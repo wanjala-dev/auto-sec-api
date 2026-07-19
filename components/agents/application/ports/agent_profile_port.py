@@ -2,6 +2,7 @@
 
 No Django imports — depends only on standard library.
 """
+
 from __future__ import annotations
 
 import abc
@@ -67,6 +68,26 @@ class PatchAgentSettingsResult:
     profile: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class PatchAgentCapabilitiesCommand:
+    """Toggle gated agent capabilities (``Agent.config.capabilities``).
+
+    Distinct from settings/custom_profile on purpose: capabilities are an
+    AUTHORIZATION surface (they unlock risk-gated tools like ``open_draft_pr``),
+    not persona styling — they carry their own allowlist and permission check.
+    """
+
+    agent_id: str
+    user: Any = None
+    data: dict[str, Any] = field(default_factory=dict)
+    http_request: Any = None
+
+
+@dataclass
+class PatchAgentCapabilitiesResult:
+    capabilities: dict[str, bool] = field(default_factory=dict)
+
+
 class AgentProfilePort(abc.ABC):
     """Secondary port for agent profile / state operations."""
 
@@ -105,5 +126,15 @@ class AgentProfilePort(abc.ABC):
         Raises LookupError if agent not found.
         Raises PermissionError if user lacks manage permission.
         Raises ValueError if data invalid.
+        """
+        ...
+
+    @abc.abstractmethod
+    def patch_agent_capabilities(self, *, command: PatchAgentCapabilitiesCommand) -> PatchAgentCapabilitiesResult:
+        """Toggle allowlisted, risk-gating capabilities on the agent.
+
+        Raises LookupError if agent not found.
+        Raises PermissionError if user lacks manage permission.
+        Raises ValueError on unknown capability keys.
         """
         ...

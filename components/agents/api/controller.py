@@ -570,9 +570,7 @@ class AgentViewSet(viewsets.GenericViewSet):
             return Response({"success": True, "agent": result.agent_info}, status=status.HTTP_201_CREATED)
 
         except Exception as e:
-            return Response(
-                {"error": f"Failed to create agent: {e!s}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+            return Response({"error": f"Failed to create agent: {e!s}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @_schema()
     # list action
@@ -792,9 +790,7 @@ class AgentViewSet(viewsets.GenericViewSet):
         except (AgentNotFoundError, AgentDisabledError, AgentPermissionError) as exc:
             return _engagement_error_response(exc)
         except Exception as e:
-            return Response(
-                {"error": f"Failed to execute agent: {e!s}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+            return Response({"error": f"Failed to execute agent: {e!s}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         poll_url = request.build_absolute_uri(reverse("agents:get-agent-execution", args=[result.execution_id]))
 
@@ -908,9 +904,7 @@ class AgentViewSet(viewsets.GenericViewSet):
             )
 
         except Exception as e:
-            return Response(
-                {"error": f"Failed to resume agent: {e!s}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+            return Response({"error": f"Failed to resume agent: {e!s}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @_schema()
     @action(detail=True, methods=["get"], url_path="profile")
@@ -981,6 +975,31 @@ class AgentViewSet(viewsets.GenericViewSet):
         except (AgentNotFoundError, AgentPermissionError, AgentEngagementError) as exc:
             return _engagement_error_response(exc)
         return Response({"profile": result.profile}, status=status.HTTP_200_OK)
+
+    @_schema(request_body=True)
+    @action(detail=True, methods=["patch"], url_path="capabilities")
+    @throttle_classes([SettingsThrottle])
+    def update_capabilities(self, request, pk=None):
+        """Toggle allowlisted, risk-gating agent capabilities (e.g. open_draft_pr).
+
+        Separate from /settings/ on purpose: capabilities unlock risk-gated
+        tools, so they carry their own strict allowlist in the repository.
+        Body: {"open_draft_pr": true|false}.
+        """
+        from components.agents.application.ports.agent_profile_port import PatchAgentCapabilitiesCommand
+
+        try:
+            result = agents_service.patch_agent_capabilities(
+                command=PatchAgentCapabilitiesCommand(
+                    agent_id=str(pk),
+                    user=request.user,
+                    data=request.data or {},
+                    http_request=request,
+                ),
+            )
+        except (AgentNotFoundError, AgentPermissionError, AgentEngagementError) as exc:
+            return _engagement_error_response(exc)
+        return Response({"capabilities": result.capabilities}, status=status.HTTP_200_OK)
 
     @_schema()
     @action(detail=True, methods=["get"], url_path="memory")
@@ -1816,9 +1835,7 @@ class ConversationViewSet(viewsets.GenericViewSet):
             serializer = ConversationMessageSerializer(messages, many=True, context={"request": request})
             return Response(serializer.data)
         except Exception as e:
-            return Response(
-                {"error": f"Failed to get messages: {e!s}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+            return Response({"error": f"Failed to get messages: {e!s}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @_schema(request_body=True)
     @action(detail=True, methods=["post"], url_path="messages/create")
@@ -1914,9 +1931,7 @@ class ConversationViewSet(viewsets.GenericViewSet):
                 }
             )
         except Exception as e:
-            return Response(
-                {"error": f"Failed to create message: {e!s}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+            return Response({"error": f"Failed to create message: {e!s}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @_schema(request_body=True)
     def partial_update(self, request, pk=None):
@@ -2463,9 +2478,7 @@ class ChainViewSet(viewsets.GenericViewSet):
             )
 
         except Exception as e:
-            return Response(
-                {"error": f"Conversation chain error: {e!s}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+            return Response({"error": f"Conversation chain error: {e!s}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @_schema(request_body=True)
     @action(detail=False, methods=["post"], url_path="qa")

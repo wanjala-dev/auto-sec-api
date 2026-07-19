@@ -526,6 +526,10 @@ class TaskSerializer(WritableNestedModelSerializer, serializers.ModelSerializer)
             "needs_human": bool(
                 payload.get("needs_human") or (triage.get("needs_human") if isinstance(triage, dict) else False)
             ),
+            # Draft-PR outcome (rung 1): set by OpenDraftPrUseCase after the
+            # human approves. ``None`` until a PR exists — the UI shows the
+            # approve affordance for triaged, grounded findings without one.
+            "draft_pr": payload.get("draft_pr") or None,
         }
 
     def get_provenance(self, obj):
