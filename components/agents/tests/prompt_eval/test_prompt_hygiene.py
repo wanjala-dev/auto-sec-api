@@ -31,19 +31,17 @@ any future bounded-context test suite that adds its own prompts.
 Plan reference: ``/Users/henrywanjala/.claude/plans/atomic-gathering-fox.md``
 Wave 1, step 1F.
 """
+
 from __future__ import annotations
 
 import pytest
 
 from components.agents.infrastructure.adapters.langchain.deep import llm_planner
-from components.agents.infrastructure.adapters.langchain.tools import (
-    project_estimator,
-)
+from components.agents.infrastructure.prompts.registry import PromptRegistry
 from components.agents.tests.prompt_eval import hygiene
 from components.agents.tests.prompt_eval.graders.model import (
     GRADER_SYSTEM_PROMPT,
 )
-
 
 # ---------------------------------------------------------------------------
 # Prompts under test
@@ -56,8 +54,12 @@ PROMPTS_UNDER_TEST: dict[str, str] = {
     "planner.system": llm_planner._build_system_prompt(),
     "planner.project": llm_planner.PROJECT_SYSTEM_PROMPT,
     "planner.task": llm_planner.TASK_SYSTEM_PROMPT,
-    "estimator.system": project_estimator.SYSTEM_PROMPT,
-    "estimator.repair": project_estimator.REPAIR_PROMPT,
+    # The estimator's runtime module (``tools/project_estimator.py``)
+    # was not ported into the auto-sec fork, but its prompts still
+    # live in the registry YAMLs — the registry is the single source
+    # of truth, so hygiene coverage reads it directly.
+    "estimator.system": PromptRegistry.get("estimator.system"),
+    "estimator.repair": PromptRegistry.get("estimator.repair"),
     # The LLM-as-judge prompt itself follows the same rules. If we
     # let the judge slip on hygiene, every model-grader score becomes
     # untrustworthy.
@@ -99,10 +101,10 @@ def test_prompt_has_no_anti_pattern_phrases(prompt_id: str) -> None:
     assert not found, (
         f"Prompt {prompt_id!r} contains anti-pattern phrasing: {found}. "
         "Rewrite as a positive instruction (what the model SHOULD do). The "
-        "exception is a routing carve-out like \"task_agent, NOT "
-        "workspace_agent\", which uses standalone NOT (3 chars) to "
+        'exception is a routing carve-out like "task_agent, NOT '
+        'workspace_agent", which uses standalone NOT (3 chars) to '
         "disambiguate two named agents — that pattern is allowed. "
-        "Phrases like \"Do NOT\" / \"MUST NOT\" are not."
+        'Phrases like "Do NOT" / "MUST NOT" are not.'
     )
 
 
@@ -113,8 +115,8 @@ def test_prompt_has_no_fallback_route_instruction(prompt_id: str) -> None:
     found = hygiene.fallback_phrase_offenders(prompt)
     assert not found, (
         f"Prompt {prompt_id!r} contains fallback-route phrasing: {found}. "
-        "Per the Logseq prompt rules, \"if in doubt\" / \"default to\" / "
-        "\"fallback to\" cause the default path to overtrigger and produce "
+        'Per the Logseq prompt rules, "if in doubt" / "default to" / '
+        '"fallback to" cause the default path to overtrigger and produce '
         "fabricated answers. Replace with: when the rule does not match, "
         "emit a clarifying task that asks the user to disambiguate."
     )
@@ -138,11 +140,7 @@ def test_planner_routing_rules_each_have_a_because_clause() -> None:
 
 @pytest.mark.parametrize(
     "prompt_id",
-    [
-        pid
-        for pid, prompt in PROMPTS_UNDER_TEST.items()
-        if hygiene.expects_json(prompt)
-    ],
+    [pid for pid, prompt in PROMPTS_UNDER_TEST.items() if hygiene.expects_json(prompt)],
 )
 def test_json_emitting_prompt_includes_literal_output_example(
     prompt_id: str,
@@ -166,9 +164,6 @@ def test_prompts_under_test_are_loaded() -> None:
     """Every prompt in the set actually loaded from its module."""
     for prompt_id, prompt in PROMPTS_UNDER_TEST.items():
         assert isinstance(prompt, str), (
-            f"Prompt {prompt_id!r} did not load as a string — the module "
-            "may have moved or been renamed."
+            f"Prompt {prompt_id!r} did not load as a string — the module may have moved or been renamed."
         )
-        assert prompt.strip(), (
-            f"Prompt {prompt_id!r} is empty or whitespace-only."
-        )
+        assert prompt.strip(), f"Prompt {prompt_id!r} is empty or whitespace-only."
