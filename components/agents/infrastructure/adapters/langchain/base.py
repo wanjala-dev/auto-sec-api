@@ -1202,6 +1202,27 @@ class BaseAgent(ABC):
         except Exception:
             return None
 
+    def _drain_rubric_evaluations(self) -> dict | None:
+        """Pop the rubric grader's evaluations for the invoke that just ran.
+
+        The middleware's ``on_evaluation`` callback fills a per-agent
+        collector (``deep/rubric.py``) because deepagents 0.6.12 keeps the
+        evaluations in private state stripped from the graph output. Returns
+        the collector payload or ``None``; never raises — rubric telemetry
+        is an enhancement, not a gate.
+        """
+        if not getattr(self, "_rubric_middleware_attached", False):
+            return None
+        try:
+            from components.agents.infrastructure.adapters.langchain.deep.rubric import (
+                drain_rubric_evaluations,
+            )
+
+            return drain_rubric_evaluations(self)
+        except Exception:
+            logger.warning("rubric evaluation drain failed for agent %s", self.agent_id, exc_info=True)
+            return None
+
     def _load_history_messages(self) -> list:
         """Prior conversation turns for the graph input (SQL-backed window).
 
@@ -1728,12 +1749,24 @@ class BaseAgent(ABC):
                 except Exception as e:
                     logger.debug("Could not update callback session_id: %s", e)
 
+            # Rubric telemetry: discard any evaluations left over from a
+            # prior aborted invoke so this turn's grading attributes only
+            # to this turn (the collector is per-agent, agents are cached).
+            self._drain_rubric_evaluations()
+
             # Execute the agent. The ``{"input": query}`` contract is kept
             # for the scripted ``AgentTestCase`` stub AND the real 1.x path:
             # ``_GraphExecutorHandle.invoke`` translates it to a
             # ``{"messages": [...]}`` graph state and back (customization is
             # baked into the create_agent ``system_prompt`` at build time).
             result = self._invoke_agent_executor({"input": query})
+
+            # Pop this invoke's grader evaluations (delivered via the
+            # middleware's ``on_evaluation`` callback — deepagents keeps them
+            # in private state stripped from the graph output) so they ride
+            # the response to the deep-run worker, which owns the task_id
+            # needed to stamp ``run_metadata["rubric_verdicts"]``.
+            rubric_evaluations = self._drain_rubric_evaluations()
 
             # Persist tool observations to DeepRunLog so the eval harness
             # and the realtime chat UI can see which tools the agent ran
@@ -1813,6 +1846,8 @@ class BaseAgent(ABC):
                 "agent_id": self.agent_id,
                 "state": self.state.to_dict(),
             }
+            if rubric_evaluations:
+                result_payload["rubric_evaluations"] = rubric_evaluations
             self._maybe_log_run_telemetry(run_context, success=True)
             return result_payload
 
