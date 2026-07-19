@@ -20,57 +20,15 @@ of them; when it can't decide, it passes (never over-blocks a real fix).
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
+
+# The salient-token heuristic moved to the shared kernel so the integrations
+# patch advisor can ground against the SAME tokens without a cross-context
+# infrastructure import. This module keeps its public name (`_salient_tokens`)
+# so existing callers/tests are untouched.
 
 _LOG_WATCH_SOURCE = "ai.log_watch"
 _LOG_OPTIMIZATION_SOURCE = "ai.log_optimization"
-
-# Generic filler that carries no grounding on its own.
-_BOILERPLATE = {
-    "investigate",
-    "further",
-    "check",
-    "logs",
-    "monitor",
-    "monitoring",
-    "system",
-    "ensure",
-    "proper",
-    "review",
-    "additional",
-    "metrics",
-    "inconsistencies",
-    "errors",
-    "error",
-    "issue",
-    "issues",
-    "problem",
-    "resources",
-    "necessary",
-    "perform",
-    "operation",
-    "data",
-    "being",
-    "cause",
-    "may",
-    "the",
-    "and",
-    "for",
-    "that",
-    "this",
-    "with",
-    "from",
-    "which",
-    "have",
-    "will",
-    "should",
-}
-# CamelCase identifiers (ImportError, AiEmbeddingsProvider), dotted paths
-# (components.knowledge.x), and longer snake_case (refresh_recommendable_items).
-_CAMEL_RE = re.compile(r"\b[A-Z][a-z]+(?:[A-Z][a-z0-9]+)+\b")
-_DOTTED_RE = re.compile(r"\b[a-zA-Z_]\w*(?:\.\w+){2,}\b")
-_SNAKE_RE = re.compile(r"\b[a-z]+_[a-z_]{3,}\b")
 
 # A concrete optimization change (vs "reduce noise" hand-waving).
 _CONCRETE_CHANGE = (
@@ -106,11 +64,7 @@ class VerifyResult:
 
 def _salient_tokens(text: str) -> set[str]:
     """Code-like identifiers from the finding's ground truth (message/evidence)."""
-    tokens: set[str] = set()
-    for rx in (_CAMEL_RE, _DOTTED_RE, _SNAKE_RE):
-        tokens.update(rx.findall(text or ""))
-    # Drop pure-filler snake tokens (e.g. "log_level" isn't an identity anchor).
-    return {t for t in tokens if t.lower() not in _BOILERPLATE}
+    return salient_tokens(text)
 
 
 def _ground_text_for_triage(payload: dict) -> str:
