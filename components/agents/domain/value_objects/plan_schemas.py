@@ -150,10 +150,11 @@ def merge_run_metadata(current: dict[str, Any] | None, update: dict[str, Any] | 
     """LangGraph reducer for ``PlanState.run_metadata`` — dict deep-merge.
 
     ``run_metadata`` is written by many nodes: the scheduler (iteration_count,
-    plan_status), the workers (rubric_verdicts / critic_scores / worker_error_*,
-    fanned out via ``Send`` so their input state carries NO run_metadata), the
-    synthesizer (goal_met), approval, and replan bookkeeping. As a plain
-    last-value channel this had two proven failure modes:
+    plan_status), the workers (rubric_verdicts / critic_scores / worker_error_* /
+    worker_failures / worker_retries, fanned out via ``Send`` so their input
+    state carries NO run_metadata), the synthesizer (goal_met), approval, and
+    replan bookkeeping. As a plain last-value channel this had two proven
+    failure modes:
 
     1. Two concurrent worker ``Send``s both returning ``run_metadata`` raised
        ``InvalidUpdateError`` and killed the whole run.
@@ -200,6 +201,13 @@ class PlanState(TypedDict, total=False):
     run_context: dict[str, Any]
     # Execution budget tracking (set by the orchestrator, checked by scheduler)
     iteration_count: int
+    # LEGACY failure channel. A last-value int written from a worker's Send
+    # payload can never accumulate (each worker seeds from an empty input
+    # state) and two concurrent failing workers collide with
+    # InvalidUpdateError. Failure records now live in
+    # ``run_metadata["worker_failures"]`` (reducer-united); the count is
+    # derived there (see orchestrator._derived_worker_failure_count, which
+    # only falls back to this channel when no records exist).
     worker_failure_count: int
     start_time: float
     budget: dict[str, Any] | None
