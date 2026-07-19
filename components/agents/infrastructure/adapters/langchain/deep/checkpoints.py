@@ -8,6 +8,7 @@ base64-encoded serde bytes in the DeepRun.checkpoints JSON field.
 Compatible with both langgraph-checkpoint 1.x (put(config, checkpoint, metadata))
 and 2.x (put(config, checkpoint, metadata, new_versions)) APIs.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -21,27 +22,21 @@ from langchain_core.runnables.config import RunnableConfig
 
 logger = logging.getLogger(__name__)
 
-# Import checkpoint types — handle both old (langgraph.checkpoint.base)
-# and new (langgraph_checkpoint) package locations.
-try:
-    from langgraph.checkpoint.base import (
-        BaseCheckpointSaver,
-        Checkpoint,
-        CheckpointMetadata,
-        CheckpointTuple,
-    )
-except ImportError:
-    from langgraph_checkpoint.base import (
-        BaseCheckpointSaver,
-        Checkpoint,
-        CheckpointMetadata,
-        CheckpointTuple,
-    )
+# langgraph 1.x / langgraph-checkpoint 4.x: the checkpoint API lives under
+# langgraph.checkpoint.* (provided by the langgraph-checkpoint package). The
+# old `langgraph_checkpoint.*` fallback layout is gone.
+from langgraph.checkpoint.base import (
+    BaseCheckpointSaver,
+    Checkpoint,
+    CheckpointMetadata,
+    CheckpointTuple,
+)
 
 try:
+    # 1.x canonical name; MemorySaver is kept as an alias upstream.
+    from langgraph.checkpoint.memory import InMemorySaver as MemorySaver
+except ImportError:  # pragma: no cover - alias fallback
     from langgraph.checkpoint.memory import MemorySaver
-except ImportError:
-    from langgraph_checkpoint.memory import MemorySaver
 
 
 def _encode(b: bytes) -> str:
@@ -57,8 +52,33 @@ class DatabaseSaver(BaseCheckpointSaver):
     Durable LangGraph checkpointer backed by the DeepRun.checkpoints JSON field.
 
     Checkpoints are stored as base64-encoded serde bytes keyed by thread_ts.
-    Compatible with langgraph 0.0.69 through 0.2.x+ checkpoint APIs.
+    Targets the langgraph-checkpoint 4.x API (typed serde); rows written by the
+    pre-1.x saver (no ``*_type`` keys) are still readable via the untyped
+    ``loads`` path. Deep-run checkpoints are short-lived, so this back-compat
+    is belt-and-braces — drain in-flight runs before deploying the 1.x stack.
     """
+
+    # ── Serde compatibility ───────────────────────────────────────────
+    #
+    # langgraph-checkpoint 4.x serializers speak dumps_typed/loads_typed
+    # ((type_tag, bytes) tuples); the plain dumps/loads pair of the 0.x
+    # line is no longer guaranteed. Store the type tag alongside the blob.
+
+    def _serde_dumps(self, obj: Any) -> tuple[str, bytes]:
+        serde = self.serde
+        if hasattr(serde, "dumps_typed"):
+            type_tag, data = serde.dumps_typed(obj)
+            return str(type_tag), data
+        return "", serde.dumps(obj)
+
+    def _serde_loads(self, type_tag: str | None, data: bytes) -> Any:
+        serde = self.serde
+        if type_tag and hasattr(serde, "loads_typed"):
+            return serde.loads_typed((type_tag, data))
+        if hasattr(serde, "loads"):
+            return serde.loads(data)
+        # Typed-only serde reading a legacy untyped row: json is the legacy format.
+        return serde.loads_typed(("json", data))
 
     def get_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         from infrastructure.persistence.ai.agents.models import DeepRun
@@ -109,7 +129,7 @@ class DatabaseSaver(BaseCheckpointSaver):
                 if limit is not None and limit <= 0:
                     break
                 if filter:
-                    metadata = self.serde.loads(_decode(saved["metadata"]))
+                    metadata = self._serde_loads(saved.get("metadata_type"), _decode(saved["metadata"]))
                     if not all(metadata.get(k) == v for k, v in filter.items()):
                         continue
                 yield self._build_tuple(
@@ -137,8 +157,8 @@ class DatabaseSaver(BaseCheckpointSaver):
 
         thread_id = config["configurable"]["thread_id"]
         thread_ts = checkpoint["id"]
-        cp_bytes = self.serde.dumps(checkpoint)
-        md_bytes = self.serde.dumps(metadata)
+        cp_type, cp_bytes = self._serde_dumps(checkpoint)
+        md_type, md_bytes = self._serde_dumps(metadata)
         run, _ = DeepRun.objects.get_or_create(
             thread_id=thread_id,
             defaults={
@@ -150,7 +170,9 @@ class DatabaseSaver(BaseCheckpointSaver):
         checkpoints = run.checkpoints or {}
         checkpoints[str(thread_ts)] = {
             "checkpoint": _encode(cp_bytes),
+            "checkpoint_type": cp_type,
             "metadata": _encode(md_bytes),
+            "metadata_type": md_type,
         }
         DeepRun.objects.filter(id=run.id).update(checkpoints=checkpoints)
 
@@ -218,15 +240,17 @@ class DatabaseSaver(BaseCheckpointSaver):
     # ── Internal ──────────────────────────────────────────────────────
 
     def _build_tuple(self, config: RunnableConfig, ts: Any, saved: dict[str, str]) -> CheckpointTuple:
-        checkpoint = self.serde.loads(_decode(saved["checkpoint"]))
-        metadata = self.serde.loads(_decode(saved["metadata"]))
+        checkpoint = self._serde_loads(saved.get("checkpoint_type"), _decode(saved["checkpoint"]))
+        metadata = self._serde_loads(saved.get("metadata_type"), _decode(saved["metadata"]))
         tuple_kwargs = {
             "config": {"configurable": {"thread_id": config["configurable"]["thread_id"], "thread_ts": int(ts)}},
             "checkpoint": checkpoint,
             "metadata": metadata,
         }
         # langgraph-checkpoint 2.x adds parent_config to CheckpointTuple
-        _fields = getattr(CheckpointTuple, "_fields", None) or [f.name for f in getattr(CheckpointTuple, "__dataclass_fields__", {}).values()]
+        _fields = getattr(CheckpointTuple, "_fields", None) or [
+            f.name for f in getattr(CheckpointTuple, "__dataclass_fields__", {}).values()
+        ]
         if "parent_config" in str(_fields):
             tuple_kwargs["parent_config"] = None
         return CheckpointTuple(**tuple_kwargs)
