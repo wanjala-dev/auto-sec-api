@@ -293,6 +293,9 @@ def dispatch_finding_specialist(
     a redelivered dispatch never double-comments or double-moves a card.
     """
     from components.agents.application.services.detector_cycle import _delegate_to_agent
+    from components.agents.infrastructure.adapters.langchain.tools._finding_processing import (
+        stamp_run_telemetry_on_findings,
+    )
     from infrastructure.persistence.workspaces.models import Workspace
 
     workspace = Workspace.objects.all_objects().filter(id=workspace_id).first()
@@ -306,6 +309,7 @@ def dispatch_finding_specialist(
         workspace_id,
         specialist,
     )
+    dispatch_started_at = timezone.now()
     result = _delegate_to_agent(
         agent_type=specialist,
         query=goal,
@@ -314,10 +318,30 @@ def dispatch_finding_specialist(
         workspace=workspace,
     )
     ok = bool((result or {}).get("success", True))
+
+    # Task #58 — persist the run's telemetry onto the finding rows the
+    # specialist just triaged. The deep run's final state (rubric verdicts,
+    # critic scores, retries, budget trips) used to be dropped here; the
+    # stamp runs AFTER the run completes (never racing the row-locked triage
+    # writes) and is fail-safe — it can only add telemetry, never fail the
+    # dispatch.
+    stamped = stamp_run_telemetry_on_findings(
+        workspace_id=workspace_id,
+        specialist=specialist,
+        since=dispatch_started_at,
+        run_result=result or {},
+    )
+
     logger.info(
-        "dispatch_finding_specialist completed workspace_id=%s specialist=%s success=%s",
+        "dispatch_finding_specialist completed workspace_id=%s specialist=%s success=%s telemetry_stamped=%d",
         workspace_id,
         specialist,
         ok,
+        stamped,
     )
-    return {"success": ok, "specialist": specialist, "workspace_id": workspace_id}
+    return {
+        "success": ok,
+        "specialist": specialist,
+        "workspace_id": workspace_id,
+        "telemetry_stamped": stamped,
+    }

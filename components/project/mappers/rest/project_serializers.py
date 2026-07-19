@@ -352,6 +352,10 @@ class TaskSerializer(WritableNestedModelSerializer, serializers.ModelSerializer)
     # Provenance trail for any agent-filed task — which detector filed it, which
     # specialist acted, and when. None for human-created tasks.
     provenance = serializers.SerializerMethodField()
+    # Autonomous-run telemetry for a handled finding — the rubric/critic
+    # verdicts, retry count and budget outcome of the deep run that triaged
+    # this card (stamped post-dispatch, task #58). None for everything else.
+    run_telemetry = serializers.SerializerMethodField()
 
     class Meta:
         model = Task
@@ -380,6 +384,7 @@ class TaskSerializer(WritableNestedModelSerializer, serializers.ModelSerializer)
             "sign_off",
             "log_watch",
             "provenance",
+            "run_telemetry",
         ]
         read_only_fields = [
             "team",
@@ -553,6 +558,30 @@ class TaskSerializer(WritableNestedModelSerializer, serializers.ModelSerializer)
             "last_handled_by": prov.get("last_handled_by") or "",
             "last_handled_at": prov.get("last_handled_at") or "",
             "events": prov.get("events") or [],
+        }
+
+    def get_run_telemetry(self, obj):
+        """Expose the autonomous-run telemetry stamped on a handled finding.
+
+        ``None`` for every task without a stamp (human tasks, un-triaged
+        findings, findings handled before the stamp shipped). Mechanical
+        reshape of ``metadata.run_telemetry`` — no domain logic. The shape is
+        what ``stamp_run_telemetry_on_findings`` writes: rubric_verdicts /
+        critic_scores (this finding's entry), worker_retries,
+        budget_exceeded, source_thread_id, specialist, stamped_at.
+        """
+        meta = getattr(obj, "metadata", None) or {}
+        telemetry = meta.get("run_telemetry")
+        if not isinstance(telemetry, dict) or not telemetry:
+            return None
+        return {
+            "rubric_verdicts": telemetry.get("rubric_verdicts"),
+            "critic_scores": telemetry.get("critic_scores"),
+            "worker_retries": telemetry.get("worker_retries") or 0,
+            "budget_exceeded": telemetry.get("budget_exceeded") or None,
+            "source_thread_id": telemetry.get("source_thread_id") or "",
+            "specialist": telemetry.get("specialist") or "",
+            "stamped_at": telemetry.get("stamped_at") or "",
         }
 
     def get_total_tracked_minutes(self, obj):
