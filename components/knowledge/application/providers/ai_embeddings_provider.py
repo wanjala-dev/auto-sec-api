@@ -1,15 +1,3 @@
-"""Dynamic embeddings provider registry.
-
-Resolves a provider slug to the corresponding ``EmbeddingsPort`` adapter
-at runtime.
-
-Usage::
-
-    provider = AIEmbeddingsProvider()
-    emb = provider.get_port("openai")
-    emb = provider.get_port("huggingface")
-"""
-
 from __future__ import annotations
 
 from components.knowledge.domain.errors import UnsupportedProviderError
