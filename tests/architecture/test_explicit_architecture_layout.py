@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
 COMPONENTS_DIR = ROOT / "components"
 
@@ -32,10 +31,7 @@ def _has_python_files(directory: Path) -> bool:
     that is not __init__.py."""
     if not directory.is_dir():
         return False
-    return any(
-        p.is_file() and p.suffix == ".py" and p.name != "__init__.py"
-        for p in directory.iterdir()
-    )
+    return any(p.is_file() and p.suffix == ".py" and p.name != "__init__.py" for p in directory.iterdir())
 
 
 def test_contexts_with_controllers_have_nonempty_request_and_resource_dirs():
@@ -83,6 +79,5 @@ def test_contexts_with_controllers_have_nonempty_request_and_resource_dirs():
         "Bounded contexts with a controller.py must have non-empty "
         "api/requests/ and api/resources/ directories.\n"
         "See DEVELOPER_GUIDE.md 'Request DTOs, Resource DTOs, and DRF Serializers' "
-        "for the required data flow.\n"
-        + "\n".join(f"  - {v}" for v in violations)
+        "for the required data flow.\n" + "\n".join(f"  - {v}" for v in violations)
     )
