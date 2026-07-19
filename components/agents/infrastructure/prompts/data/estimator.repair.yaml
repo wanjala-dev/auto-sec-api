@@ -1,0 +1,87 @@
+id: estimator.repair
+description: >
+  Repair pass for ``estimator.system``. Triggered when the estimator's
+  first attempt returned an invalid estimate (failed JSON parse, generic
+  labels, zero/negative amounts). Stricter than the original spec.
+template_variables: []
+active: v2
+versions:
+  v1:
+    created_at: 2026-05-08
+    created_by: henry
+    notes: |
+      Post-Wave-1 version. Reuses the ``because:`` justification
+      pattern; calls out the most common rejection cause (generic
+      placeholder labels) so the LLM knows exactly what to fix on
+      the retry.
+    template: |
+      You are repairing a malformed estimate. Return only JSON.
+
+      The previous attempt produced an estimate that was rejected. Replace it with 6 to 10 items in this exact shape:
+      {"items": [
+        {"label": "...", "amount": 123.45, "category_name": "...", "description": "..."}
+      ]}
+
+      Repair rules (stricter than the original spec):
+      - Every label is specific to the project and goal — never `"Miscellaneous"`, `"Contingency"`, or `"Other"`. because: generic placeholder labels are the most common reason estimates get rejected; the repair pass exists to remove them.
+      - Every `amount` is a positive number greater than zero. because: a placeholder `0.00` carries no signal and causes downstream Decimal validators to fail.
+      - `category_name` matches one of the provided categories when a sensible match exists.
+      - The JSON shape matches the example exactly — `items` is a list of objects with all four fields present.
+
+      Respond with the JSON object above and nothing else.
+  v2:
+    created_at: 2026-06-08
+    created_by: henry
+    notes: |
+      Wave 3 curriculum-aligned rewrite (SKILL.md §12.6). Repair
+      prompts benefit even more than primary prompts from a
+      failed→repaired worked example — the model sees the exact
+      type of fix the pipeline rejects on.
+
+      Changes vs v1:
+      * Wrapped in XML tags: <role>, <output_format>, <repair_rules>,
+        <example>, <closing>.
+      * Added one failed→repaired multishot example so the model
+        sees a concrete instance of the rejection→fix transformation.
+      * Output instruction moved to <closing> at the very end.
+    template: |
+      <role>
+      You are repairing a malformed budget estimate. The estimator's
+      previous attempt was rejected by the downstream validator. Your
+      job is to return a single JSON object that passes the
+      <repair_rules> below.
+      </role>
+
+      <output_format>
+      Return one JSON object with shape `{"items": [...]}` containing
+      6 to 10 items. Each item:
+      - label (string, specific to the project)
+      - amount (number, USD, positive, no symbols)
+      - category_name (string, matches the provided categories when one fits)
+      - description (string, one-sentence note on what the line covers)
+      </output_format>
+
+      <repair_rules>
+      - Every label is specific to the project and goal — never `"Miscellaneous"`, `"Contingency"`, or `"Other"`. because: generic placeholder labels are the most common reason estimates get rejected; the repair pass exists to remove them.
+      - Every `amount` is a positive number greater than zero. because: a placeholder `0.00` carries no signal and causes downstream Decimal validators to fail.
+      - `category_name` matches one of the provided categories when a sensible match exists.
+      - The JSON shape matches `<output_format>` exactly — `items` is a list of objects with all four fields present.
+      </repair_rules>
+
+      <example name="generic_labels_repaired">
+      Rejected attempt:
+      {"items": [
+        {"label": "Miscellaneous", "amount": 500.00, "category_name": "Other", "description": "extra"},
+        {"label": "Contingency", "amount": 0.00, "category_name": "Other", "description": "buffer"}
+      ]}
+      Repaired output (for project "Annual fundraising gala", categories ["Events", "Catering", "Software"]):
+      {"items": [
+        {"label": "Hotel ballroom rental for one evening", "amount": 2400.00, "category_name": "Events", "description": "Mid-tier ballroom hold including basic AV."},
+        {"label": "Plated dinner catering for 120 guests", "amount": 7200.00, "category_name": "Catering", "description": "Three-course plated dinner at the venue's house rate."},
+        {"label": "Ticketing platform per-attendee fee", "amount": 240.00, "category_name": "Software", "description": "$2 per ticket on the existing event-checkout integration."}
+      ]}
+      </example>
+
+      <closing>
+      Respond with a single JSON object matching <output_format>. No prose before or after, no markdown fences.
+      </closing>

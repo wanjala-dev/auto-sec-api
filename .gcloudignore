@@ -1,0 +1,14 @@
+# Ignore development files and directories
+*.pyc
+*.pyo
+*.sqlite3
+db.sqlite3
+__pycache__/
+media/
+staticfiles/
+.env
+
+# Ignore test files (if not using Cloud Build for testing)
+**/tests/
+**/test_*.py
+static/

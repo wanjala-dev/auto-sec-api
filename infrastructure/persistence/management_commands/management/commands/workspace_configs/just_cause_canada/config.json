@@ -1,0 +1,49 @@
+{
+  "owner": {
+    "email": "admin@justcausecanada.org",
+    "password": "ChangeMe123!",
+    "first_name": "Just",
+    "last_name": "Cause",
+    "is_staff": true
+  },
+  "workspace": {
+    "name": "Just Cause Canada",
+    "story": "Just Cause Canada equips youth in East Africa with technology, mentorship, and entrepreneurship skills so they can create solutions for their communities.",
+    "status": "active",
+    "privacy": "public",
+    "is_verified": true,
+    "categories": ["Education", "Community", "Economic Development"],
+    "subcategories": {
+      "Education": ["STEM", "Digital Literacy"],
+      "Community": ["Youth Programs"],
+      "Economic Development": ["Entrepreneurship"]
+    },
+    "contribution_means": ["Funding", "Volunteering", "Mentorship"],
+    "stripe": {
+      "tenant_url": "https://justcausecanada.local",
+      "domain_url": "https://justcausecanada.local",
+      "stripe_secret_key": "sk_test_justcause"
+    }
+  },
+  "staff_team_title": "Programs Team",
+  "staff": [
+    {"first_name": "Jordan", "last_name": "Atkinson", "email": "jordan@justcausecanada.org", "role": "Executive Director"},
+    {"first_name": "Fiona", "last_name": "Wamala", "email": "fiona@justcausecanada.org", "role": "Programs Coordinator"},
+    {"first_name": "Amy", "last_name": "Chen", "email": "amy@justcausecanada.org", "role": "Technology Lead"}
+  ],
+  "projects": [
+    {"title": "High Tech Program", "description": "Immersive coding, robotics, and design training for secondary students."},
+    {"title": "Community Innovation Labs", "description": "Pop-up labs bringing hands-on technology workshops to rural schools."},
+    {"title": "Entrepreneurship Bootcamp", "description": "Mentorship and seed funding for youth-led ventures tackling local issues."}
+  ],
+  "recipients_category": {"name": "Program Participants", "description": "Students enrolled in coding and technology intensives."},
+  "recipients": [
+    {"first_name": "Brenda", "last_name": "Kansiime", "age": 17, "gender": "female", "needs": "Laptop for continued coding practice.", "story": "Brenda built an award-winning health app during the High Tech Program and now trains younger students.", "sponsored": false, "location": "Kampala, Uganda"}
+  ],
+  "news": [
+    {"title": "Robotics Showcase Celebrates Young Innovators", "excerpt": "Students presented prototypes tackling community challenges.", "body": "Graduates from the High Tech Program unveiled robotics projects ranging from clean water sensors to crop monitoring devices.", "image": "https://justcausecanada.org/wp-content/uploads/2023/05/robotics-demo.jpg", "category": "Highlights"}
+  ],
+  "pdfs": [
+    {"filename": "justcause-high-tech-overview.pdf", "description": "Program overview for the High Tech initiative."}
+  ]
+}

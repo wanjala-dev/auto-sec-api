@@ -1,0 +1,394 @@
+# =============================================================================
+# Base compose file — shared service definitions across all environments.
+#
+# Usage (never run alone — always combine with an override):
+#   docker compose -f docker/compose/docker-compose.yml \
+#                  -f docker/compose/docker-compose.local.yml up
+#
+# Or use the Makefile shortcuts:
+#   make up          # local development
+#   make up-staging  # staging
+#   make up-prod     # production
+# =============================================================================
+
+x-common-env: &common-env
+  DJANGO_SETTINGS_MODULE: ${DJANGO_SETTINGS_MODULE:-api.settings.local}
+  DATABASE_URL: ${DATABASE_URL}
+  REDIS_SERVICE_HOST: redis
+  CELERY_BROKER: redis://redis:6379/0
+  CELERY_BACKEND: redis://redis:6379/0
+  # Where the app looks for GeoLite2-City.mmdb (session geo enrichment).
+  # The ``geoipupdate`` sidecar keeps this volume current; the MaxMind
+  # adapter degrades to blank geo columns when the file is absent.
+  GEOIP_PATH: /geoip
+  LANGFUSE_HOST: http://langfuse:3000
+  LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+  LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+  LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-http://localhost:3100}
+
+x-celery-base: &celery-base
+  env_file: &env-file
+    - ../../.env
+  environment:
+    <<: *common-env
+  depends_on:
+    redis:
+      condition: service_healthy
+    db:
+      condition: service_healthy
+    pgbouncer:
+      condition: service_started
+  networks:
+    - backend
+  restart: unless-stopped
+
+services:
+
+  # ── Core application ─────────────────────────────────────────────────────
+
+  db:
+    image: pgvector/pgvector:pg16
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-wanjala-api-database}
+      POSTGRES_USER: ${POSTGRES_USER:-wanjala-art-sql-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    networks:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-wanjala-art-sql-user} -d ${POSTGRES_DB:-wanjala-api-database}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── PgBouncer — shared transaction-mode connection pooler ─────────────────
+  #
+  # Every app process (gunicorn workers, daphne, celery workers, beat) connects
+  # to PgBouncer instead of Postgres directly. PgBouncer multiplexes those
+  # client connections onto a small pool of persistent server connections, so
+  # Postgres stops paying the per-request open/auth/TLS/teardown tax (~30-55ms)
+  # and the total server connection count stays well under max_connections no
+  # matter how many workers fan out. The app points at `pgbouncer:6432` via
+  # DB_HOST/DB_PORT (prod, api.settings.prod) or DATABASE_URL (local).
+  #
+  # Transaction mode caveats handled elsewhere:
+  #   - DISABLE_SERVER_SIDE_CURSORS=True in settings (server-side cursors can't
+  #     survive a per-transaction server-connection handoff) — gated on
+  #     DB_PGBOUNCER. .iterator() degrades to client-side chunking, still correct.
+  #   - max_prepared_statements>0 keeps psycopg3's auto-prepared statements
+  #     working through transaction pooling (needs pgbouncer >=1.21; this image
+  #     ships 1.25).
+  #   - Migrations bypass PgBouncer (DB_USE_DIRECT=1 → db:5432) — see settings.
+  # See the /sql skill for the full rationale + sizing math.
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.25.2-p0
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Upstream is ALWAYS the real Postgres on the docker network — these are
+      # PgBouncer's own connection target, distinct from the app's DB_HOST
+      # (which is `pgbouncer`). Only the main application database is proxied;
+      # the rarely-used local-only tenant DBs (art/ltg/seed) connect direct.
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USER:-wanjala-art-sql-user}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      DB_NAME: ${POSTGRES_DB:-wanjala-api-database}
+      # The edoburu image listens on 5432 by default; publish on 6432 (the
+      # conventional PgBouncer port) so the app's DB_PORT/DATABASE_URL of 6432
+      # is unambiguous and never confused with the real Postgres on 5432.
+      LISTEN_PORT: "6432"
+      # Postgres 16 encrypts passwords with scram-sha-256; match it so the
+      # generated userlist.txt + client/server auth negotiate correctly.
+      AUTH_TYPE: scram-sha-256
+      ADMIN_USERS: ${POSTGRES_USER:-wanjala-art-sql-user}
+      POOL_MODE: transaction
+      # Many clients, few server connections. default_pool_size is per
+      # (user,db) pair; with one user/db that's the whole server-side pool.
+      MAX_CLIENT_CONN: "1000"
+      DEFAULT_POOL_SIZE: "20"
+      MIN_POOL_SIZE: "5"
+      RESERVE_POOL_SIZE: "5"
+      RESERVE_POOL_TIMEOUT: "3"
+      # psycopg3 auto-prepares; this keeps prepared statements valid in
+      # transaction mode (pgbouncer >=1.21).
+      MAX_PREPARED_STATEMENTS: "200"
+      # Django/psycopg send these startup params; PgBouncer must not reject them.
+      IGNORE_STARTUP_PARAMETERS: extra_float_digits,options
+      # Internal docker network — no TLS to the upstream Postgres.
+      SERVER_TLS_SSLMODE: disable
+    networks:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      # pg_isready only checks that the server answers the startup probe — no
+      # auth needed — and PgBouncer answers it once it's listening on 6432.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 6432 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    networks:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ── MaxMind GeoLite2 updater (session geo enrichment) ────────────────────
+  #
+  # Official MaxMind sidecar: downloads GeoLite2-City.mmdb into the shared
+  # ``geoip_data`` volume and re-checks every GEOIPUPDATE_FREQUENCY hours —
+  # the GeoLite2 EULA effectively requires staying current, so the auto-
+  # update is compliance, not just convenience. The db itself must never be
+  # committed (EULA forbids redistribution; ``geoip/`` is gitignored).
+  #
+  # Credentials come from the compose env file (.env locally,
+  # .env.production on EC2): MAXMIND_ACCOUNT_ID + MAXMIND_LICENSE_KEY
+  # (free MaxMind account — see docs/reference/GEOIP_SETUP.md). When they
+  # are unset the guard below parks the container on ``sleep infinity``
+  # instead of crash-looping, and the app's geo columns simply stay blank
+  # (the MaxMind adapter treats a missing mmdb as "no geo" by design).
+  geoipupdate:
+    image: maxmindinc/geoipupdate:v7.1
+    environment:
+      GEOIPUPDATE_ACCOUNT_ID: ${MAXMIND_ACCOUNT_ID:-}
+      GEOIPUPDATE_LICENSE_KEY: ${MAXMIND_LICENSE_KEY:-}
+      GEOIPUPDATE_EDITION_IDS: GeoLite2-City
+      GEOIPUPDATE_DB_DIR: /usr/share/GeoIP
+      # Re-check twice a week (hours). GeoLite2 publishes Tue/Fri.
+      GEOIPUPDATE_FREQUENCY: "72"
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >
+        if [ -z "$$GEOIPUPDATE_ACCOUNT_ID" ] || [ -z "$$GEOIPUPDATE_LICENSE_KEY" ]; then
+        echo "geoipupdate disabled — set MAXMIND_ACCOUNT_ID + MAXMIND_LICENSE_KEY in the env file to enable GeoLite2 downloads (docs/reference/GEOIP_SETUP.md)";
+        exec sleep infinity;
+        fi;
+        exec /usr/bin/entry.sh
+    volumes:
+      - geoip_data:/usr/share/GeoIP
+    networks:
+      - backend
+    restart: unless-stopped
+
+  gotenberg:
+    # HTML-to-PDF service used by components.reports for financial report
+    # PDFs (and anything else that needs pixel-matched export of a web
+    # surface). Chromium-backed, HTTP-only — no headless-browser code in
+    # our Python stack.
+    image: gotenberg/gotenberg:8
+    command:
+      - "gotenberg"
+      - "--api-timeout=60s"
+    networks:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:3000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  minio:
+    # S3-compatible object storage for dev parity with prod S3. Reports
+    # land in ``wanjala-reports`` bucket at ``<workspace>/<report>.pdf``.
+    # In prod we point django-storages at real S3 instead — the EC2
+    # compose overlay disables this service so the demo EC2 doesn't keep
+    # a vestigial MinIO running when the platform already talks to real AWS S3.
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-wanjala}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-wanjaladev}
+    volumes:
+      - minio_data:/data
+    networks:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9000/minio/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  celery_worker:
+    <<: *celery-base
+    command: /start-celeryworker
+
+  celery_ai_teammate_worker:
+    <<: *celery-base
+    command: /start-celeryworker-ai-teammate
+
+  celery_aggregations_worker:
+    <<: *celery-base
+    command: /start-celeryworker-aggregations
+
+  celery_beat:
+    <<: *celery-base
+    command: /start-celerybeat
+
+  # ── Langfuse observability stack ───────────────────────────────────────
+
+  langfuse-db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: ${LANGFUSE_DB_USER:-langfuse}
+      POSTGRES_PASSWORD: ${LANGFUSE_DB_PASSWORD:-langfuse}
+      POSTGRES_DB: ${LANGFUSE_DB_NAME:-langfuse}
+    volumes:
+      - langfuse_db:/var/lib/postgresql/data
+    networks:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${LANGFUSE_DB_USER:-langfuse} -d ${LANGFUSE_DB_NAME:-langfuse}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  langfuse-clickhouse:
+    image: clickhouse/clickhouse-server:24.1
+    environment:
+      CLICKHOUSE_DB: langfuse
+      CLICKHOUSE_USER: ${LANGFUSE_CLICKHOUSE_USER:-langfuse}
+      CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD:-langfuse}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - langfuse_clickhouse:/var/lib/clickhouse
+    networks:
+      - backend
+    restart: unless-stopped
+
+  langfuse-minio:
+    image: cgr.dev/chainguard/minio
+    entrypoint: sh
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: ${LANGFUSE_MINIO_USER:-minio}
+      MINIO_ROOT_PASSWORD: ${LANGFUSE_MINIO_PASSWORD:-miniosecret}
+    volumes:
+      - langfuse_minio_data:/data
+    networks:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 1s
+      timeout: 5s
+      retries: 5
+      start_period: 1s
+
+  langfuse-worker:
+    image: docker.io/langfuse/langfuse-worker:3
+    depends_on:
+      langfuse-db:
+        condition: service_healthy
+      langfuse-clickhouse:
+        condition: service_started
+      redis:
+        condition: service_healthy
+      langfuse-minio:
+        condition: service_healthy
+    environment:
+      NEXTAUTH_URL: ${LANGFUSE_URL:-http://localhost:3100}
+      DATABASE_URL: postgres://${LANGFUSE_DB_USER:-langfuse}:${LANGFUSE_DB_PASSWORD:-langfuse}@langfuse-db:5432/${LANGFUSE_DB_NAME:-langfuse}
+      LANGFUSE_DATABASE_URL: postgres://${LANGFUSE_DB_USER:-langfuse}:${LANGFUSE_DB_PASSWORD:-langfuse}@langfuse-db:5432/${LANGFUSE_DB_NAME:-langfuse}
+      SALT: ${LANGFUSE_SALT:-00000000000000000000000000000000}
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:-0000000000000000000000000000000000000000000000000000000000000000}
+      TELEMETRY_ENABLED: "false"
+      CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse-clickhouse:9000
+      CLICKHOUSE_URL: http://langfuse-clickhouse:8123
+      CLICKHOUSE_USER: ${LANGFUSE_CLICKHOUSE_USER:-langfuse}
+      CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD:-langfuse}
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_TLS_ENABLED: "false"
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${LANGFUSE_MINIO_USER:-minio}
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_PASSWORD:-miniosecret}
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: ${LANGFUSE_MINIO_USER:-minio}
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_PASSWORD:-miniosecret}
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+    networks:
+      - backend
+    restart: unless-stopped
+
+  langfuse:
+    image: docker.io/langfuse/langfuse:3
+    environment:
+      HOSTNAME: 0.0.0.0
+      PORT: 3000
+      NEXTAUTH_URL: ${LANGFUSE_URL:-http://localhost:3100}
+      DATABASE_URL: postgres://${LANGFUSE_DB_USER:-langfuse}:${LANGFUSE_DB_PASSWORD:-langfuse}@langfuse-db:5432/${LANGFUSE_DB_NAME:-langfuse}
+      LANGFUSE_DATABASE_URL: postgres://${LANGFUSE_DB_USER:-langfuse}:${LANGFUSE_DB_PASSWORD:-langfuse}@langfuse-db:5432/${LANGFUSE_DB_NAME:-langfuse}
+      CLICKHOUSE_URL: http://langfuse-clickhouse:8123
+      CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse-clickhouse:9000
+      CLICKHOUSE_USER: ${LANGFUSE_CLICKHOUSE_USER:-langfuse}
+      CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD:-langfuse}
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-0123456789abcdef0123456789abcdef}
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:-0000000000000000000000000000000000000000000000000000000000000000}
+      SALT: ${LANGFUSE_SALT:-00000000000000000000000000000000}
+      TELEMETRY_ENABLED: "false"
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_TLS_ENABLED: "false"
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${LANGFUSE_MINIO_USER:-minio}
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_PASSWORD:-miniosecret}
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: ${LANGFUSE_MINIO_USER:-minio}
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_PASSWORD:-miniosecret}
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_INIT_ORG_ID: ${LANGFUSE_INIT_ORG_ID:-}
+      LANGFUSE_INIT_ORG_NAME: ${LANGFUSE_INIT_ORG_NAME:-}
+      LANGFUSE_INIT_PROJECT_ID: ${LANGFUSE_INIT_PROJECT_ID:-}
+      LANGFUSE_INIT_PROJECT_NAME: ${LANGFUSE_INIT_PROJECT_NAME:-}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-}
+      LANGFUSE_INIT_USER_NAME: ${LANGFUSE_INIT_USER_NAME:-}
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:-}
+    depends_on:
+      langfuse-db:
+        condition: service_healthy
+      langfuse-clickhouse:
+        condition: service_started
+      redis:
+        condition: service_healthy
+      langfuse-minio:
+        condition: service_healthy
+    networks:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  langfuse_db:
+  langfuse_clickhouse:
+  langfuse_minio_data:
+  minio_data:
+  geoip_data:
+
+networks:
+  backend:

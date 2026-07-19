@@ -1,0 +1,13 @@
+{% load i18n %}{% autoescape off %}
+Sign in to {{ site_name }}
+
+Click the link below to sign in. This link will expire in {{ ttl_minutes }} minutes
+and can only be used once.
+
+{{ sign_in_url }}
+
+If you didn't request this, you can safely ignore this email — nothing will
+happen unless someone clicks the link above.
+
+— {{ site_name }}
+{% endautoescape %}

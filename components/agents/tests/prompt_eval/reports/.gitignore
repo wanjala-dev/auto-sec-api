@@ -1,0 +1,4 @@
+# Eval reports are local artifacts — open in browser, don't commit.
+# The canonical baseline reports live under docs/eval-reports/ instead.
+*
+!.gitignore

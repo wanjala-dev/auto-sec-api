@@ -1,0 +1,134 @@
+
+    <!doctype html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Welcome to {{ site_name }}</title>
+    <style type="text/css">
+      body {
+        margin: 0;
+        padding: 0;
+        background-color: #f4f6fb;
+        font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+        color: #1f2933;
+      }
+      table {
+        border-collapse: collapse;
+      }
+      a {
+        color: #0b6efd;
+      }
+      .container {
+        max-width: 600px;
+        width: 100%;
+        margin: 0 auto;
+        background-color: #ffffff;
+        border-radius: 16px;
+        overflow: hidden;
+        box-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
+      }
+      .header {
+        padding: 32px 24px 16px;
+        text-align: center;
+        border-bottom: 1px solid #e5e7eb;
+      }
+      .header h1 {
+        margin: 0;
+        font-size: 24px;
+        font-weight: 600;
+        color: #111928;
+      }
+      .content {
+        padding: 16px 24px 32px;
+        font-size: 16px;
+        line-height: 1.6;
+      }
+      .content p {
+        margin: 0 0 16px;
+      }
+      .button-wrapper {
+        margin: 32px 0;
+        text-align: center;
+      }
+      .button {
+        display: inline-block;
+        padding: 14px 32px;
+        border-radius: 999px;
+        background-color: #16a34a;
+        color: #ffffff !important;
+        font-size: 16px;
+        font-weight: 600;
+        text-decoration: none;
+        box-shadow: 0 12px 24px rgba(22, 163, 74, 0.24);
+      }
+      .fallback {
+        font-size: 14px;
+        color: #4b5563;
+        text-align: center;
+        margin-top: 24px;
+        word-break: break-word;
+      }
+      .footer {
+        padding: 24px;
+        text-align: center;
+        font-size: 14px;
+        background-color: #f0f4ff;
+        color: #334155;
+      }
+      @media only screen and (max-width: 480px) {
+        .content {
+          padding: 16px 18px 28px;
+          font-size: 15px;
+        }
+        .header {
+          padding: 28px 18px 14px;
+        }
+        .button-wrapper {
+          margin: 28px 0;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Preheader: shown by Gmail/Apple Mail/Outlook in the inbox preview line, hidden inside the email body. -->
+    <div style="display:none;font-size:1px;color:#ffffff;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;mso-hide:all;">Confirm your email to finish setting up your {{ site_name }} account.&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;</div>
+    <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="padding: 32px 16px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" cellpadding="0" cellspacing="0" class="container">
+            <tr>
+              <td class="header">
+                <h1>Welcome to {{ site_name }}</h1>
+              </td>
+            </tr>
+            <tr>
+              <td class="content">
+                <p>Hi {{ name }},</p>
+                <p>Thanks for joining {{ site_name }}! We just need to confirm your email address before you dive in.</p>
+                <p>You created an account using <strong>{{ email }}</strong>. To finish setting things up, please verify your email.</p>
+                <div class="button-wrapper">
+                  <a class="button" href="{{ redirect_link }}" target="_blank" rel="noopener">
+                    Confirm my email
+                  </a>
+                </div>
+                <p>If the button doesn&apos;t work, copy and paste the link below into your browser:</p>
+                <div class="fallback">
+                  <a href="{{ redirect_link }}" target="_blank" rel="noopener">{{ redirect_link }}</a>
+                </div>
+                <p>If you didn&apos;t create an {{ site_name }} account, you can safely ignore this message.</p>
+              </td>
+            </tr>
+            <tr>
+              <td class="footer">
+                Best,<br>
+                The {{ site_name }} Team
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
+  

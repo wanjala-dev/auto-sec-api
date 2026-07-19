@@ -1,0 +1,1 @@
+"""Explicit-architecture components package."""

@@ -1,0 +1,26 @@
+"""Azure OpenAI embeddings adapter — wraps apps.ai.embeddings.azure behind EmbeddingsPort."""
+
+from __future__ import annotations
+
+from components.knowledge.application.ports.embeddings_port import EmbeddingsPort
+
+
+class AzureEmbeddingsAdapter(EmbeddingsPort):
+
+    def __init__(self) -> None:
+        self._instance = None
+
+    def _get_instance(self):
+        if self._instance is None:
+            from components.knowledge.infrastructure.factories.embeddings.factory import EmbeddingsFactory
+            self._instance = EmbeddingsFactory.create_embeddings(provider="azure")
+        return self._instance
+
+    def embed_text(self, text: str) -> list[float]:
+        return self._get_instance().embed_query(text)
+
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        return self._get_instance().embed_documents(texts)
+
+    def provider_name(self) -> str:
+        return "azure"

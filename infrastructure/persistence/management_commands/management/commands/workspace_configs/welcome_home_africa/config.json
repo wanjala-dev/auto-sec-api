@@ -1,0 +1,49 @@
+{
+  "owner": {
+    "email": "admin@welcomehomeafrica.com",
+    "password": "ChangeMe123!",
+    "first_name": "Welcome",
+    "last_name": "Home",
+    "is_staff": true
+  },
+  "workspace": {
+    "name": "Welcome Home Africa",
+    "story": "Welcome Home Africa gives abandoned babies in Uganda a place to heal, grow, and be loved through medical care, nutrition, and family-centered ministry.",
+    "status": "active",
+    "privacy": "public",
+    "is_verified": true,
+    "categories": ["Health Promotion", "Community", "Faith Based"],
+    "subcategories": {
+      "Health Promotion": ["Infant Care", "Nutrition"],
+      "Community": ["Family Support"],
+      "Faith Based": ["Discipleship"]
+    },
+    "contribution_means": ["Funding", "Volunteering", "Prayer"],
+    "stripe": {
+      "tenant_url": "https://welcomehomeafrica.local",
+      "domain_url": "https://welcomehomeafrica.local",
+      "stripe_secret_key": "sk_test_welcomehome"
+    }
+  },
+  "staff_team_title": "Care Team",
+  "staff": [
+    {"first_name": "Janet", "last_name": "Ndagire", "email": "janet@welcomehomeafrica.com", "role": "Executive Director"},
+    {"first_name": "Paul", "last_name": "Mugerwa", "email": "paul@welcomehomeafrica.com", "role": "Operations Manager"},
+    {"first_name": "Lydia", "last_name": "Kawesa", "email": "lydia@welcomehomeafrica.com", "role": "Head Nurse"}
+  ],
+  "projects": [
+    {"title": "Baby Home Care", "description": "Comprehensive residential care for abandoned infants.", "url": "https://www.welcomehomeafrica.com/about"},
+    {"title": "Medical Partnerships", "description": "Collaborations with hospitals to ensure specialized care."},
+    {"title": "Family Reintegration", "description": "Preparing children and families for reunification or adoption."}
+  ],
+  "recipients_category": {"name": "Baby Home Residents", "description": "Babies currently living at Welcome Home Africa."},
+  "recipients": [
+    {"first_name": "Evelyn", "last_name": "Kirabo", "age": 1, "gender": "female", "needs": "Nutrition therapy and physical therapy.", "story": "Evelyn is recovering from severe malnutrition and responding well to care at the home.", "sponsored": false, "location": "Jinja, Uganda"}
+  ],
+  "news": [
+    {"title": "Story: From Crisis to Cuddles", "excerpt": "Baby Emmanuel's story reminds us why your support matters.", "body": "Our blog recently highlighted Emmanuel's journey from critical care to a thriving toddler surrounded by love.", "image": "https://www.welcomehomeafrica.com/wp-content/uploads/2023/10/emmanuel-story.jpg", "category": "Stories"}
+  ],
+  "pdfs": [
+    {"filename": "welcome-home-overview.pdf", "description": "Information sheet for new partners and volunteers."}
+  ]
+}

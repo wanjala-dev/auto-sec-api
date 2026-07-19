@@ -1,0 +1,13 @@
+Hi {{ donor_name }},
+
+This is a friendly reminder that your recurring {{ context_label }} payment of {{ currency|upper }} {{ amount }} will be processed on {{ billing_date }}.
+{% if recipient_name %}
+Recipient: {{ recipient_name }}
+{% endif %}{% if workspace_name %}
+Organization: {{ workspace_name }}
+{% endif %}
+If you need to update your payment method or cancel this subscription, please log in to your account before the billing date.
+{% if manage_url %}
+Manage your subscription: {{ manage_url }}
+{% endif %}
+You are receiving this email because you have an active recurring payment. If you believe this is an error, please contact {{ site_name }} support.

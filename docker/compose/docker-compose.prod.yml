@@ -1,0 +1,124 @@
+# =============================================================================
+# Production override
+#
+# Usage:
+#   docker compose -f docker/compose/docker-compose.yml \
+#                  -f docker/compose/docker-compose.prod.yml up -d
+#   Or: make up-prod
+#
+# Differences from staging:
+#   - Tighter resource limits
+#   - No exposed ports except web (reverse proxy handles the rest)
+#   - Stricter health check intervals
+#   - Log driver configuration
+#   - No Flower, no Langfuse UI ports
+# =============================================================================
+
+x-backend-image: &backend-image ${DOCKER_REGISTRY:-}wanjala-api-backend:${IMAGE_TAG:-latest}
+
+x-log-config: &log-config
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+
+  web:
+    image: *backend-image
+    command: ["gunicorn", "--bind", ":8000", "--workers", "${GUNICORN_WORKERS:-4}", "--timeout", "120", "--access-logfile", "-", "api.wsgi"]
+    ports:
+      - "${WEB_PORT:-8000}:8000"
+    env_file:
+      - ../../.env
+    environment:
+      DJANGO_SETTINGS_MODULE: api.settings.production
+      LANGFUSE_HOST: http://langfuse:3000
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+        condition: service_healthy
+    networks:
+      - backend
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+    <<: *log-config
+
+  db:
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 2G
+    <<: *log-config
+
+  redis:
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    <<: *log-config
+
+  celery_worker:
+    image: *backend-image
+    env_file:
+      - ../../.env
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+    <<: *log-config
+
+  celery_ai_teammate_worker:
+    image: *backend-image
+    env_file:
+      - ../../.env
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 2G
+    <<: *log-config
+
+  celery_aggregations_worker:
+    image: *backend-image
+    env_file:
+      - ../../.env
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    <<: *log-config
+
+  celery_beat:
+    image: *backend-image
+    env_file:
+      - ../../.env
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+    <<: *log-config
+
+  # ── Langfuse (internal only) ───────────────────────────────────────────
+
+  langfuse:
+    # No ports exposed — access via reverse proxy or internal network
+    ports: []
+
+  langfuse-minio:
+    # No ports exposed in production
+    ports: []

@@ -1,0 +1,65 @@
+{% extends "email/base.html" %}
+{% block preheader %}{{ sharer_display_name }} invited you to {{ resource_type_label|lower }} "{{ resource_name }}" on {{ site_name }}.{% endblock %}
+{% block heading %}You're invited to {{ resource_name }}{% endblock %}
+{% block subheading %}
+              <p style="margin:8px 0 0;font-size:14px;color:#6b7280;">
+                {{ sharer_display_name }}{% if owner_workspace_name %} at {{ owner_workspace_name }}{% endif %} on {{ site_name }}
+              </p>
+{% endblock %}
+{% block content %}
+              <p style="font-size:15px;line-height:1.6;color:#4a4a68;margin:0 0 16px;">
+                {{ sharer_display_name }} has given you
+                <strong>{{ role_label|lower }}</strong> access to
+                <strong>{{ resource_name }}</strong>
+                {% if has_account %}
+                  &mdash; your existing account already works, just sign in to accept.
+                {% else %}
+                  &mdash; we've reserved an account for you at this email address.
+                  Set a password to accept and access {{ resource_name }} right away.
+                {% endif %}
+              </p>
+
+              <!-- Verification code block -->
+              <table role="presentation" cellpadding="0" cellspacing="0" style="margin:24px auto;background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;">
+                <tr>
+                  <td style="padding:14px 20px;text-align:center;">
+                    <p style="margin:0 0 6px;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:#6b7280;">
+                      Your verification code
+                    </p>
+                    <p style="margin:0;font-size:24px;font-weight:700;letter-spacing:6px;color:#1a1a2e;font-family:Menlo,Monaco,'Courier New',monospace;">
+                      {{ verification_code }}
+                    </p>
+                  </td>
+                </tr>
+              </table>
+
+              <p style="font-size:13px;line-height:1.6;color:#6b7280;margin:0 0 24px;text-align:center;">
+                You'll enter this code on the accept page. We use it to confirm we sent this email to the right address.
+              </p>
+
+              {% if accept_url %}
+              <table role="presentation" cellpadding="0" cellspacing="0" style="margin:24px auto;">
+                <tr>
+                  <td style="background-color:{{ brand_primary|default:'#42B98F' }};border-radius:8px;">
+                    <a href="{{ accept_url }}" style="display:inline-block;padding:12px 28px;color:#ffffff;text-decoration:none;font-size:15px;font-weight:600;">
+                      {% if has_account %}Accept invitation{% else %}Set up your account{% endif %}
+                    </a>
+                  </td>
+                </tr>
+              </table>
+              <p style="font-size:12px;line-height:1.5;color:#999;text-align:center;margin:0 0 8px;">
+                Or copy and paste this link into your browser:
+              </p>
+              <p style="font-size:12px;line-height:1.5;color:#4a4a68;text-align:center;margin:0;word-break:break-all;">
+                <a href="{{ accept_url }}" style="color:#10b981;text-decoration:none;">{{ accept_url }}</a>
+              </p>
+              {% endif %}
+{% endblock %}
+{% block footer %}
+              <p style="font-size:12px;color:#999;margin:0 0 6px;text-align:center;">
+                This invitation expires in {{ expiry_days }} days.
+              </p>
+              <p style="font-size:12px;color:#999;margin:0;text-align:center;">
+                You're receiving this because {{ sharer_display_name }} invited <strong>{{ invited_email }}</strong> to collaborate on {{ site_name }}. If this wasn't you, you can safely ignore this email.
+              </p>
+{% endblock %}

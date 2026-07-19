@@ -1,0 +1,50 @@
+{
+  "owner": {
+    "email": "amy@kupendwaministries.org",
+    "password": "ChangeMe123!",
+    "first_name": "Amy",
+    "last_name": "Washington",
+    "is_staff": true
+  },
+  "workspace": {
+    "name": "Kupendwa Ministries",
+    "story": "Kupendwa Ministries supports expectant mothers and vulnerable babies in Uganda through safe maternity homes, mentorship, and gospel-centered community outreach.",
+    "status": "active",
+    "privacy": "public",
+    "is_verified": true,
+    "categories": ["Health Promotion", "Community", "Faith Based"],
+    "subcategories": {
+      "Health Promotion": ["Maternal Health", "Infant Care"],
+      "Community": ["Family Support", "Skills Training"],
+      "Faith Based": ["Discipleship"]
+    },
+    "contribution_means": ["Funding", "Volunteering", "Medical Support", "Prayer"],
+    "stripe": {
+      "tenant_url": "https://kupendwaministries.local",
+      "domain_url": "https://kupendwaministries.local",
+      "stripe_secret_key": "sk_test_kupendwa"
+    }
+  },
+  "staff_team_title": "Kupendwa Team",
+  "staff": [
+    {"first_name": "Amy", "last_name": "Washington", "email": "amy@kupendwaministries.org", "role": "Founder & Director"},
+    {"first_name": "Esther", "last_name": "Namakula", "email": "esther@kupendwaministries.org", "role": "Maternity Home Manager"},
+    {"first_name": "Joseph", "last_name": "Kato", "email": "joseph@kupendwaministries.org", "role": "Community Outreach Lead"}
+  ],
+  "projects": [
+    {"title": "Maternity Homes", "description": "Safe housing, prenatal care, and discipleship for expectant mothers.", "url": "https://www.kupendwaministries.org/what-we-do"},
+    {"title": "Skills Training", "description": "Vocational and business classes equipping mothers for independence."},
+    {"title": "Baby Rescue & Medical Care", "description": "Emergency medical interventions for high-risk pregnancies and newborns."}
+  ],
+  "recipients_category": {"name": "Mothers & Babies", "description": "Expectant mothers and babies receiving comprehensive care."},
+  "recipients": [
+    {"first_name": "Grace", "last_name": "Najjemba", "age": 19, "gender": "female", "needs": "Prenatal care and emergency delivery fund.", "story": "Grace is in her third trimester and enrolled in the maternity home for safe delivery due to complications.", "sponsored": false, "location": "Jinja, Uganda"},
+    {"first_name": "Baby", "last_name": "Isaiah", "age": 0, "gender": "male", "needs": "Infant formula and medical checkups.", "story": "Baby Isaiah was born prematurely and requires specialized follow-up care.", "sponsored": true, "location": "Jinja, Uganda"}
+  ],
+  "news": [
+    {"title": "Banquet for Babies Launches", "excerpt": "Annual fundraising banquet announced for supporters.", "body": "Kupendwa Ministries opened registration for the Banquet for Babies, highlighting testimonies from mothers whose lives were transformed.", "image": "https://www.kupendwaministries.org/wp-content/uploads/2023/08/banquet.jpg", "category": "Campaigns"}
+  ],
+  "pdfs": [
+    {"filename": "kupendwa-ministry-overview.pdf", "description": "Overview brochure shared with banquet attendees."}
+  ]
+}

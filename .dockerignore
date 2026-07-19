@@ -1,0 +1,42 @@
+# Version control
+.git
+.gitignore
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.pyproj
+
+# Virtual environments
+venv/
+.venv/
+env/
+env.bak/
+
+# Local data that should never bake into images
+media/
+test-media/
+logs/
+celerybeat-schedule
+
+# Node / frontend deps
+node_modules/
+
+# Editor files
+.DS_Store
+.idea/
+.vscode/
+
+# Coverage / test outputs
+.pytest_cache/
+.pytest-dbs/
+.coverage*
+coverage.xml
+
+# Misc
+*.log
+*.sqlite3
+tmp/

@@ -1,0 +1,188 @@
+aiohttp>=3.10.0
+aiosignal==1.3.1
+amqp==5.2.0
+annotated-types==0.7.0
+anyio==4.4.0
+asgiref==3.11.1
+async-timeout==4.0.2
+attrs==22.2.0
+beautifulsoup4==4.8.0
+boto3>=1.34.0
+braintree==4.26.0
+billiard==4.2.0
+cachetools==5.2.1
+celery==5.4.0
+certifi==2024.8.30
+cffi>=1.16.0
+charset-normalizer==3.3.2
+click==8.1.7
+click-didyoumean==0.3.1
+click-plugins==1.1.1
+click-repl==0.3.0
+coreapi==2.3.3
+coreschema==0.0.4
+cryptography>=42.0.0
+dataclasses-json==0.6.7
+defusedxml==0.7.1
+dj-database-url==0.5.0
+Django==6.0.3
+django-adminlte-ui==2.1.1
+django-allauth>=65.3.0
+channels==4.1.0
+channels-redis==4.2.0
+daphne==4.1.2
+django-celery-beat==2.9.0
+django-celery-results==2.6.0
+django-cors-headers==4.3.1
+django-crispy-forms==2.6
+django-money==3.6.1
+py-moneyed==3.0
+django-elasticsearch-dsl==8.0
+django-environ==0.9.0
+django-filter==24.2
+django-haystack==3.3.0
+django-js-asset==2.0.0
+django-modelcluster==6.0
+django-otp==1.7.0
+dj-rest-auth==7.2.0
+django-rest-passwordreset==1.5.0
+django-seed==0.3.1
+django-storages==1.14.6
+django-tables2==2.8.0
+django-treebeard==4.5.1
+django-widget-tweaks==1.5.0
+zxcvbn==4.5.0
+djangorestframework>=3.15.0
+djangorestframework-simplejwt==5.5.1
+drf-spectacular==0.29.0
+drf-writable-nested==0.7.0
+easy-thumbnails==2.10.0
+elastic-apm==6.25.0
+elastic-transport==8.15.0
+elasticsearch==8.15.1
+elasticsearch-dsl==8.15.3
+Faker==18.3.1
+frozenlist>=1.4.0
+# Session enrichment: MaxMind GeoLite2 reader (IP → city/country). The
+# mmdb database file itself is optional at runtime — see
+# docs/reference/GEOIP_SETUP.md.
+geoip2>=4.8.0
+gunicorn==23.0.0
+h11==0.14.0
+httpcore==1.0.5
+httplib2==0.21.0
+httpx==0.27.2
+idna==3.8
+importlib-metadata==6.8.0
+inflection==0.5.1
+itypes==1.2.0
+Jinja2==3.1.2
+jsonpatch==1.33
+jsonpointer==3.0.0
+jsonschema==4.17.3
+kombu==5.4.0
+# ── LangChain 0.3 stack. The 1.x migration (to unlock deepagents.RubricMiddleware)
+# is planned as its own deliberate pass — see docs/plans/LANGCHAIN_1X_MIGRATION_2026-07-18.md.
+# Do NOT bump these to 1.x without migrating base.py (AgentExecutor→create_agent),
+# graph_agent.py, and the langgraph 0.2→1.x orchestrator together.
+langchain==0.3.25
+langchain-community==0.3.24
+langchain-core==0.3.83
+langchain-text-splitters==0.3.8
+langchain-openai==0.3.17
+langchain-postgres>=0.0.12
+pgvector>=0.3.6
+langgraph>=0.2.76,<0.3
+langgraph-checkpoint>=2.1.2,<3
+# langfuse 2.48.0 targets langchain-core 0.x callbacks; a 3.x bump is likely required
+# for core 1.x compatibility (migration doc risk R2). Tracing degrades gracefully via
+# NullTracingAdapter, so this is not a blocker for the core-worker spike. VERIFY at resolve.
+langfuse==2.48.0
+langsmith>=0.8.11,<0.9
+Markdown==3.4.1
+MarkupSafe==2.1.2
+marshmallow==3.19.0
+multidict>=6.1.0
+mypy-extensions==1.0.0
+numpy==1.26.4
+oauthlib==3.2.2
+openai==1.109.1
+openpyxl==3.1.5
+orjson==3.10.7
+packaging==24.1
+Pillow>=10.4.0
+plaid-python==39.2.0
+prompt_toolkit==3.0.47
+proto-plus==1.22.2
+protobuf==4.21.12
+psycopg2-binary==2.9.9
+psycopg[binary,pool]==3.2.3
+pyasn1==0.4.8
+pyasn1-modules==0.2.8
+pycparser==2.21
+pydantic==2.8.2
+pydantic-core==2.20.1
+pyhcl==0.4.4
+PyJWT>=2.8.0
+pyparsing==3.0.9
+pyrsistent==0.19.3
+pysolr==3.9.0
+python-dateutil==2.8.2
+python-docx==1.1.2
+python-dotenv==0.21.0
+python3-openid==3.2.0
+pytz==2022.7.1
+PyYAML==6.0.2
+PyPDF2==3.0.1
+pypdf==6.1.0
+redis==5.0.1
+regex==2024.7.24
+google-auth==2.13.0
+google-api-core==2.10.2
+google==3.0.0
+requests==2.32.3
+requests-oauthlib==1.3.1
+rsa==4.9
+ruamel.yaml>=0.18.0
+ruamel.yaml.clib>=0.2.8
+six>=1.16.0
+sniffio==1.3.1
+sorl-thumbnail==13.0.0
+sortedcontainers==2.4.0
+soupsieve==2.6
+# RAG cross-encoder reranker (Tier 3 #10).  Without this,
+# CrossEncoderRerankerAdapter silently runs the Jaccard
+# keyword-overlap fallback — Context Precision sits at 0.41 in the
+# 2026-06-10 eval baseline.  Real cross-encoder is the precision
+# lift the baseline doc identified.  Pulls torch + transformers
+# (~750MB image bloat) but the singleton model load is amortised
+# across all workspace retrieval calls.  See
+# docs/plans/RAG_EVAL_BASELINE.md.
+sentence-transformers>=3.0,<4.0
+SQLAlchemy==2.0.32
+sqlparse>=0.5.0
+stripe==5.0.0
+tabulate==0.8.3
+tenacity==8.5.0
+termcolor==1.1.0
+text-unidecode==1.3
+tiktoken==0.7.0
+toposort==1.10
+tqdm==4.65.0
+typing-inspect==0.9.0
+typing_extensions==4.12.2
+tzdata==2024.1
+uritemplate==4.1.1
+urllib3==2.2.2
+# Session enrichment: User-Agent → device/browser/OS parsing.
+user-agents==2.2.0
+vine==5.1.0
+wcwidth==0.2.13
+webencodings==0.5.1
+Willow==1.4
+wrapt>=1.16.0
+XlsxWriter==1.3.7
+xlrd==1.2.0
+xlwt==1.3.0
+yarl>=1.9.0
+zipp==3.17.0

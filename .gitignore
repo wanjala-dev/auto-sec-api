@@ -1,0 +1,68 @@
+# ── Environment / secrets ─────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+env.json
+.k8s
+
+# ── Python artifacts ─────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# ── Virtual environments ─────────────────────────────────────────────────────
+venv/
+.venv*/
+env/
+env.bak/
+
+# ── Testing ──────────────────────────────────────────────────────────────────
+.pytest-dbs/
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# ── Database / runtime state ─────────────────────────────────────────────────
+*.sqlite3
+celerybeat-schedule
+celerybeat.pid
+
+# ── Media / static (generated) ───────────────────────────────────────────────
+media/
+static-test/
+test-media/
+logs/
+*.log
+
+# ── Node / frontend ─────────────────────────────────────────────────────────
+node_modules/
+
+# ── OS files ─────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Editor / IDE ─────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── Temp / build ─────────────────────────────────────────────────────────────
+tmp/
+dist/
+*.egg-info/
+.claude/tools/sred_backfill_sheet.csv
+.claude/tools/sred_pr_ticket_map.json
+
+# QA agent artifacts (screenshots, traces, videos) + state.json is a LIVE demo JWT — never commit
+.playwright-mcp/
+**/state.json
+# Playwright MCP screenshots belong in ~/Desktop/claude-smoke (the MCP's --output-dir), never the repo
+/*.png
+geoip/
+.claude/worktrees/

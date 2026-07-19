@@ -1,0 +1,14 @@
+{% load i18n %}{% autoescape off %}Welcome to {{ site_name }}
+
+Hi {{ name }},
+
+Thanks for joining {{ site_name }}! We just need to confirm your email address before you dive in.
+
+You created an account using {{ email }}. To finish setting things up, open the link below to verify your email:
+
+{{ redirect_link }}
+
+If you didn't create a {{ site_name }} account, you can safely ignore this message.
+
+— The {{ site_name }} Team
+{% endautoescape %}

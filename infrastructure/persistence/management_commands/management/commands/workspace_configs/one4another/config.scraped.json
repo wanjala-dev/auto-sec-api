@@ -1,0 +1,170 @@
+{
+  "owner": {
+    "email": "one4another-owner@example.org",
+    "password": "ChangeMe123!",
+    "first_name": "One4Another",
+    "last_name": "Admin",
+    "is_staff": true
+  },
+  "workspace": {
+    "name": "One4Another International",
+    "story": "One4Another is a registered Canadian charity founded in 2012 by siblings Glenn Pascoe and Wendy Hayhoe from Waterloo, Ontario, Canada. In 2011 and 2012, while volunteering together in Uganda, Glenn and Wendy had parents asking them for help accessing surgical care for their children. They were so moved seeing parents unable to afford critical surgeries for their kids that they came back to Canada determined to do something. They enlisted the help of a nurse named Olivia (Program Coordinator) and in 2012 they facilitated operations for 6 kids. At the beginning, the siblings had no ambition of becoming an organization but the work quickly began to grow. Today, with the help of a dedicated staff team, One4Another serves over 500 children per year and now has its own surgical center in Jinja, Uganda. Hernias are one of the most common surgical conditions amongst children. There are different types but the one that we see the most is inguinal hernias amongst boys. This is as a result of an opening around the virginalis tube failing to close properly prior to birth. The intestines then begin to slide down into the scrotum through that opening. These kids require an operation to close the opening. The surgeon does this by pushing the intestines back up into the abdominal cavity and then stitching the opening shut. It is a fairly simple and inexpensive operation but prevents considerable discomfort and the possibility of an incarcerated or strangulated hernia which can be life threatening.",
+    "status": "active",
+    "privacy": "public",
+    "is_verified": true,
+    "categories": [
+      "Health Promotion",
+      "Community"
+    ],
+    "subcategories": {
+      "Health Promotion": [
+        "Surgery",
+        "Rehabilitation"
+      ],
+      "Community": [
+        "Outreach"
+      ]
+    },
+    "contribution_means": [
+      "Funding",
+      "Volunteering",
+      "Medical Support"
+    ],
+    "stripe": {
+      "tenant_url": "https://one4another.local",
+      "domain_url": "https://one4another.local",
+      "stripe_secret_key": "sk_test_one4another"
+    }
+  },
+  "staff_team_title": "Staff Team",
+  "staff": [
+    {
+      "first_name": "Olivia",
+      "last_name": "Nurse",
+      "email": "olivia@example.org",
+      "role": "Lead Nurse"
+    },
+    {
+      "first_name": "Steven",
+      "last_name": "Coordinator",
+      "email": "steven@example.org",
+      "role": "Community Coordinator"
+    },
+    {
+      "first_name": "Executive",
+      "last_name": "Director Glenn Pascoe gpascoe@one4anotherintl.ca",
+      "email": "gpascoe@one4anotherintl.ca",
+      "role": null,
+      "raw": "Executive Director Glenn Pascoe gpascoe@one4anotherintl.ca"
+    },
+    {
+      "first_name": "Development",
+      "last_name": "Director Wendy Hayhoe whayhoe@one4anotherintl.ca",
+      "email": "whayhoe@one4anotherintl.ca",
+      "role": null,
+      "raw": "Development Director Wendy Hayhoe whayhoe@one4anotherintl.ca"
+    },
+    {
+      "first_name": "Program",
+      "last_name": "Director Olivia Nakabonge olivia@one4anotherintl.ca",
+      "email": "olivia@one4anotherintl.ca",
+      "role": null,
+      "raw": "Program Director Olivia Nakabonge olivia@one4anotherintl.ca"
+    },
+    {
+      "first_name": "Lead",
+      "last_name": "Program Nurse Toni Nsiiro toni@one4anotherintl.ca",
+      "email": "toni@one4anotherintl.ca",
+      "role": null,
+      "raw": "Lead Program Nurse Toni Nsiiro toni@one4anotherintl.ca"
+    },
+    {
+      "first_name": "Follow",
+      "last_name": "Up Care & Chaplain Joel Bossa joel@one4anotherintl.ca",
+      "email": "joel@one4anotherintl.ca",
+      "role": null,
+      "raw": "Follow Up Care & Chaplain Joel Bossa joel@one4anotherintl.ca"
+    },
+    {
+      "first_name": "Community",
+      "last_name": "Coordinator Steven Kayongo steven@one4anotherintl.ca",
+      "email": "steven@one4anotherintl.ca",
+      "role": null,
+      "raw": "Community Coordinator Steven Kayongo steven@one4anotherintl.ca"
+    },
+    {
+      "first_name": "Recreation",
+      "last_name": "Therapist Lillian Poni lillian@one4anotherintl.ca",
+      "email": "lillian@one4anotherintl.ca",
+      "role": null,
+      "raw": "Recreation Therapist Lillian Poni lillian@one4anotherintl.ca"
+    },
+    {
+      "first_name": "Data",
+      "last_name": "Officer Musa Wakirabe musa@one4anotherintl.ca",
+      "email": "musa@one4anotherintl.ca",
+      "role": null,
+      "raw": "Data Officer Musa Wakirabe musa@one4anotherintl.ca"
+    },
+    {
+      "first_name": "Physiotherapist",
+      "last_name": "Viola Nabwami viola@one4anotherintl.ca",
+      "email": "viola@one4anotherintl.ca",
+      "role": null,
+      "raw": "Physiotherapist Viola Nabwami viola@one4anotherintl.ca"
+    }
+  ],
+  "projects": [
+    {
+      "title": "Surgical Center Operations",
+      "description": "Coordination of surgeries and post-operative care at the Jinja center."
+    },
+    {
+      "title": "Rural Outreach and Assessments",
+      "description": "Linking children in villages with treatment and assessments."
+    }
+  ],
+  "recipients_category": {
+    "name": "Surgical Care",
+    "description": "Children needing one-time surgical interventions."
+  },
+  "recipients": [
+    {
+      "first_name": "Musa",
+      "last_name": "Hope",
+      "age": 9,
+      "gender": "male",
+      "needs": "Hernia repair and follow-up care.",
+      "story": "Referred through outreach, awaiting surgery scheduling.",
+      "sponsored": false,
+      "location": "Jinja, Uganda"
+    }
+  ],
+  "news": [
+    {
+      "title": "Surgical Center Expands Capacity",
+      "excerpt": "Growing team improves throughput.",
+      "body": "With additional nursing staff, the center can support more surgeries each month.",
+      "image": "https://one4anotherintl.ca/static/img/placeholder.jpg",
+      "category": "Updates"
+    },
+    {
+      "title": "\u201cLife\u2019s most persistent and urgent question is, what are you doing for others?\u201d",
+      "excerpt": "MARTIN LUTHER KING JR.",
+      "body": "MARTIN LUTHER KING JR.",
+      "image": null,
+      "category": "Campaigns",
+      "source_url": "https://one4anotherintl.ca/more-fundraiser-ideas/"
+    }
+  ],
+  "pdfs": [
+    {
+      "filename": "one4another-impact-overview.pdf",
+      "description": "Overview of surgical programs and outcomes."
+    }
+  ],
+  "metadata": {
+    "scraped_at": "2025-10-07T03:19:36.114496+00:00",
+    "scraper_notes": "Fundraiser ideas page treated as news/campaign highlights."
+  }
+}

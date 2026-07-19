@@ -1,0 +1,358 @@
+# =============================================================================
+# EC2 override — lean production stack without Elasticsearch or Langfuse.
+#
+# Usage:
+#   docker compose -f docker/compose/docker-compose.yml \
+#                  -f docker/compose/docker-compose.ec2.yml up -d
+#   Or: make up-ec2
+#
+# Differences from standard production:
+#   - No Elasticsearch (search uses PostgreSQL, vectors use pgvector)
+#   - No Langfuse stack (5 fewer containers — tracing degrades to no-op)
+#   - Nginx + Certbot for HTTPS (replaces ALB — saves ~$16/mo)
+#   - Significantly lower resource footprint
+#
+# First deploy:
+#   1. docker compose -f ... up -d
+#   2. bash docker/nginx/init-ssl.sh api.wanjala.art you@example.com
+# =============================================================================
+
+x-backend-image: &backend-image ${DOCKER_REGISTRY:-}wanjala-api-backend:${IMAGE_TAG:-latest}
+
+# Every backend service (web + celery worker + celery beat) is backed by
+# the same image, built from the same Dockerfile prod stage. Declaring
+# ``build:`` alongside ``image:`` lets ``docker compose build --pull``
+# actually rebuild on EC2 — without this, compose sees only ``image:`` and
+# silently no-ops, leaving the host running stale code after a deploy.
+# Context is ``../..`` (repo root) relative to this compose file so the
+# Dockerfile's ``COPY . .`` picks up the whole app tree.
+x-backend-build: &backend-build
+  context: ../..
+  dockerfile: docker/django/Dockerfile
+  target: prod
+
+x-log-config: &log-config
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+
+  # ── Nginx reverse proxy (replaces ALB) ─────────────────────────────────────
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      API_DOMAIN: ${API_DOMAIN:-api.wanjala.art}
+      FRONTEND_DOMAIN: ${FRONTEND_DOMAIN:-demo.octopusintl.org}
+    entrypoint: ["/bin/sh", "/etc/nginx/docker-entrypoint.sh"]
+    volumes:
+      - ../../docker/nginx/docker-entrypoint.sh:/etc/nginx/docker-entrypoint.sh:ro
+      - ../../docker/nginx/nginx-initial.conf:/etc/nginx/templates/nginx-initial.conf:ro
+      - ../../docker/nginx/nginx.conf:/etc/nginx/templates/nginx-https.conf:ro
+      - certbot_webroot:/var/www/certbot:ro
+      - certbot_certs:/etc/letsencrypt:ro
+      - frontend_build:/var/www/frontend:ro
+      - django_static:/app/static:ro
+      - django_media:/app/media:ro
+    depends_on:
+      - web
+    networks:
+      - backend
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 64M
+    <<: *log-config
+
+  # One-shot: obtains certs on first deploy, then exits. On subsequent
+  # deploys the certs already exist so it exits immediately.
+  certbot-init:
+    image: certbot/certbot:latest
+    environment:
+      API_DOMAIN: ${API_DOMAIN:-api.wanjala.art}
+      FRONTEND_DOMAIN: ${FRONTEND_DOMAIN:-demo.octopusintl.org}
+      CERTBOT_EMAIL: ${CERTBOT_EMAIL:-c0d3henry@gmail.com}
+    entrypoint: ["/bin/sh", "/opt/certbot-init.sh"]
+    volumes:
+      - ../../docker/nginx/certbot-init.sh:/opt/certbot-init.sh:ro
+      - certbot_webroot:/var/www/certbot
+      - certbot_certs:/etc/letsencrypt
+    depends_on:
+      - nginx
+    networks:
+      - backend
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.1"
+          memory: 64M
+    <<: *log-config
+
+  # Auto-renew: checks every 12 hours, renews if <30 days remaining.
+  certbot:
+    image: certbot/certbot:latest
+    volumes:
+      - certbot_webroot:/var/www/certbot
+      - certbot_certs:/etc/letsencrypt
+    entrypoint: /bin/sh -c "trap exit TERM; while :; do certbot renew --quiet; sleep 43200; done"
+    networks:
+      - backend
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "0.1"
+          memory: 64M
+    <<: *log-config
+
+  # ── Django backend ─────────────────────────────────────────────────────────
+
+  web:
+    image: *backend-image
+    build: *backend-build
+    # Gunicorn config (2026-06-11) — research-backed memory optimization for the
+    # 512M→1024M EC2 web container:
+    #   --preload: master loads Django + agents + Plaid SDK ONCE, workers fork
+    #     and share via Linux copy-on-write. Rippling reported 40-70% memory
+    #     reduction on their Django fleet using this pattern (see their
+    #     engineering blog). Per-worker incremental memory drops from ~250MB
+    #     to ~50-80MB. Caveat: incompatible with module-level code that opens
+    #     persistent connections at import — our Plaid adapter does
+    #     `import plaid` at module level but only instantiates the client
+    #     inside `build_plaid_api()`, so we're safe. Django ORM is fork-safe.
+    #   --worker-class gthread + --threads 4 (2026-07-01): give the 2 workers real
+    #     concurrency without paying for more processes. Sync workers handle ONE
+    #     request at a time, so with 2 workers a 3rd concurrent request has no
+    #     upstream and nginx returns 502 — that was a primary cause of the demo
+    #     flapping under a scanner flood. Threads share the worker's forked memory
+    #     (no extra ~380MB RSS per unit), so 2×4=8 concurrent request slots fit the
+    #     1536M ceiling. Our request profile is I/O-bound (DB/pgbouncer, Redis,
+    #     Stripe), which threads overlap well; the GIL is released during I/O.
+    #   --max-requests 2000 / --max-requests-jitter 200 (raised from 500/100):
+    #     a 404 flood burned the old 500-request budget in seconds, forcing
+    #     constant worker recycles whose ~6s boot gap dropped capacity to 1 (or 0
+    #     when both recycled together) → 502s. 2000 keeps recycling for memory
+    #     hygiene without letting bot traffic trigger it. The nginx rate-limit +
+    #     444 scanner drop (docker/nginx/nginx.conf) removes most of that traffic
+    #     before it reaches gunicorn at all.
+    # Sources: docs.gunicorn.org (design/gthread), devcenter.heroku.com,
+    # rippling.com engineering blog, adamj.eu/tech/working-around-memory-leaks.
+    command:
+      - "gunicorn"
+      - "--bind"
+      - ":8000"
+      - "--workers"
+      - "${GUNICORN_WORKERS:-2}"
+      - "--worker-class"
+      - "gthread"
+      - "--threads"
+      - "${GUNICORN_THREADS:-4}"
+      - "--preload"
+      - "--max-requests"
+      - "2000"
+      - "--max-requests-jitter"
+      - "200"
+      - "--timeout"
+      - "120"
+      - "--access-logfile"
+      - "-"
+      - "api.wsgi"
+    ports: []  # Not exposed directly — Nginx proxies to it
+    env_file:
+      - ../../.env.production
+    environment:
+      GEOIP_PATH: /geoip
+    volumes:
+      - django_static:/app/static
+      - django_media:/app/media
+      - geoip_data:/geoip:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_started
+    networks:
+      - backend
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          # Bumped 2026-06-11: 512M→1024M after Plaid-exchange OOM kills.
+          # Bumped 2026-06-30: 1024M→1536M — gunicorn (2 preloaded workers,
+          # ~380MB RSS each + Django) was still brushing the 1024M cgroup
+          # ceiling and getting CONSTRAINT_MEMCG OOM-killed mid-request (dmesg:
+          # gunicorn killed Jun 16 ×3, Jun 29), which surfaced as 502s on login.
+          # 1536M gives the workers room; paired with celery --concurrency 3→2
+          # (~250MB freed) and a 2G→4G swapfile so the 3.8GB box stays balanced.
+          memory: 1536M
+    <<: *log-config
+
+  # ── Daphne (ASGI WebSocket server, parallel to gunicorn) ───────────────────
+  # Handles `/ws/*` requests (Channels). Routed by nginx alongside the
+  # gunicorn HTTP service. See docs/plans/REALTIME_OBSERVABILITY_PLAN.md
+  # Phase 7.0 for the design + nginx config requirements.
+  daphne:
+    image: *backend-image
+    build: *backend-build
+    command: ["daphne", "-b", "0.0.0.0", "-p", "8001", "api.asgi:application"]
+    ports: []  # Not exposed directly — Nginx proxies /ws/* to this service
+    env_file:
+      - ../../.env.production
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_started
+    networks:
+      - backend
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+    <<: *log-config
+
+  db:
+    image: pgvector/pgvector:pg16
+    # Conservative tuning for the 2G cgroup limit. Postgres ships with a tiny
+    # 128MB shared_buffers default that ignores the container's headroom. These
+    # flags right-size cache + sort/hash memory and turn on pg_stat_statements
+    # so the /sql skill's "find the slow queries" workflow works on the demo.
+    #   shared_buffers       ~25% of container RAM
+    #   effective_cache_size ~75% (planner hint — not an allocation)
+    #   work_mem             per sort/hash node; keep modest, many can run at once
+    #   max_connections      stays 100 — PgBouncer keeps the real count far lower
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=100"
+      - "-c"
+      - "shared_buffers=512MB"
+      - "-c"
+      - "effective_cache_size=1536MB"
+      - "-c"
+      - "work_mem=16MB"
+      - "-c"
+      - "maintenance_work_mem=128MB"
+      - "-c"
+      - "shared_preload_libraries=pg_stat_statements"
+      - "-c"
+      - "pg_stat_statements.track=all"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 2G
+    <<: *log-config
+
+  # PgBouncer is tiny — a single lightweight process multiplexing connections.
+  pgbouncer:
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 64M
+    <<: *log-config
+
+  redis:
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+    <<: *log-config
+
+  # ── Disable Elasticsearch ──────────────────────────────────────────────────
+  langfuse:
+    profiles: ["disabled"]
+  langfuse-db:
+    profiles: ["disabled"]
+  langfuse-clickhouse:
+    profiles: ["disabled"]
+  langfuse-minio:
+    profiles: ["disabled"]
+  langfuse-worker:
+    profiles: ["disabled"]
+
+  # ── Unified Celery worker (replaces 3 separate workers) ───────────────────
+  # Consumes all queues: default, ai_teammate, workspace_aggregations.
+  # Saves ~1.5 GB RAM vs running 3 dedicated workers.
+
+  celery_worker:
+    image: *backend-image
+    build: *backend-build
+    command: /start-celeryworker-unified
+    env_file:
+      - ../../.env.production
+    environment:
+      # Default 2 (2026-06-30): frees ~250MB on the RAM-tight t3a.medium demo
+      # to offset the web container's mem_limit bump. This compose env is the
+      # authoritative knob — it overrides the script's own default. Raise via
+      # CELERY_UNIFIED_CONCURRENCY on a larger host.
+      UNIFIED_CONCURRENCY: "${CELERY_UNIFIED_CONCURRENCY:-2}"
+      GEOIP_PATH: /geoip
+    volumes:
+      - django_static:/app/static
+      - django_media:/app/media
+      - geoip_data:/geoip:ro
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+    <<: *log-config
+
+  # Tiny footprint; parked on ``sleep infinity`` until MAXMIND_* creds land
+  # in .env.production (see base compose + docs/reference/GEOIP_SETUP.md).
+  geoipupdate:
+    deploy:
+      resources:
+        limits:
+          cpus: "0.1"
+          memory: 64M
+    <<: *log-config
+
+  celery_ai_teammate_worker:
+    profiles: ["disabled"]
+
+  celery_aggregations_worker:
+    profiles: ["disabled"]
+
+  celery_beat:
+    image: *backend-image
+    build: *backend-build
+    env_file:
+      - ../../.env.production
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 256M
+    <<: *log-config
+
+volumes:
+  certbot_webroot:
+  certbot_certs:
+  django_static:
+  django_media:
+  frontend_build:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${FRONTEND_BUILD_PATH:-/home/ubuntu/frontend/build}

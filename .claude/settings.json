@@ -1,0 +1,73 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(make *)",
+      "Bash(python manage.py *)",
+      "Bash(pytest *)",
+      "Bash(ruff *)",
+      "Bash(pre-commit *)",
+      "Bash(git status*)",
+      "Bash(git log *)",
+      "Bash(git diff *)",
+      "Bash(git branch *)",
+      "Bash(git checkout *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git stash *)",
+      "Bash(git show *)",
+      "Bash(git blame *)",
+      "Bash(docker compose *)",
+      "Bash(pip install *)",
+      "Bash(pip freeze*)",
+      "Bash(celery *)",
+      "Bash(gh *)",
+      "Bash(ls *)",
+      "Bash(ls)",
+      "Bash(pwd)",
+      "Bash(which *)",
+      "Bash(* --version)",
+      "Bash(* --help)",
+      "Read",
+      "Edit",
+      "Write",
+      "WebFetch(domain:docs.djangoproject.com)",
+      "WebFetch(domain:www.django-rest-framework.org)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:pypi.org)"
+    ],
+    "deny": [
+      "Bash(rm -rf *)",
+      "Bash(git push --force *)",
+      "Bash(git reset --hard *)",
+      "Bash(git clean -f*)",
+      "Bash(make clean-all)",
+      "Edit(.env)",
+      "Edit(.env.*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "if": "Bash(git push *)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "BRANCH=$(git branch --show-current) && if [ \"$BRANCH\" = \"main\" ] || [ \"$BRANCH\" = \"master\" ]; then echo 'BLOCKED: Do not push directly to main/master. Use a PR.' >&2; exit 2; fi"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "FILE=$(echo \"$TOOL_INPUT\" | jq -r '.file_path // empty') && if [ -n \"$FILE\" ] && echo \"$FILE\" | grep -qE '\\.py$'; then ruff format --quiet \"$FILE\" 2>/dev/null; ruff check --fix --quiet \"$FILE\" 2>/dev/null; fi; true"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,2 @@
+"""Image conversation endpoints (placeholder)"""
+

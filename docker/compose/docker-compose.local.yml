@@ -1,0 +1,197 @@
+# =============================================================================
+# Local development override
+#
+# Usage:
+#   docker compose -f docker/compose/docker-compose.yml \
+#                  -f docker/compose/docker-compose.local.yml up
+#   Or: make up
+#
+# Adds:
+#   - Dev Dockerfile target (hot-reload, dev requirements)
+#   - Code volume mounts for live editing
+#   - Exposed ports for local access (db, redis, elasticsearch, flower, langfuse)
+#   - Flower monitoring UI
+# =============================================================================
+
+x-backend-image: &backend-image wanjala-api-backend:dev
+
+services:
+
+  web:
+    build:
+      context: ../..
+      dockerfile: docker/django/Dockerfile
+      target: dev
+    image: *backend-image
+    command: /start
+    volumes:
+      - ../..:/app
+      - geoip_data:/geoip:ro
+    tmpfs:
+      # Overlay pytest scratch dirs on tmpfs so SQLite test DBs and the pytest
+      # cache live in RAM instead of going through the host bind-mount. These
+      # paths shadow the corresponding subdirs of the /app bind-mount, which
+      # is fine because pytest doesn't need them visible from the host.
+      # Cleared on container restart; --reuse-db just rebuilds the schema once.
+      - /app/.pytest-dbs:size=200m,mode=1777
+      - /app/.pytest_cache:size=100m,mode=1777
+    ports:
+      - "${WEB_PORT:-8010}:8000"
+    env_file:
+      - ../../.env
+    environment:
+      DJANGO_SETTINGS_MODULE: api.settings.local
+      GEOIP_PATH: /geoip
+      MCP_API_BASE_URL: http://127.0.0.1:8000
+      MCP_AUTO_TOKEN_USER_EMAIL: henry@wanjala.art
+      LANGFUSE_HOST: http://langfuse:3000
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_started
+      gotenberg:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - backend
+    restart: unless-stopped
+
+  gotenberg:
+    ports:
+      - "${GOTENBERG_PORT:-3200}:3000"
+
+  minio:
+    ports:
+      - "${MINIO_PORT:-9100}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_REPORTS_PORT:-9101}:9001"
+
+  db:
+    ports:
+      - "${DB_PORT:-5432}:5432"
+
+  # Expose the pooler locally so you can `psql -h 127.0.0.1 -p 6433` into the
+  # admin console (SHOW POOLS / SHOW STATS) while debugging.
+  pgbouncer:
+    ports:
+      - "${PGBOUNCER_PORT:-6433}:6432"
+
+  redis:
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+
+  celery_worker:
+    image: *backend-image
+    volumes:
+      - ../..:/app
+      - geoip_data:/geoip:ro
+    env_file:
+      - ../../.env
+
+  celery_ai_teammate_worker:
+    image: *backend-image
+    volumes:
+      - ../..:/app
+    env_file:
+      - ../../.env
+
+  celery_aggregations_worker:
+    image: *backend-image
+    volumes:
+      - ../..:/app
+    env_file:
+      - ../../.env
+
+  celery_beat:
+    image: *backend-image
+    volumes:
+      - ../..:/app
+    env_file:
+      - ../../.env
+
+  # ── Dev-only services ──────────────────────────────────────────────────
+
+  flower:
+    image: *backend-image
+    command: /start-flower
+    volumes:
+      - ../..:/app
+    env_file:
+      - ../../.env
+    ports:
+      - "${FLOWER_PORT:-5557}:5555"
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    networks:
+      - backend
+    restart: unless-stopped
+
+  # ── Stripe CLI webhook forwarder (local money-path testing) ────────────
+  # Brings Stripe webhooks up with the stack so donation + billing flows can
+  # be exercised locally against real Stripe TEST-MODE events — no separate
+  # `stripe listen` terminal. See docs/payments/LOCAL_STRIPE_WEBHOOKS.md.
+  #
+  # ONE `stripe listen` session, BOTH routing flags — this is the Stripe-
+  # documented pattern and it matters for correctness:
+  #   • --forward-connect-to → Stripe CONNECT events (all donor money on
+  #     connected accounts) → the donations webhook.
+  #   • --forward-to         → platform/direct events (workspace SaaS
+  #     billing) → the workspaces/billing webhook.
+  #
+  # WHY ONE SESSION, NOT TWO (the bug this fixes): a `stripe listen` with
+  # only `--forward-to` forwards CONNECT events to that URL too (per the CLI
+  # reference: "By default, the same URL will be used for all webhook
+  # events"). Two separate sessions (one connect-only, one forward-to-only)
+  # therefore CROSS-DELIVER connect events to the billing endpoint, which
+  # records them "ignored" in the shared PaymentEvent idempotency table and
+  # makes the donations endpoint dedupe-skip them — so recurring sponsorship
+  # invoices never book a Donation. Giving ONE session both flags routes
+  # connect→donations and direct→billing with no overlap. This mirrors
+  # production, where Connect-scope and platform-scope Dashboard webhooks are
+  # distinct registrations that don't overlap.
+  #
+  # ONE-TIME setup (the CLI signing secret is stable per Stripe account):
+  #     make stripe-webhook-secret      # prints the whsec_… + the .env lines
+  # then set STRIPE_CONNECT_DONATIONS_WEBHOOK_SECRET / STRIPE_WEBHOOK_KEY /
+  # STRIPE_SUBSCRIPTIONS_WEBHOOK_SECRET to that value and `make restart`.
+  # The single session signs both connect and direct events with that one
+  # secret, so all three vars share it.
+  #
+  # ${STRIPE_SECRET_KEY} is substituted from .env at `make up` (must be a
+  # sk_test_… key — `stripe listen` only forwards test-mode events).
+
+  stripe_webhooks:
+    image: stripe/stripe-cli:latest
+    command:
+      - listen
+      - --api-key
+      - ${STRIPE_SECRET_KEY}
+      - --skip-update
+      - --forward-connect-to
+      - http://web:8000/sponsorship/donations/stripe/webhook/?tenant=localhost
+      - --forward-to
+      - http://web:8000/workspaces/billing/stripe/webhook/
+    depends_on:
+      - web
+    networks:
+      - backend
+    restart: unless-stopped
+
+  # ── Langfuse ports (local access) ──────────────────────────────────────
+
+  langfuse:
+    ports:
+      - "${LANGFUSE_PORT:-3100}:3000"
+
+  langfuse-minio:
+    ports:
+      - "${MINIO_API_PORT:-9090}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9091}:9001"

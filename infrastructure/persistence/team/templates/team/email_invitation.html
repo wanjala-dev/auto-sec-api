@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <title>{{ site_name }} • Team Invitation</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #f5f6fa;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+            color: #0f172a;
+        }
+        a {
+            text-decoration: none;
+        }
+        .container {
+            width: 100%;
+            max-width: 640px;
+            margin: 0 auto;
+            padding: 32px 16px;
+        }
+    </style>
+</head>
+<body>
+    <!-- Preheader: shown by Gmail/Apple Mail/Outlook in the inbox preview line, hidden inside the email body. -->
+    <div style="display:none;font-size:1px;color:#ffffff;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;mso-hide:all;">{{ inviter_name }} invited you to join {{ team_name }} at {{ site_name }}.&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;</div>
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color:#f5f6fa;">
+        <tr>
+            <td align="center">
+                <table role="presentation" class="container" cellspacing="0" cellpadding="0">
+                    <tr>
+                        <td style="padding:0 0 16px 0;text-align:center;">
+                            <span style="font-size:13px;letter-spacing:0.2em;font-weight:600;color:#65a30d;text-transform:uppercase;">{{ site_name }}</span>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="background-color:#ffffff;border-radius:18px;border:1px solid #e2e8f0;padding:36px 32px 28px 32px;">
+                            <p style="font-size:20px;line-height:1.4;margin:0 0 24px 0;">
+                                {% if is_existing_user %}
+                                <strong>{{ inviter_name }}</strong> has invited you to join <strong>{{ team_name }}</strong> at {{ site_name }}. You already have an account — just accept below.
+                                {% else %}
+                                <strong>{{ inviter_name }}</strong> has invited you to collaborate with the <strong>{{ team_name }}</strong> team at {{ site_name }}.
+                                {% endif %}
+                            </p>
+
+                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border:1px solid #d9f99d;border-radius:16px;margin-bottom:24px;">
+                                <tr>
+                                    <td style="padding:24px;text-align:center;">
+                                        <div style="display:inline-block;width:64px;height:64px;line-height:64px;border-radius:999px;background-color:#ecfccb;border:1px solid #bbf7d0;font-size:24px;font-weight:600;color:#166534;margin-bottom:12px;">
+                                            {{ team_initials }}
+                                        </div>
+                                        <div style="font-size:18px;font-weight:600;color:#0f172a;">{{ workspace_name }}</div>
+                                        <div style="font-size:14px;color:#475569;margin-top:4px;">{{ team_members_label }}</div>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td style="padding:0 24px 28px 24px;text-align:center;">
+                                        {% if password_setup_url %}
+                                        <p style="font-size:14px;color:#475569;margin:0 0 12px 0;">
+                                            New here? Set your password first to sign in.
+                                        </p>
+                                        <a href="{{ password_setup_url }}" style="display:inline-block;width:100%;max-width:320px;background-color:#0f766e;color:#ffffff;font-weight:600;font-size:16px;padding:12px 24px;border-radius:999px;">Set Password & Sign In</a>
+                                        {% else %}
+                                        <a href="{{ accept_url }}" style="display:inline-block;width:100%;max-width:320px;background-color:#16a34a;color:#ffffff;font-weight:600;font-size:16px;padding:12px 24px;border-radius:999px;">Accept Invite</a>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                            </table>
+
+                            <p style="font-size:15px;color:#475569;margin:0 0 12px 0;text-align:center;">
+                                {% if is_existing_user %}
+                                If prompted, use this invitation code:
+                                {% else %}
+                                After signing in, use this invitation code if prompted:
+                                {% endif %}
+                            </p>
+                            <div style="text-align:center;margin-bottom:32px;">
+                                <span style="display:inline-block;padding:12px 24px;border:1px dashed #bbf7d0;border-radius:12px;font-size:18px;font-weight:600;letter-spacing:0.15em;color:#0f172a;background-color:#f0fdf4;">{{ code }}</span>
+                            </div>
+
+                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color:#fefce8;border-radius:16px;padding:0 0 8px 0;margin-bottom:20px;">
+                                <tr>
+                                    <td style="padding:20px 24px 4px 24px;font-size:14px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.08em;">
+                                        By joining, you'll unlock:
+                                    </td>
+                                </tr>
+                                {% for benefit in benefits %}
+                                <tr>
+                                    <td style="padding:12px 24px 8px 24px;">
+                                        <div style="display:flex;align-items:flex-start;gap:12px;">
+                                            <span style="width:18px;height:18px;border-radius:50%;background-color:#fef9c3;color:#854d0e;font-size:12px;line-height:18px;text-align:center;font-weight:600;">{{ forloop.counter }}</span>
+                                            <div>
+                                                <div style="font-size:15px;font-weight:600;color:#0f172a;">{{ benefit.title }}</div>
+                                                <div style="font-size:14px;color:#475569;margin-top:2px;">{{ benefit.body }}</div>
+                                            </div>
+                                        </div>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </table>
+
+                            <p style="font-size:14px;color:#475569;margin:0 0 24px 0;text-align:center;">
+                                This invite was sent to {{ recipient_email }}. If you did not expect it, you can ignore this message or reach us at <a href="mailto:{{ support_email }}" style="color:#16a34a;font-weight:600;">{{ support_email }}</a>.
+                            </p>
+
+                            <p style="font-size:12px;color:#94a3b8;margin:0;text-align:center;">
+                                © {{ current_year }} {{ site_name }} · {{ site_domain }}
+                            </p>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>

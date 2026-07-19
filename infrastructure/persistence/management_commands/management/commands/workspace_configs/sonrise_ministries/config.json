@@ -1,0 +1,48 @@
+{
+  "owner": {
+    "email": "admin@sonriseministriesinc.org",
+    "password": "ChangeMe123!",
+    "first_name": "Sonrise",
+    "last_name": "Admin",
+    "is_staff": true
+  },
+  "workspace": {
+    "name": "Sonrise Ministries Inc.",
+    "story": "Sonrise Ministries nurtures abandoned and vulnerable babies in Jinja, Uganda by providing loving caregivers, medical attention, and pathways to permanent family care.",
+    "status": "active",
+    "privacy": "public",
+    "is_verified": true,
+    "categories": ["Health Promotion", "Community"],
+    "subcategories": {
+      "Health Promotion": ["Infant Care", "Nutrition"],
+      "Community": ["Family Reintegration", "Adoption Support"]
+    },
+    "contribution_means": ["Funding", "Volunteering", "Medical Support", "Prayer"],
+    "stripe": {
+      "tenant_url": "https://sonriseministries.local",
+      "domain_url": "https://sonriseministries.local",
+      "stripe_secret_key": "sk_test_sonrise"
+    }
+  },
+  "staff_team_title": "Baby Home Team",
+  "staff": [
+    {"first_name": "Ruth", "last_name": "Nansamba", "email": "ruth@sonriseministriesinc.org", "role": "Baby Home Director"},
+    {"first_name": "Teddy", "last_name": "Mukisa", "email": "teddy@sonriseministriesinc.org", "role": "Senior Caregiver"},
+    {"first_name": "Isaac", "last_name": "Kalyango", "email": "isaac@sonriseministriesinc.org", "role": "Family Reintegration Officer"}
+  ],
+  "projects": [
+    {"title": "Baby Home", "description": "Holistic residential care for infants and toddlers.", "url": "https://www.sonriseministriesinc.org/babyhome"},
+    {"title": "Family Reintegration", "description": "Preparing families and providing follow-up once children are reunited."},
+    {"title": "Community Health Clinics", "description": "Partner-supported clinics ensuring babies receive critical medical care."}
+  ],
+  "recipients_category": {"name": "Baby Home Residents", "description": "Infants and toddlers currently in the Sonrise Baby Home."},
+  "recipients": [
+    {"first_name": "Hope", "last_name": "Nalwanga", "age": 2, "gender": "female", "needs": "Nutritional supplements and medical monitoring.", "story": "Hope was welcomed to Sonrise after being found abandoned; she is thriving with round-the-clock care.", "sponsored": false, "location": "Jinja, Uganda"}
+  ],
+  "news": [
+    {"title": "New Cribs Installed at Baby Home", "excerpt": "Generous partners funded safer bedding for infants.", "body": "Thanks to campaign supporters, Sonrise replaced aging cribs with safe new models and upgraded mosquito netting.", "image": "https://www.sonriseministriesinc.org/wp-content/uploads/2023/07/babyhome-update.jpg", "category": "Updates"}
+  ],
+  "pdfs": [
+    {"filename": "sonrise-monthly-newsletter.pdf", "description": "Monthly newsletter featuring baby stories and milestones."}
+  ]
+}

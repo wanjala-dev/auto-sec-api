@@ -1,0 +1,1 @@
+"""AI embeddings infrastructure module."""

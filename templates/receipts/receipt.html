@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Receipt {{ receipt_number }}</title>
+    <style>
+        @page {
+            size: letter;
+            margin: 0;
+        }
+        * { box-sizing: border-box; }
+        html, body {
+            margin: 0;
+            padding: 0;
+            background: #0f172a;
+            color: #f8fafc;
+            font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            font-size: 11px;
+        }
+        .page {
+            min-height: 100vh;
+            padding: 40px 60px 60px 60px;
+            position: relative;
+        }
+        .brand-bar {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 8px;
+            background: {{ brand_primary|default:"#10b981" }};
+        }
+        .header {
+            display: table;
+            width: 100%;
+            margin-bottom: 18px;
+        }
+        .header__left {
+            display: table-cell;
+            vertical-align: middle;
+            width: 65%;
+        }
+        .header__right {
+            display: table-cell;
+            vertical-align: middle;
+            width: 35%;
+            text-align: right;
+            color: #94a3b8;
+            font-size: 9.5px;
+        }
+        .logo-wrap {
+            display: table-cell;
+            width: 56px;
+            vertical-align: middle;
+            padding-right: 14px;
+        }
+        .logo-wrap img {
+            max-width: 50px;
+            max-height: 50px;
+            display: block;
+        }
+        .title-wrap {
+            display: table-cell;
+            vertical-align: middle;
+        }
+        .org-name {
+            font-size: 20px;
+            font-weight: 700;
+            color: #f8fafc;
+            margin: 0;
+            letter-spacing: -0.01em;
+        }
+        .doc-type {
+            font-size: 10px;
+            color: #94a3b8;
+            margin: 2px 0 0 0;
+        }
+        .divider {
+            height: 1px;
+            background: #334155;
+            margin: 24px 0;
+        }
+        .section-label {
+            font-size: 9px;
+            letter-spacing: 0.22em;
+            text-transform: uppercase;
+            color: #94a3b8;
+            margin: 0 0 8px 0;
+            font-weight: 600;
+        }
+        .payer-name {
+            font-size: 14px;
+            font-weight: 700;
+            color: #f8fafc;
+            margin: 0;
+        }
+        .payer-email {
+            font-size: 10.5px;
+            color: #94a3b8;
+            margin: 4px 0 0 0;
+        }
+        table.lines {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 0;
+        }
+        table.lines th {
+            font-size: 9px;
+            letter-spacing: 0.2em;
+            text-transform: uppercase;
+            color: #94a3b8;
+            font-weight: 600;
+            text-align: left;
+            padding: 0 0 10px 0;
+            border-bottom: 1px solid #334155;
+        }
+        table.lines th.amount {
+            text-align: right;
+        }
+        table.lines td {
+            padding: 14px 0 6px 0;
+            font-size: 11.5px;
+            color: #f8fafc;
+        }
+        table.lines td.amount {
+            text-align: right;
+        }
+        .total-row {
+            border-top: 1px solid #334155;
+            padding-top: 18px;
+            margin-top: 12px;
+            display: table;
+            width: 100%;
+        }
+        .total-row__label {
+            display: table-cell;
+            font-size: 14px;
+            font-weight: 700;
+            color: {{ brand_primary|default:"#10b981" }};
+            letter-spacing: 0.05em;
+        }
+        .total-row__value {
+            display: table-cell;
+            text-align: right;
+            font-size: 14px;
+            font-weight: 700;
+            color: {{ brand_primary|default:"#10b981" }};
+        }
+        .footer {
+            margin-top: 48px;
+            color: #94a3b8;
+            font-size: 9.5px;
+            line-height: 1.55;
+        }
+        .footer p { margin: 0 0 6px 0; }
+    </style>
+</head>
+<body>
+    <div class="page">
+        <div class="header">
+            <div class="header__left">
+                <div style="display: table;">
+                    <div class="logo-wrap">
+                        <img src="{% if workspace_logo_url %}{{ workspace_logo_url }}{% else %}{{ default_logo_data_uri }}{% endif %}" alt="">
+                    </div>
+                    <div class="title-wrap">
+                        <p class="org-name">{{ workspace_name|default:"Receipt" }}</p>
+                        <p class="doc-type">Donation Receipt</p>
+                    </div>
+                </div>
+            </div>
+            <div class="header__right">
+                <div>Receipt #: {{ receipt_number }}</div>
+                <div>Date: {{ issued_at }}</div>
+            </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <p class="section-label">Received from</p>
+        <p class="payer-name">{{ payer_name|default:"Anonymous" }}</p>
+        {% if payer_email %}
+        <p class="payer-email">{{ payer_email }}</p>
+        {% endif %}
+
+        <div class="divider"></div>
+
+        <table class="lines">
+            <thead>
+                <tr>
+                    <th>Description</th>
+                    <th class="amount">Amount</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in line_items %}
+                <tr>
+                    <td>{{ item.description }}</td>
+                    <td class="amount">{{ currency_display }} {{ item.amount_display }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <div class="total-row">
+            <div class="total-row__label">TOTAL</div>
+            <div class="total-row__value">{{ currency_display }} {{ total_display }}</div>
+        </div>
+
+        <div class="footer">
+            <p>Thank you for your generous contribution.</p>
+            <p>This receipt is for your records. Please retain it for tax purposes.</p>
+            {% if notes %}<p>Note: {{ notes }}</p>{% endif %}
+        </div>
+    </div>
+    <div class="brand-bar"></div>
+</body>
+</html>
