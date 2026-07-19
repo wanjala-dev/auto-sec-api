@@ -6,9 +6,12 @@ return the structured delta expected by the orchestrator (completed_tasks,
 artifacts). They do not enforce retries or budget control; upstream callers
 should handle those concerns.
 """
+
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Optional
+import logging
+from collections.abc import Callable
+from typing import Any
 
 from django.utils import timezone
 
@@ -16,16 +19,18 @@ from components.agents.domain.value_objects.plan_schemas import ArtifactRef, Pla
 from components.agents.infrastructure.gateways.deep.logging import log_deep_event
 from components.agents.infrastructure.services.agents_service import AgentService
 
+logger = logging.getLogger(__name__)
+
 
 def build_worker_from_agent(
     agent_type: str,
     user_id: str,
     workspace_id: str,
     *,
-    config: Optional[Dict[str, Any]] = None,
-    run_context: Optional[Dict[str, Any]] = None,
-    summarize_output: Optional[Callable[[Dict[str, Any]], str]] = None,
-    deep_run_context: Optional[Any] = None,
+    config: dict[str, Any] | None = None,
+    run_context: dict[str, Any] | None = None,
+    summarize_output: Callable[[dict[str, Any]], str] | None = None,
+    deep_run_context: Any | None = None,
 ) -> Callable[[PlanState], PlanState]:
     """
     Return a worker function that executes an existing agent and wraps the result.
@@ -62,11 +67,11 @@ def build_worker_from_agent(
         )
         raise PermissionError(f"Agent type '{agent_type}' is not allowed for this run.")
 
-    def _default_summary(response: Dict[str, Any]) -> str:
+    def _default_summary(response: dict[str, Any]) -> str:
         if not response:
             return "No response returned from agent."
         for key in ("result", "detail", "message", "output"):
-            if key in response and response[key]:
+            if response.get(key):
                 return str(response[key])
         return str(response)
 
@@ -103,7 +108,7 @@ def build_worker_from_agent(
         return "\n".join(lines)
 
     def worker(state: PlanState) -> PlanState:
-        task: Optional[TaskSpec] = state.get("task") if state else None
+        task: TaskSpec | None = state.get("task") if state else None
         if not task:
             return {}
 
@@ -191,9 +196,29 @@ def build_worker_from_agent(
                 # Ignore artifacts that are not shape-compatible yet.
                 continue
 
-        return {
+        delta: PlanState = {
             "completed_tasks": [worker_result],
             "artifacts": parsed_artifacts,
         }
+
+        # Rubric verdict telemetry (RubricMiddleware path). The agent ships
+        # the grader's evaluations out on the response; this worker owns the
+        # task_id, so the per-task stamp happens HERE — mirroring where
+        # ``reflective_worker`` stamps ``run_metadata["critic_scores"]`` on
+        # the critic path (same consumers: run trace + L4 hill-climbing).
+        # Fail-safe: telemetry failure degrades to a warning, never breaks
+        # the worker. Lazy import keeps the module import-light.
+        try:
+            from components.agents.infrastructure.adapters.langchain.deep.rubric import (
+                rubric_run_metadata_update,
+            )
+
+            run_metadata = rubric_run_metadata_update(state=state, response=response, task_id=task.id)
+            if run_metadata is not None:
+                delta["run_metadata"] = run_metadata
+        except Exception:
+            logger.warning("rubric verdict stamp failed task_id=%s", task.id, exc_info=True)
+
+        return delta
 
     return worker
