@@ -197,5 +197,8 @@ services:
 
   langfuse-minio:
     ports:
-      - "${MINIO_API_PORT:-9090}:9000"
-      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9091}:9001"
+      # 9190/9191 — NOT 9090/9091: wanjala's stack runs its own langfuse-minio
+      # on 9090 on this machine, and this mapping was the one port the auto-sec
+      # port-shift sweep missed (caught 2026-07-19 when `make up` collided).
+      - "${MINIO_API_PORT:-9190}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9191}:9001"
