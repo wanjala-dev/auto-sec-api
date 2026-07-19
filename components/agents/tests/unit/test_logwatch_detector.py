@@ -200,4 +200,9 @@ def test_triage_router_enqueues_dispatch_not_inline():
         assert "pending findings" in args[2]  # goal
         assert args[3]["worker_agent_type"] == "triage_agent"
         assert args[3]["max_reflections"] == 1
+        # mode=deep is load-bearing: worker_agent_type/max_reflections are only
+        # read by the deep pipeline, and the run_telemetry stamp needs the deep
+        # run's run_metadata. An Agent row with mode=None must not demote the
+        # dispatch to the plain executor.
+        assert args[3]["mode"] == "deep"
         assert args[4] == "user-1"  # performed_by
