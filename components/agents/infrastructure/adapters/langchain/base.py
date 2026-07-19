@@ -18,7 +18,7 @@ from typing import Any, Union
 # 0.3 `AgentExecutor` + `create_react_agent` / `create_tool_calling_agent`
 # construction. See docs/plans/LANGCHAIN_1X_MIGRATION_2026-07-18.md.
 from langchain.agents import create_agent
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.tools import StructuredTool, Tool
 from langchain_core.tools.base import BaseTool
 
@@ -200,11 +200,20 @@ class _GraphExecutorHandle:
     loop still finds the run callbacks.
     """
 
-    def __init__(self, *, graph, callbacks=None, recursion_limit: int = 50, history_provider=None):
+    def __init__(
+        self,
+        *,
+        graph,
+        callbacks=None,
+        recursion_limit: int = 50,
+        history_provider=None,
+        rubric_provider=None,
+    ):
         self._graph = graph
         self.callbacks = list(callbacks or [])
         self._recursion_limit = recursion_limit
         self._history_provider = history_provider
+        self._rubric_provider = rubric_provider
 
     def _build_config(self) -> dict:
         config: dict[str, Any] = {"recursion_limit": self._recursion_limit}
@@ -229,7 +238,17 @@ class _GraphExecutorHandle:
 
     def invoke(self, inputs: dict[str, Any]) -> dict[str, Any]:
         query = inputs.get("input", "") if isinstance(inputs, dict) else str(inputs)
-        state = {"messages": [*self._load_history(), HumanMessage(content=query)]}
+        state: dict[str, Any] = {"messages": [*self._load_history(), HumanMessage(content=query)]}
+        # deepagents.RubricMiddleware activates via the invocation state:
+        # with no "rubric" key it is a no-op. The provider returns the
+        # agent-type rubric only when the middleware is attached + enabled.
+        if callable(self._rubric_provider):
+            try:
+                rubric = self._rubric_provider()
+            except Exception:
+                rubric = None
+            if rubric:
+                state["rubric"] = rubric
         result = self._graph.invoke(state, config=self._build_config())
         messages = result.get("messages", []) if isinstance(result, dict) else []
         output = ""
@@ -1121,6 +1140,7 @@ class BaseAgent(ABC):
             callbacks=callbacks,
             recursion_limit=self._graph_recursion_limit,
             history_provider=self._load_history_messages,
+            rubric_provider=self._resolve_active_rubric,
         )
 
     def _build_agent_middleware(self) -> list:
@@ -1134,6 +1154,7 @@ class BaseAgent(ABC):
         flag is off.
         """
         middleware: list = []
+        self._rubric_middleware_attached = False
         rubric_cfg = self.config.get("rubric_middleware")
         if not rubric_cfg:
             try:
@@ -1156,11 +1177,30 @@ class BaseAgent(ABC):
                 )
                 if mw is not None:
                     middleware.append(mw)
+                    self._rubric_middleware_attached = True
             except Exception:
                 # The rubric loop is a quality enhancement, never a gate that
                 # can block agent construction — degrade to no middleware.
                 logger.exception("rubric middleware unavailable for agent %s; continuing without", self.agent_id)
         return middleware
+
+    def _resolve_active_rubric(self) -> str | None:
+        """The rubric to place on the invocation state, or ``None``.
+
+        deepagents' ``RubricMiddleware`` is state-activated: it only grades
+        when ``state["rubric"]`` is set. Only agents that actually carry the
+        middleware get a rubric on their invokes.
+        """
+        if not getattr(self, "_rubric_middleware_attached", False):
+            return None
+        try:
+            from components.agents.infrastructure.adapters.langchain.deep.rubric import (
+                resolve_rubric_text,
+            )
+
+            return resolve_rubric_text(self)
+        except Exception:
+            return None
 
     def _load_history_messages(self) -> list:
         """Prior conversation turns for the graph input (SQL-backed window).

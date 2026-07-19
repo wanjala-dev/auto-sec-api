@@ -141,18 +141,49 @@ def build_grader_verifier_tool(agent):
     )
 
 
+def resolve_rubric_text(agent) -> str | None:
+    """The rubric string for this agent's type, or ``None`` when not gradable.
+
+    deepagents 0.6.12 delivers the rubric via the **invocation state**
+    (``state["rubric"]``) — with no rubric on the state the middleware is a
+    no-op. ``_GraphExecutorHandle`` calls this through its
+    ``rubric_provider`` on every invoke so critic-enabled agents are graded
+    and every other agent runs middleware-free-in-effect.
+    """
+    agent_type = _resolve_agent_type(agent)
+    if agent_type not in CRITIC_ENABLED_AGENTS:
+        return None
+    return RUBRICS.get(agent_type) or None
+
+
+def _log_evaluation(evaluation) -> None:
+    """Observability parity with the critic's ``critic_scores`` stamping."""
+    try:
+        logger.info(
+            "rubric_evaluation verdict=%s iteration=%s run_id=%s feedback=%s",
+            getattr(evaluation, "result", None) or getattr(evaluation, "verdict", None),
+            getattr(evaluation, "iteration", None),
+            getattr(evaluation, "grading_run_id", None),
+            str(getattr(evaluation, "feedback", "") or "")[:300],
+        )
+    except Exception:  # pragma: no cover - logging must never break grading
+        logger.debug("rubric evaluation logging failed", exc_info=True)
+
+
 def build_rubric_middleware(*, agent, config: dict | None = None):
     """Build a ``deepagents.RubricMiddleware`` for this agent, or ``None``.
 
     ``None`` (no middleware) when the agent's type has no rubric — grading an
     agent with no measurable criteria is pure cost, same opt-in rule the
     hand-rolled critic used.
+
+    Actual deepagents 0.6.12 signature (verified against the installed
+    package): ``RubricMiddleware(*, model, system_prompt=None, tools=None,
+    max_iterations=3, on_evaluation=None)``. ``model`` is REQUIRED; the
+    rubric itself is NOT a constructor arg — it rides the invocation state
+    (see ``resolve_rubric_text``).
     """
-    agent_type = _resolve_agent_type(agent)
-    if agent_type not in CRITIC_ENABLED_AGENTS:
-        return None
-    rubric = RUBRICS.get(agent_type)
-    if not rubric:
+    if resolve_rubric_text(agent) is None:
         return None
 
     from deepagents.middleware.rubric import RubricMiddleware
@@ -164,32 +195,31 @@ def build_rubric_middleware(*, agent, config: dict | None = None):
         max_iterations = MAX_ITERATIONS_CAP
     max_iterations = max(1, min(max_iterations, MAX_ITERATIONS_CAP))
 
-    grader_model = None
+    grader_model_name = str(cfg.get("grader_model") or GRADER_MODEL)
     try:
         grader_model = agent._resolve_llm_provider().get_llm(
             provider_slug=(agent.config or {}).get("provider", "openai"),
-            model_name=str(cfg.get("grader_model") or GRADER_MODEL),
+            model_name=grader_model_name,
             temperature=GRADER_TEMPERATURE,
         )
     except Exception:
-        # Fall back to the middleware's own default grader model rather than
-        # disabling verification because the cheap tier failed to resolve.
-        logger.warning("rubric grader model unavailable; using middleware default", exc_info=True)
+        # `model` is required — fall back to the provider:model string form
+        # (resolved lazily by the middleware) rather than disabling
+        # verification because the port failed to hand us an instance.
+        logger.warning("rubric grader model port resolution failed; using model string", exc_info=True)
+        grader_model = f"openai:{grader_model_name}"
 
-    kwargs = {
-        "rubric": rubric,
-        "max_iterations": max_iterations,
-        "tools": [build_grader_verifier_tool(agent)],
-        "system_prompt": _GRADER_SYSTEM_PROMPT,
-    }
-    if grader_model is not None:
-        kwargs["model"] = grader_model
-
-    middleware = RubricMiddleware(**kwargs)
+    middleware = RubricMiddleware(
+        model=grader_model,
+        system_prompt=_GRADER_SYSTEM_PROMPT,
+        tools=[build_grader_verifier_tool(agent)],
+        max_iterations=max_iterations,
+        on_evaluation=_log_evaluation,
+    )
     logger.info(
         "rubric_middleware attached agent_type=%s max_iterations=%s grader=%s",
-        agent_type,
+        _resolve_agent_type(agent),
         max_iterations,
-        GRADER_MODEL,
+        grader_model_name,
     )
     return middleware
