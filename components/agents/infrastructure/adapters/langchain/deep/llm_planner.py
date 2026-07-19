@@ -14,7 +14,8 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from langchain.schema import SystemMessage, HumanMessage
+# LangChain 1.x: langchain.schema shim removed — import from langchain_core.
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from components.agents.domain.services.deep.planners import build_plan_from_actions
 from components.agents.domain.value_objects.plan_schemas import BudgetLine, PlanSpec

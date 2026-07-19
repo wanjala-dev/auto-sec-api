@@ -450,10 +450,30 @@ def execute_plan_once(
     return state
 
 
-def resume_plan(thread_id: str, *, graph, plan_state: PlanState | None = None) -> PlanState:
+def resume_plan(
+    thread_id: str,
+    *,
+    graph,
+    decision: dict | None = None,
+    plan_state: PlanState | None = None,
+) -> PlanState:
+    """Resume a previously interrupted graph run by thread_id.
+
+    langgraph 1.x makes ``Command(resume=...)`` first-class: the resume value
+    is delivered to the pending ``interrupt()`` call in the approval node
+    (see orchestrator.approval_node). ``decision`` is the payload that
+    ``interrupt()`` returns — e.g. ``{"approved": True}`` /
+    ``{"approved": False}``; it defaults to an approval so legacy callers
+    that just "poked" the thread keep their effective behaviour.
+
+    ``plan_state`` is the legacy 0.x escape hatch (re-invoke with explicit
+    state on the same checkpointer thread). When provided it wins, so old
+    call sites remain valid; new callers should pass ``decision``.
     """
-    Resume a previously interrupted graph run by thread_id. In langgraph 0.0.69,
-    explicit Command(resume=...) is not available; callers should reuse the same
-    checkpointer thread_id when invoking the graph.
-    """
-    return graph.invoke(plan_state or {}, config={"configurable": {"thread_id": thread_id}})
+    config = {"configurable": {"thread_id": thread_id}}
+    if plan_state is not None:
+        return graph.invoke(plan_state, config=config)
+
+    from langgraph.types import Command
+
+    return graph.invoke(Command(resume=decision if decision is not None else {"approved": True}), config=config)
