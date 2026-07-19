@@ -12,6 +12,7 @@ task on the floor. The smoke chat for "Find Henry Wanjala" returned
 This test pins the two registries together so a missing catalogue row
 fails CI instead of silently breaking a production chat.
 """
+
 from __future__ import annotations
 
 from components.agents.application.config.agent_defaults import DEFAULT_AGENT_TYPES
@@ -45,22 +46,41 @@ def _catalogued_names() -> set[str]:
     return names
 
 
-def test_every_registered_agent_class_is_in_default_catalog():
+def test_every_registered_agent_class_is_dispatchable_via_catalog_or_sync():
+    """Every registered class must produce a usable ``AgentType`` row.
+
+    2026-07 retune: the ``AgentType`` catalogue is no longer seeded solely
+    from ``DEFAULT_AGENT_TYPES`` — ``sync_agent_types_from_registry`` now
+    auto-projects every ``@register_agent`` class (slug = canonical name,
+    aliases = remaining registered names, card fields from the class
+    ``profile``). The dispatch contract is therefore: a class is covered by
+    an explicit ``DEFAULT_AGENT_TYPES`` entry OR by a non-degenerate
+    auto-sync card — meaning the class declares a ``profile`` with a real
+    ``name`` and ``summary``. A profile-less class would still sync, but as
+    a bare Title-cased slug with an empty description on the entitlement /
+    Kanban surface — treat that as a shipping bug, same as the original
+    2026-06-09 'Unsupported agent type' incident this file pins.
+    """
     grouped = _registered_classes_to_names()
     catalogued = _catalogued_names()
 
-    missing: list[tuple[str, list[str]]] = []
+    problems: list[tuple[str, list[str], str]] = []
     for cls, names in grouped.items():
-        if not (names & catalogued):
-            missing.append((cls.__name__, sorted(names)))
+        if names & catalogued:
+            continue  # explicit DEFAULT_AGENT_TYPES coverage
+        profile = getattr(cls, "profile", None) or {}
+        if not (profile.get("name") or "").strip():
+            problems.append((cls.__name__, sorted(names), "profile.name missing/empty"))
+        elif not (profile.get("summary") or "").strip():
+            problems.append((cls.__name__, sorted(names), "profile.summary missing/empty"))
 
-    assert not missing, (
-        "Every @register_agent class must have a DEFAULT_AGENT_TYPES entry — "
-        "the deep-run executor looks agent_type up in the AgentType Django "
-        "catalogue seeded from DEFAULT_AGENT_TYPES. Missing entries cause "
-        "the executor to raise 'Unsupported agent type' and drop the "
-        "planner's task on the floor. Missing classes "
-        f"(name -> registered names): {missing}"
+    assert not problems, (
+        "Every @register_agent class must be dispatchable with a real agent "
+        "card: either add a DEFAULT_AGENT_TYPES entry or give the class a "
+        "profile with non-empty name + summary (sync_agent_types_from_registry "
+        "projects that profile into the AgentType row the deep-run executor "
+        "and the agents directory consult). Problems "
+        f"(class, registered names, problem): {problems}"
     )
 
 
@@ -92,7 +112,4 @@ def test_catalog_class_paths_resolve():
         except (ImportError, AttributeError) as exc:
             failures.append((entry["slug"], f"{type(exc).__name__}: {exc}"))
 
-    assert not failures, (
-        "Every class_path in DEFAULT_AGENT_TYPES must resolve. "
-        f"Failures: {failures}"
-    )
+    assert not failures, f"Every class_path in DEFAULT_AGENT_TYPES must resolve. Failures: {failures}"

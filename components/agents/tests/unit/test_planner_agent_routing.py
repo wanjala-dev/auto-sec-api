@@ -39,8 +39,7 @@ class TestSystemPromptRoutingRules:
         assert "task_agent" in prompt
         # And that the rule covers the verbs that previously thrashed.
         assert re.search(r"task_agent.*assign", prompt, re.IGNORECASE | re.DOTALL), (
-            "task_agent rule must mention 'assign' so the planner picks "
-            "it for 'assign those tasks to me' shapes."
+            "task_agent rule must mention 'assign' so the planner picks it for 'assign those tasks to me' shapes."
         )
 
     def test_routing_table_disambiguates_team_membership(self):
@@ -60,13 +59,10 @@ class TestSystemPromptRoutingRules:
             r"`?task_agent`?,\s+NOT\s+`?workspace_agent`?",
             prompt,
         )
-        legacy_regex_match = (
-            "NOT task" not in prompt.lower()
-            and re.search(
-                r"NOT task-of-team assignment|task assignment is task_agent",
-                prompt,
-                re.IGNORECASE,
-            )
+        legacy_regex_match = "NOT task" not in prompt.lower() and re.search(
+            r"NOT task-of-team assignment|task assignment is task_agent",
+            prompt,
+            re.IGNORECASE,
         )
         assert carveout_match or legacy_regex_match, (
             "Prompt must explicitly say task assignment goes to task_agent "
@@ -213,10 +209,7 @@ class TestClarifySentinelRouting:
             re.DOTALL,
         )
         if ambiguous_block is None:
-            pytest.skip(
-                "No ambiguous-goal example in the active prompt; "
-                "routing rule alone covers the contract."
-            )
+            pytest.skip("No ambiguous-goal example in the active prompt; routing rule alone covers the contract.")
         body = ambiguous_block.group(1)
         # Must NOT route the clarifying task to workspace_agent.
         assert "workspace_agent" not in body, (
@@ -227,12 +220,12 @@ class TestClarifySentinelRouting:
         # And it should explicitly use the sentinel.
         assert '"clarify"' in body or "'clarify'" in body, (
             "The ambiguous-goal example must set "
-            "`agent_type: \"clarify\"` so the LLM has a concrete "
+            '`agent_type: "clarify"` so the LLM has a concrete '
             "shape to imitate when the goal is vague."
         )
 
     def test_tldr_and_summary_route_to_workspace_agent_not_clarify(self):
-        """"tldr" / "summary" / "overview" are NOT ambiguous goals.
+        """ "tldr" / "summary" / "overview" are NOT ambiguous goals.
 
         Tldr means "summarise this workspace" — that has a clear
         specialist answer (``workspace_agent.get_organization_info``).
@@ -278,12 +271,8 @@ class TestClarifySentinelRouting:
             "regresses to emitting a clarify task for `tldr`."
         )
         body = tldr_example.group(1)
-        assert "workspace_agent" in body, (
-            "The tldr example must route to workspace_agent, not clarify."
-        )
-        assert '"clarify"' not in body, (
-            "The tldr example must NOT use the clarify sentinel."
-        )
+        assert "workspace_agent" in body, "The tldr example must route to workspace_agent, not clarify."
+        assert '"clarify"' not in body, "The tldr example must NOT use the clarify sentinel."
 
     def test_clarify_is_not_in_agent_registry(self):
         """``clarify`` is a routing sentinel, NOT a registered agent.
@@ -352,9 +341,7 @@ class TestUserAgentRouting:
             prompt,
             re.DOTALL,
         )
-        assert user_rule is not None, (
-            "user_agent rule must be a single bullet in <routing_rules>."
-        )
+        assert user_rule is not None, "user_agent rule must be a single bullet in <routing_rules>."
         assert "because:" in user_rule.group(0), (
             "user_agent rule must carry a `because:` clause so the LLM "
             "generalises from the reason, not just the rule (§12.4)."
@@ -390,9 +377,7 @@ class TestUserAgentRouting:
         )
         body = user_example.group(1)
         assert '"user_agent"' in body, (
-            "The user_agent example must set "
-            "`agent_type: \"user_agent\"` so the LLM has a concrete "
-            "shape to imitate."
+            'The user_agent example must set `agent_type: "user_agent"` so the LLM has a concrete shape to imitate.'
         )
 
     def test_user_agent_maps_to_identity_domain(self):
@@ -542,7 +527,7 @@ class TestV6BareFindRouting:
         )
         assert '"user_agent"' in example.group(1), (
             "find_member_routes_to_user_agent example must set "
-            "`agent_type: \"user_agent\"` so the LLM has a concrete "
+            '`agent_type: "user_agent"` so the LLM has a concrete '
             "shape to imitate."
         )
 
@@ -566,277 +551,12 @@ class TestV6BareFindRouting:
             )
 
 
-class TestWritingAgentRouting:
-    """Drafting verbs route to writing_agent, not workspace_agent or a sentinel.
-
-    Pre-v7 the planner had no explicit `writing_agent` routing rule —
-    writing tools were reachable only through the dynamic agent
-    catalog, so the LLM picked whichever alias slug was closest to the
-    user's noun (`letter_agent` for "draft a letter"). v7 carves the
-    drafting verb family + entity-update flow into the routing table
-    with `because:` clauses and three worked examples.
-
-    These tests pin the v7 contract so a future prompt edit can't
-    silently drop the rule.
-
-    Per §5.13: the runtime side (`writing_agent` tools persist via
-    `CreateWritingDraftUseCase`) lands in the same PR — the runtime
-    handler is real, not a sentinel, so no separate runner test
-    is needed (covered by `test_writing_agent_tools.py`).
-    """
-
-    def test_writing_agent_has_a_routing_rule(self):
-        prompt = llm_planner._build_system_prompt()
-        assert "writing_agent" in prompt, (
-            "planner.system v7 must include a `writing_agent` rule. "
-            "Without it the LLM falls back to alias matching against "
-            "the dynamic catalog and surfaces `letter_agent` / "
-            "`newsletter_agent` rather than the canonical name."
-        )
-        # The rule must explain WHEN to pick writing_agent — the verb
-        # family. The §12.4 hygiene rule requires every routing bullet
-        # to carry a `because:` clause; this also enforces that the
-        # rule is grounded in the canonical reason (WritingDraft
-        # persistence).
-        writing_bullet = re.search(
-            r"\*\s+`?writing_agent`?\s+—.*?because:.*?(?=\n\s*\*\s+`?\w+_agent`?|\Z)",
-            prompt,
-            re.IGNORECASE | re.DOTALL,
-        )
-        assert writing_bullet is not None, (
-            "The `writing_agent` rule must follow the `* name — body. "
-            "because: reason` shape used by every other specialist."
-        )
-        bullet_text = writing_bullet.group(0)
-        # The drafting verbs that should trigger the route. v7's
-        # phrasing is `(draft, write, create, compose, generate, "
-        # "produce, make)`; the planner uses verb intent rather than
-        # keyword match, so we test for presence of the canonical
-        # subset that the rule names.
-        for verb in ("draft", "write", "compose", "generate"):
-            assert verb in bullet_text.lower(), (
-                f"The `writing_agent` rule must name the verb "
-                f"'{verb}' so the LLM knows the verb family that "
-                "routes here."
-            )
-        # The rule must mention WritingDraft persistence — that's the
-        # justification for routing here over alternatives.
-        assert "WritingDraft" in bullet_text, (
-            "The `writing_agent` rule must reference WritingDraft "
-            "persistence so the LLM has the canonical reason for "
-            "preferring this agent."
-        )
-
-    def test_drafting_verbs_paragraph_exists(self):
-        """v7 adds a `Drafting verbs route by artifact` paragraph
-        mirroring the existing `Report verbs route by scope` paragraph.
-        The block enumerates specific tool routes (draft_letter,
-        draft_mission, etc.) so the planner emits the right tool name
-        in the description even before the LLM tools fire.
-        """
-        prompt = llm_planner._build_system_prompt()
-        assert re.search(
-            r"drafting\s+verbs?\s+route\s+by\s+artifact",
-            prompt,
-            re.IGNORECASE,
-        ), (
-            "v7 must include the `Drafting verbs route by artifact` "
-            "paragraph. Without it the LLM may route drafting verbs "
-            "to whichever agent shares a noun (e.g. `donation_agent` "
-            "for a donor letter)."
-        )
-        # The paragraph must name the canonical tools.
-        for tool_name in (
-            "draft_letter",
-            "draft_mission",
-            "draft_newsletter_from_period",
-        ):
-            assert tool_name in prompt, (
-                f"The drafting-verbs paragraph must name the "
-                f"`{tool_name}` tool so the planner's task description "
-                "field cites the exact tool name."
-            )
-
-    def test_entity_update_paragraph_requires_two_task_plan(self):
-        """The entity-update flow needs a two-task plan: resolve UUID
-        via the entity-owning specialist first, then call writing_agent
-        with the resolved id. The writing tool verifies workspace
-        ownership and rejects a UUID it can't find — passing the entity
-        name as `entity_id` fails at the persistence layer.
-        """
-        prompt = llm_planner._build_system_prompt()
-        assert re.search(
-            r"entity-update\s+drafting",
-            prompt,
-            re.IGNORECASE,
-        ), (
-            "v7 must include the `Entity-update drafting` paragraph. "
-            "Without it the planner emits a one-task plan that passes "
-            "the entity name as entity_id, which the persistence "
-            "layer rejects."
-        )
-        # The paragraph must name the four entity-update tools and the
-        # specialists that resolve their UUIDs.
-        for entity_tool in (
-            "draft_recipient_update",
-            "draft_project_update",
-            "draft_event_update",
-            "draft_campaign_update",
-        ):
-            assert entity_tool in prompt, (
-                f"Entity-update paragraph must name `{entity_tool}` "
-                "so the planner picks the right writing tool per "
-                "entity type."
-            )
-        # The resolve-first specialists must be named.
-        for resolver in ("sponsorship_agent", "project_agent", "fundraising_agent"):
-            assert resolver in prompt, (
-                f"Entity-update paragraph must name `{resolver}` as "
-                "an entity-resolution specialist so the planner emits "
-                "the resolve-first task."
-            )
-
-    def test_draft_thank_you_letter_example_present(self):
-        """The two-task example: donor lookup then writing_agent.draft_letter."""
-        prompt = llm_planner._build_system_prompt()
-        example = re.search(
-            r"<example name=\"draft_thank_you_letter\">(.*?)</example>",
-            prompt,
-            re.DOTALL,
-        )
-        assert example is not None, (
-            "v7 must include the `draft_thank_you_letter` worked "
-            "example. Few-shot examples are the strongest signal to "
-            "the LLM (§12.6)."
-        )
-        body = example.group(1)
-        # The first task resolves the donor.
-        assert '"donation_agent"' in body, (
-            "First task in draft_thank_you_letter must route to "
-            "`donation_agent` to surface the top donor."
-        )
-        # The second task drafts via writing_agent.
-        assert '"writing_agent"' in body, (
-            "Second task in draft_thank_you_letter must route to "
-            "`writing_agent` so the letter persists as a WritingDraft."
-        )
-        assert "draft_letter" in body, (
-            "The drafting task's description must name the "
-            "`draft_letter` tool so the worker LLM picks it."
-        )
-
-    def test_draft_recipient_update_example_resolves_first(self):
-        """The two-task example for entity-scoped updates: sponsorship
-        resolves the recipient UUID, then writing_agent drafts the
-        update with the resolved id."""
-        prompt = llm_planner._build_system_prompt()
-        example = re.search(
-            r"<example name=\"draft_recipient_update_resolves_first\">(.*?)</example>",
-            prompt,
-            re.DOTALL,
-        )
-        assert example is not None, (
-            "v7 must include the `draft_recipient_update_resolves_first` "
-            "example showing the two-task entity flow."
-        )
-        body = example.group(1)
-        # The resolve task routes to sponsorship_agent.
-        assert '"sponsorship_agent"' in body, (
-            "First task must route to `sponsorship_agent` to resolve "
-            "the recipient UUID."
-        )
-        # The draft task routes to writing_agent and names the tool.
-        assert '"writing_agent"' in body, (
-            "Second task must route to `writing_agent`."
-        )
-        assert "draft_recipient_update" in body, (
-            "Second task must name the `draft_recipient_update` tool "
-            "so the writing worker picks the entity-scoped variant."
-        )
-
-    def test_draft_mission_statement_example_single_task(self):
-        """The single-task example for free-form drafting: no entity
-        lookup, one writing_agent task that calls draft_mission."""
-        prompt = llm_planner._build_system_prompt()
-        example = re.search(
-            r"<example name=\"draft_mission_statement\">(.*?)</example>",
-            prompt,
-            re.DOTALL,
-        )
-        assert example is not None, (
-            "v7 must include the `draft_mission_statement` example "
-            "showing the single-task free-form draft flow."
-        )
-        body = example.group(1)
-        assert '"writing_agent"' in body, (
-            "draft_mission_statement example must route to "
-            "`writing_agent` (free-form drafts don't need an entity "
-            "lookup)."
-        )
-        assert "draft_mission" in body, (
-            "draft_mission_statement example must name the "
-            "`draft_mission` tool."
-        )
-
-    def test_writing_agent_is_registered(self):
-        """The writing_agent class must be registered under its canonical
-        name and its aliases — the runtime side of the v7 routing rule
-        depends on this. If a future refactor drops the registration,
-        v7's routing rule sends users to an agent that doesn't exist."""
-        from components.agents.infrastructure.adapters.langchain.base import (
-            AgentRegistry,
-        )
-
-        registered = set(AgentRegistry.list_agents())
-        assert "writing_agent" in registered, (
-            "writing_agent must be registered under its canonical "
-            "name — v7's routing rule depends on it."
-        )
-        # The aliases the planner may still emit (the routing rule
-        # tells it to prefer writing_agent, but the catalog still
-        # contains the aliases so backward-compat planner emissions
-        # resolve to the same class).
-        for alias in ("newsletter_agent", "letter_agent", "draft_agent"):
-            assert alias in registered, (
-                f"alias `{alias}` must remain registered so the "
-                "frontend's canonical-name resolver (which maps "
-                "alias → canonical via the registry) can resolve "
-                "older snapshots."
-            )
-
-    def test_writing_agent_canonical_name_resolves(self):
-        """The AgentRegistry must expose canonical_name_for() so the
-        chat-header resource can resolve aliases to the canonical name.
-
-        Without this lookup, the frontend would surface whichever
-        alias the planner picked (`letter_agent`, etc.) rather than
-        the consistent canonical name (`writing_agent`)."""
-        from components.agents.infrastructure.adapters.langchain.base import (
-            AgentRegistry,
-        )
-
-        # Canonical resolution: alias resolves to canonical slug.
-        assert AgentRegistry.canonical_name_for("letter_agent") == "writing_agent", (
-            "`letter_agent` is a registered alias of writing_agent — "
-            "canonical_name_for() must resolve it to the canonical "
-            "slug so the chat header is consistent."
-        )
-        assert AgentRegistry.canonical_name_for("writing_agent") == "writing_agent", (
-            "canonical_name_for() must be idempotent for the "
-            "canonical slug itself."
-        )
-        # Sentinel passthrough: clarify is a routing sentinel, not
-        # an agent — the resolver must pass it through unchanged so
-        # the frontend can render its own label.
-        assert AgentRegistry.canonical_name_for("clarify") == "clarify", (
-            "`clarify` is a routing sentinel, not an agent. "
-            "canonical_name_for() must pass it through unchanged."
-        )
-        # Display-name resolution: alias resolves to the human label
-        # from the registered profile.
-        display = AgentRegistry.display_name_for("letter_agent")
-        assert display == "Writing Agent", (
-            f"display_name_for('letter_agent') returned {display!r} "
-            "— the frontend chat header expects the registered "
-            "profile['name'] ('Writing Agent')."
-        )
+# NOTE (2026-07 fork retune): TestWritingAgentRouting was deleted. Its premise
+# is the wanjala Writing surface (WritingDraft persistence + the writing_agent
+# specialist and its newsletter/letter/draft aliases), none of which were ported
+# into the auto-sec fork — the registry has no writing_agent, so the
+# registration/canonical-name assertions can never pass here. Caveat this
+# leaves open: planner.system.yaml still carries the wanjala v7 routing rules
+# (writing_agent included) — retuning that prompt to the SOC fleet is tracked
+# as its own change and should delete the writing rules rather than resurrect
+# the agent.

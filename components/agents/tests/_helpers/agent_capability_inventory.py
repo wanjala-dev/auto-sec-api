@@ -1,4 +1,4 @@
-"""Canonical agent capability inventory.
+"""Canonical agent capability inventory — auto-sec fleet.
 
 This module is the **contract** between every specialist agent and the
 test suite. ``CANONICAL_TOOLS`` lists the exact set of tools each agent
@@ -11,26 +11,34 @@ don't — that is intentional. It forces an explicit decision: is this
 tool the right agent's territory? Is the description sharp enough?
 
 When you add a NEW agent class, append it to ``CANONICAL_TOOLS`` (with
-its full tool set) AND make sure it's listed in
-``components/agents/infrastructure/adapters/langchain/deep/llm_planner.py``
-PER-TASK SPECIALIST ROUTING table. Both ``test_agent_capability_inventory.py``
-and ``test_planner_agent_routing.py::test_every_registered_specialist_has_a_rule``
-will fire if you miss either step.
+its full tool set). ``test_agent_capability_inventory.py::
+test_every_registered_specialist_has_an_inventory_entry`` fires if you
+miss it.
 
 Universal tools (``UNIVERSAL_TOOLS``) are tools the framework adds to
 every agent through ``BaseAgent`` and the ``WorkspaceContextMixin``.
 They are excluded from the cross-agent overlap check (Pattern D) and
 must NOT be repeated in ``CANONICAL_TOOLS`` entries.
 
+Shared tools (``SHARED_TOOLS``) are the deliberate exceptions to the
+one-owner rule: the same implementation registered on a declared set of
+agents (e.g. the triage agent wraps the task tools so a finding can be
+filed and assigned without a second routing hop). Pattern D verifies
+the actual overlap matches these declarations EXACTLY — an undeclared
+collision still fails.
+
 History:
-- 2026-05-08 — created as part of the GTM lock-down (PR-A).
-- See ``docs/plans/AGENT_TOOL_COVERAGE_AUDIT.md`` for the gap audit
-  this enforces.
+- 2026-05-08 — created as part of the GTM lock-down (PR-A, wanjala).
+- 2026-07 — rebuilt for the auto-sec fork: inventory now mirrors the
+  actual registered fleet (workspace / task / project / user / triage /
+  log_watch / optimization). The wanjala-only specialists (budget,
+  grants, financial, sponsorship, sponsor, donation, fundraising, blog,
+  writing, sharing, admin_verification) were never ported here and
+  their entries were pure drift — every PR paid a "mine vs pre-existing"
+  tax on their failures.
 """
+
 from __future__ import annotations
-
-from typing import Dict, FrozenSet, Set
-
 
 # ── Universal tools provided by the framework ──────────────────────────
 #
@@ -42,7 +50,7 @@ from typing import Dict, FrozenSet, Set
 #
 # These tools live on multiple agents intentionally; the cross-agent
 # overlap test allowlists them.
-UNIVERSAL_TOOLS: FrozenSet[str] = frozenset(
+UNIVERSAL_TOOLS: frozenset[str] = frozenset(
     {
         "retrieve_workspace_context",
         "whoami",
@@ -51,17 +59,34 @@ UNIVERSAL_TOOLS: FrozenSet[str] = frozenset(
 )
 
 
+# ── Deliberately shared tools ──────────────────────────────────────────
+#
+# tool name -> the EXACT set of agents allowed to register it. Every
+# entry here is the SAME implementation (``task_tools``) exposed on both
+# agents on purpose: the SOC triage flow files a finding as a task and
+# assigns it in one hop, so the triage agent wraps the task agent's
+# member-discovery + assignment tools rather than bouncing the planner
+# through a second specialist mid-triage. Routing stays deterministic
+# because both registrations delegate to the identical function.
+#
+# Adding a tool to this dict is a DELIBERATE decision — undeclared
+# overlaps (or an overlap whose agent set differs from the declaration)
+# still fail Pattern D.
+SHARED_TOOLS: dict[str, frozenset[str]] = {
+    "assign_task": frozenset({"task_agent", "triage_agent"}),
+    "get_team_members": frozenset({"task_agent", "triage_agent"}),
+    "get_members_without_tasks": frozenset({"task_agent", "triage_agent"}),
+}
+
+
 # ── Per-agent canonical tool sets ──────────────────────────────────────
 #
 # Each value is the set of tool names the agent's ``@tool`` decorators
 # register. Universal tools (above) are NOT listed here; the inventory
 # test computes the agent's actual tools and subtracts ``UNIVERSAL_TOOLS``
-# before comparing.
-#
-# Add new tools by editing this dict in the same change that adds the
-# ``@tool`` decorator. The test will tell you exactly what's missing
-# or extra.
-CANONICAL_TOOLS: Dict[str, Set[str]] = {
+# before comparing. Shared tools ARE listed on every agent that
+# registers them (the per-agent set is the agent's real surface).
+CANONICAL_TOOLS: dict[str, set[str]] = {
     "workspace_agent": {
         "create_organization",
         "get_organization_info",
@@ -74,7 +99,6 @@ CANONICAL_TOOLS: Dict[str, Set[str]] = {
         "manage_organization_privacy",
         "get_organization_operations",
         "manage_organization_operations",
-        "generate_organization_report",
         "check_organization_permissions",
     },
     "task_agent": {
@@ -103,9 +127,6 @@ CANONICAL_TOOLS: Dict[str, Set[str]] = {
     },
     "project_agent": {
         "create_project",
-        "create_project_from_prompt",
-        "create_project_with_plan",
-        "estimate_project_items",
         "list_projects",
         "get_project_info",
         "update_project",
@@ -116,240 +137,50 @@ CANONICAL_TOOLS: Dict[str, Set[str]] = {
         "assign_project_team",
         "create_project_task",
         "get_project_tasks",
-        "get_project_spend",
         "manage_project_budget",
         "get_project_analytics",
         "generate_project_report",
         "check_project_permissions",
     },
-    "budget_agent": {
-        "create_budget",
-        "update_budget",
-        "list_budgets",
-        "list_budget_categories",
-        "add_budget_estimate",
-        "update_estimate",
-        "delete_estimate",
-        "get_budget_summary",
-        "compare_budget_actuals",
-        "check_budget_permissions",
-        "suggest_transaction_category",
-        "reconcile_bank_export",
-        "forecast_cash_flow",
-        "draft_variance_narrative",
-        # Added in the Sprint 6 unplanned-spend feature — surfaces a
-        # recurring-expense template suggestion from a cluster of
-        # unplanned transactions so the founder can promote one-off
-        # spending into a budgeted line.
-        "suggest_recurring_from_unplanned_pattern",
-    },
-    "grants_agent": {
-        "list_grants",
-        "get_grant",
-        "create_grant",
-        "transition_grant_stage",
-        "record_grant_decision",
-        "list_funders",
-        "create_funder",
-        "get_funder",
-        "list_opportunities",
-        "convert_opportunity_to_grant",
-        "save_application_draft",
-        "list_application_drafts",
-        "submit_application_draft",
-        "list_snippets",
-        "save_snippet",
-        "summarize_grant_pipeline",
-        "summarize_upcoming_deadlines",
-        "draft_loi_from_workspace_context",
-        "draft_application_from_workspace_context",
-        "recommend_funders_for_workspace",
-        "search_grants_gov",
-        "save_grant_search",
-        "rank_opportunities_by_fit",
-    },
-    "financial_agent": {
-        "parse_transaction",
-        "create_expense",
-        "create_income",
-        "categorize_transaction",
-        "list_transactions",
-        "update_transaction",
-        "delete_transaction",
-        "get_top_expenses",
-        "list_financial_reports",
-        "get_financial_report",
-        "generate_financial_report",
-        "get_expense_status",
-        "get_categories",
-        "get_financial_summary",
-        "compare_budget_spend",
-        "validate_budget",
-        "check_financial_permissions",
-    },
-    "sponsorship_agent": {
-        "list_recipients",
-        "list_sponsors",
-        "get_child_info",
-        "get_sponsor_info",
-        "create_child_profile",
-        "create_sponsor_profile",
-        "create_sponsorship",
-        "get_sponsorship_status",
-        "update_child_progress",
-        "update_recipient",
-        "update_sponsor",
-        "update_sponsorship_status",
-        "cancel_sponsorship",
-        "manage_sponsorship_goal",
-        "get_sponsorship_analytics",
-        "get_sponsorship_overview",
-        "send_sponsor_update",
-        "manage_sponsorship_payments",
-        "check_sponsorship_permissions",
-        "generate_sponsorship_report",
-        "log_outreach",
-        "list_outreach",
-        "create_donation_link",
-    },
-    "sponsor_agent": {
-        "my_giving_summary",
-        "my_sponsorships",
-        "my_donations",
-    },
-    "donation_agent": {
-        "list_donors",
-        "top_donors",
-        "get_donor_info",
-        "create_donation",
-        "get_donation_history",
-        "create_recurring_donation",
-        "update_recurring_donation",
-        "cancel_recurring_donation",
-        "approve_donation",
-        "reject_donation",
-        "summarize_donations",
-        "show_impact_reports",
-        "create_donor_profile",
-        "schedule_follow_up",
-        "parse_donation_amount",
-        "update_donor_info",
-        "get_campaign_stats",
-        "generate_donation_report",
-        "check_donation_permissions",
-    },
-    "fundraising_agent": {
-        "create_fundraising_campaign",
-        "generate_fundraising_plan",
-        "list_campaigns",
-        "count_campaigns",
-        "list_events",
-        "get_event_info",
-        "create_event",
-        "update_event",
-        "transition_event_lifecycle",
-        "delete_event",
-        "get_campaign_info",
-        "update_campaign",
-        "manage_campaign_goals",
-        "get_campaign_donations",
-        "get_campaign_analytics",
-        "generate_fundraising_report",
-        "manage_campaign_tags",
-        "get_donor_analytics",
-        "manage_recurring_donations",
-        "manage_campaign_gallery",
-        "get_campaign_performance",
-        "check_fundraising_permissions",
-    },
-    "blog_agent": {
-        "create_news_article",
-        "get_news_article",
-        "get_news_articles",
-        "update_news_article",
-        "publish_news_article",
-        "schedule_news_article",
-        "delete_news_article",
-        "toggle_article_feature",
-        "manage_news_categories",
-        "manage_news_tags",
-        "manage_article_comments",
-        "get_article_engagement",
-        "get_news_analytics",
-        "generate_news_report",
-        "draft_social_post",
-        "queue_social_post_task",
-        "check_news_permissions",
-    },
     "user_agent": {
-        # PR #277 — workspace-member identity specialist.  Aliases:
-        # ``user``, ``users``, ``identity_agent``, ``identity``,
-        # ``members``.  Inherits ``whoami`` + ``get_workspace_info``
-        # from ``WorkspaceContextMixin`` — those live in the mixin
-        # column, not here.
+        # Workspace-member identity specialist. Aliases: ``user``,
+        # ``users``, ``identity_agent``, ``identity``, ``members``.
+        # Inherits ``whoami`` + ``get_workspace_info`` from
+        # ``WorkspaceContextMixin`` — those live in the mixin column,
+        # not here.
         "list_workspace_members",
         "search_workspace_members",
         "get_user_profile",
         "list_user_activity",
     },
-    "writing_agent": {
-        # PR #303 — Writing surface specialist. Aliases:
-        # ``newsletter_agent``, ``letter_agent``, ``draft_agent``.
-        # Drafts artifacts in the Workspace → Writing surface.
-        # Newsletters land at ``status=ai_drafted`` for human review —
-        # this agent never sends. Inherits ``whoami`` +
-        # ``get_workspace_info`` from ``WorkspaceContextMixin``.
-        #
-        # AI drafting surface (this PR): every drafting tool now
-        # persists a WritingDraft (ai_drafted=True, status=draft) and
-        # emits a draft-card artifact through ``collect_artifact`` so
-        # the chat bubble can render an "Open in Writing →" CTA.
-        # Newsletter persistence stays on the Newsletter aggregate
-        # (separate DRAFT → AI_DRAFTED → SENT lifecycle) and is
-        # unchanged here. The five ``draft_*_update`` tools (entity-
-        # scoped) require the planner to resolve the entity UUID
-        # first via the specialist that owns it — see planner.system
-        # v7's "Entity-update drafting" routing block.
-        "draft_newsletter_from_period",
-        "draft_letter",
-        "draft_mission",
-        "draft_recipient_update",
-        "draft_project_update",
-        "draft_event_update",
-        "draft_campaign_update",
-        "summarize_period",
-        "generate_blog_post",
-        "extract_key_points",
+    "triage_agent": {
+        # SOC triage specialist. Aliases: ``triage``, ``soc_triage``,
+        # ``security_triage``. Files findings on the SOC board, triages
+        # pending log-watch findings, and (rung-1 HITL) opens draft PRs.
+        # The three task tools are the deliberate SHARED_TOOLS overlap
+        # with task_agent — see the declaration above.
+        "list_open_findings",
+        "list_pending_log_findings",
+        "triage_finding",
+        "record_finding",
+        "open_draft_pr",
+        "assign_task",
+        "get_team_members",
+        "get_members_without_tasks",
     },
-    "sharing_agent": {
-        # PR #270 — resource-level sharing specialist. Aliases:
-        # ``share``, ``sharing``. Manages per-resource share grants
-        # (budget / task / project / report / newsletter / blog) without
-        # granting workspace membership. Read-only on shared-with-me,
-        # mutating on owned-resource grants.
-        "share_resource",
-        "create_share_link",
-        "list_shares_on",
-        "list_my_shared_resources",
-        "revoke_share",
-        "change_share_role",
-        "list_shared_resource_ids",
-        "who_has_access_to",
+    "log_watch_agent": {
+        # Log anomaly specialist. Aliases: ``log_watch``, ``logwatch``,
+        # ``log_monitor``. Read-only over recent log findings + suggests
+        # fixes for the triage flow to act on.
+        "list_recent_log_findings",
+        "suggest_fix",
     },
-    "admin_verification_agent": {
-        # PR #392 — admin identity-verification ("KYC") specialist.
-        # Aliases: ``kyc``, ``admin_kyc``, ``admin_verification``,
-        # ``verification``. Read-only by design — never approves or
-        # rejects. Approval is a human-in-the-loop boundary handled by
-        # platform staff via Django admin (SKILL.md §1 #11). Tools
-        # surface what's pending review, who hasn't started, expiry
-        # reminders.
-        "get_my_verification_status",
-        "list_unverified_admins",
-        "list_pending_review",
-        "list_rejected_verifications",
-        "summarize_verification_stats",
-        "list_expiring_id_documents",
+    "optimization_agent": {
+        # Log/cost optimization specialist. Aliases: ``optimization``,
+        # ``log_optimizer``, ``log_optimization``. Surfaces pending
+        # optimization advisories from the log analysis pipeline.
+        "list_pending_optimizations",
+        "advise_optimization",
     },
 }
 
@@ -362,7 +193,15 @@ CANONICAL_TOOLS: Dict[str, Set[str]] = {
 #
 # The test uses ``RoutingMockLLM`` so this dict double-duties as both
 # the routing rule (passed to the mock) and the assertion table.
-ROUTING_EXPECTATIONS: Dict[str, str] = {
+#
+# 2026-07 fork retune: entries for the unported wanjala specialists were
+# deleted, and the SOC specialists (triage / log_watch / optimization) got
+# entries. Their prompt backing today is the LIVE agent catalog section that
+# ``_build_agent_catalog()`` injects into the system prompt from each class's
+# ``profile`` (the yaml routing TABLE is still the wanjala v7 text and has no
+# explicit SOC bullets — that prompt retune is tracked as its own change;
+# when it lands, add explicit routing rules for these keywords there).
+ROUTING_EXPECTATIONS: dict[str, str] = {
     # task_agent
     "how many tasks": "task_agent",
     "list our tasks": "task_agent",
@@ -391,105 +230,11 @@ ROUTING_EXPECTATIONS: Dict[str, str] = {
     "update the project description": "project_agent",
     "add a milestone": "project_agent",
     "delete the milestone": "project_agent",
-    # budget_agent
-    "how many budgets": "budget_agent",
-    "am I over budget": "budget_agent",
-    "budget summary": "budget_agent",
-    "rename the budget": "budget_agent",
-    "update the estimate": "budget_agent",
-    "delete the estimate": "budget_agent",
-    "why is marketing over budget": "budget_agent",
-    "explain the variance": "budget_agent",
-    "narrate the budget gap": "budget_agent",
-    # financial_agent
-    "list transactions": "financial_agent",
-    "what did we spend": "financial_agent",
-    "top expenses": "financial_agent",
-    "financial summary": "financial_agent",
-    "list financial reports": "financial_agent",
-    "show me our reports": "financial_agent",
-    "generate a financial report": "financial_agent",
-    "update this transaction": "financial_agent",
-    "delete this transaction": "financial_agent",
-    # sponsorship_agent
-    "list recipients": "sponsorship_agent",
-    "who are my recipients": "sponsorship_agent",
-    "how many sponsors": "sponsorship_agent",
-    "how many sponsorships": "sponsorship_agent",
-    "how many active sponsorships": "sponsorship_agent",
-    "sponsorship overview": "sponsorship_agent",
-    "update the recipient": "sponsorship_agent",
-    "cancel the sponsorship": "sponsorship_agent",
-    "set a goal for the recipient": "sponsorship_agent",
-    "sponsorship report": "sponsorship_agent",
-    "high level report of our sponsorship": "sponsorship_agent",
-    "generate a sponsorship report": "sponsorship_agent",
-    "download sponsorship report": "sponsorship_agent",
-    # donation_agent
-    "list our donors": "donation_agent",
-    "top donors": "donation_agent",
-    "biggest donors": "donation_agent",
-    "donations this week": "donation_agent",
-    "approve donation": "donation_agent",
-    "reject donation": "donation_agent",
-    "review this donation": "donation_agent",
-    "cancel the recurring donation": "donation_agent",
-    "update the recurring amount": "donation_agent",
-    "donation report": "donation_agent",
-    "generate a donation report": "donation_agent",
-    "download donation report": "donation_agent",
-    # sponsor_agent — the donor/sponsor persona's OWN giving (first-person).
-    # Distinct from donation_agent / sponsorship_agent (org-admin side);
-    # phrases chosen so no other route's keyword is a substring of them.
-    "where did my money go": "sponsor_agent",
-    "what was spent on my behalf": "sponsor_agent",
-    "show my giving impact": "sponsor_agent",
-    "how much have i given": "sponsor_agent",
-    # fundraising_agent
-    "list campaigns": "fundraising_agent",
-    "how many campaigns": "fundraising_agent",
-    "active campaigns": "fundraising_agent",
-    "create a campaign": "fundraising_agent",
-    "campaign performance": "fundraising_agent",
-    "list our events": "fundraising_agent",
-    "do we have any events": "fundraising_agent",
-    "what events do we have": "fundraising_agent",
-    "create an event": "fundraising_agent",
-    "schedule the gala": "fundraising_agent",
-    "go live with the event": "fundraising_agent",
-    "pause the event": "fundraising_agent",
-    "end the event": "fundraising_agent",
     # workspace_agent
     "workspace overview": "workspace_agent",
     "list our followers": "workspace_agent",
     "engagement report": "workspace_agent",
     "invite a member": "workspace_agent",
-    # 2026-05-09 — generic workspace-scoped report verbs.
-    # ``workspace_agent.generate_organization_report`` now produces a
-    # PDF artifact via the FinancialReport pipeline (variant=impact
-    # default). Lock the routing so future prompt edits don't break
-    # the user-visible "write impact report" → paperclip flow.
-    "write impact report": "workspace_agent",
-    "create an impact report": "workspace_agent",
-    "generate an impact report": "workspace_agent",
-    "annual report": "workspace_agent",
-    "create the annual report": "workspace_agent",
-    "create a pdf report": "workspace_agent",
-    "write a workspace report": "workspace_agent",
-    "generate a workspace summary": "workspace_agent",
-    # blog_agent
-    "list articles": "blog_agent",
-    "publish an article": "blog_agent",
-    "news analytics": "blog_agent",
-    "delete this article": "blog_agent",
-    "feature this article": "blog_agent",
-    # grants_agent
-    "find grants closing this month": "grants_agent",
-    "what's our grant pipeline status": "grants_agent",
-    "draft an LOI for the Gates Foundation": "grants_agent",
-    "summarise grant deadlines": "grants_agent",
-    "list funders": "grants_agent",
-    "search grants gov": "grants_agent",
     # user_agent — workspace member identity, profiles, per-user audit
     "list workspace members": "user_agent",
     "who is on the team": "user_agent",
@@ -497,26 +242,20 @@ ROUTING_EXPECTATIONS: Dict[str, str] = {
     "search for the member named sarah": "user_agent",
     "show me bob's profile": "user_agent",
     "what has carol done recently": "user_agent",
-    # writing_agent — Writing surface: newsletters, letters, summaries, memos
-    "draft a monthly newsletter": "writing_agent",
-    "write a thank-you letter to acme foundation": "writing_agent",
-    "summarize workspace activity for q1": "writing_agent",
-    "draft a memo about the spring fundraiser": "writing_agent",
-    # v6 qualified bare-find: explicit entity-type qualifier routes
-    # straight to the matching specialist (no multi-route).
     "find member aisha otieno": "user_agent",
-    "find donor henry wanjala": "donation_agent",
-    "find sponsor michael wong": "sponsorship_agent",
-    "find recipient priya sharma": "sponsorship_agent",
-    # admin_verification_agent — workspace-admin KYC / identity review
-    "start admin verification for jane": "admin_verification_agent",
-    "review my admin verification": "admin_verification_agent",
-    "approve admin verification": "admin_verification_agent",
-    # sharing_agent — resource-level sharing across workspaces
-    "share this budget with priya": "sharing_agent",
-    "list shares on this report": "sharing_agent",
-    "revoke share for henry": "sharing_agent",
+    # triage_agent — SOC board triage, finding filing, draft-PR HITL
+    "triage the pending findings": "triage_agent",
+    "file a security finding": "triage_agent",
+    "open a draft pr for this finding": "triage_agent",
+    "assign the brute force finding to someone free": "triage_agent",
+    # log_watch_agent — ingested log stream, anomalies, fix suggestions
+    "watch the log stream for anomalies": "log_watch_agent",
+    "what happened in the logs overnight": "log_watch_agent",
+    "suggest a fix for that log error": "log_watch_agent",
+    # optimization_agent — log noise / cost optimization advisories
+    "any pending log optimizations": "optimization_agent",
+    "how do we cut log noise": "optimization_agent",
 }
 
 
-__all__ = ["CANONICAL_TOOLS", "ROUTING_EXPECTATIONS", "UNIVERSAL_TOOLS"]
+__all__ = ["CANONICAL_TOOLS", "ROUTING_EXPECTATIONS", "SHARED_TOOLS", "UNIVERSAL_TOOLS"]
