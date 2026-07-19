@@ -81,22 +81,28 @@ jsonpatch==1.33
 jsonpointer==3.0.0
 jsonschema==4.17.3
 kombu==5.4.0
-# ── LangChain 0.3 stack. The 1.x migration (to unlock deepagents.RubricMiddleware)
-# is planned as its own deliberate pass — see docs/plans/LANGCHAIN_1X_MIGRATION_2026-07-18.md.
-# Do NOT bump these to 1.x without migrating base.py (AgentExecutor→create_agent),
-# graph_agent.py, and the langgraph 0.2→1.x orchestrator together.
-langchain==0.3.25
-langchain-community==0.3.24
-langchain-core==0.3.83
-langchain-text-splitters==0.3.8
-langchain-openai==0.3.17
+# ── LangChain 1.x stack (migrated 2026-07-19 to unlock deepagents.RubricMiddleware).
+# See docs/plans/LANGCHAIN_1X_MIGRATION_2026-07-18.md. deepagents 0.6.12 drives the
+# lower bounds: langchain>=1.3.11, langchain-core>=1.4.8, langchain-anthropic>=1.4.7.
+# langchain-openai 1.3.5 forces openai>=2.45.0 (major openai-SDK bump — risk R1;
+# the only direct SDK call site, shared_platform/openai_client.py, survives 2.x).
+langchain==1.3.14
+# langchain-classic carries the legacy chains (ConversationalRetrievalChain used by
+# agents/…/chains/retrieval.py). Vendor-maintained 1.x-compatible package, NOT a shim.
+langchain-classic>=1.0,<2
+langchain-community>=0.4,<0.5
+langchain-core==1.4.9
+langchain-text-splitters>=1.0,<2
+langchain-openai==1.3.5
+langchain-anthropic==1.4.7
 langchain-postgres>=0.0.12
 pgvector>=0.3.6
-langgraph>=0.2.76,<0.3
-langgraph-checkpoint>=2.1.2,<3
-# langfuse 2.48.0 targets langchain-core 0.x callbacks; a 3.x bump is likely required
-# for core 1.x compatibility (migration doc risk R2). Tracing degrades gracefully via
-# NullTracingAdapter, so this is not a blocker for the core-worker spike. VERIFY at resolve.
+langgraph==1.2.9
+langgraph-checkpoint>=4.1.0,<5
+deepagents==0.6.12
+# langfuse 2.x targets langchain-core 0.x callbacks; its LC handler may not attach on
+# core 1.x (risk R2). Tracing degrades gracefully via NullTracingAdapter — handler
+# construction failure is caught by the TracingPort. Bump to langfuse 3.x in a follow-up.
 langfuse==2.48.0
 langsmith>=0.8.11,<0.9
 Markdown==3.4.1
@@ -106,7 +112,10 @@ multidict>=6.1.0
 mypy-extensions==1.0.0
 numpy==1.26.4
 oauthlib==3.2.2
-openai==1.109.1
+# openai 2.x forced by langchain-openai 1.3.5 (>=2.45.0). Direct-SDK audit (risk R1):
+# the single call site (components/shared_platform/.../openai_client.py) uses
+# OpenAI(...), RateLimitError, client.completions.create — all present in 2.x.
+openai>=2.45.0,<3
 openpyxl==3.1.5
 orjson==3.10.7
 packaging==24.1
@@ -120,8 +129,11 @@ psycopg[binary,pool]==3.2.3
 pyasn1==0.4.8
 pyasn1-modules==0.2.8
 pycparser==2.21
-pydantic==2.8.2
-pydantic-core==2.20.1
+# Loosened from ==2.8.2/==2.20.1 for the LangChain 1.x stack: deepagents /
+# langchain-core 1.x / openai 2.x resolve their own compatible pydantic; the
+# exact pydantic-core pin must float with it (they are lock-step releases).
+pydantic>=2.8.2,<3
+pydantic-core>=2.20.1,<3
 pyhcl==0.4.4
 PyJWT>=2.8.0
 pyparsing==3.0.9
