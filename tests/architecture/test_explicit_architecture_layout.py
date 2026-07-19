@@ -6,14 +6,21 @@ COMPONENTS_DIR = ROOT / "components"
 
 
 def test_explicit_architecture_scaffolding_exists():
+    """Anchor paths of the explicit architecture that must never disappear.
+
+    Retuned 2026-07 for the auto-sec fork: the wanjala-only anchors
+    (``components/sponsorship`` and the docs/adr + ownership-map files that
+    were never ported) are dropped; the anchors below are the fork's actual
+    load-bearing contexts. Add an anchor when a new context becomes
+    load-bearing — don't re-add wanjala paths.
+    """
     required_paths = [
         ROOT / "components",
         ROOT / "components" / "shared_kernel",
-        ROOT / "components" / "sponsorship" / "application" / "facades",
         ROOT / "components" / "workspace" / "application" / "facades",
-        ROOT / "docs" / "adr" / "0001-explicit-architecture-rules.md",
-        ROOT / "docs" / "CONTEXT_OWNERSHIP_MAP.md",
-        ROOT / "docs" / "LEGACY_HOTSPOTS_REGISTER.md",
+        ROOT / "components" / "agents" / "application" / "facades",
+        ROOT / "components" / "integrations" / "application" / "ports",
+        ROOT / "components" / "shared_platform" / "application" / "facades",
     ]
 
     for path in required_paths:
