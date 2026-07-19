@@ -80,6 +80,23 @@ class DatabaseSaver(BaseCheckpointSaver):
         # Typed-only serde reading a legacy untyped row: json is the legacy format.
         return serde.loads_typed(("json", data))
 
+    @staticmethod
+    def _checkpoint_sort_key(key: str) -> tuple[int, int, str]:
+        """Order checkpoint ids across the two id schemes we've written.
+
+        Legacy rows keyed checkpoints by integer timestamps; langgraph 1.x
+        checkpoint ids are lexicographically time-ordered UUID6 strings. A
+        thread that spans both holds mixed keys, so ``int(key)`` on every
+        key raises ValueError and kills the run at resume (the 2026-07-19
+        dispatch failure). UUID keys sort after legacy int keys — they are
+        by definition the newer writes — and among themselves UUID6 strings
+        compare chronologically.
+        """
+        try:
+            return (0, int(key), "")
+        except ValueError:
+            return (1, 0, key)
+
     def get_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         from infrastructure.persistence.ai.agents.models import DeepRun
 
@@ -98,7 +115,7 @@ class DatabaseSaver(BaseCheckpointSaver):
 
         if not checkpoints:
             return None
-        latest_ts = max(checkpoints.keys(), key=lambda k: int(k))
+        latest_ts = max(checkpoints.keys(), key=self._checkpoint_sort_key)
         return self._build_tuple(
             {"configurable": {"thread_id": thread_id, "thread_ts": latest_ts}},
             latest_ts,
@@ -123,8 +140,9 @@ class DatabaseSaver(BaseCheckpointSaver):
             if not run or not run.checkpoints:
                 continue
             for ts_str, saved in run.checkpoints.items():
-                ts_int = int(ts_str)
-                if before and ts_int >= int(before["configurable"]["thread_ts"]):
+                if before and self._checkpoint_sort_key(ts_str) >= self._checkpoint_sort_key(
+                    str(before["configurable"]["thread_ts"])
+                ):
                     continue
                 if limit is not None and limit <= 0:
                     break
@@ -133,8 +151,8 @@ class DatabaseSaver(BaseCheckpointSaver):
                     if not all(metadata.get(k) == v for k, v in filter.items()):
                         continue
                 yield self._build_tuple(
-                    {"configurable": {"thread_id": thread_id, "thread_ts": ts_int}},
-                    ts_int,
+                    {"configurable": {"thread_id": thread_id, "thread_ts": ts_str}},
+                    ts_str,
                     saved,
                 )
                 if limit is not None:
@@ -242,8 +260,15 @@ class DatabaseSaver(BaseCheckpointSaver):
     def _build_tuple(self, config: RunnableConfig, ts: Any, saved: dict[str, str]) -> CheckpointTuple:
         checkpoint = self._serde_loads(saved.get("checkpoint_type"), _decode(saved["checkpoint"]))
         metadata = self._serde_loads(saved.get("metadata_type"), _decode(saved["metadata"]))
+        # thread_ts passes through verbatim — legacy int-timestamp keys stay
+        # ints for old callers, langgraph 1.x UUID6 checkpoint ids stay strings
+        # (int(ts) on a UUID was the second half of the 2026-07-19 crash).
+        try:
+            ts = int(ts)
+        except (TypeError, ValueError):
+            ts = str(ts)
         tuple_kwargs = {
-            "config": {"configurable": {"thread_id": config["configurable"]["thread_id"], "thread_ts": int(ts)}},
+            "config": {"configurable": {"thread_id": config["configurable"]["thread_id"], "thread_ts": ts}},
             "checkpoint": checkpoint,
             "metadata": metadata,
         }
