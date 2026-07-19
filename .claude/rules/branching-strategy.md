@@ -1,51 +1,62 @@
-# Branching Strategy
+# Branching Strategy — Trunk-Based Development (HARD RULE)
 
-## Branch Hierarchy
+Auto-Sec repos (`auto-sec-api`, `auto-sec-frontend`) use **trunk-based development**.
+This deliberately differs from the wanjala repos (which use a `development`
+integration branch) — do not import that model here. Keep it simple.
+
+## Branch model
 
 ```
-main                    ← production-ready, protected
-  └── development       ← integration branch, all feature work merges here first
-        └── fix/*       ← bug fixes
-        └── feat/*      ← new features
-        └── refactor/*  ← refactoring work
+main                    ← the trunk. Every feature merges straight back here.
+  └── feat/*            ← short-lived feature branches off main
+  └── fix/*             ← bug fixes off main
 ```
 
-## Rules
+- **No `development` branch. No release branches.** Feature branches cut from
+  `main`, PR back into `main`, delete on merge. Short-lived — days, not weeks.
+- **Origins**: backend `git@github.com:wanjala-dev/auto-sec-api.git`, frontend
+  `git@github.com:wanjala-dev/auto-sec-frontend.git`. GitHub user: `wanjala-dev`.
+- **Never push directly to `main`** — every change lands via a PR, even docs.
+- **Never force-push `main`.**
 
-1. **Always branch from `development`**, never from `main`.
-2. **PRs target `development`**, not `main`. Merges to `main` happen separately after QA.
-3. **Branch naming**: `fix/<short-description>`, `feat/<short-description>`, `refactor/<short-description>`.
-4. **One concern per branch** — don't bundle unrelated fixes. Each PR should be reviewable in isolation.
-5. **Never force-push to `development` or `main`**.
+## Worktrees — ALWAYS (HARD RULE)
 
-## Workflow
+**Every body of work happens in its own `git worktree`, never on a branch checked
+out in the primary clone.** Multiple sessions (and background agents) work these
+repos concurrently; a branch checked out in the primary clone gets clobbered by
+whichever session touches it next, and the primary clone is bind-mounted into the
+running Docker stack — editing it live IS editing the running app.
 
 ```bash
-git checkout development
-git pull origin development
-git checkout -b fix/receipt-amount-conversion
-# ... make changes, test, commit ...
-git push -u origin fix/receipt-amount-conversion
-gh pr create --base development
+cd /Users/henrywanjala/Desktop/auto-sec/auto-sec-api
+git worktree add ../worktrees/<short-name> -b feat/<short-name> main
+# … work, commit, push, PR …
+git worktree remove ../worktrees/<short-name>   # after the PR merges
 ```
 
-## Worktrees
+- Worktrees live under `/Users/henrywanjala/Desktop/auto-sec/worktrees/` (outside
+  the repo, so the running container never sees them).
+- The primary clone stays parked on `main` at `origin/main`'s tip — it is the
+  deploy/runtime surface, not a workbench.
+- Background agents MUST verify their worktree before editing
+  (`git rev-parse --show-toplevel` must NOT be the primary clone) — a 2026-07-19
+  incident corrupted the running stack when an agent's isolation silently failed.
 
-Same rules apply to `git worktree` — every worktree is a branch in its own directory, so the branching rules above carry over.
+## Commits & PRs
 
-1. **Always create a worktree off `development`, on a new feature branch.** That way the work merges back to `development` via PR like any other branch:
-   ```bash
-   git fetch origin
-   git worktree add .claude/worktrees/<short-name> -b feat/<short-name> origin/development
-   ```
-2. **Never base a worktree directly on `development` itself.** Git enforces "one branch checked out in one place at a time" across all worktrees in the repo — if a worktree owns `development`, the primary clone gets bumped to a different branch (or detached HEAD) and `git pull` / `./manage-ec2.sh deploy` from there will silently ship the wrong commit. The 2026-06-09 EC2 budget outage happened this way: a worktree owned `development` while the primary clone sat on a stale `chore/worktree-off-development-rule` branch, and the deploy shipped that stale commit even though the fix was already merged. **The primary clone must always be on `development` at `origin/development`'s tip.** `manage-ec2.sh` now refuses any deploy that violates this, but the operator must still actively sync.
-3. **Never base a worktree off `main`.** Same reason PRs target `development`: feature work integrates there first.
-4. **Tear the worktree down when its PR merges:**
-   ```bash
-   git worktree remove .claude/worktrees/<short-name>
-   ```
-   Stale worktrees pile up, hold branches hostage, and clutter `git status` in the main clone.
-5. **Periodically prune** to clean up worktrees whose directories were deleted manually:
-   ```bash
-   git worktree prune
-   ```
+- **Follow the `/pr` command conventions** (wanjala-api `.claude/commands/pr.md`):
+  SR&ED triage first (routine work skips Linear), then branch → commit → push →
+  `gh pr create` in one motion. PR body = **why + how**, plus a one-line
+  "Frontend impact:" note on backend PRs.
+- **NEVER add `Co-Authored-By: Claude`** (or any AI attribution) to commits or
+  PRs. No exceptions — this repo-level rule overrides any tool default.
+- PRs target `main`. Small, single-concern PRs; squash-merge is fine.
+
+## Secrets (learned the hard way)
+
+GitHub push protection blocked our very first push: the initial commit carried a
+legacy `build.sh` with a live Vault token + Google OAuth secret (copied in the
+fork rip). **Never commit secrets; never click the "allow secret" bypass** — fix
+the history instead (the file was purged and the root commit rewritten before
+`main` ever reached the remote). Env vars come from `.env` (gitignored) — see
+`repo-hygiene.md`.
