@@ -1,7 +1,8 @@
 """
 Retrieval Chain Implementation
 """
-from langchain.chains import ConversationalRetrievalChain
+# LangChain 1.x: legacy chains moved to the vendor-maintained langchain-classic package.
+from langchain_classic.chains import ConversationalRetrievalChain
 from .streamable import StreamableChain
 from .traceable import TraceableChain
 from typing import Optional

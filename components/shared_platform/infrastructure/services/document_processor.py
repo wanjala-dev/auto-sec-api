@@ -188,8 +188,8 @@ class DocumentProcessor:
             else:
                 # For txt/csv, create simple chunks
                 content = file_content.decode("utf-8-sig", errors="replace")
-                from langchain.text_splitter import RecursiveCharacterTextSplitter
-                from langchain.schema import Document
+                from langchain_text_splitters import RecursiveCharacterTextSplitter
+                from langchain_core.documents import Document
 
                 splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
                 chunks = splitter.split_text(content)

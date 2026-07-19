@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from django.utils import timezone
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 
 logger = logging.getLogger(__name__)

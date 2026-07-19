@@ -32,7 +32,7 @@ class AzureLlmAdapter(LlmPort):
         )
 
     def chat(self, messages: list[dict[str, str]], **kwargs) -> LlmResponse:
-        from langchain.schema import HumanMessage, SystemMessage, AIMessage
+        from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
         role_map = {"system": SystemMessage, "user": HumanMessage, "human": HumanMessage, "assistant": AIMessage, "ai": AIMessage}
         lc_messages = [role_map.get(m.get("role", "user"), HumanMessage)(content=m.get("content", "")) for m in messages]

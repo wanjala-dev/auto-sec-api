@@ -11,8 +11,9 @@ from datetime import datetime
 import time
 from typing import Any, Dict, List, Optional
 
-from langchain.callbacks.base import BaseCallbackHandler
-from langchain.schema import AgentAction, AgentFinish, LLMResult
+from langchain_core.callbacks import BaseCallbackHandler
+from langchain_core.agents import AgentAction, AgentFinish
+from langchain_core.outputs import LLMResult
 
 
 @dataclass

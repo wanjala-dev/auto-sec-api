@@ -350,7 +350,7 @@ def run_detector_cycle(
     llm_actions_data: list[dict[str, Any]] = []
     if all_signals:
         try:
-            from langchain.schema import HumanMessage, SystemMessage
+            from langchain_core.messages import HumanMessage, SystemMessage
 
             from components.knowledge.infrastructure.factories.llms.factory import (
                 LLMFactory,

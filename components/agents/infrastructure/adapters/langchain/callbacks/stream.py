@@ -1,10 +1,11 @@
 """
 Streaming Callback Handler for LangChain
 """
-from langchain.callbacks.base import BaseCallbackHandler
+from langchain_core.callbacks import BaseCallbackHandler
 from queue import Queue
 from typing import Any, Dict, List, Optional, Union
-from langchain.schema import AgentAction, AgentFinish, LLMResult
+from langchain_core.agents import AgentAction, AgentFinish
+from langchain_core.outputs import LLMResult
 
 
 class StreamingHandler(BaseCallbackHandler):

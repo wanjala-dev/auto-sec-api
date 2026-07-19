@@ -63,7 +63,7 @@ class KnowledgeTextIngestAdapter(KnowledgeTextIngestPort):
         if not document_key:
             raise ValueError("document_key is required for text ingestion.")
 
-        from langchain.text_splitter import RecursiveCharacterTextSplitter
+        from langchain_text_splitters import RecursiveCharacterTextSplitter
         from langchain_core.documents import Document
 
         from components.knowledge.infrastructure.factories.embeddings.factory import (
