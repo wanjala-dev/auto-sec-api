@@ -174,6 +174,45 @@ class LogPatternRollup(models.Model):
         return f"{self.kind}:{self.signature} ×{self.total_count}"
 
 
+class GitHubConnection(models.Model):
+    """Workspace-scoped GitHub access for agent draft-PR remediation.
+
+    Phase A (dogfood): a fine-grained PAT, stored via the app-layer Fernet
+    envelope (``components.integrations.application.providers.
+    secret_envelope_provider``) — NEVER plaintext. ``repo_allowlist`` is the
+    consent boundary: the agent may only open draft PRs against repos the
+    operator explicitly listed. Phase B replaces the PAT with a GitHub App
+    installation (short-lived, per-operation tokens).
+    """
+
+    class Status(models.TextChoices):
+        CONNECTED = "connected", "Connected"
+        DISABLED = "disabled", "Disabled"
+        ERROR = "error", "Error"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name="github_connections")
+    name = models.CharField(max_length=120, default="GitHub")
+    # "owner/repo" strings the agent may open draft PRs against — the consent
+    # boundary. A repo not on this list is rejected before any API call.
+    repo_allowlist = models.JSONField(default=list, blank=True)
+    # Encrypted fine-grained PAT — Fernet envelope applied at the application
+    # layer (same envelope as SinkConnector secrets); NEVER plaintext.
+    token_ciphertext = models.TextField(blank=True, default="")
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.CONNECTED)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.TextField(blank=True, default="")
+    created_by = models.ForeignKey("users.CustomUser", null=True, blank=True, on_delete=models.SET_NULL)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["workspace", "status"])]
+
+    def __str__(self):
+        return f"{self.name} ({self.workspace_id})"
+
+
 class SinkConnector(models.Model):
     class Kind(models.TextChoices):
         SLACK = "slack", "Slack"

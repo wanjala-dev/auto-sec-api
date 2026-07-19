@@ -381,6 +381,75 @@ class AwsConnectionVerifyView(APIView):
         return Response({"success": True, "data": _serialize(conn)})
 
 
+class FindingOpenDraftPrView(APIView):
+    """POST /integrations/workspaces/<ws>/findings/<task_id>/open-draft-pr/
+
+    The rung-1 HITL path for the triage agent's draft-PR capability: a human
+    operator approves, and the use case (the single choke point for EVERY
+    precondition — installed connection, repo allowlist, finding triaged and
+    not needs_human, agent capability enabled) opens the draft PR. Thin:
+    parse → use case → serialize. Idempotent — a finding that already has a
+    draft PR returns the existing URL with 200.
+    """
+
+    permission_classes = (permissions.IsAuthenticated, CanManageIntegrations)
+    name = "integrations-finding-open-draft-pr"
+
+    _REASON_STATUS = {
+        "finding_not_found": status.HTTP_404_NOT_FOUND,
+        "no_github_connection": status.HTTP_409_CONFLICT,
+        "connection_not_connected": status.HTTP_409_CONFLICT,
+        "no_github_token": status.HTTP_409_CONFLICT,
+        "repo_not_allowlisted": status.HTTP_409_CONFLICT,
+        "finding_not_triaged": status.HTTP_409_CONFLICT,
+        "finding_needs_human": status.HTTP_409_CONFLICT,
+        "capability_disabled": status.HTTP_403_FORBIDDEN,
+        "no_candidate_path": status.HTTP_422_UNPROCESSABLE_ENTITY,
+        "no_grounded_patch": status.HTTP_422_UNPROCESSABLE_ENTITY,
+    }
+
+    def post(self, request, workspace_id, task_id):
+        from components.integrations.application.ports.github_pr_port import GitHubApiError
+        from components.integrations.application.providers.github_pr_provider import (
+            get_open_draft_pr_use_case,
+        )
+        from components.integrations.application.use_cases.open_draft_pr_use_case import (
+            DraftPrPreconditionError,
+        )
+
+        try:
+            result = get_open_draft_pr_use_case().execute(
+                workspace_id=str(workspace_id),
+                task_id=str(task_id),
+                performed_by=str(request.user.id),
+                repo=(request.data.get("repo") or "").strip() or None,
+            )
+        except DraftPrPreconditionError as exc:
+            return Response(
+                {"success": False, "reason": exc.reason, "error": str(exc)},
+                status=self._REASON_STATUS.get(exc.reason, status.HTTP_400_BAD_REQUEST),
+            )
+        except GitHubApiError as exc:
+            logger.exception("open_draft_pr_endpoint github error workspace_id=%s task_id=%s", workspace_id, task_id)
+            return Response(
+                {"success": False, "reason": "github_api_error", "error": str(exc)},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        return Response(
+            {
+                "success": True,
+                "data": {
+                    "url": result.url,
+                    "repo": result.repo,
+                    "branch": result.branch,
+                    "created": result.created,
+                },
+            },
+            status=status.HTTP_201_CREATED if result.created else status.HTTP_200_OK,
+        )
+
+
 class AwsConnectionLogStreamView(APIView):
     """GET /integrations/workspaces/<ws>/aws/<id>/logstream/
 
