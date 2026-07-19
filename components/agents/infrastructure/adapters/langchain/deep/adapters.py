@@ -219,6 +219,31 @@ def build_worker_from_agent(
         except Exception:
             logger.warning("rubric verdict stamp failed task_id=%s", task.id, exc_info=True)
 
+        # Per-task LLM spend record (task #46). The agent ships its per-call
+        # telemetry snapshot on the response; this worker owns the task_id, so
+        # the priced record is stamped HERE under
+        # ``run_metadata["cost_usd_records"][task_id]`` — the reducer unions
+        # records across concurrent Send workers, and the scheduler derives
+        # the run total for the ``max_cost_usd`` budget check. Merges into
+        # the delta AFTER the rubric stamp (which replaces the dict wholesale)
+        # so both stamps survive. Reflection re-runs share the task key, so
+        # only the returned attempt's record survives (documented undercount).
+        # Fail-safe: cost telemetry never breaks the worker.
+        try:
+            from components.agents.infrastructure.adapters.langchain.deep.costing import (
+                worker_cost_record,
+            )
+
+            cost_record = worker_cost_record(response)
+            if cost_record is not None:
+                cost_metadata = dict(delta.get("run_metadata") or {})
+                records = dict(cost_metadata.get("cost_usd_records") or {})
+                records[str(task.id)] = cost_record
+                cost_metadata["cost_usd_records"] = records
+                delta["run_metadata"] = cost_metadata
+        except Exception:
+            logger.warning("worker cost record stamp failed task_id=%s", task.id, exc_info=True)
+
         return delta
 
     return worker

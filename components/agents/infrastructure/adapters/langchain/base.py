@@ -1848,6 +1848,19 @@ class BaseAgent(ABC):
             }
             if rubric_evaluations:
                 result_payload["rubric_evaluations"] = rubric_evaluations
+            # Ship the per-call telemetry snapshot (token counters, model
+            # usage, tool counts) out on the response so the deep-run worker
+            # can price this execution into run_metadata["cost_usd_records"]
+            # (task #46 — the per-run cost cap needs in-run spend, and the
+            # snapshot previously only reached AgentExecution.state /
+            # DeepRunLog where the scheduler can't see it). Additive key;
+            # fail-safe — telemetry failure never breaks the reply.
+            try:
+                telemetry_snapshot = self._get_telemetry_snapshot()
+                if telemetry_snapshot:
+                    result_payload["telemetry"] = telemetry_snapshot
+            except Exception:  # pylint: disable=broad-except
+                logger.debug("telemetry snapshot attach failed for agent %s", self.agent_id, exc_info=True)
             self._maybe_log_run_telemetry(run_context, success=True)
             return result_payload
 

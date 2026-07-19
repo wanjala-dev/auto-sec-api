@@ -144,6 +144,17 @@ class ExecutionBudget(BaseModel):
     max_tasks: int = Field(default=100, description="Max total tasks (ready + completed) before forced stop.")
     time_budget_seconds: float = Field(default=300.0, description="Wall-clock seconds before forced stop.")
     max_worker_failures: int = Field(default=10, description="Cumulative worker failures before forced stop.")
+    # Per-run LLM spend cap in USD. ``None`` (the default) = no cost cap —
+    # existing callers and old checkpoints are untouched. When set, the
+    # scheduler derives the run's spend from the reducer-united
+    # ``run_metadata["cost_usd_records"]`` (one record per priced LLM surface:
+    # the planner seed + one per worker task) and stops dispatching new work
+    # once the cap is reached — same honest-synthesizer exhaustion path as the
+    # other caps (see orchestrator._check_budget).
+    max_cost_usd: float | None = Field(
+        default=None,
+        description="Max cumulative LLM spend in USD before forced stop. None disables the cap.",
+    )
 
 
 def merge_run_metadata(current: dict[str, Any] | None, update: dict[str, Any] | None) -> dict[str, Any]:

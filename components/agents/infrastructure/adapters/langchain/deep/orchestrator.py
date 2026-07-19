@@ -98,6 +98,31 @@ def _derived_worker_failure_count(state: PlanState) -> int:
         return 0
 
 
+def _total_run_cost_usd(state: PlanState) -> float:
+    """Cumulative LLM spend for this run, derived from cost records.
+
+    Spend records live in ``run_metadata["cost_usd_records"]`` — one record
+    per priced surface (``"planner"`` for the planning call(s), the task_id
+    for each worker execution), united across concurrent ``Send`` workers by
+    the ``merge_run_metadata`` reducer. The total is DERIVED here rather than
+    carried on a scalar channel for the same reason worker-failure counts are
+    (see ``_derived_worker_failure_count``): concurrent workers writing one
+    scalar either collide or clobber. Records whose cost could not be priced
+    (unknown model → ``cost_usd: None``) contribute 0 — the cap only trips on
+    spend we can actually substantiate.
+    """
+    run_metadata = state.get("run_metadata") or {}
+    records = run_metadata.get("cost_usd_records") or {}
+    total = 0.0
+    for record in records.values():
+        if not isinstance(record, dict):
+            continue
+        cost = record.get("cost_usd")
+        if isinstance(cost, (int, float)):
+            total += float(cost)
+    return total
+
+
 def _check_budget(state: PlanState) -> str | None:
     """Return a human-readable reason if the budget is exceeded, else None."""
     budget_dict = state.get("budget")
@@ -123,6 +148,12 @@ def _check_budget(state: PlanState) -> str | None:
     failure_count = _derived_worker_failure_count(state)
     if failure_count >= budget.max_worker_failures:
         return f"max_worker_failures ({budget.max_worker_failures}) reached — {failure_count} failures"
+
+    max_cost = getattr(budget, "max_cost_usd", None)
+    if max_cost is not None and max_cost > 0:
+        total_cost = _total_run_cost_usd(state)
+        if total_cost >= max_cost:
+            return f"max_cost_usd (${max_cost:.2f}) reached — ${total_cost:.4f} spent"
 
     return None
 
@@ -672,6 +703,11 @@ def build_orchestrator(
 
         run_metadata = dict(state.get("run_metadata") or {})
         run_metadata["iteration_count"] = iteration_count
+        # Derived spend total, stamped by the scheduler only (single writer per
+        # iteration → no reducer collisions). The additive source of truth is
+        # ``cost_usd_records``; this scalar exists for run-trace consumers that
+        # want the total without re-deriving it.
+        run_metadata["cost_usd_total"] = round(_total_run_cost_usd(state), 6)
 
         # Check budget BEFORE dispatching more work
         budget_reason = _check_budget({**state, "iteration_count": iteration_count})
