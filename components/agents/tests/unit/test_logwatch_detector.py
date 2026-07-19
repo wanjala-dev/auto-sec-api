@@ -153,15 +153,51 @@ def test_router_routes_both_log_source_types():
     assert "ai.log_optimization" in AiFindingRouterDetector.ROUTABLE_SOURCE_TYPES
 
 
+_DISPATCH_TASK = "components.agents.infrastructure.tasks.agent_tasks.dispatch_finding_specialist"
+
+
 def test_triage_router_no_pending_is_noop():
-    # With no pending findings the router must not invoke any agent. The router
-    # query is ``filter(...).filter(not_triaged_filter()).only(...)`` (NULL-safe
-    # not-handled filter pushed into the DB) — resolves to empty here.
+    # With no pending findings the router must not enqueue any dispatch. The
+    # router query is ``filter(...).filter(not_triaged_filter()).only(...)``
+    # (NULL-safe not-handled filter pushed into the DB) — resolves to empty here.
     empty_qs = mock.Mock()
     empty_qs.filter.return_value.only.return_value = []
-    with mock.patch("infrastructure.persistence.project.models.Task") as task_model:
+    with (
+        mock.patch("infrastructure.persistence.project.models.Task") as task_model,
+        mock.patch(_DISPATCH_TASK) as dispatch,
+    ):
         task_model.objects.filter.return_value = empty_qs
+        assert list(AiFindingRouterDetector().execute(_ctx())) == []
+        dispatch.delay.assert_not_called()
+
+
+def test_triage_router_enqueues_dispatch_not_inline():
+    # With pending findings the router ENQUEUES dispatch_finding_specialist
+    # (after commit) and NEVER runs the specialist inline — running it inline
+    # was the 30s-detector-timeout regression. on_commit is patched to fire the
+    # callback immediately (no surrounding transaction in a unit test).
+    finding = mock.Mock()
+    finding.metadata = {"agent_type": "triage_agent"}
+    qs = mock.Mock()
+    qs.filter.return_value.only.return_value = [finding]
+    with (
+        mock.patch("infrastructure.persistence.project.models.Task") as task_model,
+        mock.patch(_DISPATCH_TASK) as dispatch,
+        mock.patch("django.db.transaction.on_commit", side_effect=lambda cb: cb()),
+        mock.patch("django.core.cache.cache.add", return_value=True),
+    ):
+        task_model.objects.filter.return_value = qs
         ctx = _ctx()
+        ctx.extras = {"performed_by": "user-1"}
         ctx.invoke_agent = mock.Mock()
         assert list(AiFindingRouterDetector().execute(ctx)) == []
-        ctx.invoke_agent.assert_not_called()
+
+        ctx.invoke_agent.assert_not_called()  # nothing runs inline anymore
+        dispatch.delay.assert_called_once()
+        args = dispatch.delay.call_args.args
+        assert args[0] == "ws-1"  # workspace_id
+        assert args[1] == "triage_agent"  # specialist
+        assert "pending findings" in args[2]  # goal
+        assert args[3]["worker_agent_type"] == "triage_agent"
+        assert args[3]["max_reflections"] == 1
+        assert args[4] == "user-1"  # performed_by
