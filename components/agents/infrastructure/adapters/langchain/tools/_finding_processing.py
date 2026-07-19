@@ -281,3 +281,129 @@ def process_pending_finding(
         moved,
     )
     return f"Handled {task.title[:70]}: {', '.join(actions)}."
+
+
+def _telemetry_entry_for(per_task_map, finding_id: str):
+    """Resolve a finding's entry from a run's per-task telemetry map.
+
+    ``rubric_verdicts`` / ``critic_scores`` are keyed by the PLAN task id the
+    deep runner dispatched — which is normally NOT the finding row's id (the
+    specialist processes findings through its tools, one plan task can cover a
+    whole batch). Resolution order:
+
+    1. exact key match (a plan task that IS the finding — future-proofing);
+    2. a single-entry map → that entry graded the whole batch, so it applies
+       to every finding the batch handled (marked ``scope: "run"``);
+    3. otherwise ``None`` — ambiguous attribution is not fabricated.
+    """
+    if not isinstance(per_task_map, dict) or not per_task_map:
+        return None
+    entry = per_task_map.get(finding_id)
+    if isinstance(entry, dict):
+        return {**entry, "scope": "task"}
+    if len(per_task_map) == 1:
+        only = next(iter(per_task_map.values()))
+        if isinstance(only, dict):
+            return {**only, "scope": "run"}
+    return None
+
+
+def stamp_run_telemetry_on_findings(*, workspace_id, specialist, since, run_result) -> int:
+    """Persist a specialist run's telemetry onto the finding rows it handled.
+
+    The async dispatch path (``dispatch_finding_specialist`` →
+    ``execute_agent`` → ``execute_plan_once``) produces a final state whose
+    ``run_metadata`` carries the run's A/B telemetry — rubric verdicts, critic
+    scores, worker retries, budget exhaustion — and then DROPPED it (no
+    DeepRun consumer reads it on this path). This stamps the relevant slice
+    onto ``Task.metadata["run_telemetry"]`` of each finding the specialist
+    triaged during the run, next to the existing triage/provenance stamps —
+    so the quality data lives where the operator sees the finding, and the
+    ``AgentRunQualityDetector`` can aggregate it.
+
+    Handled findings are matched deterministically: rows this specialist
+    stamped ``metadata.triage.agent == specialist`` on, updated after the
+    dispatch started. Runs AFTER the deep run completes, and re-locks each row
+    (same ``select_for_update(of=("self",))`` discipline as the triage write)
+    so it never races an overlapping cycle's row-locked triage mutation.
+
+    Fail-safe end to end: any error degrades to a log line — telemetry must
+    never fail (or retry) the dispatch. Returns the number of rows stamped.
+    """
+    from django.db import transaction
+    from django.utils import timezone
+
+    from infrastructure.persistence.project.models import Task
+
+    try:
+        final = run_result.get("final_output") if isinstance(run_result, dict) else None
+        run_metadata = final.get("run_metadata") if isinstance(final, dict) else None
+        if not isinstance(run_metadata, dict) or not run_metadata:
+            return 0
+        thread_id = str(run_result.get("thread_id") or "") or None
+        rubric_map = run_metadata.get("rubric_verdicts") or {}
+        critic_map = run_metadata.get("critic_scores") or {}
+        retries_map = run_metadata.get("worker_retries") or {}
+        try:
+            total_retries = sum(int(v) for v in retries_map.values() if v is not None)
+        except (TypeError, ValueError):
+            total_retries = 0
+        budget_exceeded = run_metadata.get("budget_exceeded_reason") or (
+            final.get("budget_exceeded") if isinstance(final, dict) else None
+        )
+
+        handled_ids = list(
+            Task.objects.filter(
+                workspace_id=workspace_id,
+                source_type__startswith="ai.",
+                metadata__triage__agent=specialist,
+                updated_at__gte=since,
+            ).values_list("id", flat=True)
+        )
+        if not handled_ids:
+            return 0
+
+        stamped = 0
+        stamped_at = timezone.now().isoformat()
+        for finding_id in handled_ids:
+            try:
+                with transaction.atomic():
+                    locked = Task.objects.select_for_update(of=("self",)).filter(id=finding_id).first()
+                    if locked is None:
+                        continue
+                    meta = locked.metadata or {}
+                    if (meta.get("triage") or {}).get("agent") != specialist:
+                        continue  # re-check under the lock — an overlapping run may have re-stamped
+                    meta["run_telemetry"] = {
+                        "rubric_verdicts": _telemetry_entry_for(rubric_map, str(finding_id)),
+                        "critic_scores": _telemetry_entry_for(critic_map, str(finding_id)),
+                        "worker_retries": total_retries,
+                        "budget_exceeded": budget_exceeded or None,
+                        "source_thread_id": thread_id,
+                        "specialist": specialist,
+                        "stamped_at": stamped_at,
+                    }
+                    locked.metadata = meta
+                    locked.save(update_fields=["metadata", "updated_at"])
+                    stamped += 1
+            except Exception:
+                logger.exception(
+                    "run_telemetry stamp failed finding_id=%s specialist=%s",
+                    finding_id,
+                    specialist,
+                )
+        logger.info(
+            "run_telemetry stamped workspace_id=%s specialist=%s thread_id=%s findings=%d",
+            workspace_id,
+            specialist,
+            thread_id,
+            stamped,
+        )
+        return stamped
+    except Exception:
+        logger.exception(
+            "run_telemetry stamp aborted workspace_id=%s specialist=%s",
+            workspace_id,
+            specialist,
+        )
+        return 0

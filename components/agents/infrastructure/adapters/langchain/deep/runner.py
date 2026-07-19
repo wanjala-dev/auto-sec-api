@@ -151,6 +151,7 @@ def execute_plan_once(
     time_budget_seconds: float = 300.0,
     max_worker_failures: int = 10,
     max_worker_retries: int = 1,
+    max_cost_usd: float | None = None,
     max_replans: int = 1,
     use_llm_synthesizer: bool = True,
     deep_run_context: Any | None = None,
@@ -401,11 +402,24 @@ def execute_plan_once(
 
     from components.agents.domain.value_objects.plan_schemas import ExecutionBudget
 
+    # Per-run spend cap (task #46): agent_config overrides the caller default,
+    # same precedence as the retry knob below. None/invalid = cap off — the
+    # existing caps (iterations/tasks/time/failures) still bound the run.
+    if isinstance(agent_config, dict) and agent_config.get("max_cost_usd") is not None:
+        try:
+            max_cost_usd = float(agent_config["max_cost_usd"])
+        except (TypeError, ValueError):
+            logger.warning(
+                "deep_run invalid max_cost_usd=%r in agent_config; keeping %r",
+                agent_config.get("max_cost_usd"),
+                max_cost_usd,
+            )
     execution_budget = ExecutionBudget(
         max_iterations=max_iterations,
         max_tasks=max(len(plan.tasks or []) * 3, 100),  # 3x the initial plan size, min 100
         time_budget_seconds=time_budget_seconds,
         max_worker_failures=max_worker_failures,
+        max_cost_usd=max_cost_usd if (max_cost_usd or 0) > 0 else None,
     )
     # Per-task transient-failure retries: agent_config overrides the caller
     # default; build_orchestrator clamps to its hard cap (2) either way so
@@ -447,6 +461,21 @@ def execute_plan_once(
             "workspace_id": workspace_id,
         }
     }
+    # Seed the run's spend ledger with the planner's cost (task #46). The
+    # planner runs BEFORE the graph, so its spend can't be stamped by a worker
+    # node — the runner reads the ``llm_call`` DeepRunLog rows the planner
+    # instrumentation wrote and seeds ``cost_usd_records["planner"]`` on the
+    # initial state. The reducer then unions worker records on top.
+    initial_run_metadata: dict[str, Any] = {}
+    try:
+        from .costing import planner_cost_record
+
+        planner_record = planner_cost_record(run_thread)
+        if planner_record is not None:
+            initial_run_metadata["cost_usd_records"] = {"planner": planner_record}
+    except Exception:
+        logger.warning("planner cost seed failed thread_id=%s", run_thread, exc_info=True)
+
     try:
         state = graph.invoke(
             {
@@ -455,6 +484,7 @@ def execute_plan_once(
                 "completed_task_ids": [],
                 "run_id": run_thread,
                 "run_context": run_context,
+                "run_metadata": initial_run_metadata,
             },
             config=config,
         )
@@ -467,16 +497,27 @@ def execute_plan_once(
         log_deep_event(run_thread, "run_failed", status=DeepRun.STATUS_FAILED, payload={"error": str(exc)})
         raise
 
-    # Persist cost tracking into DeepRun.state['usage']
+    # Persist cost tracking into DeepRun.state['usage'].
+    #
+    # HONESTY FIX (task #46): this used to read
+    # ``run_metadata["total_input_tokens"]`` — a key NOTHING ever wrote, so the
+    # persisted usage was always zeros. The real per-run spend now lives in
+    # ``run_metadata["cost_usd_records"]`` (planner seed + per-task worker
+    # records, united by the reducer); fold those into the snapshot so
+    # ``DeepRun.state["usage"]`` finally reports measured tokens + cost.
     from components.agents.application.services.execution_cost_tracker import ExecutionCostTracker
 
     cost_tracker = ExecutionCostTracker()
-    # Extract token counts from run_metadata if the worker tracked them
     run_metadata = state.get("run_metadata") or {}
-    if run_metadata.get("total_input_tokens"):
+    for record in (run_metadata.get("cost_usd_records") or {}).values():
+        if not isinstance(record, dict):
+            continue
+        cost = record.get("cost_usd")
         cost_tracker.record_llm_call(
-            input_tokens=run_metadata.get("total_input_tokens", 0),
-            output_tokens=run_metadata.get("total_output_tokens", 0),
+            model=str(record.get("model") or "unknown"),
+            input_tokens=int(record.get("input_tokens") or 0),
+            output_tokens=int(record.get("output_tokens") or 0),
+            cost_usd=float(cost) if isinstance(cost, (int, float)) else 0.0,
         )
 
     final_state = to_serializable(state)

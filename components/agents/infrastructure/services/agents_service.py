@@ -5,6 +5,7 @@ Service layer for AI agent management, replacing the factory pattern
 with a cleaner service-oriented approach.
 """
 
+import logging
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -23,6 +24,8 @@ from components.agents.infrastructure.services.actions_service import get_ai_act
 from infrastructure.persistence.ai.agents.models import Agent, AgentExecution, AgentType
 
 User = get_user_model()
+
+logger = logging.getLogger(__name__)
 
 
 _MAX_ACTIVE_AGENTS = 200  # Prevent unbounded memory growth in long-running workers
@@ -341,6 +344,29 @@ class AgentService:
                 default_tool_name=None,
             ),
         )
+
+        # Create the DeepRun ledger row BEFORE planning (task #46). The
+        # planner's LLM observability (``llm_planner._log_llm_call`` — tokens,
+        # latency, cost_usd) attaches to an existing DeepRun and silently
+        # skips when none exists. The row used to be created only inside
+        # ``execute_plan_once`` (after planning), so the autonomous dispatch
+        # path lost every planner llm_call row — and with it the planner half
+        # of the per-run cost ledger. ``execute_plan_once`` still runs its own
+        # ``update_or_create`` on the same thread_id (idempotent).
+        from infrastructure.persistence.ai.agents.models import DeepRun
+
+        try:
+            DeepRun.objects.update_or_create(
+                thread_id=thread_id,
+                defaults={
+                    "plan_id": plan_id,
+                    "user_id": performed_by or str(agent_record.user_id),
+                    "workspace_id": str(agent_record.workspace_id),
+                    "status": DeepRun.STATUS_PENDING,
+                },
+            )
+        except Exception:  # pylint: disable=broad-except
+            logger.warning("pre-plan DeepRun create failed thread_id=%s", thread_id, exc_info=True)
 
         plan = plan_with_llm(
             goal=query,
