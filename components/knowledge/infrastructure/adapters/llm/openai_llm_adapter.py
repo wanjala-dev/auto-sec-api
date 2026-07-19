@@ -34,7 +34,7 @@ class OpenAILlmAdapter(LlmPort):
         )
 
     def chat(self, messages: list[dict[str, str]], **kwargs) -> LlmResponse:
-        from langchain.schema import HumanMessage, SystemMessage, AIMessage
+        from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
         role_map = {
             "system": SystemMessage,

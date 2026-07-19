@@ -301,7 +301,7 @@ class Command(BaseCommand):
         model_name: str | None,
     ) -> str:
         """One-shot LLM call with the candidate system prompt."""
-        from langchain.schema import HumanMessage, SystemMessage
+        from langchain_core.messages import HumanMessage, SystemMessage
 
         from components.knowledge.infrastructure.factories.llms.factory import (
             LLMFactory,

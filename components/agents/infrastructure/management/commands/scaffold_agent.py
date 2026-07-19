@@ -40,7 +40,7 @@ class Command(BaseCommand):
 
         plans: List[tuple[Path, str]] = []
 
-        agent_template = f'''"""{{name}} Agent."""\nfrom functools import partial\nfrom langchain.tools import Tool\n\nfrom .base import BaseAgent\nfrom .tools import {slug}_agent as {slug}_tools\n\n\nclass {class_name}(BaseAgent):\n    """Agent for {name.lower()} workflows."""\n\n    def _setup_tools(self):\n        self.tools = [\n            Tool(\n                name="sample_{slug}_tool",\n                description="Example tool for {name} agent (replace with real tools).",\n                func=partial({slug}_tools.sample_tool, self),\n            ),\n        ]\n'''.format(slug=slug, name=name, class_name=class_name)
+        agent_template = f'''"""{{name}} Agent."""\nfrom functools import partial\nfrom langchain_core.tools import Tool\n\nfrom .base import BaseAgent\nfrom .tools import {slug}_agent as {slug}_tools\n\n\nclass {class_name}(BaseAgent):\n    """Agent for {name.lower()} workflows."""\n\n    def _setup_tools(self):\n        self.tools = [\n            Tool(\n                name="sample_{slug}_tool",\n                description="Example tool for {name} agent (replace with real tools).",\n                func=partial({slug}_tools.sample_tool, self),\n            ),\n        ]\n'''.format(slug=slug, name=name, class_name=class_name)
 
         tool_template = f'''"""Tools for {name} agent."""\nfrom __future__ import annotations\n\nfrom typing import Any\n\n\ndef sample_tool(agent, payload: Any) -> str:\n    """Return a placeholder response for scaffolding."""\n    return "TODO: implement {name} tool logic."\n'''.format(name=name)
 

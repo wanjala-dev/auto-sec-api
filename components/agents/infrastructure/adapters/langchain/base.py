@@ -1126,12 +1126,24 @@ class BaseAgent(ABC):
     def _build_agent_middleware(self) -> list:
         """Middleware for ``create_agent`` (LangChain 1.x cross-cutting hooks).
 
-        Empty by default. ``deepagents.RubricMiddleware`` is attached here for
-        deep-run workers when the run opts in — see
+        Empty by default. ``deepagents.RubricMiddleware`` is attached for
+        critic-enabled worker types when the global setting
+        ``DEEP_RUBRIC_MIDDLEWARE_ENABLED`` or the agent config opts in — see
         ``components.agents.infrastructure.adapters.langchain.deep.rubric``.
+        The hand-rolled ``deep/critic.py`` loop remains the fallback while the
+        flag is off.
         """
         middleware: list = []
         rubric_cfg = self.config.get("rubric_middleware")
+        if not rubric_cfg:
+            try:
+                from components.agents.infrastructure.adapters.langchain.deep.rubric import (
+                    rubric_middleware_enabled,
+                )
+
+                rubric_cfg = rubric_middleware_enabled(self.config)
+            except Exception:
+                rubric_cfg = False
         if rubric_cfg:
             try:
                 from components.agents.infrastructure.adapters.langchain.deep.rubric import (
