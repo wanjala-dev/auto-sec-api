@@ -358,7 +358,7 @@ class TestOpenDraftPrEndpoint:
         assert response.data["reason"] == "no_github_connection"
 
     def test_unknown_finding_is_404(self, api_client, workspace_factory, team_factory):
-        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        workspace, owner, _team, _column = _board(workspace_factory, team_factory)
         _connection(workspace, owner)
         _capability_agent(workspace, owner)
         api_client.force_authenticate(owner)
