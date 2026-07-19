@@ -253,6 +253,14 @@ class AiFindingRouterDetector(BaseDetector):
             # (§5.13). Dispatched after commit (celery-tasks skill §0) so the
             # worker never races a finding row the cycle hasn't committed yet.
             agent_context = {
+                # The dispatch MUST run the LangGraph deep pipeline —
+                # worker_agent_type (forced-worker pin) and max_reflections
+                # are only read by _execute_deep, and the telemetry stamp
+                # reads run_metadata off the deep run's final_output. Without
+                # this key the specialist Agent row's config decides the mode,
+                # and a row with mode=None silently drops to the plain
+                # executor where both keys are dead and no telemetry exists.
+                "mode": "deep",
                 "worker_agent_type": specialist,
                 "source": "ai_findings.route",
                 # Verification loop (L2): the specialist self-verifies its
