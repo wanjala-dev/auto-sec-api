@@ -317,11 +317,15 @@ def rubric_run_metadata_update(*, state, response, task_id) -> dict | None:
     """The worker-delta ``run_metadata`` carrying this task's rubric verdict.
 
     ``None`` when the response carries no rubric evaluations (middleware off,
-    non-gradable agent type, or nothing graded). Seeds from the state's
-    current ``run_metadata`` because ``PlanState.run_metadata`` has no merge
-    reducer (last write wins) — without the seed each task's stamp would
-    clobber the previous task's. Never raises: extraction failure degrades
-    to a warning, the run continues unstamped.
+    non-gradable agent type, or nothing graded). Cross-task survival is owned
+    by the channel: ``PlanState.run_metadata`` carries the
+    ``merge_run_metadata`` deep-merge reducer, so this delta's
+    ``rubric_verdicts`` entry unions by task_id with every other node's
+    stamps (concurrent ``Send`` fan-outs included) instead of clobbering
+    them. Seeding from the state's current ``run_metadata`` is kept as a
+    harmless belt-and-suspenders for direct callers that pass a populated
+    state (the real worker's ``Send`` payload carries none). Never raises:
+    extraction failure degrades to a warning, the run continues unstamped.
     """
     try:
         drained = (response or {}).get("rubric_evaluations") if isinstance(response, dict) else None
