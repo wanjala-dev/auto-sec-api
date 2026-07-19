@@ -1,19 +1,25 @@
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
 COMPONENTS_DIR = ROOT / "components"
 
 
 def test_explicit_architecture_scaffolding_exists():
+    """Anchor paths of the explicit architecture that must never disappear.
+
+    Retuned 2026-07 for the auto-sec fork: the wanjala-only anchors
+    (``components/sponsorship`` and the docs/adr + ownership-map files that
+    were never ported) are dropped; the anchors below are the fork's actual
+    load-bearing contexts. Add an anchor when a new context becomes
+    load-bearing — don't re-add wanjala paths.
+    """
     required_paths = [
         ROOT / "components",
         ROOT / "components" / "shared_kernel",
-        ROOT / "components" / "sponsorship" / "application" / "facades",
         ROOT / "components" / "workspace" / "application" / "facades",
-        ROOT / "docs" / "adr" / "0001-explicit-architecture-rules.md",
-        ROOT / "docs" / "CONTEXT_OWNERSHIP_MAP.md",
-        ROOT / "docs" / "LEGACY_HOTSPOTS_REGISTER.md",
+        ROOT / "components" / "agents" / "application" / "facades",
+        ROOT / "components" / "integrations" / "application" / "ports",
+        ROOT / "components" / "shared_platform" / "application" / "facades",
     ]
 
     for path in required_paths:
@@ -25,10 +31,7 @@ def _has_python_files(directory: Path) -> bool:
     that is not __init__.py."""
     if not directory.is_dir():
         return False
-    return any(
-        p.is_file() and p.suffix == ".py" and p.name != "__init__.py"
-        for p in directory.iterdir()
-    )
+    return any(p.is_file() and p.suffix == ".py" and p.name != "__init__.py" for p in directory.iterdir())
 
 
 def test_contexts_with_controllers_have_nonempty_request_and_resource_dirs():
@@ -76,6 +79,5 @@ def test_contexts_with_controllers_have_nonempty_request_and_resource_dirs():
         "Bounded contexts with a controller.py must have non-empty "
         "api/requests/ and api/resources/ directories.\n"
         "See DEVELOPER_GUIDE.md 'Request DTOs, Resource DTOs, and DRF Serializers' "
-        "for the required data flow.\n"
-        + "\n".join(f"  - {v}" for v in violations)
+        "for the required data flow.\n" + "\n".join(f"  - {v}" for v in violations)
     )

@@ -7,7 +7,6 @@ from unittest.mock import MagicMock, patch
 
 from components.agents.infrastructure.services.deep_service import (
     _prefetch_retrieved_context,
-    plan_and_create_project,
     plan_and_run_with_llm,
 )
 from components.knowledge.application.ports.vector_store_port import RetrievedChunk
@@ -35,13 +34,10 @@ class TestPrefetchRetrievedContext:
             ),
         ]
         with patch(
-            "components.knowledge.application.providers."
-            "workspace_retrieval_provider.workspace_retrieval",
+            "components.knowledge.application.providers.workspace_retrieval_provider.workspace_retrieval",
             return_value=fake_port,
         ):
-            result = _prefetch_retrieved_context(
-                workspace_id="ws-1", goal="mission"
-            )
+            result = _prefetch_retrieved_context(workspace_id="ws-1", goal="mission")
 
         assert result == [
             {
@@ -59,14 +55,10 @@ class TestPrefetchRetrievedContext:
         fake_port = MagicMock()
         fake_port.search.side_effect = RuntimeError("pg down")
         with patch(
-            "components.knowledge.application.providers."
-            "workspace_retrieval_provider.workspace_retrieval",
+            "components.knowledge.application.providers.workspace_retrieval_provider.workspace_retrieval",
             return_value=fake_port,
         ):
-            assert (
-                _prefetch_retrieved_context(workspace_id="ws-1", goal="mission")
-                == []
-            )
+            assert _prefetch_retrieved_context(workspace_id="ws-1", goal="mission") == []
 
 
 class TestRerankMinScoreFromEnv:
@@ -81,10 +73,11 @@ class TestRerankMinScoreFromEnv:
     """
 
     def _read(self, value):
+        import os
+
         from components.agents.infrastructure.services.deep_service import (
             _rerank_min_score_from_env,
         )
-        import os
 
         if value is None:
             os.environ.pop("KNOWLEDGE_RERANK_MIN_SCORE", None)
@@ -143,16 +136,19 @@ class TestPlanAndRunInjectsRetrievedContext:
         fake_pack.plan_planner = MagicMock(return_value=MagicMock())
         fake_pack.executor = MagicMock(return_value={"state": "ok"})
 
-        with patch(
-            "components.agents.infrastructure.services.deep_service._resolve_sector_pack",
-            return_value=(None, None),
-        ), patch(
-            "components.agents.infrastructure.services.deep_service.get_deep_pack",
-            return_value=fake_pack,
-        ), patch(
-            "components.knowledge.application.providers."
-            "workspace_retrieval_provider.workspace_retrieval",
-            return_value=fake_port,
+        with (
+            patch(
+                "components.agents.infrastructure.services.deep_service._resolve_sector_pack",
+                return_value=(None, None),
+            ),
+            patch(
+                "components.agents.infrastructure.services.deep_service.get_deep_pack",
+                return_value=fake_pack,
+            ),
+            patch(
+                "components.knowledge.application.providers.workspace_retrieval_provider.workspace_retrieval",
+                return_value=fake_port,
+            ),
         ):
             plan_and_run_with_llm(
                 goal="tldr",
@@ -177,16 +173,19 @@ class TestPlanAndRunInjectsRetrievedContext:
         fake_pack.plan_planner = MagicMock(return_value=MagicMock())
         fake_pack.executor = MagicMock(return_value={"state": "ok"})
 
-        with patch(
-            "components.agents.infrastructure.services.deep_service._resolve_sector_pack",
-            return_value=(None, None),
-        ), patch(
-            "components.agents.infrastructure.services.deep_service.get_deep_pack",
-            return_value=fake_pack,
-        ), patch(
-            "components.knowledge.application.providers."
-            "workspace_retrieval_provider.workspace_retrieval",
-            return_value=fake_port,
+        with (
+            patch(
+                "components.agents.infrastructure.services.deep_service._resolve_sector_pack",
+                return_value=(None, None),
+            ),
+            patch(
+                "components.agents.infrastructure.services.deep_service.get_deep_pack",
+                return_value=fake_pack,
+            ),
+            patch(
+                "components.knowledge.application.providers.workspace_retrieval_provider.workspace_retrieval",
+                return_value=fake_port,
+            ),
         ):
             plan_and_run_with_llm(
                 goal="tldr",
@@ -200,100 +199,11 @@ class TestPlanAndRunInjectsRetrievedContext:
         assert "retrieved_context" not in kwargs["extra_context"]
 
 
-class TestPlanAndCreateProjectInjectsRetrievedContext:
-    """Tier 1 #3 — ``plan_and_create_project`` was historically the only
-    deep-planner entry point that skipped the RAG prefetch.  Project
-    plans were built without grounding even when the workspace had an
-    embedded mission / sector / categories.  These tests pin the
-    prefetch path so a future refactor can't silently re-open the gap.
-    See ``docs/plans/RAG_AUDIT_AND_ROADMAP.md`` Tier 1 #3.
-    """
-
-    def _patches(self, fake_port, fake_pack):
-        return (
-            patch(
-                "components.agents.infrastructure.services."
-                "deep_service._resolve_sector_pack",
-                return_value=(None, None),
-            ),
-            patch(
-                "components.agents.infrastructure.services."
-                "deep_service.get_deep_pack",
-                return_value=fake_pack,
-            ),
-            patch(
-                "components.agents.infrastructure.services."
-                "deep_service.run_project_creation",
-                return_value={"project_id": "p-1"},
-            ),
-            patch(
-                "components.knowledge.application.providers."
-                "workspace_retrieval_provider.workspace_retrieval",
-                return_value=fake_port,
-            ),
-        )
-
-    def test_project_planner_receives_retrieved_context(self):
-        fake_port = MagicMock()
-        fake_port.search.return_value = [
-            RetrievedChunk(
-                content="Sprouted Roots is a literacy nonprofit.",
-                metadata={"section_title": "Workspace identity"},
-                score=0.88,
-            ),
-        ]
-
-        fake_pack = MagicMock()
-        fake_pack.slug = "default"
-        fake_plan = MagicMock()
-        fake_plan.metadata = {}
-        fake_pack.project_planner = MagicMock(return_value=fake_plan)
-
-        ps = self._patches(fake_port, fake_pack)
-        with ps[0], ps[1], ps[2], ps[3]:
-            plan_and_create_project(
-                goal="draft Q3 stewardship project",
-                plan_id="pid",
-                project_title=None,
-                user_id="u",
-                workspace_id="ws-1",
-            )
-
-        fake_pack.project_planner.assert_called_once()
-        kwargs = fake_pack.project_planner.call_args.kwargs
-        retrieved = kwargs["extra_context"].get("retrieved_context")
-        assert retrieved, (
-            "plan_and_create_project must prefetch RAG chunks and pass "
-            "them under extra_context.retrieved_context — mirrors the "
-            "plan_and_run_with_llm grounding path."
-        )
-        assert retrieved[0]["content"].startswith("Sprouted Roots")
-
-    def test_project_planner_runs_without_retrieved_context_when_index_empty(self):
-        fake_port = MagicMock()
-        fake_port.search.return_value = []
-
-        fake_pack = MagicMock()
-        fake_pack.slug = "default"
-        fake_plan = MagicMock()
-        fake_plan.metadata = {}
-        fake_pack.project_planner = MagicMock(return_value=fake_plan)
-
-        ps = self._patches(fake_port, fake_pack)
-        with ps[0], ps[1], ps[2], ps[3]:
-            plan_and_create_project(
-                goal="draft Q3 stewardship project",
-                plan_id="pid",
-                project_title=None,
-                user_id="u",
-                workspace_id="ws-1",
-            )
-
-        kwargs = fake_pack.project_planner.call_args.kwargs
-        # Empty retrieval — key should NOT be set, matching
-        # plan_and_run_with_llm behaviour.  This is the "still build a
-        # plan even when grounding is empty" contract.
-        assert "retrieved_context" not in kwargs["extra_context"]
+# NOTE (2026-07 fork retune): TestPlanAndCreateProjectInjectsRetrievedContext
+# was deleted. It exercised ``plan_and_create_project`` (wanjala Tier 1 #3 RAG
+# grounding for the project-creation deep flow), which auto-sec's trimmed
+# ``deep_service.py`` removed along with the flow itself. The surviving
+# grounding contract for ``plan_and_run_with_llm`` is pinned above.
 
 
 class TestPrefetchUsesQueryRewriter:
@@ -307,15 +217,17 @@ class TestPrefetchUsesQueryRewriter:
         fake_port = MagicMock()
         fake_port.search.return_value = []
 
-        with patch(
-            "components.knowledge.application.providers."
-            "workspace_retrieval_provider.workspace_retrieval",
-            return_value=fake_port,
-        ), patch(
-            "components.knowledge.application.use_cases."
-            "rewrite_query_for_retrieval_use_case."
-            "RewriteQueryForRetrievalUseCase.rewrite",
-            return_value="EXPANDED workspace mission summary",
+        with (
+            patch(
+                "components.knowledge.application.providers.workspace_retrieval_provider.workspace_retrieval",
+                return_value=fake_port,
+            ),
+            patch(
+                "components.knowledge.application.use_cases."
+                "rewrite_query_for_retrieval_use_case."
+                "RewriteQueryForRetrievalUseCase.rewrite",
+                return_value="EXPANDED workspace mission summary",
+            ),
         ):
             _prefetch_retrieved_context(workspace_id="ws-1", goal="tldr")
 
@@ -333,18 +245,18 @@ class TestPrefetchUsesQueryRewriter:
         fake_port = MagicMock()
         fake_port.search.return_value = []
 
-        with patch(
-            "components.knowledge.application.providers."
-            "workspace_retrieval_provider.workspace_retrieval",
-            return_value=fake_port,
-        ), patch(
-            "components.knowledge.application.use_cases."
-            "rewrite_query_for_retrieval_use_case."
-            "RewriteQueryForRetrievalUseCase.rewrite",
-            side_effect=RuntimeError("rewriter exploded"),
+        with (
+            patch(
+                "components.knowledge.application.providers.workspace_retrieval_provider.workspace_retrieval",
+                return_value=fake_port,
+            ),
+            patch(
+                "components.knowledge.application.use_cases."
+                "rewrite_query_for_retrieval_use_case."
+                "RewriteQueryForRetrievalUseCase.rewrite",
+                side_effect=RuntimeError("rewriter exploded"),
+            ),
         ):
-            result = _prefetch_retrieved_context(
-                workspace_id="ws-1", goal="tldr"
-            )
+            result = _prefetch_retrieved_context(workspace_id="ws-1", goal="tldr")
 
         assert result == []

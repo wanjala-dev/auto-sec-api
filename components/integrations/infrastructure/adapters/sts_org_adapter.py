@@ -12,10 +12,14 @@ from __future__ import annotations
 
 import logging
 
+from components.integrations.application.ports.org_verification_port import (
+    OrgVerificationPort,
+)
+
 logger = logging.getLogger(__name__)
 
 
-class StsOrgAdapter:
+class StsOrgAdapter(OrgVerificationPort):
     def verify_and_discover(
         self,
         *,

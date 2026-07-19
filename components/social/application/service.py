@@ -59,6 +59,41 @@ class SocialService:
         self._repo.toggle_dislike(post, user)
         return post
 
+    def resolve_user_display_names(self, user_ids) -> dict:
+        if not user_ids:
+            return {}
+        return self._repo.resolve_user_display_names(user_ids)
+
+    def viewer_liked_post_ids(self, post_ids, viewer) -> set:
+        if not post_ids:
+            return set()
+        return self._repo.liked_post_ids(post_ids, viewer)
+
+    def toggle_feed_post_like(self, post_id, user):
+        """Toggle a like on an active feed post.
+
+        Returns ``(liked, like_count)`` or ``None`` when the post doesn't
+        exist / is soft-deleted.
+        """
+        post = self._repo.get_active_post(post_id)
+        if post is None:
+            return None
+        liked = self._repo.toggle_like(post, user)
+        return liked, self._repo.like_count(post)
+
+    def post_exists(self, post_id) -> bool:
+        return self._repo.post_exists(post_id)
+
+    def list_post_comments(self, post_id, limit: int = 100):
+        return self._repo.list_post_comments(post_id, limit=limit)
+
+    def add_post_comment(self, *, post_id, author, body: str):
+        """Add a comment to an active post. Returns ``None`` if the post is gone."""
+        post = self._repo.get_active_post(post_id)
+        if post is None:
+            return None
+        return self._repo.add_post_comment(post=post, author=author, body=body)
+
     # ── Comments ────────────────────────────────────────────────────────
 
     def get_comment_queryset(self):

@@ -36,10 +36,6 @@ COMPONENTS_ROOT = REPO_ROOT / "components"
 # silently grow.
 KNOWN_VIOLATIONS = frozenset(
     {
-        # budgeting — Celery task tests that actually exercise the ORM today;
-        # move to integration/ when bank-feed sync gets its port-based use case.
-        "budgeting/tests/unit/test_sync_all_active_bank_connections_task.py",
-        "budgeting/tests/unit/test_sync_workspace_bank_connection_task.py",
         # membership — permission service still reads ORM rows directly;
         # follow-up: extract WorkspaceMembershipReader port.
         "membership/tests/unit/test_membership_permission_service.py",
@@ -54,13 +50,6 @@ KNOWN_VIOLATIONS = frozenset(
         "payments/tests/unit/test_orm_payment_order_repository.py",
         "payments/tests/unit/test_payment_event_state.py",
         "payments/tests/unit/test_payment_method_management_repository.py",
-        "payments/tests/unit/test_resolve_payment_method_and_plan_use_case.py",
-        # sponsorship — donation/recipient soft-delete + serializer tests that
-        # currently round-trip the ORM. Refactor to fake-backed when their
-        # respective ports stabilise post-DDD refactor.
-        "sponsorship/tests/unit/test_donation_adjustment_repository.py",
-        "sponsorship/tests/unit/test_recipient_serializer_create.py",
-        "sponsorship/tests/unit/test_soft_delete_exclusion.py",
     }
 )
 

@@ -28,7 +28,7 @@ from components.agents.application.use_cases import agent_chat_use_case
 from components.agents.infrastructure.adapters.langchain.agents.workspace_agent import (
     WorkspaceAgent,
 )
-from components.agents.infrastructure.adapters.langchain.base import tool, BaseAgent
+from components.agents.infrastructure.adapters.langchain.base import BaseAgent, tool
 from components.agents.tests.agent_test_case import AgentTestCase
 
 
@@ -42,9 +42,7 @@ class StructuredToolMigrationTests(AgentTestCase):
         # If even one falls back to single-string Tool, the chat path
         # would silently pick ReAct (the tool-calling builder raises
         # "Too many arguments to single-input tool" mid-construction).
-        non_structured = [
-            t.name for t in agent.tools if not isinstance(t, StructuredTool)
-        ]
+        non_structured = [t.name for t in agent.tools if not isinstance(t, StructuredTool)]
         self.assertEqual(
             non_structured,
             [],
@@ -132,33 +130,41 @@ class ChatPathDoesNotForceReActTests(AgentTestCase):
 class LenientToolInputAdapterTests(AgentTestCase):
     """When a tool method has the legacy single-string signature
     ``def foo(self, input_str: str)`` and the planner LLM passes
-    structured kwargs (e.g. ``{"active": True}``) instead of
+    structured kwargs (e.g. ``{"status": "open"}``) instead of
     ``{"input_str": "..."}``, the framework must NOT raise the
     pydantic ``input_str: Field required`` error that surfaced as a
     generic "validation error" in chat. The legacy adapter folds any
     extras into a JSON string and forwards a single string into the
     underlying tool, which already knows how to ``_coerce_payload``
     JSON back to a dict.
+
+    2026-07 fork retune: the original tests drove ``sponsorship_agent.
+    list_sponsors`` (the exact tool from the 2026-05-09 wanjala
+    incident). That agent was never ported; the contract under test is
+    framework behaviour, so the tests now drive it through
+    ``triage_agent.list_open_findings`` — a still-legacy
+    single-``input_str`` tool on this fork's fleet.
     """
 
+    @staticmethod
+    def _list_open_findings_tool(agent):
+        return next(t for t in agent.tools if getattr(t, "name", None) == "list_open_findings")
+
     def test_legacy_tool_accepts_structured_kwargs_from_llm(self):
-        """Simulates the failing call from 2026-05-09: planner invoked
-        ``list_sponsors`` with ``{'active': True}``. Pre-fix this raised
-        pydantic ``input_str: Field required``; post-fix the call
-        returns the tool's actual response string."""
-        from components.agents.infrastructure.adapters.langchain.agents.sponsorship_agent import (
-            SponsorshipAgent,
+        """The 2026-05-09 failure shape: the planner invokes a legacy
+        single-string tool with structured kwargs and no ``input_str``
+        key at all. Pre-fix this raised pydantic ``input_str: Field
+        required``; post-fix the call returns the tool's actual
+        response string."""
+        from components.agents.infrastructure.adapters.langchain.agents.triage_agent import (
+            TriageAgent,
         )
 
-        agent = self.make_agent(SponsorshipAgent)
-        list_sponsors_tool = next(
-            t for t in agent.tools if getattr(t, "name", None) == "list_sponsors"
-        )
+        agent = self.make_agent(TriageAgent)
+        tool = self._list_open_findings_tool(agent)
 
         # Invoke through the StructuredTool so pydantic validation runs.
-        # ``{"active": True}`` is the exact payload the LLM sent in the
-        # 2026-05-09 incident — no ``input_str`` key at all.
-        result = list_sponsors_tool.invoke({"active": True})
+        result = tool.invoke({"status": "open"})
 
         self.assertIsInstance(result, str)
         self.assertNotIn("validation error", result.lower())
@@ -167,16 +173,14 @@ class LenientToolInputAdapterTests(AgentTestCase):
     def test_legacy_tool_still_accepts_canonical_input_str_kwarg(self):
         """The fix is additive — tools must still accept the canonical
         ``{"input_str": "..."}`` shape callers may send."""
-        from components.agents.infrastructure.adapters.langchain.agents.sponsorship_agent import (
-            SponsorshipAgent,
+        from components.agents.infrastructure.adapters.langchain.agents.triage_agent import (
+            TriageAgent,
         )
 
-        agent = self.make_agent(SponsorshipAgent)
-        list_sponsors_tool = next(
-            t for t in agent.tools if getattr(t, "name", None) == "list_sponsors"
-        )
+        agent = self.make_agent(TriageAgent)
+        tool = self._list_open_findings_tool(agent)
 
-        result = list_sponsors_tool.invoke({"input_str": ""})
+        result = tool.invoke({"input_str": ""})
 
         self.assertIsInstance(result, str)
         self.assertNotIn("Field required", result)
@@ -185,16 +189,14 @@ class LenientToolInputAdapterTests(AgentTestCase):
         """``tool.invoke({})`` (no args at all) must not crash —
         ``_coerce_payload(None)`` returns ``{}`` in every tool body, so
         an empty dict is the smoke contract Pattern E already locks."""
-        from components.agents.infrastructure.adapters.langchain.agents.sponsorship_agent import (
-            SponsorshipAgent,
+        from components.agents.infrastructure.adapters.langchain.agents.triage_agent import (
+            TriageAgent,
         )
 
-        agent = self.make_agent(SponsorshipAgent)
-        list_sponsors_tool = next(
-            t for t in agent.tools if getattr(t, "name", None) == "list_sponsors"
-        )
+        agent = self.make_agent(TriageAgent)
+        tool = self._list_open_findings_tool(agent)
 
-        result = list_sponsors_tool.invoke({})
+        result = tool.invoke({})
 
         self.assertIsInstance(result, str)
         self.assertNotIn("Field required", result)

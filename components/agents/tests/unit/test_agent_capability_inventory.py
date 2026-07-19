@@ -19,28 +19,28 @@ These tests use ``Agent._decorated_tools`` (populated by the ``@tool``
 decorator at class-definition time) — no LLM calls, no DB writes, no
 agent instantiation. Fast and deterministic.
 """
+
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Dict, List, Set
 
 import pytest
 
 from components.agents.infrastructure.adapters.langchain.base import AgentRegistry
 from components.agents.tests._helpers.agent_capability_inventory import (
     CANONICAL_TOOLS,
+    SHARED_TOOLS,
     UNIVERSAL_TOOLS,
 )
-
 
 # Aliases registered via ``@register_agent("name", aliases=("foo", "bar"))``
 # resolve to the same class as the canonical name. We test the canonical
 # entry only — testing each alias would exercise the same class N times
 # and bury real failures in noise.
-_CANONICAL_AGENT_NAMES: Set[str] = set(CANONICAL_TOOLS.keys())
+_CANONICAL_AGENT_NAMES: set[str] = set(CANONICAL_TOOLS.keys())
 
 
-def _decorated_tool_names(agent_class) -> Set[str]:
+def _decorated_tool_names(agent_class) -> set[str]:
     """Return the names of every ``@tool``-decorated method on the class.
 
     Reads ``_decorated_tools`` directly — the list ``BaseAgent.__init_subclass__``
@@ -96,7 +96,7 @@ class TestPerAgentCapabilityInventory:
         """
         # Group registered names by class so aliases collapse onto their
         # owning class.
-        class_names: Dict[type, Set[str]] = defaultdict(set)
+        class_names: dict[type, set[str]] = defaultdict(set)
         for name in AgentRegistry.list_agents():
             cls = AgentRegistry.get_agent_class(name)
             if cls is not None:
@@ -111,8 +111,8 @@ class TestPerAgentCapabilityInventory:
             "orchestrator",
         }
 
-        missing_inventory: List[str] = []
-        for cls, names in class_names.items():
+        missing_inventory: list[str] = []
+        for names in class_names.values():
             if names & orchestrator_aliases:
                 continue
             # Class is covered iff any of its registered names matches a
@@ -143,34 +143,29 @@ class TestCrossAgentToolOverlap:
     ``get_workspace_info``) are allow-listed because they're added by
     the framework / mixin to every agent intentionally.
 
-    Anything else appearing on two agents is the ``create_donation``
-    class of bug: ambiguous routing destination, depending on which
-    agent the planner picks the user gets different behavior.
-    """
+    ``SHARED_TOOLS`` entries are the deliberate exceptions: the same
+    implementation registered on a DECLARED set of agents (the triage
+    agent wraps the task tools so a finding can be filed + assigned in
+    one hop). The overlap must match the declaration exactly — an
+    undeclared collision, or a declared tool appearing on a different
+    agent set, still fails.
 
-    # Known overlaps PR-B-1 (boundary cleanup) resolved 2026-05-08:
-    # ``create_donation`` (dropped on fundraising_agent — canonical home
-    # is donation_agent), ``check_permissions`` (renamed to
-    # ``check_financial_permissions`` and ``check_task_permissions``),
-    # ``get_project_spend`` (dropped on financial_agent — canonical home
-    # is project_agent), ``update_task_status`` (dropped on project_agent
-    # — canonical home is task_agent).
-    #
-    # Empty dict means any collision detected is a real bug. Adding a
-    # tool that overlaps with another agent will fail immediately.
-    _KNOWN_OVERLAPS_FOR_PR_B: Dict[str, Dict[str, str]] = {}
+    Anything else appearing on two agents is the classic ambiguous-
+    routing bug: depending on which agent the planner picks the user
+    gets different behavior.
+    """
 
     def test_no_specialist_overlap_outside_universal_allowlist(self):
         # Build tool_name -> {agent_names} mapping over every registered
         # specialist. Group by class first (so aliases collapse) and
         # report the canonical inventory name when available.
-        class_names: Dict[type, Set[str]] = defaultdict(set)
+        class_names: dict[type, set[str]] = defaultdict(set)
         for name in AgentRegistry.list_agents():
             cls = AgentRegistry.get_agent_class(name)
             if cls is not None:
                 class_names[cls].add(name)
 
-        canonical_for_class: Dict[type, str] = {}
+        canonical_for_class: dict[type, str] = {}
         for cls, names in class_names.items():
             inventory_match = names & _CANONICAL_AGENT_NAMES
             if inventory_match:
@@ -179,44 +174,64 @@ class TestCrossAgentToolOverlap:
                 # No inventory match (orchestrator etc.) — pick any short name.
                 canonical_for_class[cls] = sorted(names)[0]
 
-        tool_owners: Dict[str, Set[str]] = defaultdict(set)
+        tool_owners: dict[str, set[str]] = defaultdict(set)
         for cls, agent_name in canonical_for_class.items():
             for tool_name in _decorated_tool_names(cls):
                 if tool_name in UNIVERSAL_TOOLS:
                     continue
                 tool_owners[tool_name].add(agent_name)
 
-        collisions: Dict[str, List[str]] = {
-            tool: sorted(agents)
-            for tool, agents in tool_owners.items()
-            if len(agents) > 1
+        collisions: dict[str, list[str]] = {
+            tool: sorted(agents) for tool, agents in tool_owners.items() if len(agents) > 1
         }
 
-        # Match against the documented PR-B-resolves set. Any difference —
-        # extra tool, missing tool, or different agent set — fires the
-        # full assertion below.
-        expected_overlap_keys = set(self._KNOWN_OVERLAPS_FOR_PR_B.keys())
-        # Only xfail when there ARE collisions AND they exactly match the
-        # documented set. Empty collisions = test passes outright (the
-        # default for a healthy system).
-        if collisions and set(collisions.keys()) == expected_overlap_keys:
-            note_lines = [
-                "Known overlaps PR-B resolves:",
-            ]
-            for tool, info in self._KNOWN_OVERLAPS_FOR_PR_B.items():
-                note_lines.append(
-                    f"  - {tool}: agents=[{info['agents']}] — {info['resolution']}"
-                )
-            pytest.xfail("\n".join(note_lines))
+        # A collision is acceptable ONLY when it exactly matches a
+        # SHARED_TOOLS declaration (same tool, same agent set).
+        undeclared: dict[str, list[str]] = {
+            tool: agents
+            for tool, agents in collisions.items()
+            if frozenset(agents) != SHARED_TOOLS.get(tool, frozenset())
+        }
 
-        assert not collisions, (
-            f"These tools are registered on multiple specialists: {collisions}. "
-            "Each capability must live on exactly one agent — overlapping "
-            "registrations make routing non-deterministic. Either move the "
-            "tool to its canonical owner OR add the name to UNIVERSAL_TOOLS "
-            "if it's framework-provided. Known overlaps queued for PR-B: "
-            f"{sorted(expected_overlap_keys)}."
+        assert not undeclared, (
+            f"These tools are registered on multiple specialists without a "
+            f"matching SHARED_TOOLS declaration: {undeclared}. Each capability "
+            "must live on exactly one agent — overlapping registrations make "
+            "routing non-deterministic. Either move the tool to its canonical "
+            "owner, add the name to UNIVERSAL_TOOLS if it's framework-provided, "
+            "or (for a deliberate same-implementation share) declare it in "
+            "SHARED_TOOLS with the exact agent set. Declared shares: "
+            f"{ {t: sorted(a) for t, a in SHARED_TOOLS.items()} }."
         )
+
+    def test_shared_tools_declarations_are_real(self):
+        """Every SHARED_TOOLS declaration must reflect the live registry.
+
+        A share declared here but no longer present on every declared
+        agent is stale — either the tool moved to a single owner (delete
+        the declaration) or an agent dropped it (fix the agent or the
+        declaration). Also guards that each declared agent lists the tool
+        in its own CANONICAL_TOOLS entry, so the per-agent inventory and
+        the share table can't drift apart.
+        """
+        problems: list[str] = []
+        for tool, agents in SHARED_TOOLS.items():
+            if len(agents) < 2:
+                problems.append(f"{tool}: declared for <2 agents ({sorted(agents)}) — not a share")
+            for agent_name in agents:
+                canonical = CANONICAL_TOOLS.get(agent_name)
+                if canonical is None:
+                    problems.append(f"{tool}: declared agent {agent_name!r} has no CANONICAL_TOOLS entry")
+                    continue
+                if tool not in canonical:
+                    problems.append(f"{tool}: declared for {agent_name!r} but missing from its CANONICAL_TOOLS set")
+                cls = AgentRegistry.get_agent_class(agent_name)
+                if cls is None:
+                    problems.append(f"{tool}: declared agent {agent_name!r} is not registered")
+                elif tool not in _decorated_tool_names(cls):
+                    problems.append(f"{tool}: not actually registered on {agent_name!r}")
+
+        assert not problems, "SHARED_TOOLS has drifted from reality:\n  - " + "\n  - ".join(problems)
 
     def test_canonical_tools_inventory_does_not_double_count_universals(self):
         """Universal tools must NOT appear in any per-agent canonical set.
@@ -226,7 +241,7 @@ class TestCrossAgentToolOverlap:
         ``UNIVERSAL_TOOLS`` subtraction). This test guards the inventory
         file itself.
         """
-        offenders: Dict[str, Set[str]] = {}
+        offenders: dict[str, set[str]] = {}
         for agent_name, tools in CANONICAL_TOOLS.items():
             overlap = tools & UNIVERSAL_TOOLS
             if overlap:
