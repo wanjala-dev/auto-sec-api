@@ -156,18 +156,192 @@ def resolve_rubric_text(agent) -> str | None:
     return RUBRICS.get(agent_type) or None
 
 
-def _log_evaluation(evaluation) -> None:
-    """Observability parity with the critic's ``critic_scores`` stamping."""
+class RubricEvaluationCollector:
+    """Accumulates the grader's per-iteration evaluations for one agent.
+
+    deepagents 0.6.12 keeps its grading bookkeeping (``_rubric_evaluations``,
+    ``_rubric_status``) in ``PrivateStateAttr`` state keys that are STRIPPED
+    from the graph's output schema — the only in-process observation channels
+    are the ``on_evaluation`` callback, the ``rubric_evaluation_*`` stream
+    events, or ``get_state()`` on a checkpointed thread. Our worker graphs
+    are deliberately not checkpointed (conversation memory is SQL-backed)
+    and we don't consume the stream, so this collector — wired in as the
+    middleware's ``on_evaluation`` — IS the telemetry tap.
+
+    Each evaluation is a ``RubricEvaluation`` **TypedDict** (a plain dict at
+    runtime) with keys ``grading_run_id`` / ``iteration`` / ``result`` /
+    ``explanation`` / ``criteria`` — NOT an object with ``verdict`` /
+    ``feedback`` attributes (the bug this class replaced: ``getattr`` on a
+    dict returned ``None`` for every field).
+
+    Per-evaluation ``result`` ∈ {satisfied, needs_revision, failed,
+    grader_error}; ``max_iterations_reached`` never appears on an evaluation
+    (the middleware records it only on the private ``_rubric_status``) — see
+    ``summarize_rubric_evaluations`` for the mirrored derivation.
+
+    Fail-safe discipline: ``record`` never raises (a telemetry bug must not
+    break grading — deepagents also guards the callback, but we degrade to a
+    warning ourselves rather than rely on it).
+    """
+
+    def __init__(self, *, grader_model: str, max_iterations: int) -> None:
+        self.grader_model = grader_model
+        self.max_iterations = max_iterations
+        self._evaluations: list[dict] = []
+
+    def record(self, evaluation) -> None:
+        """``on_evaluation`` callback — capture + log one grader evaluation."""
+        try:
+            data = self._normalize(evaluation)
+            self._evaluations.append(data)
+            logger.info(
+                "rubric_evaluation verdict=%s iteration=%s run_id=%s feedback=%s",
+                data["result"],
+                data["iteration"],
+                data["grading_run_id"],
+                (data["explanation"] or "")[:300],
+            )
+        except Exception:
+            logger.warning("rubric evaluation capture failed", exc_info=True)
+
+    @staticmethod
+    def _normalize(evaluation) -> dict:
+        """Coerce a ``RubricEvaluation`` (TypedDict → plain dict) to our shape.
+
+        Dict access is the real 0.6.12 location; attribute access is kept
+        only as forward-compat should a future release turn the evaluation
+        into a model object.
+        """
+        if isinstance(evaluation, dict):
+            get = evaluation.get
+        else:
+
+            def get(key, default=None):
+                return getattr(evaluation, key, default)
+
+        criteria = []
+        for criterion in get("criteria") or []:
+            if isinstance(criterion, dict):
+                criteria.append(
+                    {
+                        "name": str(criterion.get("name") or ""),
+                        "passed": bool(criterion.get("passed")),
+                        "gap": str(criterion.get("gap") or ""),
+                    }
+                )
+        return {
+            "grading_run_id": str(get("grading_run_id") or ""),
+            "iteration": get("iteration"),
+            "result": str(get("result") or ""),
+            "explanation": str(get("explanation") or ""),
+            "criteria": criteria,
+        }
+
+    def drain(self) -> list[dict]:
+        """Return and clear everything recorded since the last drain."""
+        evaluations, self._evaluations = self._evaluations, []
+        return evaluations
+
+
+def summarize_rubric_evaluations(evaluations, *, max_iterations: int, grader_model: str) -> dict | None:
+    """Fold one invoke's evaluations into the ``rubric_verdicts`` stamp.
+
+    Shape mirrors the critic's ``run_metadata["critic_scores"][task_id]``
+    stamp (same consumers: the run trace + the future L4 hill-climbing
+    loop): ``{"verdict", "iterations", "feedback", "grader", "source"}``
+    plus the observed per-iteration ``results`` and the ``grading_run_id``.
+
+    ``verdict`` is the last evaluation's ``result``, EXCEPT that a terminal
+    ``needs_revision`` with the iteration budget exhausted is reported as
+    ``max_iterations_reached`` — the exact mapping the middleware applies to
+    its private ``_rubric_status`` (``RubricMiddleware._compose_update``),
+    which we cannot read from the graph output.
+    """
+    if not evaluations:
+        return None
+    last = evaluations[-1]
+    run_id = last.get("grading_run_id") or ""
+    run_evaluations = [e for e in evaluations if (e.get("grading_run_id") or "") == run_id]
+    iterations = len(run_evaluations)
+
+    verdict = str(last.get("result") or "")
+    if verdict == "needs_revision" and iterations >= max_iterations:
+        verdict = "max_iterations_reached"
+
+    feedback = str(last.get("explanation") or "")
+    gaps = [
+        f"{c.get('name') or '(criterion)'}: {c.get('gap')}"
+        for c in (last.get("criteria") or [])
+        if not c.get("passed") and c.get("gap")
+    ]
+    if gaps:
+        feedback = f"{feedback} | gaps: {'; '.join(gaps)}".strip(" |")
+
+    return {
+        "verdict": verdict,
+        "iterations": iterations,
+        "feedback": feedback[:500],
+        "grader": grader_model,
+        "source": "rubric_middleware",
+        "grading_run_id": run_id,
+        "results": [str(e.get("result") or "") for e in run_evaluations],
+    }
+
+
+def drain_rubric_evaluations(agent) -> dict | None:
+    """Pop the agent collector's evaluations for the invoke that just ran.
+
+    Returns ``{"evaluations": [...], "max_iterations": int, "grader": str}``
+    or ``None`` when there is no collector / nothing was graded. Called by
+    ``BaseAgent.execute`` so the payload rides the response to the deep-run
+    worker (which owns the task_id needed for stamping). Never raises.
+    """
     try:
-        logger.info(
-            "rubric_evaluation verdict=%s iteration=%s run_id=%s feedback=%s",
-            getattr(evaluation, "result", None) or getattr(evaluation, "verdict", None),
-            getattr(evaluation, "iteration", None),
-            getattr(evaluation, "grading_run_id", None),
-            str(getattr(evaluation, "feedback", "") or "")[:300],
+        collector = getattr(agent, "_rubric_evaluation_collector", None)
+        if collector is None:
+            return None
+        evaluations = collector.drain()
+        if not evaluations:
+            return None
+        return {
+            "evaluations": evaluations,
+            "max_iterations": collector.max_iterations,
+            "grader": collector.grader_model,
+        }
+    except Exception:
+        logger.warning("rubric evaluation drain failed", exc_info=True)
+        return None
+
+
+def rubric_run_metadata_update(*, state, response, task_id) -> dict | None:
+    """The worker-delta ``run_metadata`` carrying this task's rubric verdict.
+
+    ``None`` when the response carries no rubric evaluations (middleware off,
+    non-gradable agent type, or nothing graded). Seeds from the state's
+    current ``run_metadata`` because ``PlanState.run_metadata`` has no merge
+    reducer (last write wins) — without the seed each task's stamp would
+    clobber the previous task's. Never raises: extraction failure degrades
+    to a warning, the run continues unstamped.
+    """
+    try:
+        drained = (response or {}).get("rubric_evaluations") if isinstance(response, dict) else None
+        if not drained:
+            return None
+        stamp = summarize_rubric_evaluations(
+            drained.get("evaluations") or [],
+            max_iterations=int(drained.get("max_iterations") or MAX_ITERATIONS_CAP),
+            grader_model=str(drained.get("grader") or GRADER_MODEL),
         )
-    except Exception:  # pragma: no cover - logging must never break grading
-        logger.debug("rubric evaluation logging failed", exc_info=True)
+        if stamp is None:
+            return None
+        run_metadata = dict((state or {}).get("run_metadata") or {})
+        verdicts = dict(run_metadata.get("rubric_verdicts") or {})
+        verdicts[str(task_id)] = stamp
+        run_metadata["rubric_verdicts"] = verdicts
+        return run_metadata
+    except Exception:
+        logger.warning("rubric verdict stamping failed task_id=%s", task_id, exc_info=True)
+        return None
 
 
 def build_rubric_middleware(*, agent, config: dict | None = None):
@@ -209,12 +383,21 @@ def build_rubric_middleware(*, agent, config: dict | None = None):
         logger.warning("rubric grader model port resolution failed; using model string", exc_info=True)
         grader_model = f"openai:{grader_model_name}"
 
+    # The collector is the ONLY in-process tap for grader verdicts (see its
+    # docstring); attach it to the agent so BaseAgent.execute can drain it
+    # per invoke and ship the evaluations out on the response.
+    collector = RubricEvaluationCollector(
+        grader_model=grader_model_name,
+        max_iterations=max_iterations,
+    )
+    agent._rubric_evaluation_collector = collector
+
     middleware = RubricMiddleware(
         model=grader_model,
         system_prompt=_GRADER_SYSTEM_PROMPT,
         tools=[build_grader_verifier_tool(agent)],
         max_iterations=max_iterations,
-        on_evaluation=_log_evaluation,
+        on_evaluation=collector.record,
     )
     logger.info(
         "rubric_middleware attached agent_type=%s max_iterations=%s grader=%s",
