@@ -1,0 +1,39 @@
+{% load i18n static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>{% trans "Log in | Admin Honeypot" %}</title>
+    <link rel="stylesheet" type="text/css" href="{% static 'admin/css/base.css' %}">
+    <link rel="stylesheet" type="text/css" href="{% static 'admin/css/login.css' %}">
+</head>
+<body class="login honeypot">
+<div id="container">
+    <h1>{% trans "Django administration" %}</h1>
+    {% if messages %}
+        <ul class="messagelist">
+            {% for message in messages %}
+                <li class="{{ message.tags }}">{{ message }}</li>
+            {% endfor %}
+        </ul>
+    {% endif %}
+    <form method="post" novalidate>
+        {% csrf_token %}
+        <div class="form-row">
+            {{ form.username.errors }}
+            <label class="required" for="{{ form.username.id_for_label }}">{% trans "Username" %}:</label>
+            {{ form.username }}
+        </div>
+        <div class="form-row">
+            {{ form.password.errors }}
+            <label class="required" for="{{ form.password.id_for_label }}">{% trans "Password" %}:</label>
+            {{ form.password }}
+        </div>
+        <div class="submit-row">
+            <input type="submit" value="{% trans 'Log in' %}">
+        </div>
+        {{ form.non_field_errors }}
+    </form>
+</div>
+</body>
+</html>

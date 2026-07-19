@@ -1,0 +1,91 @@
+"""Application service for the social bounded context.
+
+This is the PRIMARY PORT — driving adapters (controllers, CLI, GraphQL)
+call these methods to trigger application use cases.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+from components.social.infrastructure.repositories.social_repository import (
+    SocialRepository,
+)
+
+
+@dataclass
+class SocialService:
+    """Primary port for the social bounded context."""
+
+    _repo: SocialRepository = field(default_factory=SocialRepository)
+
+    # ── Followers ────────────────────────────────────────────────────────
+
+    def get_user_profile(self, user_id):
+        return self._repo.get_user_profile(user_id)
+
+    def add_follower(self, user_id, follower_id):
+        profile = self._repo.get_user_profile(user_id)
+        self._repo.add_follower(profile, follower_id)
+        return profile
+
+    def remove_follower(self, user_id, follower_id):
+        profile = self._repo.get_user_profile(user_id)
+        self._repo.remove_follower(profile, follower_id)
+        return profile
+
+    def get_followers(self, user_id):
+        profile = self._repo.get_user_profile(user_id)
+        return self._repo.get_followers(profile)
+
+    # ── Posts ────────────────────────────────────────────────────────────
+
+    def get_post_queryset(self):
+        return self._repo.get_post_queryset()
+
+    def get_post_by_id(self, post_id):
+        return self._repo.get_post_by_id(post_id)
+
+    def get_followed_posts(self, user_id):
+        return self._repo.get_followed_posts(user_id)
+
+    def toggle_post_like(self, post_id, user):
+        post = self._repo.get_post_by_id(post_id)
+        liked = self._repo.toggle_like(post, user)
+        return post, liked
+
+    def toggle_post_dislike(self, post_id, user):
+        post = self._repo.get_post_by_id(post_id)
+        self._repo.toggle_dislike(post, user)
+        return post
+
+    # ── Comments ────────────────────────────────────────────────────────
+
+    def get_comment_queryset(self):
+        return self._repo.get_comment_queryset()
+
+    def get_comment_by_id(self, comment_id):
+        return self._repo.get_comment_by_id(comment_id)
+
+    def create_reply(self, *, author, post_id, parent_comment_id):
+        post = self._repo.get_post_by_id(post_id)
+        parent = self._repo.get_comment_by_id(parent_comment_id)
+        return self._repo.create_comment(author=author, post=post, parent=parent), post, parent
+
+    def toggle_comment_like(self, comment_id, user):
+        comment = self._repo.get_comment_by_id(comment_id)
+        liked = self._repo.toggle_like(comment, user)
+        return comment, liked
+
+    def toggle_comment_dislike(self, comment_id, user):
+        comment = self._repo.get_comment_by_id(comment_id)
+        self._repo.toggle_dislike(comment, user)
+        return comment
+
+    # ── Tags ─────────────────────────────────────────────────────────────
+
+    def get_tag_queryset(self):
+        return self._repo.get_tag_queryset()
+
+    # NOTE: Threads/Messages have been extracted to components/messaging/
+    # See components/messaging/api/urls.py for the new REST endpoints.

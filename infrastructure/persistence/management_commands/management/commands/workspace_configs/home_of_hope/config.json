@@ -1,0 +1,359 @@
+{
+  "owner": {
+    "email": "homeofhope-owner@example.org",
+    "password": "ChangeMe123!",
+    "first_name": "Hope",
+    "last_name": "Admin",
+    "is_staff": true
+  },
+  "workspace_lookup": {
+    "name": "Home of Hope Uganda"
+  },
+  "workspace": {
+    "name": "Home of Hope",
+    "story": "Home of Hope Uganda provides holistic care to children with severe disabilities through residential care, medical support, education, and family outreach.",
+    "status": "active",
+    "privacy": "public",
+    "is_verified": true,
+    "categories": [
+      "Health Promotion",
+      "Education",
+      "Community"
+    ],
+    "subcategories": {
+      "Health Promotion": [
+        "Mental Health",
+        "Wellness"
+      ],
+      "Education": [
+        "Primary Education",
+        "Vocational Training"
+      ],
+      "Community": [
+        "Youth Programs"
+      ]
+    },
+    "contribution_means": [
+      "Funding",
+      "Volunteering",
+      "Medical Support",
+      "Educational Support"
+    ],
+    "stripe": {
+      "tenant_url": "https://homeofhopeuganda.local",
+      "domain_url": "https://homeofhopeuganda.local",
+      "stripe_secret_key": "sk_test_homeofhope"
+    },
+    "photo_source_url": "https://homeofhopeuganda.org/images_header/header_logo.png",
+    "photo_url": "assets/header_logo.png"
+  },
+  "staff_team_title": "Staff Team",
+  "staff": [
+    {
+      "first_name": "Richard",
+      "last_name": "Mukasa",
+      "email": "richard.mukasa@example.org",
+      "role": "Executive Director"
+    },
+    {
+      "first_name": "Joy",
+      "last_name": "Katusabe",
+      "email": "joy.katusabe@example.org",
+      "role": "Programs Manager"
+    },
+    {
+      "first_name": "Sarah",
+      "last_name": "Namakula",
+      "email": "sarah.namakula@example.org",
+      "role": "Therapy Lead"
+    },
+    {
+      "first_name": "John",
+      "last_name": "Okello",
+      "email": "john.okello@example.org",
+      "role": "Finance & Administration"
+    }
+  ],
+  "projects": [
+    {
+      "title": "Center Based Therapy and Care",
+      "description": "On-site therapy, daily care, and specialized services for residents."
+    },
+    {
+      "title": "Assessment and Outreach Clinics",
+      "description": "Clinics that identify children with disabilities and connect them to services."
+    },
+    {
+      "title": "Home and Follow-up Visits",
+      "description": "Regular visits to families to ensure continuity of care."
+    },
+    {
+      "title": "Epilepsy Medication",
+      "description": "Reliable access to anti-epileptic medication and monitoring."
+    }
+  ],
+  "recipients_category": {
+    "name": "General Care",
+    "description": "Default category for demo beneficiaries."
+  },
+  "recipients": [
+    {
+      "first_name": "Amina",
+      "last_name": "Namutebi",
+      "age": 8,
+      "gender": "female",
+      "needs": "Needs ongoing physiotherapy and specialised mobility aids.",
+      "story": "Amina joined Home of Hope at age 5 and is thriving with therapy and inclusive education support.",
+      "sponsored": false,
+      "location": "Jinja, Uganda"
+    },
+    {
+      "first_name": "Brian",
+      "last_name": "Okello",
+      "age": 11,
+      "gender": "male",
+      "needs": "Requires epilepsy medication and nutritional supplements.",
+      "story": "Brian attends weekly clinics and has shown significant progress in managing seizures.",
+      "sponsored": true,
+      "location": "Jinja, Uganda"
+    }
+  ],
+  "news": [
+    {
+      "title": "Therapy Center Welcomes New Equipment",
+      "excerpt": "New standing frames and walkers arrived this month thanks to partner donations.",
+      "body": "Home of Hope Uganda received a shipment of adaptive equipment that will dramatically improve therapy sessions.",
+      "image": "https://homeofhopeuganda.org/static/img/home-of-hope.jpg",
+      "category": "Updates"
+    }
+  ],
+  "pdfs": [
+    {
+      "filename": "june_2025_202227.pdf",
+      "description": "June 2025 Monthly Performance Report",
+      "source_url": "https://homeofhopeuganda.org/file_uploads/june_2025_202227.pdf",
+      "local_path": "assets/june_2025_202227.pdf"
+    },
+    {
+      "filename": "may_2025_202102.pdf",
+      "description": "May 2025 Monthly Performance Report",
+      "source_url": "https://homeofhopeuganda.org/file_uploads/may_2025_202102.pdf",
+      "local_path": "assets/may_2025_202102.pdf"
+    }
+  ],
+  "budget_estimates": [
+    {
+      "label": "Posho",
+      "amount": 1395000,
+      "category": "Direct Services"
+    },
+    {
+      "label": "Beans",
+      "amount": 640000,
+      "category": "Direct Services"
+    },
+    {
+      "label": "Rice",
+      "amount": 680000,
+      "category": "Direct Services"
+    },
+    {
+      "label": "Porridge",
+      "amount": 360000,
+      "category": "Direct Services"
+    },
+    {
+      "label": "Firewood",
+      "amount": 150000,
+      "category": "Utilities"
+    },
+    {
+      "label": "Curry Powder",
+      "amount": 6300,
+      "category": "Direct Services"
+    },
+    {
+      "label": "Liquid Soap",
+      "amount": 60000,
+      "category": "Direct Services"
+    },
+    {
+      "label": "Salt",
+      "amount": 35000,
+      "category": "Direct Services"
+    },
+    {
+      "label": "Cooking Oil",
+      "amount": 21000,
+      "category": "Direct Services"
+    },
+    {
+      "label": "Sugar",
+      "amount": 240000,
+      "category": "Direct Services"
+    },
+    {
+      "label": "Milk",
+      "amount": 180000,
+      "category": "Direct Services"
+    },
+    {
+      "label": "Onion",
+      "amount": 70000,
+      "category": "Direct Services"
+    },
+    {
+      "label": "Tomatoes",
+      "amount": 200000,
+      "category": "Direct Services"
+    },
+    {
+      "label": "Cabbage",
+      "amount": 90000,
+      "category": "Direct Services"
+    },
+    {
+      "label": "Tea Leaves",
+      "amount": 5000,
+      "category": "Direct Services"
+    },
+    {
+      "label": "Bread",
+      "amount": 525000,
+      "category": "Direct Services"
+    },
+    {
+      "label": "Eggs",
+      "amount": 420000,
+      "category": "Direct Services"
+    },
+    {
+      "label": "Bananas",
+      "amount": 80000,
+      "category": "Direct Services"
+    },
+    {
+      "label": "Irish Potatoes",
+      "amount": 65000,
+      "category": "Direct Services"
+    },
+    {
+      "label": "Pumpkins",
+      "amount": 82000,
+      "category": "Direct Services"
+    },
+    {
+      "label": "Bar Soap",
+      "amount": 85000,
+      "category": "Direct Services"
+    },
+    {
+      "label": "Toilet Paper",
+      "amount": 60000,
+      "category": "Direct Services"
+    },
+    {
+      "label": "Matchbox",
+      "amount": 2000,
+      "category": "Direct Services"
+    },
+    {
+      "label": "Steel Wire",
+      "amount": 6000,
+      "category": "Maintenance"
+    },
+    {
+      "label": "Meat",
+      "amount": 544000,
+      "category": "Direct Services"
+    },
+    {
+      "label": "Pampers (Diapers)",
+      "amount": 300000,
+      "category": "Direct Services"
+    },
+    {
+      "label": "Cooking Gas",
+      "amount": 64000,
+      "category": "Utilities"
+    },
+    {
+      "label": "Water Bills",
+      "amount": 90000,
+      "category": "Utilities"
+    },
+    {
+      "label": "Electricity Bills",
+      "amount": 140000,
+      "category": "Utilities"
+    },
+    {
+      "label": "Transportation",
+      "amount": 250000,
+      "category": "Transportation"
+    },
+    {
+      "label": "Communication",
+      "amount": 150000,
+      "category": "Technology"
+    },
+    {
+      "label": "Medical",
+      "amount": 350000,
+      "category": "Healthcare Services"
+    },
+    {
+      "label": "Emergencies",
+      "amount": 350000,
+      "category": "Emergency Relief"
+    },
+    {
+      "label": "Head Teacher / Social Worker",
+      "amount": 600000,
+      "category": "Staff Salaries",
+      "description": "1 staff member @ 600,000 UGX"
+    },
+    {
+      "label": "Baby to Top Class Teachers",
+      "amount": 1600000,
+      "category": "Staff Salaries",
+      "description": "4 teachers @ 400,000 UGX"
+    },
+    {
+      "label": "P1 to P2 Teachers",
+      "amount": 1600000,
+      "category": "Staff Salaries",
+      "description": "4 teachers @ 400,000 UGX"
+    },
+    {
+      "label": "P3 to P4 Teachers",
+      "amount": 1600000,
+      "category": "Staff Salaries",
+      "description": "4 teachers @ 400,000 UGX"
+    },
+    {
+      "label": "P5 to P6 Teachers",
+      "amount": 1600000,
+      "category": "Staff Salaries",
+      "description": "4 teachers @ 400,000 UGX"
+    },
+    {
+      "label": "Babies Matrons",
+      "amount": 400000,
+      "category": "Staff Salaries",
+      "description": "2 matrons @ 200,000 UGX"
+    },
+    {
+      "label": "Cook",
+      "amount": 150000,
+      "category": "Staff Salaries",
+      "description": "1 staff member @ 150,000 UGX"
+    },
+    {
+      "label": "Guard",
+      "amount": 150000,
+      "category": "Staff Salaries",
+      "description": "1 staff member @ 150,000 UGX"
+    }
+  ]
+}

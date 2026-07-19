@@ -1,0 +1,304 @@
+# RAG eval set — 30 prompts grounded against the seeded Zaylan demo workspace.
+#
+# Each entry's `reference_answer` is the gold-standard answer we EXPECT
+# the chat to give, grounded in the seeded data. `expected_sections` is
+# the set of workspace_snapshot section keys that MUST be retrieved for
+# the answer to be groundable; Context Recall is scored against this.
+# `expected_specialist` (optional) is the agent_type the planner SHOULD
+# route to — used in the routing-accuracy aggregate, not the four RAGAS
+# metrics.
+#
+# Categories:
+#   - identity      Workspace metadata, members, mission, story
+#   - transactional Donations, recipients, campaigns, projects, grants
+#   - ambiguous     Bare-find queries, vague summaries — multi-route
+#
+# When adding entries:
+#   1. The reference answer must be a fact about the seeded Zaylan data.
+#      If the seed changes, the reference answer changes — keep them
+#      in lockstep by re-running the eval after every seed change.
+#   2. `expected_sections` are the SNAPSHOT SECTIONS the answer needs,
+#      not literal text matches. The snapshot's section keys today are:
+#      identity, mission, classification, operations, team, members,
+#      recent_activity, top_entities, timeline.
+#   3. Don't add prompts that touch unseeded data — Context Recall
+#      will always be 0 and the score is noise.
+
+version: 1
+authored_at: 2026-06-10
+authored_by: henry
+
+entries:
+  # ── Identity (10) ─────────────────────────────────────────────────
+  - id: id_001
+    category: identity
+    question: tldr of this workspace
+    expected_sections: [identity, mission, team]
+    expected_specialist: workspace_agent
+    reference_answer: |
+      Zaylan is the demo nonprofit used to showcase Octopus to
+      prospective customers, focused on literacy programs in East
+      Africa. It runs sponsorship and donor-funded programs.
+
+  - id: id_002
+    category: identity
+    question: What does Zaylan do?
+    expected_sections: [identity, mission]
+    expected_specialist: workspace_agent
+    reference_answer: |
+      Zaylan is a literacy-focused nonprofit running sponsorship and
+      donor programs.
+
+  - id: id_003
+    category: identity
+    question: What sector is this workspace in?
+    expected_sections: [identity]
+    expected_specialist: workspace_agent
+    reference_answer: |
+      Zaylan operates in the nonprofit sector.
+
+  - id: id_004
+    category: identity
+    question: What is Zaylan's mission?
+    expected_sections: [mission]
+    expected_specialist: workspace_agent
+    reference_answer: |
+      Zaylan's mission is to showcase nonprofit management
+      capabilities — literacy programs, donor transparency, and
+      recipient outcomes.
+
+  - id: id_005
+    category: identity
+    question: Who is the founder?
+    expected_sections: [members, identity]
+    expected_specialist: user_agent
+    reference_answer: |
+      The founder of Zaylan is the workspace owner user with email
+      founder@zaylan.demo. Their display name is "founder".
+
+  - id: id_006
+    category: identity
+    question: How big is the team?
+    expected_sections: [team]
+    expected_specialist: workspace_agent
+    reference_answer: |
+      Zaylan has a small team — fewer than five active members.
+
+  - id: id_007
+    category: identity
+    question: Who are the workspace members?
+    expected_sections: [members]
+    expected_specialist: user_agent
+    reference_answer: |
+      The active workspace members include the founder. The Zaylan
+      seed config also lists Aisha Otieno (Programs Coordinator) and
+      Daniel Mwangi (Development Lead) but only members that landed
+      as real WorkspaceMembership rows appear in the snapshot.
+
+  - id: id_008
+    category: identity
+    question: What categories does this workspace operate in?
+    expected_sections: [classification]
+    expected_specialist: workspace_agent
+    reference_answer: |
+      Zaylan operates in Education and Community categories, with
+      subcategories Literacy, Mentorship, and Youth Programs.
+
+  - id: id_009
+    category: identity
+    question: What contribution means does Zaylan accept?
+    expected_sections: [operations]
+    expected_specialist: workspace_agent
+    reference_answer: |
+      Zaylan accepts Funding, Volunteering, and Mentorship as
+      contribution means.
+
+  - id: id_010
+    category: identity
+    question: Is this workspace public?
+    expected_sections: [identity]
+    expected_specialist: workspace_agent
+    reference_answer: |
+      Yes, the Zaylan workspace privacy setting is public.
+
+  # ── Transactional (10) ────────────────────────────────────────────
+  - id: tx_001
+    category: transactional
+    question: Who are our top donors?
+    expected_sections: [top_entities]
+    expected_specialist: donation_agent
+    reference_answer: |
+      Zaylan's top donors include Henry Wanjala with $578 across 21
+      donations and Wanjala Henry with $72 across 5 donations.
+
+  - id: tx_002
+    category: transactional
+    question: How much have we received in donations in the last 30 days?
+    expected_sections: [recent_activity]
+    expected_specialist: donation_agent
+    reference_answer: |
+      Zaylan received approximately USD 400-450 from donations in the
+      last 30 days. The exact figure varies as new donations land.
+
+  - id: tx_003
+    category: transactional
+    question: List our active campaigns
+    expected_sections: [top_entities]
+    expected_specialist: fundraising_agent
+    reference_answer: |
+      Zaylan does not currently have any active campaigns in the
+      seeded data.
+
+  - id: tx_004
+    category: transactional
+    question: What grants are we pursuing?
+    expected_sections: [top_entities]
+    expected_specialist: grants_agent
+    reference_answer: |
+      Zaylan has no open grants in the seeded data.
+
+  - id: tx_005
+    category: transactional
+    question: List our active projects
+    expected_sections: [top_entities]
+    expected_specialist: project_agent
+    reference_answer: |
+      Zaylan has two seeded projects: "Reading Confidence" (an
+      after-school literacy support program for children aged 8-12)
+      and "Book Drive" (a quarterly book collection and distribution
+      program to under-resourced schools).
+
+  - id: tx_006
+    category: transactional
+    question: How many new recipients did we onboard in the last 30 days?
+    expected_sections: [recent_activity]
+    expected_specialist: sponsorship_agent
+    reference_answer: |
+      Zaylan onboarded a small number (typically 1-3) of new
+      recipients in the last 30 days based on the seeded data.
+
+  - id: tx_007
+    category: transactional
+    question: Show me Henry Wanjala's donation history
+    expected_sections: [top_entities]
+    expected_specialist: donation_agent
+    reference_answer: |
+      Henry Wanjala has contributed approximately $578 across 21
+      donations to Zaylan, with the most recent donation in 2026.
+
+  - id: tx_008
+    category: transactional
+    question: How many followers does this workspace have?
+    expected_sections: [team]
+    expected_specialist: workspace_agent
+    reference_answer: |
+      Zaylan has a small follower count, typically fewer than 10.
+
+  - id: tx_009
+    category: transactional
+    question: Who is our top recipient?
+    expected_sections: [top_entities]
+    expected_specialist: sponsorship_agent
+    reference_answer: |
+      Zaylan's seeded data includes a small number of recipient
+      profiles; the specific top recipient varies by seed run.
+
+  - id: tx_010
+    category: transactional
+    question: What's the total amount we've raised this year?
+    expected_sections: [recent_activity, top_entities]
+    expected_specialist: financial_agent
+    reference_answer: |
+      Zaylan has raised approximately $650 in total contributions
+      across all donors over its lifetime in the seeded data.
+
+  # ── Ambiguous / multi-route (10) ──────────────────────────────────
+  - id: amb_001
+    category: ambiguous
+    question: Find Aisha Otieno
+    expected_sections: [members]
+    expected_specialist: user_agent
+    reference_answer: |
+      Aisha Otieno is listed in the Zaylan workspace's staff config
+      as Programs Coordinator. She may or may not be present as a
+      real workspace member depending on whether the seeder created
+      her membership record.
+
+  - id: amb_002
+    category: ambiguous
+    question: Find Henry Wanjala
+    expected_sections: [top_entities]
+    expected_specialist: donation_agent
+    reference_answer: |
+      Henry Wanjala is Zaylan's top donor with $578 across 21
+      donations. He is not a workspace member.
+
+  - id: amb_003
+    category: ambiguous
+    question: Find Sam Otieno
+    expected_sections: []
+    expected_specialist: ""  # multi-route — no specific specialist expected
+    reference_answer: |
+      Sam Otieno does not appear in Zaylan's workspace data — not as
+      a member, donor, recipient, or sponsor.
+
+  - id: amb_004
+    category: ambiguous
+    question: How are we doing?
+    expected_sections: []
+    expected_specialist: clarify
+    reference_answer: |
+      The assistant should ask the user to clarify scope —
+      donations, budgets, sponsorships, grants, or projects.
+
+  - id: amb_005
+    category: ambiguous
+    question: Tell me about Wanjala Henry
+    expected_sections: [top_entities]
+    expected_specialist: donation_agent
+    reference_answer: |
+      Wanjala Henry has donated $72 across 5 donations to Zaylan.
+
+  - id: amb_006
+    category: ambiguous
+    question: summary
+    expected_sections: [identity, mission, team]
+    expected_specialist: workspace_agent
+    reference_answer: |
+      A workspace summary should cover Zaylan's mission (literacy
+      programs), team size, and recent activity.
+
+  - id: amb_007
+    category: ambiguous
+    question: any news
+    expected_sections: []
+    expected_specialist: clarify
+    reference_answer: |
+      "Any news" with no entity should route to clarify — finances,
+      donors, programs, or grants are all candidate scopes.
+
+  - id: amb_008
+    category: ambiguous
+    question: Find member Daniel Mwangi
+    expected_sections: [members]
+    expected_specialist: user_agent
+    reference_answer: |
+      Daniel Mwangi is listed in the Zaylan staff config as
+      Development Lead.
+
+  - id: amb_009
+    category: ambiguous
+    question: Find donor Henry Wanjala
+    expected_sections: [top_entities]
+    expected_specialist: donation_agent
+    reference_answer: |
+      Henry Wanjala is a Zaylan donor with $578 across 21 donations.
+
+  - id: amb_010
+    category: ambiguous
+    question: What's important
+    expected_sections: []
+    expected_specialist: clarify
+    reference_answer: |
+      "What's important" with no entity should route to clarify and
+      ask the user to specify a scope.

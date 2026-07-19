@@ -1,0 +1,1253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>{{ title|default:"Financial Report" }}</title>
+    <style>
+        /* ─────────────────────────────────────────────────────────────
+           Modern donor-facing report — typography-led, photo-slot-optional.
+           Layered loosely on the Black & Orange Modern Annual Report
+           layout language but tuned to a nonprofit-green accent: warm
+           cream paper, charcoal text, ONE accent green applied to a
+           single word per title + key numbers. Photography optional —
+           slots degrade to typography moments when no cover image is
+           supplied.
+
+           Variants (existing contract — DO NOT rename):
+              - impact:     cover + director + impact            + sign-off
+              - financial:  cover + director + stewardship       + sign-off
+              - annual:     cover + director + impact + stewardship + sign-off
+              - custom:     same as annual + a "focus" callout sourced
+                            from the user-supplied prompt.
+
+           Photo slots (any URL = use the photo; empty = typography):
+              - workspace_logo_url    (cover header + footer mark)
+              - cover_image_url       (cover hero band)
+              - director_photo_url    (director's message)
+           ───────────────────────────────────────────────────────────── */
+        @import url('https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;700;800;900&family=Inter:wght@400;500;600;700;800&display=swap');
+
+        @page {
+            size: letter;
+            margin: 0;
+        }
+        :root {
+            --paper: #f6efe6;
+            --paper-deep: #ece2d2;
+            --ink: #0a0a0c;
+            --ink-soft: #2c2a28;
+            --muted: #6e6b66;
+            --rule: rgba(10, 10, 12, 0.16);
+            --rule-soft: rgba(10, 10, 12, 0.08);
+            --accent: {{ brand_accent|default:"#16a34a" }};
+            --accent-deep: {{ brand_accent_deep|default:"#15803d" }};
+            --accent-soft: {{ brand_accent_soft|default:"#dcfce7" }};
+            --card: #ffffff;
+            /* Drop-shadows removed per design feedback — flat cards on
+               cream paper, hairline borders carry the card boundary
+               where the contrast alone isn't enough. */
+            --shadow: none;
+            --card-border: 1px solid var(--rule-soft);
+        }
+        * { box-sizing: border-box; }
+        html, body {
+            margin: 0;
+            padding: 0;
+            color: var(--ink);
+            background: var(--paper);
+            font-family: 'Inter', -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            font-size: 11px;
+            line-height: 1.55;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+        }
+        h1, h2, h3, h4 {
+            font-family: 'Archivo', 'Inter', -apple-system, sans-serif;
+            font-weight: 800;
+            letter-spacing: -0.02em;
+            margin: 0;
+            color: var(--ink);
+        }
+        .page {
+            width: 8.5in;
+            min-height: 11in;
+            page-break-after: always;
+            position: relative;
+            overflow: hidden;
+            background: var(--paper);
+            padding: 0.7in 0.75in 0.85in;
+        }
+        .page:last-child { page-break-after: auto; }
+
+        /* ── Universal header rule ─────────────────────────────────── */
+        .page__header {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            border-bottom: 1px solid var(--ink);
+            padding-bottom: 10px;
+            font-size: 9.5px;
+            font-weight: 600;
+            letter-spacing: 0.18em;
+            text-transform: uppercase;
+            color: var(--ink);
+        }
+        .page__header__left { display: flex; align-items: center; gap: 10px; }
+        .page__header__mark {
+            height: 18px; width: 18px; object-fit: contain;
+            display: inline-block;
+        }
+        .page__header__right { color: var(--ink-soft); }
+        .page__footer {
+            position: absolute;
+            left: 0.75in; right: 0.75in; bottom: 0.42in;
+            display: flex; justify-content: space-between; align-items: center;
+            font-size: 9px; font-weight: 500;
+            letter-spacing: 0.16em; text-transform: uppercase;
+            color: var(--muted);
+            border-top: 1px solid var(--rule-soft);
+            padding-top: 10px;
+        }
+        .page__footer__dot {
+            display: inline-block; width: 5px; height: 5px;
+            border-radius: 50%; background: var(--accent);
+            vertical-align: 2px; margin: 0 8px;
+        }
+
+        /* ─────────────────────────────────────────────────────────────
+           Cover
+           ───────────────────────────────────────────────────────────── */
+        .cover { padding: 0.7in 0.75in 0; }
+        .cover__eyebrow {
+            font-size: 10px; letter-spacing: 0.22em;
+            font-weight: 600; text-transform: uppercase;
+            color: var(--ink);
+        }
+        .cover__title {
+            font-size: 76px;
+            line-height: 0.95;
+            font-weight: 900;
+            letter-spacing: -0.035em;
+            margin-top: 32px;
+        }
+        .cover__title__accent { color: var(--accent); }
+        .cover__period {
+            margin-top: 22px;
+            font-family: 'Archivo', sans-serif;
+            font-size: 22px;
+            font-weight: 600;
+            letter-spacing: -0.01em;
+            color: var(--ink-soft);
+        }
+        .cover__hero {
+            margin-top: 26px;
+            border-top: 1px solid var(--ink);
+            border-bottom: 1px solid var(--ink);
+            padding: 22px 0 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            gap: 24px;
+        }
+        .cover__hero__label {
+            font-size: 9.5px; letter-spacing: 0.22em;
+            font-weight: 600; text-transform: uppercase;
+            color: var(--muted);
+            margin-bottom: 6px;
+        }
+        .cover__hero__number {
+            font-family: 'Archivo', sans-serif;
+            font-size: 52px;
+            line-height: 1;
+            font-weight: 900;
+            letter-spacing: -0.03em;
+            color: var(--accent);
+        }
+        .cover__hero__sub {
+            font-size: 11px;
+            font-weight: 500;
+            color: var(--ink-soft);
+            text-align: right;
+            max-width: 2.6in;
+            line-height: 1.4;
+        }
+        .cover__band {
+            margin-top: 22px;
+            height: 2.4in;
+            border-radius: 6px;
+            background-color: var(--paper-deep);
+            position: relative;
+            overflow: hidden;
+        }
+        .cover__band__photo {
+            width: 100%; height: 100%; object-fit: cover;
+            filter: grayscale(45%) contrast(1.05);
+        }
+        .cover__band__overlay {
+            position: absolute; inset: 0;
+            background: linear-gradient(180deg, rgba(10,10,12,0) 35%, rgba(22,163,74,0.75) 100%);
+        }
+        .cover__band__caption {
+            position: absolute;
+            left: 28px; right: 28px; bottom: 22px;
+            display: flex; justify-content: space-between; align-items: flex-end;
+            color: #fff;
+        }
+        .cover__band__caption__title {
+            font-family: 'Archivo', sans-serif;
+            font-size: 24px; font-weight: 800;
+            letter-spacing: -0.01em;
+            max-width: 4.5in;
+            text-shadow: 0 1px 4px rgba(0,0,0,0.35);
+        }
+        .cover__band__caption__meta {
+            font-size: 9.5px; letter-spacing: 0.22em;
+            text-transform: uppercase; font-weight: 600;
+            text-shadow: 0 1px 4px rgba(0,0,0,0.35);
+        }
+        /* Typography fallback when no cover photo is supplied */
+        .cover__band--type {
+            display: flex; flex-direction: column;
+            justify-content: space-between;
+            padding: 28px 30px 22px;
+        }
+        .cover__band--type .cover__band__quote {
+            font-family: 'Archivo', sans-serif;
+            font-size: 24px; line-height: 1.2;
+            font-weight: 700; letter-spacing: -0.015em;
+            color: var(--ink);
+            max-width: 6.5in;
+        }
+        .cover__band--type .cover__band__quote__accent { color: var(--accent); }
+        .cover__band--type .cover__band__meta {
+            display: flex; justify-content: space-between; align-items: baseline;
+            font-size: 9.5px; letter-spacing: 0.22em;
+            text-transform: uppercase; font-weight: 600;
+            color: var(--ink-soft);
+        }
+
+        /* ─────────────────────────────────────────────────────────────
+           Table of contents
+           ───────────────────────────────────────────────────────────── */
+        .toc__title {
+            font-size: 70px; line-height: 0.96;
+            font-weight: 900; letter-spacing: -0.03em;
+            margin-top: 38px;
+        }
+        .toc__title__accent { color: var(--accent); }
+        .toc__subtitle {
+            margin-top: 14px;
+            font-size: 13px; font-weight: 500;
+            color: var(--ink-soft);
+            max-width: 4.5in;
+        }
+        .toc__grid {
+            margin-top: 44px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 18px 22px;
+        }
+        .toc__item {
+            display: flex; align-items: flex-start; gap: 16px;
+            padding: 14px 16px;
+            background: var(--card);
+            border-radius: 6px;
+            border: var(--card-border);
+        }
+        .toc__item__num {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 32px; height: 32px;
+            border: 1.5px solid var(--accent);
+            border-radius: 4px;
+            color: var(--accent);
+            font-family: 'Archivo', sans-serif;
+            font-size: 13px; font-weight: 700;
+            flex: 0 0 32px;
+        }
+        .toc__item__body { padding-top: 2px; }
+        .toc__item__title {
+            font-family: 'Archivo', sans-serif;
+            font-size: 15px; font-weight: 700;
+            letter-spacing: -0.005em;
+            color: var(--ink);
+            line-height: 1.15;
+        }
+        .toc__item__hint {
+            margin-top: 3px;
+            font-size: 10px; color: var(--muted);
+        }
+        .toc__stats {
+            margin-top: 36px;
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 14px;
+            padding: 20px 22px;
+            background: var(--ink);
+            color: #fff;
+            border-radius: 6px;
+        }
+        .toc__stat__num {
+            font-family: 'Archivo', sans-serif;
+            font-size: 32px; font-weight: 900;
+            letter-spacing: -0.02em;
+            color: var(--accent);
+        }
+        .toc__stat__label {
+            margin-top: 2px;
+            font-size: 9px; letter-spacing: 0.2em;
+            text-transform: uppercase;
+            color: rgba(255,255,255,0.8);
+        }
+
+        /* ─────────────────────────────────────────────────────────────
+           Director's message
+           ───────────────────────────────────────────────────────────── */
+        .message-page .page__header { margin-bottom: 32px; }
+        .message-grid {
+            display: grid;
+            grid-template-columns: 2.6in 1fr;
+            gap: 36px;
+            margin-top: 8px;
+        }
+        .message-photo {
+            background: var(--paper-deep);
+            border-radius: 6px;
+            height: 3.6in;
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            align-items: flex-end;
+            justify-content: center;
+        }
+        .message-photo__img {
+            width: 100%; height: 100%; object-fit: cover;
+            filter: grayscale(35%);
+        }
+        .message-photo__initials {
+            position: absolute;
+            inset: 0;
+            display: flex; align-items: center; justify-content: center;
+            font-family: 'Archivo', sans-serif;
+            font-size: 110px; font-weight: 900;
+            color: var(--accent);
+            letter-spacing: -0.04em;
+        }
+        .message-photo__strip {
+            position: absolute;
+            left: 0; right: 0; bottom: 0;
+            background: var(--accent);
+            color: #fff;
+            padding: 10px 14px;
+            font-size: 9px; letter-spacing: 0.22em;
+            text-transform: uppercase; font-weight: 700;
+        }
+        .message-body { padding-top: 6px; }
+        .message-title, .message-page h2 {
+            font-size: 46px; line-height: 1; font-weight: 900;
+            letter-spacing: -0.03em;
+        }
+        .message-title__accent { color: var(--accent); }
+        .message-paragraph {
+            margin: 16px 0 0;
+            font-size: 11.5px; line-height: 1.65;
+            color: var(--ink-soft);
+        }
+        .signature-block {
+            margin-top: 36px;
+            padding-top: 18px;
+            border-top: 1px solid var(--rule);
+        }
+        .signature-closing {
+            font-size: 11px; color: var(--muted);
+            margin: 0 0 6px;
+        }
+        .signature-name {
+            font-family: 'Archivo', sans-serif;
+            font-size: 18px; font-weight: 800;
+            letter-spacing: -0.01em;
+            color: var(--ink);
+            margin: 0;
+        }
+        .signature-role {
+            font-size: 10px; color: var(--muted);
+            letter-spacing: 0.15em; text-transform: uppercase;
+            margin-top: 2px;
+        }
+        .signature-mark { display: none; } /* legacy class — kept for back-compat */
+
+        /* ─────────────────────────────────────────────────────────────
+           Impact at a glance
+           ───────────────────────────────────────────────────────────── */
+        .impact .page__header { margin-bottom: 22px; }
+        .section__eyebrow {
+            display: inline-block;
+            padding: 4px 10px;
+            background: var(--accent-soft);
+            color: var(--accent-deep);
+            font-size: 9.5px; letter-spacing: 0.22em;
+            text-transform: uppercase; font-weight: 700;
+            border-radius: 999px;
+            margin-bottom: 14px;
+        }
+        .impact-title {
+            font-size: 54px; line-height: 0.96;
+            font-weight: 900; letter-spacing: -0.03em;
+            margin-bottom: 4px;
+        }
+        .impact-title__accent { color: var(--accent); }
+
+        .focus-callout {
+            margin-top: 16px;
+            background: var(--card);
+            border-left: 6px solid var(--accent);
+            border-radius: 4px;
+            padding: 12px 16px;
+            border: var(--card-border);
+        }
+        .focus-callout__label {
+            font-size: 9.5px; letter-spacing: 0.22em;
+            text-transform: uppercase; font-weight: 700;
+            color: var(--accent-deep);
+        }
+        .focus-callout__text {
+            margin-top: 4px;
+            font-family: 'Archivo', sans-serif;
+            font-size: 14px; font-weight: 600;
+            color: var(--ink);
+            line-height: 1.35;
+        }
+
+        .mission-band {
+            margin-top: 18px;
+            padding: 14px 20px;
+            background: var(--ink);
+            color: #fff;
+            border-radius: 6px;
+        }
+        .mission-band__label {
+            font-size: 9.5px; letter-spacing: 0.22em;
+            text-transform: uppercase; font-weight: 700;
+            color: var(--accent);
+        }
+        .mission-band__text {
+            margin-top: 4px;
+            font-family: 'Archivo', sans-serif;
+            font-size: 14px; font-weight: 600;
+            letter-spacing: -0.005em;
+            color: #fff;
+            line-height: 1.4;
+        }
+
+        .kpi-grid {
+            margin-top: 18px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+        .kpi {
+            background: var(--card);
+            border-radius: 6px;
+            padding: 14px 18px;
+            border: var(--card-border);
+            border-top: 4px solid var(--ink);
+        }
+        .kpi--accent { border-top-color: var(--accent); }
+        .kpi__label {
+            font-size: 9.5px; letter-spacing: 0.22em;
+            text-transform: uppercase; font-weight: 700;
+            color: var(--muted);
+            margin: 0;
+        }
+        .kpi__number {
+            font-family: 'Archivo', sans-serif;
+            font-size: 34px; font-weight: 900;
+            letter-spacing: -0.025em;
+            color: var(--ink);
+            margin: 6px 0 2px;
+            line-height: 1;
+        }
+        .kpi--accent .kpi__number { color: var(--accent); }
+        .kpi__sub {
+            margin: 4px 0 0;
+            font-size: 10.5px;
+            color: var(--ink-soft);
+        }
+
+        /* Avatars */
+        .avatar-row {
+            margin-top: 18px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 22px;
+        }
+        .avatar-group { padding-top: 4px; }
+        .avatar-group__head {
+            display: flex; justify-content: space-between; align-items: baseline;
+            margin-bottom: 10px;
+        }
+        .avatar-group__title {
+            font-family: 'Archivo', sans-serif;
+            font-size: 13px; font-weight: 700;
+            letter-spacing: -0.005em;
+        }
+        .avatar-group__count {
+            font-size: 9.5px; letter-spacing: 0.2em;
+            text-transform: uppercase; color: var(--muted);
+        }
+        .avatar-group__list {
+            display: flex; flex-wrap: wrap; gap: 6px;
+        }
+        .avatar {
+            width: 32px; height: 32px;
+            border-radius: 50%;
+            display: inline-flex; align-items: center; justify-content: center;
+            font-family: 'Archivo', sans-serif;
+            font-size: 10px; font-weight: 700;
+            color: #fff;
+            letter-spacing: 0;
+        }
+        .avatar--a { background: #16a34a; }
+        .avatar--b { background: #0a0a0c; }
+        .avatar--c { background: #14532d; }
+        .avatar--d { background: #4b4b4f; }
+        .avatar--e { background: #047857; }
+        .avatar--f { background: #2c2a28; }
+        .avatar--more {
+            background: transparent;
+            color: var(--ink);
+            border: 1.5px solid var(--ink);
+            font-size: 9.5px;
+        }
+
+        /* Donor thanks */
+        .thanks {
+            margin-top: 16px;
+            background: var(--accent-soft);
+            border-radius: 6px;
+            padding: 12px 20px;
+        }
+        .thanks__heading {
+            font-family: 'Archivo', sans-serif;
+            font-size: 13px; font-weight: 700;
+            color: var(--accent-deep);
+            margin: 0;
+            letter-spacing: -0.005em;
+        }
+        .thanks__body {
+            margin: 4px 0 0;
+            font-size: 10.5px;
+            color: var(--ink-soft);
+        }
+
+        .grant-callout {
+            margin-top: 14px;
+            font-size: 10.5px; color: var(--ink-soft);
+            padding: 10px 14px;
+            background: var(--card);
+            border-radius: 4px;
+            border: var(--card-border);
+        }
+        .grant-callout strong { color: var(--accent-deep); font-weight: 700; }
+
+        /* Chart */
+        .chart {
+            margin-top: 22px;
+            background: var(--card);
+            border-radius: 6px;
+            padding: 18px 22px;
+            border: var(--card-border);
+        }
+        .chart__title {
+            font-family: 'Archivo', sans-serif;
+            font-size: 13px; font-weight: 700;
+            margin: 0 0 10px;
+        }
+        .chart__row {
+            display: grid;
+            grid-template-columns: 1.4in 1fr;
+            align-items: center;
+            gap: 12px;
+            padding: 6px 0;
+            border-bottom: 1px solid var(--rule-soft);
+        }
+        .chart__row:last-child { border-bottom: 0; }
+        .chart__label {
+            font-size: 10.5px; font-weight: 600;
+            color: var(--ink-soft);
+        }
+        .chart__bars { position: relative; height: 18px; }
+        .chart__bar {
+            position: absolute;
+            top: 50%; left: 0; height: 8px;
+            transform: translateY(-50%);
+            border-radius: 3px;
+            min-width: 2px;
+        }
+        .chart__bar--allocated { background: var(--rule); top: 25%; }
+        .chart__bar--spent { background: var(--accent); top: 65%; }
+
+        /* ─────────────────────────────────────────────────────────────
+           Money flow — Income → Expenses Sankey (server-side SVG)
+           ───────────────────────────────────────────────────────────── */
+        .money-flow__totals {
+            margin-top: 22px;
+            display: flex;
+            justify-content: space-between;
+            gap: 24px;
+        }
+        .money-flow__total {
+            flex: 1;
+            background: var(--card);
+            border-radius: 6px;
+            padding: 14px 18px;
+            border: var(--card-border);
+        }
+        .money-flow__total--right { text-align: right; }
+        .money-flow__total__label {
+            font-size: 9.5px; letter-spacing: 0.22em;
+            text-transform: uppercase; font-weight: 700;
+            color: var(--muted);
+            margin: 0;
+        }
+        .money-flow__total__value {
+            font-family: 'Archivo', sans-serif;
+            font-size: 30px; font-weight: 900;
+            letter-spacing: -0.025em;
+            color: var(--accent);
+            margin: 4px 0 0;
+            line-height: 1;
+        }
+        .money-flow__chart {
+            margin-top: 22px;
+            padding: 14px 12px;
+            background: var(--card);
+            border-radius: 6px;
+            border: var(--card-border);
+        }
+        .money-flow__chart svg {
+            display: block;
+            width: 100%;
+            height: auto;
+        }
+
+        /* ─────────────────────────────────────────────────────────────
+           Stewardship — where the money went
+           ───────────────────────────────────────────────────────────── */
+        .detail__intro {
+            margin-top: 22px;
+            font-size: 11.5px; line-height: 1.6;
+            color: var(--ink-soft);
+            max-width: 5.6in;
+        }
+        .budget {
+            margin-top: 26px;
+            background: var(--card);
+            border-radius: 6px;
+            border: var(--card-border);
+            overflow: hidden;
+        }
+        .budget table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 10.5px;
+        }
+        .budget thead th {
+            background: var(--ink);
+            color: #fff;
+            text-align: left;
+            padding: 11px 14px;
+            font-size: 9px;
+            letter-spacing: 0.18em;
+            text-transform: uppercase;
+            font-weight: 700;
+        }
+        .budget thead th:not(:first-child) { text-align: right; }
+        .budget tbody td {
+            padding: 11px 14px;
+            border-bottom: 1px solid var(--rule-soft);
+            vertical-align: top;
+        }
+        .budget tbody tr:last-child td { border-bottom: 0; }
+        .budget tbody td:not(:first-child) { text-align: right; font-variant-numeric: tabular-nums; }
+        .budget tbody td:first-child strong { font-weight: 700; }
+        .status-pill {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 999px;
+            font-size: 9px;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            font-weight: 700;
+        }
+        /* status_variant values come from _status_variant() in the
+           builder: ontrack / over / under / default. Keep these class
+           names in sync — drift here = silent loss of color. */
+        .status-pill--ontrack  { background: #e8f5ee; color: #1b6738; }
+        .status-pill--under    { background: #fff3d6; color: #8a5a00; }
+        .status-pill--over     { background: #fde0d6; color: #a23000; }
+        .status-pill--default  { background: var(--paper-deep); color: var(--ink-soft); }
+
+        .looking-ahead {
+            margin-top: 26px;
+            padding: 18px 22px;
+            background: var(--card);
+            border-radius: 6px;
+            border: var(--card-border);
+        }
+        .looking-ahead__heading {
+            font-family: 'Archivo', sans-serif;
+            font-size: 14px; font-weight: 700;
+            margin: 0 0 8px;
+            letter-spacing: -0.005em;
+        }
+        .looking-ahead__list {
+            margin: 0; padding: 0;
+            list-style: none;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px 18px;
+        }
+        .looking-ahead__item {
+            display: flex; align-items: flex-start; gap: 8px;
+            font-size: 11px;
+            color: var(--ink-soft);
+        }
+        .looking-ahead__icon {
+            color: var(--accent);
+            font-weight: 700;
+        }
+
+        /* Sign-off */
+        .signoff {
+            margin-top: 26px;
+            padding: 20px 22px;
+            background: var(--ink);
+            color: #fff;
+            border-radius: 6px;
+        }
+        .signoff__heading {
+            font-family: 'Archivo', sans-serif;
+            font-size: 18px; font-weight: 800;
+            letter-spacing: -0.01em;
+            margin: 0;
+            color: #fff;
+        }
+        .signoff__heading__accent { color: var(--accent); }
+        .signoff__prepared {
+            margin: 8px 0 0;
+            font-size: 11px;
+            color: rgba(255,255,255,0.85);
+        }
+        .signoff__line { font-size: 9.5px; letter-spacing: 0.18em; text-transform: uppercase; color: rgba(255,255,255,0.65); }
+
+        /* Empty-data slate */
+        .empty-state {
+            padding: 28px;
+            text-align: center;
+            color: var(--muted);
+            font-size: 11px;
+            background: var(--card);
+            border-radius: 6px;
+            border: var(--card-border);
+            margin-top: 22px;
+        }
+    </style>
+</head>
+<body>
+
+{# Reusable header rule fragment — workspace name LEFT, period + variant RIGHT #}
+{% with mark_src=workspace_logo_url|default:default_logo_data_uri %}
+
+<!-- ─────────────────────────────────────────────────────────────
+     PAGE 1 — COVER
+     ───────────────────────────────────────────────────────────── -->
+<div class="page cover">
+    <div class="page__header">
+        <div class="page__header__left">
+            <img class="page__header__mark" src="{{ mark_src }}" alt="">
+            <span>{{ workspace_name|default:"Impact Report" }}</span>
+        </div>
+        <div class="page__header__right">{{ date_label }}</div>
+    </div>
+
+    <p class="cover__eyebrow" style="margin-top: 28px;">{{ report_type_label|default:"Impact Report" }}</p>
+
+    <h1 class="cover__title">
+        {% if variant == "financial" %}
+            Financial<br><span class="cover__title__accent">Report</span>
+        {% elif variant == "annual" %}
+            Annual<br><span class="cover__title__accent">Report</span>
+        {% elif variant == "custom" %}
+            Custom<br><span class="cover__title__accent">Report</span>
+        {% else %}
+            Impact<br><span class="cover__title__accent">Report</span>
+        {% endif %}
+    </h1>
+    <p class="cover__period">{{ date_label }}</p>
+
+    <div class="cover__hero">
+        <div>
+            {% if show_hero %}
+            <p class="cover__hero__label">Total donations this period</p>
+            <p class="cover__hero__number">{{ total_donations_display }}</p>
+            {% else %}
+            <p class="cover__hero__label">Reporting period</p>
+            <p class="cover__hero__number" style="font-size: 36px;">{{ date_label }}</p>
+            {% endif %}
+        </div>
+        <div class="cover__hero__sub">
+            {% if show_hero %}
+                {% if donor_count > 0 %}from {{ donor_count }} generous donor{{ donor_count|pluralize }}{% else %}building our donor base{% endif %}{% if active_recipients > 0 %} · supporting {{ active_recipients }} recipient{{ active_recipients|pluralize }}{% endif %}.
+            {% else %}
+                A snapshot of our programs and stewardship.
+            {% endif %}
+        </div>
+    </div>
+
+    {% if cover_image_url %}
+    <div class="cover__band">
+        <img class="cover__band__photo" src="{{ cover_image_url }}" alt="">
+        <div class="cover__band__overlay"></div>
+        <div class="cover__band__caption">
+            <div class="cover__band__caption__title">
+                {% if workspace_mission %}{{ workspace_mission|truncatewords:14 }}{% else %}{{ workspace_name|default:"Together, we are building something that lasts." }}{% endif %}
+            </div>
+            <div class="cover__band__caption__meta">{{ workspace_name|default:"" }}</div>
+        </div>
+    </div>
+    {% else %}
+    <div class="cover__band cover__band--type">
+        <p class="cover__band__quote">
+            {% if workspace_mission %}
+                {{ workspace_mission }}
+            {% elif is_personal %}
+                A clear view of <span class="cover__band__quote__accent">where your money goes</span>.
+            {% else %}
+                One act of compassion can spark a <span class="cover__band__quote__accent">lifetime of hope</span>.
+            {% endif %}
+        </p>
+        <div class="cover__band__meta">
+            <span>{{ workspace_name|default:"" }}</span>
+            <span>{{ date_label }}</span>
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="page__footer">
+        <span>{{ workspace_name|default:"" }}</span>
+        <span>{{ report_type_label|default:"" }}<span class="page__footer__dot"></span>{{ date_label }}</span>
+        <span>01</span>
+    </div>
+</div>
+
+
+<!-- ─────────────────────────────────────────────────────────────
+     PAGE 2 — TABLE OF CONTENTS
+     ───────────────────────────────────────────────────────────── -->
+<div class="page toc">
+    <div class="page__header">
+        <div class="page__header__left">
+            <img class="page__header__mark" src="{{ mark_src }}" alt="">
+            <span>{{ workspace_name|default:"" }}</span>
+        </div>
+        <div class="page__header__right">{{ date_label }}</div>
+    </div>
+
+    <h2 class="toc__title">Table of<br><span class="toc__title__accent">Contents</span></h2>
+    <p class="toc__subtitle">A short tour of what's inside — the period in numbers, the people behind them, and what we're stewarding next.</p>
+
+    <div class="toc__grid">
+        <div class="toc__item">
+            <span class="toc__item__num">01</span>
+            <div class="toc__item__body">
+                <p class="toc__item__title">Cover</p>
+                <p class="toc__item__hint">Period at a glance</p>
+            </div>
+        </div>
+        {% if show_director_page %}
+        <div class="toc__item">
+            <span class="toc__item__num">02</span>
+            <div class="toc__item__body">
+                <p class="toc__item__title">A Letter from the {{ director_role|default:"Director" }}</p>
+                <p class="toc__item__hint">In their own words</p>
+            </div>
+        </div>
+        {% endif %}
+        {% if show_impact_page %}
+        <div class="toc__item">
+            <span class="toc__item__num">03</span>
+            <div class="toc__item__body">
+                <p class="toc__item__title">Impact at a Glance</p>
+                <p class="toc__item__hint">Donors, recipients, and reach</p>
+            </div>
+        </div>
+        {% endif %}
+        {% if show_stewardship_page %}
+        <div class="toc__item">
+            <span class="toc__item__num">04</span>
+            <div class="toc__item__body">
+                <p class="toc__item__title">Where Every Shilling Went</p>
+                <p class="toc__item__hint">Budget vs. actuals</p>
+            </div>
+        </div>
+        {% endif %}
+        <div class="toc__item">
+            <span class="toc__item__num">05</span>
+            <div class="toc__item__body">
+                <p class="toc__item__title">Looking Ahead</p>
+                <p class="toc__item__hint">What's next</p>
+            </div>
+        </div>
+    </div>
+
+    {% if show_hero or active_recipients > 0 or active_sponsorships > 0 %}
+    <div class="toc__stats">
+        <div>
+            <div class="toc__stat__num">{{ total_donations_display }}</div>
+            <div class="toc__stat__label">Raised</div>
+        </div>
+        <div>
+            <div class="toc__stat__num">{{ active_recipients|default:0 }}</div>
+            <div class="toc__stat__label">Recipients</div>
+        </div>
+        <div>
+            <div class="toc__stat__num">{{ active_sponsorships|default:0 }}</div>
+            <div class="toc__stat__label">Sponsorships</div>
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="page__footer">
+        <span>{{ workspace_name|default:"" }}</span>
+        <span>Contents<span class="page__footer__dot"></span>{{ date_label }}</span>
+        <span>02</span>
+    </div>
+</div>
+
+
+{% if show_director_page %}
+<!-- ─────────────────────────────────────────────────────────────
+     DIRECTOR'S MESSAGE
+     ───────────────────────────────────────────────────────────── -->
+<div class="page message-page">
+    <div class="page__header">
+        <div class="page__header__left">
+            <img class="page__header__mark" src="{{ mark_src }}" alt="">
+            <span>{{ workspace_name|default:"" }}</span>
+        </div>
+        <div class="page__header__right">{{ date_label }}</div>
+    </div>
+
+    <p class="section__eyebrow" style="margin-top: 28px;">A letter from</p>
+    <h2 class="message-title">{{ director_role }}'s<br><span class="message-title__accent">Message</span></h2>
+    <h3 style="display:none;">{{ director_role }}'s Message</h3>
+
+    <div class="message-grid">
+        <div class="message-photo">
+            {% if director_photo_url %}
+            <img class="message-photo__img" src="{{ director_photo_url }}" alt="">
+            {% else %}
+            <span class="message-photo__initials">{{ director_initials|default:"·" }}</span>
+            {% endif %}
+            <div class="message-photo__strip">{{ director_name|default:director_role }}</div>
+        </div>
+        <div class="message-body">
+            {% for paragraph in director_message_paragraphs %}
+            <p class="message-paragraph">{{ paragraph }}</p>
+            {% endfor %}
+
+            <div class="signature-block">
+                <p class="signature-closing">Sincerely,</p>
+                <p class="signature-name">{{ director_name }}</p>
+                <p class="signature-role">{{ director_role }}{% if workspace_name %} · {{ workspace_name }}{% endif %}</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="page__footer">
+        <span>{{ workspace_name|default:"" }}</span>
+        <span>Letter<span class="page__footer__dot"></span>{{ date_label }}</span>
+        <span>03</span>
+    </div>
+</div>
+{% endif %}
+
+
+{% if show_impact_page %}
+<!-- ─────────────────────────────────────────────────────────────
+     IMPACT AT A GLANCE
+     ───────────────────────────────────────────────────────────── -->
+<div class="page impact">
+    <div class="page__header">
+        <div class="page__header__left">
+            <img class="page__header__mark" src="{{ mark_src }}" alt="">
+            <span>{{ workspace_name|default:"" }}</span>
+        </div>
+        <div class="page__header__right">{{ date_label }}</div>
+    </div>
+
+    <p class="section__eyebrow" style="margin-top: 28px;">Impact</p>
+    <h2 class="page-heading impact-title">At a<br><span class="impact-title__accent">Glance</span></h2>
+    <h3 class="page-subheading" style="display:none;">At a glance</h3>
+
+    {% if custom_prompt %}
+    <div class="focus-callout">
+        <p class="focus-callout__label">This report focuses on</p>
+        <p class="focus-callout__text">{{ custom_prompt }}</p>
+    </div>
+    {% endif %}
+
+    {% comment %}
+        Mission band is suppressed when a custom prompt is shown — the
+        callout above already framed the document, and stacking both
+        eats the vertical room the thanks/avatars need on this page.
+    {% endcomment %}
+    {% if workspace_mission and not custom_prompt %}
+    <div class="mission-band">
+        <p class="mission-band__label">Our mission</p>
+        <p class="mission-band__text">{{ workspace_mission }}</p>
+    </div>
+    {% endif %}
+
+    <div class="kpi-grid">
+        <div class="kpi kpi--accent">
+            <p class="kpi__label">Donations</p>
+            <p class="kpi__number">{{ total_donations_display }}</p>
+            <p class="kpi__sub">{% if donor_count > 0 %}{{ donor_count }} generous donor{{ donor_count|pluralize }}{% else %}&nbsp;{% endif %}</p>
+        </div>
+        <div class="kpi">
+            <p class="kpi__label">Recipients</p>
+            <p class="kpi__number">{{ active_recipients|default:0 }}</p>
+            <p class="kpi__sub">{% if new_recipients > 0 %}+{{ new_recipients }} new this period{% else %}active{% endif %}</p>
+        </div>
+        <div class="kpi">
+            <p class="kpi__label">Sponsorships</p>
+            <p class="kpi__number">{{ active_sponsorships|default:0 }}</p>
+            <p class="kpi__sub">{% if new_sponsorships > 0 %}+{{ new_sponsorships }} new this period{% else %}active{% endif %}</p>
+        </div>
+        <div class="kpi">
+            <p class="kpi__label">Outflows</p>
+            <p class="kpi__number">{{ total_expenses_display }}</p>
+            <p class="kpi__sub">{% if expense_count > 0 %}{{ expense_count }} transaction{{ expense_count|pluralize }}{% else %}no outflows{% endif %}</p>
+        </div>
+    </div>
+
+    {% if donor_avatars or recipient_avatars %}
+    <div class="avatar-row">
+        {% if donor_avatars %}
+        <div class="avatar-group">
+            <div class="avatar-group__head">
+                <span class="avatar-group__title">Donors</span>
+                <span class="avatar-group__count">{{ donor_count }} total</span>
+            </div>
+            <div class="avatar-group__list">
+                {% for a in donor_avatars %}
+                <span class="avatar avatar--{{ a.color }}">{{ a.initials }}</span>
+                {% endfor %}
+                {% if donor_more > 0 %}
+                <span class="avatar avatar--more">+{{ donor_more }}</span>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+        {% if recipient_avatars %}
+        <div class="avatar-group">
+            <div class="avatar-group__head">
+                <span class="avatar-group__title">Recipients</span>
+                <span class="avatar-group__count">{{ active_recipients }} total</span>
+            </div>
+            <div class="avatar-group__list">
+                {% for a in recipient_avatars %}
+                <span class="avatar avatar--{{ a.color }}">{{ a.initials }}</span>
+                {% endfor %}
+                {% if recipient_more > 0 %}
+                <span class="avatar avatar--more">+{{ recipient_more }}</span>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {% if grant_callout %}
+    <div class="grant-callout">{{ grant_callout|safe }}</div>
+    {% endif %}
+
+    {% if donor_names_preview or donor_count > 0 %}
+    <div class="thanks">
+        <h3 class="thanks__heading">To our {{ donor_count|default:"generous" }} donor{% if donor_count != 1 %}s{% endif %}</h3>
+        <p class="thanks__body">
+            {% if donor_names_preview %}
+                <strong>{{ donor_names_preview }}</strong>{% if donor_names_extra > 0 %} and {{ donor_names_extra }} other{{ donor_names_extra|pluralize }}{% endif %} — thank you.
+            {% else %}
+                Thank you for showing up for this work.
+            {% endif %}
+        </p>
+    </div>
+    {% endif %}
+
+    <div class="page__footer">
+        <span>{{ workspace_name|default:"" }}</span>
+        <span>Impact<span class="page__footer__dot"></span>{{ date_label }}</span>
+        <span>04</span>
+    </div>
+</div>
+{% endif %}
+
+
+{% if money_flow_show_page %}
+<!-- ─────────────────────────────────────────────────────────────
+     MONEY FLOW — Income → Expenses Sankey
+     ───────────────────────────────────────────────────────────── -->
+<div class="page money-flow">
+    <div class="page__header">
+        <div class="page__header__left">
+            <img class="page__header__mark" src="{{ mark_src }}" alt="">
+            <span>{{ workspace_name|default:"" }}</span>
+        </div>
+        <div class="page__header__right">{{ date_label }}</div>
+    </div>
+
+    <p class="section__eyebrow" style="margin-top: 28px;">Money flow</p>
+    <h2 class="impact-title">Income to<br><span class="impact-title__accent">Expenses</span></h2>
+
+    <p class="detail__intro" style="margin-top: 18px;">
+        How every dollar moved this period — sources on the left, where it landed on the right.
+        Link widths are proportional to amounts.
+    </p>
+
+    <div class="money-flow__totals">
+        <div class="money-flow__total">
+            <p class="money-flow__total__label">Income</p>
+            <p class="money-flow__total__value">{{ money_flow_income_total_display }}</p>
+        </div>
+        <div class="money-flow__total money-flow__total--right">
+            <p class="money-flow__total__label">Expenses</p>
+            <p class="money-flow__total__value">{{ money_flow_expense_total_display }}</p>
+        </div>
+    </div>
+
+    <div class="money-flow__chart">
+        {{ money_flow_sankey_svg|safe }}
+    </div>
+
+    <div class="page__footer">
+        <span>{{ workspace_name|default:"" }}</span>
+        <span>Money flow<span class="page__footer__dot"></span>{{ date_label }}</span>
+        <span>05</span>
+    </div>
+</div>
+{% endif %}
+
+
+{% if show_stewardship_page %}
+<!-- ─────────────────────────────────────────────────────────────
+     STEWARDSHIP — WHERE EVERY SHILLING WENT
+     ───────────────────────────────────────────────────────────── -->
+<div class="page detail">
+    <div class="page__header">
+        <div class="page__header__left">
+            <img class="page__header__mark" src="{{ mark_src }}" alt="">
+            <span>{{ workspace_name|default:"" }}</span>
+        </div>
+        <div class="page__header__right">{{ date_label }}</div>
+    </div>
+
+    <p class="section__eyebrow" style="margin-top: 28px;">Stewardship</p>
+    {% if currency_noun %}
+    <h2 class="impact-title">Where Every<br><span class="impact-title__accent">{{ currency_noun|capfirst }} Went</span></h2>
+    <h3 style="display:none;">Where every {{ currency_noun }} went</h3>
+    {% else %}
+    <h2 class="impact-title">Where The<br><span class="impact-title__accent">Money Went</span></h2>
+    <h3 style="display:none;">Where the money went</h3>
+    {% endif %}
+
+    {% if summary %}
+    <p class="detail__intro">{{ summary }}</p>
+    {% endif %}
+
+    {% if budget_performance %}
+    <div class="budget">
+        <table>
+            <thead>
+                <tr>
+                    <th>Category</th>
+                    <th>Allocated</th>
+                    <th>Spent</th>
+                    <th>Variance</th>
+                    <th>Utilisation</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in budget_performance %}
+                <tr>
+                    <td><strong>{{ row.category }}</strong></td>
+                    <td>{{ row.allocated_display }}</td>
+                    <td>{{ row.spent_display }}</td>
+                    <td>{{ row.variance_display }}</td>
+                    <td>{{ row.utilisation_display }}</td>
+                    <td><span class="status-pill status-pill--{{ row.status_variant }}">{{ row.status }}</span></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">No budget data is available for this period.</div>
+    {% endif %}
+
+    {% if chart_rows %}
+    <div class="chart">
+        <h4 class="chart__title">Budget performance — allocated vs. spent</h4>
+        {% for row in chart_rows %}
+        <div class="chart__row">
+            <div class="chart__label">{{ row.category }}</div>
+            <div class="chart__bars">
+                <div class="chart__bar chart__bar--allocated" style="width: {{ row.allocated_pct }}%;"></div>
+                <div class="chart__bar chart__bar--spent" style="width: {{ row.spent_pct }}%;"></div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if looking_ahead_has_any %}
+    <div class="looking-ahead">
+        <h4 class="looking-ahead__heading">Looking ahead</h4>
+        <ul class="looking-ahead__list">
+            {% for item in looking_ahead %}
+            <li class="looking-ahead__item">
+                <span class="looking-ahead__icon">{{ item.icon }}</span>
+                <span>{{ item.label }}</span>
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    <div class="signoff">
+        <p class="signoff__heading">Prepared with <span class="signoff__heading__accent">care</span></p>
+        <p class="signoff__prepared">{{ alias|default:workspace_name|default:"Your team" }}</p>
+        <p class="signoff__line" style="margin-top: 6px;">{{ date_label }}</p>
+    </div>
+
+    <div class="page__footer">
+        <span>{{ workspace_name|default:"" }}</span>
+        <span>Stewardship<span class="page__footer__dot"></span>{{ date_label }}</span>
+        <span>05</span>
+    </div>
+</div>
+{% endif %}
+
+{% if not show_impact_page and not show_stewardship_page %}
+<div class="page">
+    <p style="text-align:center;color:var(--muted);font-size:11px;margin-top:1in;">
+        This report variant has no body pages enabled.
+    </p>
+</div>
+{% endif %}
+
+{% endwith %}
+</body>
+</html>

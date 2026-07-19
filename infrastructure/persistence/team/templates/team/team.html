@@ -1,0 +1,54 @@
+{% extends 'core/base.html' %}
+
+{% block title %}{{ team.title }} | {% endblock %}
+
+{% block content %}
+    <nav class="breadcrumb" aria-label="breadcrumbs">
+        <ul>
+            <li><a href="#">Dashboard</a></li>
+            <li><a href="{% url 'myaccount' %}">My account</a></li>
+            <li class="is-active"><a href="{% url 'team:team' team.id %}" aria-current="page">{{ team.title }}</a></li>
+        </ul>
+    </nav>
+
+    <div class="columns is-multiline" id="team-app">
+        <div class="column is-4">
+            <h1 class="title">{{ team.title }}</h1>
+
+            <p><strong>Current plan: </strong>{{ team.plan.title }}</p>
+
+            {% if team.plan.title != 'Free' %}
+                <p><strong>Plan end date: </strong>{{ team.plan_end_date|date:"Y-m-d" }}{% if team.plan_status == 'active' %} (auto renewing){% endif %}</p>
+            {% endif %}
+
+            {% if request.user == team.created_by %}
+                <a href="{% url 'team:invite' %}" class="button is-primary">Invite users</a>
+                <a href="/subscriptions/pricing/twotier/" class="button is-success">Change plan</a>
+            {% endif %}
+
+            <hr>
+
+            <h2 class="subtitle mt-6">Members</h2>
+
+            {% for member in team.members.all %}
+                <p>{{ member.username }}</p>
+            {% endfor %}
+
+            <h2 class="subtitle mt-6">Invitated members</h2>
+
+            {% for member in invitations %}
+                <p>{{ member.email }} - {{ member.date_sent|timesince }} ago</p>
+            {% endfor %}
+        </div>
+
+        {% if team.created_by == request.user %}
+            <div class="column is-12">
+                <hr>
+        
+                <h3 class="subtitle">Owner actions</h3>
+
+                <a href="{% url 'team:edit' %}" class="button is-warning">Edit team</a>
+            </div>
+        {% endif %}
+    </div>
+{% endblock %}

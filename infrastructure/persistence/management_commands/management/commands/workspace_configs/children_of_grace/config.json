@@ -1,0 +1,50 @@
+{
+  "owner": {
+    "email": "admin@childrenofgrace.com",
+    "password": "ChangeMe123!",
+    "first_name": "Children",
+    "last_name": "OfGrace",
+    "is_staff": true
+  },
+  "workspace": {
+    "name": "Children of Grace",
+    "story": "Children of Grace empowers Ugandan children through education, health care, and discipleship so they can overcome the cycle of poverty.",
+    "status": "active",
+    "privacy": "public",
+    "is_verified": true,
+    "categories": ["Education", "Health Promotion", "Faith Based"],
+    "subcategories": {
+      "Education": ["Scholarships", "Mentorship"],
+      "Health Promotion": ["HIV Care", "Nutrition"],
+      "Faith Based": ["Discipleship"]
+    },
+    "contribution_means": ["Sponsorship", "Funding", "Volunteering"],
+    "stripe": {
+      "tenant_url": "https://childrenofgrace.local",
+      "domain_url": "https://childrenofgrace.local",
+      "stripe_secret_key": "sk_test_childrenofgrace"
+    }
+  },
+  "staff_team_title": "Team",
+  "staff": [
+    {"first_name": "Heather", "last_name": "Tuura", "email": "heather@childrenofgrace.com", "role": "Executive Director"},
+    {"first_name": "Robert", "last_name": "Mukisa", "email": "robert@childrenofgrace.com", "role": "Programs Manager"},
+    {"first_name": "Agnes", "last_name": "Namatovu", "email": "agnes@childrenofgrace.com", "role": "Health Coordinator"}
+  ],
+  "projects": [
+    {"title": "Education Program", "description": "Comprehensive sponsorship covering school fees, supplies, and mentoring.", "url": "https://www.childrenofgrace.com/what-we-do"},
+    {"title": "Health & Wellness", "description": "Mobile clinics, HIV care, and nutrition support for enrolled children."},
+    {"title": "Discipleship & Counseling", "description": "Faith-based mentoring and trauma-informed counseling."}
+  ],
+  "recipients_category": {"name": "Sponsored Recipients", "description": "Recipients currently available for sponsorship."},
+  "recipients": [
+    {"first_name": "Jackline", "last_name": "Atieno", "age": 9, "gender": "female", "needs": "Primary school sponsorship and malaria prevention.", "story": "Jackline recently joined Children of Grace and is eager to continue her education with consistent support.", "sponsored": false, "location": "Jinja, Uganda"},
+    {"first_name": "Brian", "last_name": "Okia", "age": 15, "gender": "male", "needs": "Boarding school fees and mentorship.", "story": "Brian is passionate about science and dreams of becoming an engineer to serve his community.", "sponsored": true, "location": "Jinja, Uganda"}
+  ],
+  "news": [
+    {"title": "Mentorship Retreat Empowers Students", "excerpt": "Secondary students gathered for leadership training.", "body": "Children of Grace hosted a leadership retreat focused on goal setting, health, and discipleship for secondary students.", "image": "https://www.childrenofgrace.com/wp-content/uploads/2023/08/mentorship-retreat.jpg", "category": "Stories"}
+  ],
+  "pdfs": [
+    {"filename": "children-of-grace-sponsorship-guide.pdf", "description": "Guide for new sponsors outlining program impact."}
+  ]
+}

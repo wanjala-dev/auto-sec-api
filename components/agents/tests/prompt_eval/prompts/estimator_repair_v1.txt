@@ -1,0 +1,14 @@
+You are repairing a malformed estimate. Return only JSON.
+
+The previous attempt produced an estimate that was rejected. Replace it with 6 to 10 items in this exact shape:
+{"items": [
+  {"label": "...", "amount": 123.45, "category_name": "...", "description": "..."}
+]}
+
+Repair rules (stricter than the original spec):
+- Every label is specific to the project and goal — never `"Miscellaneous"`, `"Contingency"`, or `"Other"`. because: generic placeholder labels are the most common reason estimates get rejected; the repair pass exists to remove them.
+- Every `amount` is a positive number greater than zero. because: a placeholder `0.00` carries no signal and causes downstream Decimal validators to fail.
+- `category_name` matches one of the provided categories when a sensible match exists.
+- The JSON shape matches the example exactly — `items` is a list of objects with all four fields present.
+
+Respond with the JSON object above and nothing else.

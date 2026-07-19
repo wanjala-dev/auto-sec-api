@@ -1,0 +1,184 @@
+{
+  "owner": {
+    "email": "hello@jeremiahhouseug.org",
+    "password": "ChangeMe123!",
+    "first_name": "Jeremiah",
+    "last_name": "House",
+    "is_staff": true
+  },
+  "workspace": {
+    "name": "Jeremiah House Uganda",
+    "story": "Jeremiah House provides family-style homes, counseling, and discipleship for vulnerable boys in Jinja, Uganda, helping them heal and flourish.",
+    "status": "active",
+    "privacy": "public",
+    "is_verified": true,
+    "categories": [
+      "Community",
+      "Education",
+      "Faith Based"
+    ],
+    "subcategories": {
+      "Community": [
+        "Family Care",
+        "Counseling"
+      ],
+      "Education": [
+        "Primary Education",
+        "Life Skills"
+      ],
+      "Faith Based": [
+        "Discipleship"
+      ]
+    },
+    "contribution_means": [
+      "Funding",
+      "Volunteering",
+      "Mentorship"
+    ],
+    "stripe": {
+      "tenant_url": "https://jeremiahhouseug.local",
+      "domain_url": "https://jeremiahhouseug.local",
+      "stripe_secret_key": "sk_test_jeremiahhouse"
+    }
+  },
+  "brand": {
+    "primary": "#5685BC",
+    "secondary": "#1ABFE0",
+    "logo": "https://res.cloudinary.com/dj1qbl0el/image/upload/v1624521724/jeremiah/imgs/trans_ypasgr.png"
+  },
+  "staff_team_title": "Our Team",
+  "staff": [
+    {
+      "first_name": "Benon",
+      "last_name": "Mugisha",
+      "email": "benon@jeremiahhouseug.org",
+      "role": "House Father"
+    },
+    {
+      "first_name": "Sarah",
+      "last_name": "Nandutu",
+      "email": "sarah@jeremiahhouseug.org",
+      "role": "Social Worker"
+    },
+    {
+      "first_name": "Michael",
+      "last_name": "Kintu",
+      "email": "michael@jeremiahhouseug.org",
+      "role": "Programs Director"
+    }
+  ],
+  "projects": [
+    {
+      "title": "Family Homes",
+      "description": "Safe, nurturing homes for boys transitioning from the streets."
+    },
+    {
+      "title": "Education & Life Skills",
+      "description": "School enrollment, tutoring, and life skills mentorship."
+    },
+    {
+      "title": "Counseling and Reintegration",
+      "description": "Trauma-informed counseling and family reunification support."
+    }
+  ],
+  "recipients_category": {
+    "name": "Residents",
+    "description": "Boys receiving holistic care at Jeremiah House."
+  },
+  "recipients": [
+    {
+      "first_name": "Peter",
+      "last_name": "Ouma",
+      "age": 13,
+      "gender": "male",
+      "needs": "School fees and counseling support.",
+      "story": "Peter joined Jeremiah House in 2022 and is now thriving in Primary Six while rebuilding family connections.",
+      "sponsored": false,
+      "location": "Jinja, Uganda"
+    },
+    {
+      "first_name": "David",
+      "last_name": "Okello",
+      "age": 11,
+      "gender": "male",
+      "needs": "School supplies and ongoing medical care.",
+      "story": "David came to Jeremiah House in 2023 after losing both parents. He loves football and is catching up quickly in class.",
+      "sponsored": false,
+      "location": "Jinja, Uganda"
+    },
+    {
+      "first_name": "Samuel",
+      "last_name": "Mukisa",
+      "age": 15,
+      "gender": "male",
+      "needs": "Vocational training and reintegration support.",
+      "story": "Samuel is one of our oldest residents, training in carpentry through Education & Life Skills as he prepares to reunite with extended family.",
+      "sponsored": false,
+      "location": "Jinja, Uganda"
+    }
+  ],
+  "news": [
+    {
+      "title": "Family Fun Day Unites Communities",
+      "excerpt": "Supporters and caregivers gathered for games and celebration.",
+      "body": "Jeremiah House hosted caregivers, alumni, and supporters for a day of connection, highlighting stories of transformation.",
+      "image": "https://jeremiahhouseug.org/wp-content/uploads/2023/09/family-day.jpg",
+      "category": "Events"
+    }
+  ],
+  "pdfs": [
+    {
+      "filename": "jeremiahhouse-impact-report.pdf",
+      "description": "Quarterly impact report shared during recent events."
+    }
+  ],
+  "drafts": [
+    {
+      "kind": "letter",
+      "title": "A Home for Every Boy — Year-End Appeal",
+      "body_html": "<p>Dear Friend of Jeremiah House,</p><p>When a boy first arrives at our gate in Jinja, he often carries little more than fear and a story no child should have to tell. Within our <strong>Family Homes</strong>, that story begins to change — a bed of his own, a caregiver who learns his name, and the slow, steadfast work of healing.</p><p>This year your generosity kept three family-style homes running, funded counseling and reintegration for boys leaving the streets, and opened the classroom door through our Education &amp; Life Skills program. Peter, who came to us frightened and guarded, now sets the table for his housemates and dreams out loud about finishing school.</p><p>As the year closes, we are asking you to help us bring the next boy home. A year-end gift sustains a family home through the dry season and keeps a counselor beside every child who needs one.</p><p>Would you consider a year-end gift today? Every boy deserves a family table.</p><p>With gratitude,<br/>The Jeremiah House Family</p>"
+    },
+    {
+      "kind": "blog",
+      "title": "From Jinja's Streets to a Family Table: Peter's First Year",
+      "body_html": "<p>Peter arrived at Jeremiah House on an ordinary Tuesday, though nothing about that day was ordinary for him. Like many of the boys we welcome in Jinja, he had learned to survive alone long before he learned to trust.</p><p>Healing at Jeremiah House is not a program you complete; it is a family you join. In his first months, Peter moved into one of our <strong>Family Homes</strong>, met daily with a counselor through our <strong>Counseling and Reintegration</strong> work, and slowly began to believe that this table, this bed, and these people were his to keep.</p><p>By mid-year he had enrolled in our <strong>Education &amp; Life Skills</strong> classes. His caregivers noticed the change first — a boy who once flinched now laughs easily and looks after the younger residents.</p><p>Peter's story is one of many, and it is only possible because supporters like you believe that every boy deserves to belong. This is what your partnership builds: not a shelter, but a home.</p>"
+    },
+    {
+      "kind": "update",
+      "title": "Autumn Update: Three Homes, One Growing Family",
+      "body_html": "<p>Friends and partners,</p><p>We wanted to share where your support has gone this season across Jeremiah House Uganda.</p><ul><li><strong>Family Homes:</strong> all three homes are full, each with a dedicated caregiver providing round-the-clock, family-style care in Jinja.</li><li><strong>Education &amp; Life Skills:</strong> our residents are attending class and building the practical skills that make reintegration possible.</li><li><strong>Counseling and Reintegration:</strong> every boy is walking through a personalized counseling plan, and we celebrated our first reunifications this year.</li></ul><p>None of this happens without you. Thank you for standing with our boys — for believing that healing is possible and that a family changes everything.</p><p>Warmly,<br/>The Jeremiah House Team</p>"
+    }
+  ],
+  "newsletters": [
+    {
+      "title": "Jeremiah House — Term Update for Our Partners",
+      "subject": "Three homes, ten boys, one growing family",
+      "content_html": "<h2>Dear friends of Jeremiah House,</h2><p>As the term closes in Jinja, we wanted to bring you inside our three family homes and share what your partnership has made possible.</p><h3>Our homes are full</h3><p>All three <strong>Family Homes</strong> are running at capacity, each with a dedicated caregiver providing round-the-clock, family-style care. Boys who arrived guarded and alone are learning, again, what it means to belong.</p><h3>Learning is happening</h3><p>Through <strong>Education &amp; Life Skills</strong>, Peter is thriving in Primary Six, David is catching up fast after a hard start, and Samuel is training in carpentry as he prepares for reintegration.</p><h3>Healing is happening</h3><p>Every boy is walking a personalized plan through <strong>Counseling and Reintegration</strong>, and this year we celebrated our first family reunifications.</p><p>None of this happens without you. Thank you for believing that healing is possible and that a family changes everything.</p><p>Warmly,<br/>The Jeremiah House Family</p>"
+    }
+  ],
+  "giving": {
+    "sponsorships": [
+      {
+        "recipient": "Peter Ouma",
+        "sponsor_first": "Grace",
+        "sponsor_last": "Wanjiru",
+        "sponsor_email": "grace.wanjiru@demo.octopusintl.org",
+        "monthly_amount": 45,
+        "months": 8
+      },
+      {
+        "recipient": "David Okello",
+        "sponsor_first": "Thomas",
+        "sponsor_last": "Bennett",
+        "sponsor_email": "thomas.bennett@demo.octopusintl.org",
+        "monthly_amount": 50,
+        "months": 6
+      }
+    ],
+    "project_funding": [
+      { "project": "Family Homes", "goal": 15000, "raised": 9750 },
+      { "project": "Education & Life Skills", "goal": 8000, "raised": 5200 },
+      { "project": "Counseling and Reintegration", "goal": 6000, "raised": 2400 }
+    ]
+  }
+}

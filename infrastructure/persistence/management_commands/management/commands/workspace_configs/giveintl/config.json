@@ -1,0 +1,52 @@
+{
+  "owner": {
+    "email": "admin@giveintl.org",
+    "password": "ChangeMe123!",
+    "first_name": "Give",
+    "last_name": "Admin",
+    "is_staff": true
+  },
+  "workspace": {
+    "name": "Give International",
+    "story": "Give International partners with Ugandan communities to improve health care access, education, and livelihoods through sustainable, locally-led projects.",
+    "status": "active",
+    "privacy": "public",
+    "is_verified": true,
+    "categories": ["Health Promotion", "Education", "Community"],
+    "subcategories": {
+      "Health Promotion": ["Primary Care", "Medical Outreach"],
+      "Education": ["Scholarships", "Vocational Training"],
+      "Community": ["Economic Empowerment"]
+    },
+    "contribution_means": ["Funding", "Volunteering", "Medical Support", "Educational Support"],
+    "stripe": {
+      "tenant_url": "https://giveintl.local",
+      "domain_url": "https://giveintl.local",
+      "stripe_secret_key": "sk_test_giveintl"
+    }
+  },
+  "staff_team_title": "Leadership Team",
+  "staff": [
+    {"first_name": "Grace", "last_name": "Namutebi", "email": "grace.namutebi@giveintl.org", "role": "Program Director"},
+    {"first_name": "David", "last_name": "Kaggwa", "email": "david.kaggwa@giveintl.org", "role": "Health Projects Lead"},
+    {"first_name": "Emily", "last_name": "Wright", "email": "emily.wright@giveintl.org", "role": "Volunteer Coordinator"}
+  ],
+  "projects": [
+    {"title": "Uganda Health Care Initiative", "description": "Partnership-based medical outreaches and surgical support for children in rural districts."},
+    {"title": "Education Sponsorships", "description": "Scholarships and mentorship for students transitioning to secondary and vocational education."},
+    {"title": "Economic Empowerment Groups", "description": "Village savings and loan associations that help families build resilience."}
+  ],
+  "recipients_category": {"name": "Student Sponsorships", "description": "Recipients and youth receiving educational support."},
+  "recipients": [
+    {"first_name": "Maria", "last_name": "Nakyobe", "age": 12, "gender": "female", "needs": "Secondary school scholarship support.", "story": "Maria excels in science and dreams of becoming a nurse through Give International's scholarship program.", "sponsored": false, "location": "Buikwe, Uganda"},
+    {"first_name": "Samuel", "last_name": "Owor", "age": 10, "gender": "male", "needs": "Orthopedic surgery follow-up and school support.", "story": "Samuel joined the health care initiative after a successful corrective surgery and is now back in school.", "sponsored": true, "location": "Jinja, Uganda"}
+  ],
+  "news": [
+    {"title": "Volunteer Team Returns to Uganda", "excerpt": "Skilled volunteers completed medical screenings across three clinics.", "body": "A multidisciplinary volunteer team from Canada joined Ugandan clinicians to deliver screenings, surgeries, and training in three partner clinics.", "image": "https://www.giveintl.org/wp-content/uploads/2021/05/clinic-team.jpg", "category": "Updates"},
+    {"title": "New Savings Groups Launch", "excerpt": "Economic empowerment for caregivers expands.", "body": "Give International launched two new village savings groups to help caregivers fund education and health expenses.", "image": "https://www.giveintl.org/wp-content/uploads/2021/04/savings-group.jpg", "category": "Community"}
+  ],
+  "pdfs": [
+    {"filename": "giveintl-volunteer-guide.pdf", "description": "Volunteer preparation guide sourced from the public documents listing."},
+    {"filename": "giveintl-annual-update.pdf", "description": "Annual impact snapshot for donors."}
+  ]
+}

@@ -1,0 +1,105 @@
+{
+  "_meta": {
+    "name": "writing_v1",
+    "description": "Golden writing-quality cases per kind (thank-you letter, newsletter, recipient update, quarterly summary). Each case provides the grounding facts the draft must stick to and the workspace voice rules it must respect. Graders: faithfulness (figures grounded), voice (no banned terms), readability (plain English), structure (title + body + sections), plus an LLM rubric judge (warmth / specificity / clarity-CTA / on-voice).",
+    "schema_version": 1,
+    "case_count": 4,
+    "added": ["writing-eval-2026-06-29"]
+  },
+  "cases": [
+    {
+      "id": "thank-you-major-donor",
+      "category": "thank_you",
+      "kind": "letter",
+      "goal": "Draft a warm thank-you letter to Margaret Henderson for her gift.",
+      "criteria": "Names Margaret Henderson, cites the $10,000 gift and the 48 young readers, sounds genuinely grateful, ends with a clear invitation to stay involved, and never uses the banned term 'child'/'children'.",
+      "context": {
+        "kind": "letter",
+        "recipient_name": "Margaret Henderson",
+        "title": "Thank you, Margaret",
+        "prompt": "Thank Margaret Henderson for her generous gift and share the impact.",
+        "retrieved_context": [
+          "Margaret Henderson donated $10,000 on 2026-05-15 to the Zaylan Foundation.",
+          "The Zaylan Foundation runs a literacy program supporting 48 young readers in East Africa.",
+          "The program provided 320 books to young readers in the last term."
+        ],
+        "voice": {
+          "tone": "warm",
+          "banned_terms": ["child", "children", "kid", "kids"],
+          "preferred": "young readers"
+        }
+      }
+    },
+    {
+      "id": "newsletter-monthly-impact",
+      "category": "newsletter",
+      "kind": "newsletter",
+      "goal": "Draft the September 2026 supporter newsletter for the Zaylan Foundation.",
+      "criteria": "Covers the period September 2026, cites $50,000 raised across 12 gifts and 3 newly enrolled young readers, is structured with clear sections, reads at plain-English level, and ends with a clear call to action.",
+      "context": {
+        "kind": "newsletter",
+        "period": "September 2026",
+        "title": "September 2026 Impact Update",
+        "prompt": "Summarise September 2026 fundraising and program impact for supporters.",
+        "retrieved_context": [
+          "In September 2026 the Zaylan Foundation raised $50,000 from 12 gifts.",
+          "3 new young readers were enrolled in the literacy program in September 2026.",
+          "The program now supports 48 young readers in total.",
+          "An upcoming reading day is scheduled for October 2026."
+        ],
+        "voice": {
+          "tone": "warm",
+          "banned_terms": ["child", "children", "kid", "kids"],
+          "preferred": "young readers"
+        }
+      }
+    },
+    {
+      "id": "recipient-update-progress",
+      "category": "recipient_update",
+      "kind": "recipient_update",
+      "goal": "Draft an update about the young reader Amina for her sponsor.",
+      "criteria": "Is about Amina, cites that her reading level improved by 2 grades this term, is specific and warm, and never uses the banned term 'child'.",
+      "context": {
+        "kind": "recipient_update",
+        "entity": "Amina",
+        "recipient_name": "Amina",
+        "title": "Amina's progress this term",
+        "prompt": "Share Amina's reading progress with her sponsor.",
+        "retrieved_context": [
+          "Amina is a young reader enrolled in the Zaylan Foundation literacy program.",
+          "Amina's reading level improved by 2 grades this term.",
+          "Amina read 24 books this term."
+        ],
+        "voice": {
+          "tone": "warm",
+          "banned_terms": ["child", "children", "kid", "kids"],
+          "preferred": "young reader"
+        }
+      }
+    },
+    {
+      "id": "quarterly-summary-q3",
+      "category": "summary",
+      "kind": "summary",
+      "goal": "Draft a Q3 2026 program summary for the board.",
+      "criteria": "Covers Q3 2026, cites $120,000 raised and 48 young readers supported, is clear and well-structured, and stays on-voice.",
+      "context": {
+        "kind": "summary",
+        "period": "Q3 2026",
+        "title": "Q3 2026 Program Summary",
+        "prompt": "Summarise Q3 2026 fundraising and program reach for the board.",
+        "retrieved_context": [
+          "In Q3 2026 the Zaylan Foundation raised $120,000.",
+          "The literacy program supported 48 young readers in Q3 2026.",
+          "920 books were distributed in Q3 2026."
+        ],
+        "voice": {
+          "tone": "warm",
+          "banned_terms": ["child", "children", "kid", "kids"],
+          "preferred": "young readers"
+        }
+      }
+    }
+  ]
+}

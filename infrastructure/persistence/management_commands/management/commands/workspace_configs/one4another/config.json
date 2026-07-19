@@ -1,0 +1,47 @@
+{
+  "owner": {
+    "email": "one4another-owner@example.org",
+    "password": "ChangeMe123!",
+    "first_name": "One4Another",
+    "last_name": "Admin",
+    "is_staff": true
+  },
+  "workspace": {
+    "name": "One4Another International",
+    "story": "One4Another facilitates surgeries, at no cost, for children in Uganda with surgical conditions such as clubfeet, bone infections, burn contractures, anal malformations, traumas, fractures and hernias.",
+    "status": "active",
+    "privacy": "public",
+    "is_verified": true,
+    "categories": ["Health Promotion", "Community"],
+    "subcategories": {
+      "Health Promotion": ["Surgery", "Rehabilitation"],
+      "Community": ["Outreach"]
+    },
+    "contribution_means": ["Funding", "Volunteering", "Medical Support"],
+    "stripe": {
+      "tenant_url": "https://one4another.local",
+      "domain_url": "https://one4another.local",
+      "stripe_secret_key": "sk_test_one4another"
+    }
+  },
+  "staff_team_title": "Staff Team",
+  "staff": [
+    {"first_name": "Olivia", "last_name": "Nurse", "email": "olivia@example.org", "role": "Lead Nurse"},
+    {"first_name": "Steven", "last_name": "Coordinator", "email": "steven@example.org", "role": "Community Coordinator"}
+  ],
+  "projects": [
+    {"title": "Surgical Center Operations", "description": "Coordination of surgeries and post-operative care at the Jinja center."},
+    {"title": "Rural Outreach and Assessments", "description": "Linking children in villages with treatment and assessments."}
+  ],
+  "recipients_category": {"name": "Surgical Care", "description": "Recipients needing one-time surgical interventions."},
+  "recipients": [
+    {"first_name": "Musa", "last_name": "Hope", "age": 9, "gender": "male", "needs": "Hernia repair and follow-up care.", "story": "Referred through outreach, awaiting surgery scheduling.", "sponsored": false, "location": "Jinja, Uganda"}
+  ],
+  "news": [
+    {"title": "Surgical Center Expands Capacity", "excerpt": "Growing team improves throughput.", "body": "With additional nursing staff, the center can support more surgeries each month.", "image": "https://one4anotherintl.ca/static/img/placeholder.jpg", "category": "Updates"}
+  ],
+  "pdfs": [
+    {"filename": "one4another-impact-overview.pdf", "description": "Overview of surgical programs and outcomes."}
+  ]
+}
+

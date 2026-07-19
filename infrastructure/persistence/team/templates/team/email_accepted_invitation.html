@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+        
+        <title>SEED</title>
+
+        <style type="text/css">
+            html {
+                width: 100%;
+            }
+
+            body {
+                width: 100%;
+                font-family: Arial;
+                font-size: 14px;
+                background-color: #fff;
+                color: #333;
+            }
+
+            a {
+                color: #111;
+            }
+        </style>
+    </head>
+
+    <body>
+        <!-- Preheader: shown by Gmail/Apple Mail/Outlook in the inbox preview line, hidden inside the email body. -->
+        <div style="display:none;font-size:1px;color:#ffffff;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;mso-hide:all;">{{ invitation.email }} accepted your invitation to {{ team.title|default:"your team" }}.&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;&#847;&zwnj;</div>
+        <table width="100%" cellspacing="0" cellpadding="0">
+            <tr>
+                <td><h1>SEED</h1></td>
+            </tr>
+
+            <tr>
+                <td>
+                    <p>{{ invitation.email }} accepted your invitation.</p>
+                </td>
+            </tr>
+        </table>
+    </body>
+</html>

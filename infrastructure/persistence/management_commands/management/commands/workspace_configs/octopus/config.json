@@ -1,0 +1,42 @@
+{
+  "owner": {
+    "email": "c0d3henry@gmail.com",
+    "password": "ChangeMeOnFirstLogin1!",
+    "first_name": "Henry",
+    "last_name": "Wanjala",
+    "is_staff": true
+  },
+  "workspace": {
+    "name": "Octopus",
+    "story": "Octopus is a multi-tenant operations and fundraising platform for nonprofit / charity teams. This workspace exists so the platform dogfoods itself — donations to support Octopus's continued development flow through the same donation, contact, news, and newsletter surfaces that customer nonprofits use. Every supporter sees their contribution land in the same dashboard the team uses to run the platform.",
+    "status": "active",
+    "privacy": "public",
+    "is_verified": true,
+    "categories": ["Technology", "Community"],
+    "subcategories": {
+      "Technology": ["Open Source", "Nonprofit Tools"],
+      "Community": ["Capacity Building"]
+    },
+    "contribution_means": ["Funding", "Volunteering", "Mentorship"],
+    "stripe": {
+      "tenant_url": "https://d7eenxjjxeqi7.cloudfront.net",
+      "domain_url": "https://d7eenxjjxeqi7.cloudfront.net",
+      "stripe_secret_key": "sk_test_octopus_dogfood"
+    }
+  },
+  "staff_team_title": "Octopus Core Team",
+  "staff": [],
+  "projects": [
+    {
+      "title": "Octopus Platform",
+      "description": "The multi-tenant operations + fundraising suite for nonprofit teams — donations, sponsorships, campaigns, events, budgets, and reporting in one workspace."
+    }
+  ],
+  "recipients_category": {
+    "name": "Partner Nonprofits",
+    "description": "Nonprofit and charity organisations running operations and fundraising on Octopus."
+  },
+  "recipients": [],
+  "news": [],
+  "pdfs": []
+}

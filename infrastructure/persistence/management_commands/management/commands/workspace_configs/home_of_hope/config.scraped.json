@@ -1,0 +1,487 @@
+{
+  "workspace_lookup": {
+    "name": "Home of Hope Uganda"
+  },
+  "owner": {
+    "email": "homeofhope-owner@example.org",
+    "password": "ChangeMe123!",
+    "first_name": "Hope",
+    "last_name": "Admin",
+    "is_staff": true
+  },
+  "workspace": {
+    "name": "Home of Hope",
+    "story": "Home of Hope Uganda provides holistic care to children with severe disabilities through residential care, medical support, education, and family outreach.",
+    "status": "active",
+    "privacy": "public",
+    "is_verified": true,
+    "categories": [
+      "Health Promotion",
+      "Education",
+      "Community"
+    ],
+    "subcategories": {
+      "Health Promotion": [
+        "Mental Health",
+        "Wellness"
+      ],
+      "Education": [
+        "Primary Education",
+        "Vocational Training"
+      ],
+      "Community": [
+        "Youth Programs"
+      ]
+    },
+    "contribution_means": [
+      "Funding",
+      "Volunteering",
+      "Medical Support",
+      "Educational Support"
+    ],
+    "stripe": {
+      "tenant_url": "https://homeofhopeuganda.local",
+      "domain_url": "https://homeofhopeuganda.local",
+      "stripe_secret_key": "sk_test_homeofhope"
+    },
+    "photo_source_url": "https://homeofhopeuganda.org/images_header/header_logo.png",
+    "photo_url": "assets/header_logo.png"
+  },
+  "staff_team_title": "Staff Team",
+  "staff": [
+    {
+      "first_name": "Richard",
+      "last_name": "Mukasa",
+      "email": "richard.mukasa@example.org",
+      "role": "Executive Director"
+    },
+    {
+      "first_name": "Joy",
+      "last_name": "Katusabe",
+      "email": "joy.katusabe@example.org",
+      "role": "Programs Manager"
+    },
+    {
+      "first_name": "Sarah",
+      "last_name": "Namakula",
+      "email": "sarah.namakula@example.org",
+      "role": "Therapy Lead"
+    },
+    {
+      "first_name": "John",
+      "last_name": "Okello",
+      "email": "john.okello@example.org",
+      "role": "Finance & Administration"
+    }
+  ],
+  "projects": [
+    {
+      "title": "Center Based Therapy and Care",
+      "description": "On-site therapy, daily care, and specialized services for residents."
+    },
+    {
+      "title": "Assessment and Outreach Clinics",
+      "description": "Clinics that identify children with disabilities and connect them to services."
+    },
+    {
+      "title": "Home and Follow-up Visits",
+      "description": "Regular visits to families to ensure continuity of care."
+    },
+    {
+      "title": "Epilepsy Medication",
+      "description": "Reliable access to anti-epileptic medication and monitoring."
+    }
+  ],
+  "recipients_category": {
+    "name": "General Care",
+    "description": "Default category for demo beneficiaries."
+  },
+  "recipients": [
+    {
+      "first_name": "Amina",
+      "last_name": "Namutebi",
+      "age": 8,
+      "gender": "female",
+      "needs": "Needs ongoing physiotherapy and specialised mobility aids.",
+      "story": "Amina joined Home of Hope at age 5 and is thriving with therapy and inclusive education support.",
+      "sponsored": false,
+      "location": "Jinja, Uganda"
+    },
+    {
+      "first_name": "Brian",
+      "last_name": "Okello",
+      "age": 11,
+      "gender": "male",
+      "needs": "Requires epilepsy medication and nutritional supplements.",
+      "story": "Brian attends weekly clinics and has shown significant progress in managing seizures.",
+      "sponsored": true,
+      "location": "Jinja, Uganda"
+    },
+    {
+      "first_name": "Beatrice",
+      "last_name": "",
+      "age": 0,
+      "gender": "",
+      "needs": "",
+      "story": "",
+      "location": "Jinja, Uganda",
+      "sponsored": false,
+      "photo_url": "assets/670_beatrice_205041.jpg",
+      "photo_source_url": "https://homeofhopeuganda.org/info_photos/670_beatrice_205041.jpg"
+    },
+    {
+      "first_name": "Junior",
+      "last_name": "",
+      "age": 0,
+      "gender": "",
+      "needs": "",
+      "story": "",
+      "location": "Jinja, Uganda",
+      "sponsored": false,
+      "photo_url": "assets/670_kid02_233531.jpg",
+      "photo_source_url": "https://homeofhopeuganda.org/info_photos/670_kid02_233531.jpg"
+    },
+    {
+      "first_name": "Patrick",
+      "last_name": "",
+      "age": 0,
+      "gender": "",
+      "needs": "",
+      "story": "",
+      "location": "Jinja, Uganda",
+      "sponsored": false,
+      "photo_url": "assets/670_kid03_233733.jpg",
+      "photo_source_url": "https://homeofhopeuganda.org/info_photos/670_kid03_233733.jpg"
+    },
+    {
+      "first_name": "Nicole",
+      "last_name": "",
+      "age": 0,
+      "gender": "",
+      "needs": "",
+      "story": "",
+      "location": "Jinja, Uganda",
+      "sponsored": false,
+      "photo_url": "assets/670_kid04_234116.jpg",
+      "photo_source_url": "https://homeofhopeuganda.org/info_photos/670_kid04_234116.jpg"
+    },
+    {
+      "first_name": "Emma",
+      "last_name": "",
+      "age": 0,
+      "gender": "",
+      "needs": "",
+      "story": "",
+      "location": "Jinja, Uganda",
+      "sponsored": false,
+      "photo_url": "assets/670_kid05_234353.jpg",
+      "photo_source_url": "https://homeofhopeuganda.org/info_photos/670_kid05_234353.jpg"
+    },
+    {
+      "first_name": "Peace",
+      "last_name": "",
+      "age": 0,
+      "gender": "",
+      "needs": "",
+      "story": "",
+      "location": "Jinja, Uganda",
+      "sponsored": false,
+      "photo_url": "assets/670_kid06_234603.jpg",
+      "photo_source_url": "https://homeofhopeuganda.org/info_photos/670_kid06_234603.jpg"
+    },
+    {
+      "first_name": "Betty",
+      "last_name": "",
+      "age": 0,
+      "gender": "",
+      "needs": "",
+      "story": "",
+      "location": "Jinja, Uganda",
+      "sponsored": false,
+      "photo_url": "assets/670_kid07_234843.jpg",
+      "photo_source_url": "https://homeofhopeuganda.org/info_photos/670_kid07_234843.jpg"
+    },
+    {
+      "first_name": "Lazia",
+      "last_name": "",
+      "age": 0,
+      "gender": "",
+      "needs": "",
+      "story": "",
+      "location": "Jinja, Uganda",
+      "sponsored": false,
+      "photo_url": "assets/670_kid08_235115.jpg",
+      "photo_source_url": "https://homeofhopeuganda.org/info_photos/670_kid08_235115.jpg"
+    },
+    {
+      "first_name": "Jackson",
+      "last_name": "",
+      "age": 0,
+      "gender": "",
+      "needs": "",
+      "story": "",
+      "location": "Jinja, Uganda",
+      "sponsored": false,
+      "photo_url": "assets/670_kid09_235318.jpg",
+      "photo_source_url": "https://homeofhopeuganda.org/info_photos/670_kid09_235318.jpg"
+    },
+    {
+      "first_name": "Timothy",
+      "last_name": "",
+      "age": 0,
+      "gender": "",
+      "needs": "",
+      "story": "",
+      "location": "Jinja, Uganda",
+      "sponsored": false,
+      "photo_url": "assets/670_kid10_235545.jpg",
+      "photo_source_url": "https://homeofhopeuganda.org/info_photos/670_kid10_235545.jpg"
+    },
+    {
+      "first_name": "Moses",
+      "last_name": "",
+      "age": 0,
+      "gender": "",
+      "needs": "",
+      "story": "",
+      "location": "Jinja, Uganda",
+      "sponsored": false,
+      "photo_url": "assets/670_kid11_235842.jpg",
+      "photo_source_url": "https://homeofhopeuganda.org/info_photos/670_kid11_235842.jpg"
+    },
+    {
+      "first_name": "Abdul",
+      "last_name": "",
+      "age": 0,
+      "gender": "",
+      "needs": "",
+      "story": "",
+      "location": "Jinja, Uganda",
+      "sponsored": false,
+      "photo_url": "assets/670_kid12_000202.jpg",
+      "photo_source_url": "https://homeofhopeuganda.org/info_photos/670_kid12_000202.jpg"
+    },
+    {
+      "first_name": "Lazarus",
+      "last_name": "",
+      "age": 0,
+      "gender": "",
+      "needs": "",
+      "story": "",
+      "location": "Jinja, Uganda",
+      "sponsored": false,
+      "photo_url": "assets/969_kid13_003827.jpg",
+      "photo_source_url": "https://homeofhopeuganda.org/info_photos/969_kid13_003827.jpg"
+    },
+    {
+      "first_name": "Lydia",
+      "last_name": "",
+      "age": 0,
+      "gender": "",
+      "needs": "",
+      "story": "",
+      "location": "Jinja, Uganda",
+      "sponsored": false,
+      "photo_url": "assets/969_kid14_004415.jpg",
+      "photo_source_url": "https://homeofhopeuganda.org/info_photos/969_kid14_004415.jpg"
+    },
+    {
+      "first_name": "Yonah",
+      "last_name": "",
+      "age": 0,
+      "gender": "",
+      "needs": "",
+      "story": "",
+      "location": "Jinja, Uganda",
+      "sponsored": false,
+      "photo_url": "assets/969_kid15_004724.jpg",
+      "photo_source_url": "https://homeofhopeuganda.org/info_photos/969_kid15_004724.jpg"
+    },
+    {
+      "first_name": "Ronald",
+      "last_name": "",
+      "age": 0,
+      "gender": "",
+      "needs": "",
+      "story": "",
+      "location": "Jinja, Uganda",
+      "sponsored": false,
+      "photo_url": "assets/969_kid16_005032.jpg",
+      "photo_source_url": "https://homeofhopeuganda.org/info_photos/969_kid16_005032.jpg"
+    },
+    {
+      "first_name": "Henry",
+      "last_name": "",
+      "age": 0,
+      "gender": "",
+      "needs": "",
+      "story": "",
+      "location": "Jinja, Uganda",
+      "sponsored": false,
+      "photo_url": "assets/969_kid17_005153.jpg",
+      "photo_source_url": "https://homeofhopeuganda.org/info_photos/969_kid17_005153.jpg"
+    },
+    {
+      "first_name": "Akram",
+      "last_name": "",
+      "age": 0,
+      "gender": "",
+      "needs": "",
+      "story": "",
+      "location": "Jinja, Uganda",
+      "sponsored": false,
+      "photo_url": "assets/969_kid18_005346.jpg",
+      "photo_source_url": "https://homeofhopeuganda.org/info_photos/969_kid18_005346.jpg"
+    },
+    {
+      "first_name": "Charity",
+      "last_name": "",
+      "age": 0,
+      "gender": "",
+      "needs": "",
+      "story": "",
+      "location": "Jinja, Uganda",
+      "sponsored": false,
+      "photo_url": "assets/969_kid19_005515.jpg",
+      "photo_source_url": "https://homeofhopeuganda.org/info_photos/969_kid19_005515.jpg"
+    },
+    {
+      "first_name": "Prossy",
+      "last_name": "",
+      "age": 0,
+      "gender": "",
+      "needs": "",
+      "story": "",
+      "location": "Jinja, Uganda",
+      "sponsored": false,
+      "photo_url": "assets/969_kid20_005709.jpg",
+      "photo_source_url": "https://homeofhopeuganda.org/info_photos/969_kid20_005709.jpg"
+    },
+    {
+      "first_name": "Catherine",
+      "last_name": "",
+      "age": 0,
+      "gender": "",
+      "needs": "",
+      "story": "",
+      "location": "Jinja, Uganda",
+      "sponsored": false,
+      "photo_url": "assets/235_IMG-20211006-WA0017_001916.jpg",
+      "photo_source_url": "https://homeofhopeuganda.org/info_photos/235_IMG-20211006-WA0017_001916.jpg"
+    },
+    {
+      "first_name": "Kato",
+      "last_name": "",
+      "age": 0,
+      "gender": "",
+      "needs": "",
+      "story": "",
+      "location": "Jinja, Uganda",
+      "sponsored": false,
+      "photo_url": "assets/235_IMG-20211006-WA0022_002305.jpg",
+      "photo_source_url": "https://homeofhopeuganda.org/info_photos/235_IMG-20211006-WA0022_002305.jpg"
+    },
+    {
+      "first_name": "Daniel",
+      "last_name": "",
+      "age": 0,
+      "gender": "",
+      "needs": "",
+      "story": "",
+      "location": "Jinja, Uganda",
+      "sponsored": false,
+      "photo_url": "assets/235_IMG-20211006-WA0062_002531.jpg",
+      "photo_source_url": "https://homeofhopeuganda.org/info_photos/235_IMG-20211006-WA0062_002531.jpg"
+    }
+  ],
+  "news": [
+    {
+      "title": "Therapy Center Welcomes New Equipment",
+      "excerpt": "New standing frames and walkers arrived this month thanks to partner donations.",
+      "body": "Home of Hope Uganda received a shipment of adaptive equipment that will dramatically improve therapy sessions.",
+      "image": "https://homeofhopeuganda.org/static/img/home-of-hope.jpg",
+      "category": "Updates"
+    }
+  ],
+  "pdfs": [
+    {
+      "filename": "home-of-hope-monthly-report.pdf",
+      "description": "Monthly report summarising therapy outcomes and outreach statistics."
+    },
+    {
+      "filename": "june_2025_202227.pdf",
+      "source_url": "https://homeofhopeuganda.org/file_uploads/june_2025_202227.pdf",
+      "description": "June 2025 Monthly Performance Report",
+      "local_path": "assets/june_2025_202227.pdf"
+    },
+    {
+      "filename": "may_2025_202102.pdf",
+      "source_url": "https://homeofhopeuganda.org/file_uploads/may_2025_202102.pdf",
+      "description": "May 2025 Monthly Performance Report",
+      "local_path": "assets/may_2025_202102.pdf"
+    },
+    {
+      "filename": "april_2025_123831.pdf",
+      "source_url": "https://homeofhopeuganda.org/file_uploads/april_2025_123831.pdf",
+      "description": "April 2025 Monthly Performance Report",
+      "local_path": "assets/april_2025_123831.pdf"
+    },
+    {
+      "filename": "feb_mar__214004.pdf",
+      "source_url": "https://homeofhopeuganda.org/file_uploads/feb_mar__214004.pdf",
+      "description": "February & March 2025 Monthly Performance Reports",
+      "local_path": "assets/feb_mar__214004.pdf"
+    },
+    {
+      "filename": "jan_2025_201404.pdf",
+      "source_url": "https://homeofhopeuganda.org/file_uploads/jan_2025_201404.pdf",
+      "description": "January 2025 Monthly Performance Report",
+      "local_path": "assets/jan_2025_201404.pdf"
+    },
+    {
+      "filename": "end_of_year_2024_report_1_104937.pdf",
+      "source_url": "https://homeofhopeuganda.org/file_uploads/end_of_year_2024_report_1_104937.pdf",
+      "description": "December 2024 End of Year Performance Report",
+      "local_path": "assets/end_of_year_2024_report_1_104937.pdf"
+    },
+    {
+      "filename": "nov_2024_report_193849.pdf",
+      "source_url": "https://homeofhopeuganda.org/file_uploads/nov_2024_report_193849.pdf",
+      "description": "November 2024 Monthly Performance Report",
+      "local_path": "assets/nov_2024_report_193849.pdf"
+    },
+    {
+      "filename": "oct_2024_report_103627.pdf",
+      "source_url": "https://homeofhopeuganda.org/file_uploads/oct_2024_report_103627.pdf",
+      "description": "October 2024 Monthly Performance Report",
+      "local_path": "assets/oct_2024_report_103627.pdf"
+    },
+    {
+      "filename": "sept__2024_report_205806.pdf",
+      "source_url": "https://homeofhopeuganda.org/file_uploads/sept__2024_report_205806.pdf",
+      "description": "September 2024 Monthly Performance Report",
+      "local_path": "assets/sept__2024_report_205806.pdf"
+    },
+    {
+      "filename": "july_2024_report_012452.pdf",
+      "source_url": "https://homeofhopeuganda.org/file_uploads/july_2024_report_012452.pdf",
+      "description": "July 2024 Monthly Performance Report",
+      "local_path": "assets/july_2024_report_012452.pdf"
+    },
+    {
+      "filename": "june_2024_012207.pdf",
+      "source_url": "https://homeofhopeuganda.org/file_uploads/june_2024_012207.pdf",
+      "description": "June 2024 Monthly Performance Report",
+      "local_path": "assets/june_2024_012207.pdf"
+    },
+    {
+      "filename": "may_2024_004629.pdf",
+      "source_url": "https://homeofhopeuganda.org/file_uploads/may_2024_004629.pdf",
+      "description": "May 2024 Monthly Performance Report",
+      "local_path": "assets/may_2024_004629.pdf"
+    }
+  ],
+  "metadata": {
+    "scraped_at": "2025-10-07T03:17:43.090662+00:00"
+  }
+}

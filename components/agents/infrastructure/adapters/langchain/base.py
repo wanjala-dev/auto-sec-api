@@ -1,0 +1,2168 @@
+"""
+Base Agent Framework
+
+Provides the foundation for all AI agents with common functionality,
+state management, and LangChain integration.
+"""
+from abc import ABC, abstractmethod
+from typing import Dict, List, Any, Optional, Union, Tuple
+from dataclasses import dataclass, field
+from datetime import datetime
+import functools
+import json
+import logging
+import os
+from importlib import import_module
+
+from langchain.agents import AgentExecutor, create_react_agent
+from langchain.tools import StructuredTool, Tool
+from langchain.tools.base import BaseTool
+from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
+from langchain.schema import BaseMessage, HumanMessage, SystemMessage
+from langchain.memory import ConversationBufferMemory
+
+try:  # pragma: no cover — LangChain >= 0.1 has this; fall back to ReAct if not.
+    from langchain.agents import create_tool_calling_agent as _create_tool_calling_agent
+except ImportError:
+    _create_tool_calling_agent = None
+
+from components.agents.application.ports.tracing_port import TracingPort, NullTracingAdapter
+from components.agents.application.ports.llm_provider_port import LLMProviderPort
+from components.agents.infrastructure.adapters.langchain.graph_agent import build_graph_executor
+from components.agents.infrastructure.adapters.langchain.memory_service import AgentMemoryService, get_agent_memory_service
+
+logger = logging.getLogger(__name__)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Agent decorator framework (ADR 0003)
+#
+# `@register_agent`, `@tool`, `@requires_role`, and the `ToolResult` dataclass
+# let new agents be authored in a single file with no edits to existing code.
+# Existing agents that override `_setup_tools` continue to work unchanged —
+# the new default `_setup_tools()` body only runs when a subclass uses the
+# decorator pattern instead.
+#
+# See `docs/adr/0003-agent-decorator-framework.md` for the full rationale.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@dataclass
+class ToolResult:
+    """Consistent return shape for `@tool`-decorated agent methods.
+
+    Tools can return any type — when they return a `ToolResult`, the
+    framework calls `.serialize()` to produce a string the LLM can read.
+    Strings, dicts, and other primitives are passed through as-is.
+    """
+
+    ok: bool = True
+    message: str = ""
+    data: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+
+    def serialize(self) -> str:
+        if not self.ok:
+            return f"Error: {self.error or self.message or 'unknown error'}"
+        if self.data is not None:
+            try:
+                return f"{self.message}\n{json.dumps(self.data, default=str)}".strip()
+            except (TypeError, ValueError):
+                return f"{self.message}\n{self.data}".strip()
+        return self.message or "OK"
+
+
+def tool(name: Optional[str] = None,
+         description: Optional[str] = None,
+         args_schema: Optional[type] = None,
+         risk: Optional[str] = None):
+    """Mark a method on a `BaseAgent` subclass as an LLM-invocable tool.
+
+    The base class's `__init_subclass__` collects every method tagged with
+    `_agent_tool_meta` at class definition time and the default
+    `_setup_tools()` promotes them to `langchain.tools.Tool` instances.
+
+    Defaults: `name` falls back to the method name, `description` falls
+    back to the method's docstring. `args_schema` is an optional Pydantic
+    model that gives the LLM a typed argument list.
+    """
+
+    def decorator(func):
+        func._agent_tool_meta = {
+            "name": name or func.__name__,
+            "description": description or (func.__doc__ or "").strip() or func.__name__,
+            "args_schema": args_schema,
+            # SEE-203 — risk tier (None normalizes to "read" at the gate).
+            "risk": risk,
+        }
+        return func
+
+    return decorator
+
+
+# ── LLM-friendly tool input adapter (PR-I bug A fix, 2026-05-09) ────────
+#
+# Every legacy tool method on the agents follows this shape:
+#
+#     @tool(...)
+#     def list_sponsors(self, input_str: str) -> str:
+#         data = _coerce_payload(input_str)  # accepts dict, JSON, or text
+#         ...
+#
+# That means each tool's *body* already accepts arbitrary structured
+# input — but ``StructuredTool.from_function`` infers a strict pydantic
+# schema (``{input_str: str}``) from the method signature. When the
+# planner LLM reads the docstring's "Optional input as JSON: {active:
+# bool, ...}" hint and helpfully passes ``{"active": True}`` directly,
+# pydantic rejects with "input_str: Field required" and the tool never
+# runs — it surfaces in chat as a generic "validation error" the LLM
+# can't recover from.
+#
+# Fix: a permissive args_schema that accepts ``input_str`` AND any extra
+# kwargs (``extra="allow"``). The wrapper folds extras into a JSON
+# string, then calls the original tool with that single string. The
+# tool body's existing ``_coerce_payload`` parses it back to a dict —
+# the same shape the body always expected.
+#
+# This sits in the framework so all 16+ legacy ``input_str: str`` tools
+# inherit the fix in one place. Tools with explicit ``args_schema``
+# (typed Pydantic models) are not adapted — they already advertise their
+# real shape to the LLM.
+try:
+    from pydantic import BaseModel as _PdModel, ConfigDict as _PdConfigDict
+except ImportError:  # pragma: no cover — pydantic v1 fallback
+    from pydantic.v1 import BaseModel as _PdModel  # type: ignore
+
+    _PdConfigDict = None
+
+
+class LegacyStringToolInput(_PdModel):
+    """Permissive args schema for legacy single-string tools."""
+
+    input_str: str = ""
+
+    if _PdConfigDict is not None:
+        model_config = _PdConfigDict(extra="allow")
+    else:  # pragma: no cover — pydantic v1
+        class Config:  # type: ignore[no-redef]
+            extra = "allow"
+
+
+def _adapt_legacy_tool(bound):
+    """Wrap a legacy single-positional-string tool method so it accepts
+    arbitrary kwargs from a tool-calling LLM."""
+
+    @functools.wraps(bound)
+    def adapter(input_str: str = "", **extras):
+        if extras:
+            # LLM passed structured kwargs. JSON-encode them so the tool
+            # body's ``_coerce_payload`` can parse back to a dict. If
+            # ``input_str`` was *also* supplied, prefer the structured
+            # kwargs — they're the explicit data.
+            payload = json.dumps(extras)
+        else:
+            payload = input_str or ""
+        return bound(payload)
+
+    return adapter
+
+
+def register_agent(name: str, aliases: Tuple[str, ...] = ()):
+    """Register an agent class in the `AgentRegistry` at class definition time.
+
+    Replaces the manual `AgentRegistry.register("name", BlogAgent)` block at
+    the bottom of `base.py`. Each name + alias is registered idempotently;
+    re-registering the same name with a different class logs a WARNING so
+    accidental shadowing is diagnosable.
+    """
+
+    def decorator(cls):
+        # Pin the canonical slug on the class so a lookup by alias can
+        # resolve back to the registered name. The chat-header display
+        # reads this (via ``AgentRegistry.canonical_name_for``) so the
+        # surface always shows ``writing_agent`` rather than whichever
+        # alias the planner picked (``letter_agent`` etc.).
+        cls._canonical_agent_name = name
+        all_names = (name,) + tuple(aliases)
+        for entry in all_names:
+            existing = AgentRegistry._agents.get(entry)
+            if existing is not None and existing is not cls:
+                logger.warning(
+                    "Overwriting agent registration: %s was %s, now %s",
+                    entry,
+                    existing.__name__,
+                    cls.__name__,
+                )
+            AgentRegistry.register(entry, cls)
+        return cls
+
+    return decorator
+
+
+def requires_role(*allowed_roles: str):
+    """Restrict a `@tool`-decorated method to actors with a matching
+    `WorkspaceMembership.role` for the agent's workspace.
+
+    Owners always pass even without an explicit membership row. Staff /
+    superusers also pass for support workflows. Everyone else gets a
+    refusal string the LLM surfaces gracefully.
+
+    Permission decisions read `role` only — never persona. See ADR 0002.
+    """
+
+    allowed = set(allowed_roles)
+
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(self, *args, **kwargs):
+            from infrastructure.persistence.workspaces.models import (
+                Workspace,
+                WorkspaceMembership,
+            )
+
+            user_id = getattr(self, "user_id", None)
+            workspace_id = getattr(self, "workspace_id", None)
+            if not user_id or not workspace_id:
+                return "You don't have permission to perform this action."
+
+            try:
+                # SEE-201 — the autonomous AI service principal never
+                # self-executes a permission-gated action; it surfaces a
+                # finding for a human instead. Checked before the owner /
+                # membership resolution so the cap holds even if the AI user
+                # is later granted a membership row.
+                if is_ai_service_principal(user_id, workspace_id):
+                    return (
+                        "Autonomous AI runs cannot perform this action "
+                        "directly. Surface it as a finding for a workspace "
+                        "admin to review."
+                    )
+                if Workspace.objects.filter(
+                    id=workspace_id, workspace_owner_id=user_id
+                ).exists():
+                    return func(self, *args, **kwargs)
+                has_role = WorkspaceMembership.objects.filter(
+                    workspace_id=workspace_id,
+                    user_id=user_id,
+                    status=WorkspaceMembership.Status.ACTIVE,
+                    role__in=allowed,
+                ).exists()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "requires_role check failed for %s: %s",
+                    func.__name__,
+                    exc,
+                )
+                return "You don't have permission to perform this action."
+
+            if not has_role:
+                return "You don't have permission to perform this action."
+            return func(self, *args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
+def resolve_workspace_role(user_id, workspace_id):
+    """Return the effective ``WorkspaceMembership`` role of *user* in *workspace*.
+
+    Mirrors the resolution ``requires_role`` uses (ADR 0002 — role, never
+    persona): the workspace owner resolves to ``"owner"`` even without a
+    membership row; otherwise the active membership's role; ``None`` when the
+    actor has no active membership. Callers pass this to a retrieval port as
+    ``viewer_role`` so results are scoped to the tiers the actor may read
+    (SEE-199). ``None`` is least-privilege — a caller that can't resolve a role
+    gets GENERAL-only retrieval, never restricted facts.
+    """
+    if not user_id or not workspace_id:
+        return None
+    from infrastructure.persistence.workspaces.models import (
+        Workspace,
+        WorkspaceMembership,
+    )
+
+    try:
+        # SEE-201 — the autonomous AI service principal is a trusted internal
+        # reader (the detector needs restricted facts to surface findings), so
+        # it reads every tier. Its write/action cap lives in ``requires_role``.
+        if is_ai_service_principal(user_id, workspace_id):
+            return "ai_service"
+        if Workspace.objects.filter(
+            id=workspace_id, workspace_owner_id=user_id
+        ).exists():
+            return "owner"
+        return (
+            WorkspaceMembership.objects.filter(
+                workspace_id=workspace_id,
+                user_id=user_id,
+                status=WorkspaceMembership.Status.ACTIVE,
+            )
+            .values_list("role", flat=True)
+            .first()
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "resolve_workspace_role failed user_id=%s workspace_id=%s: %s",
+            user_id,
+            workspace_id,
+            exc,
+        )
+        return None
+
+
+def is_ai_service_principal(user_id, workspace_id) -> bool:
+    """True when *user_id* is the workspace's autonomous AI service user.
+
+    The AI teammate user (``AITeammateProfile.user``) runs the scheduled
+    detector. It is a trusted internal *reader* but must never self-execute a
+    permission-gated action — it surfaces findings for a human instead
+    (SEE-201). Identity is the profile's user, independent of any
+    ``WorkspaceMembership``, so the write cap holds even if the AI is later
+    granted a membership row.
+    """
+    if not user_id or not workspace_id:
+        return False
+    from infrastructure.persistence.ai.models import AITeammateProfile
+
+    try:
+        return AITeammateProfile.objects.filter(
+            workspace_id=workspace_id, user_id=user_id
+        ).exists()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "is_ai_service_principal check failed user_id=%s workspace_id=%s: %s",
+            user_id,
+            workspace_id,
+            exc,
+        )
+        return False
+
+
+def _risk_gated(func, tool_name, explicit_risk, agent):
+    """Wrap a promoted tool so its risk tier is enforced per call (SEE-203).
+
+    An autonomous run is denied ``irreversible`` tools; an ``irreversible`` tool
+    is denied to any caller until this run carries ``approval_granted``. Both
+    return a refusal string the LLM surfaces gracefully — the tool body never
+    runs. Reversible/read tools pass straight through.
+    """
+    from components.agents.application.policies.tool_risk import (
+        resolve_tool_risk,
+        tool_risk_refusal,
+    )
+
+    resolved_risk = resolve_tool_risk(tool_name, explicit_risk)
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            is_autonomous = is_ai_service_principal(
+                getattr(agent, "user_id", None), getattr(agent, "workspace_id", None)
+            )
+            approval_granted = bool(
+                (getattr(agent, "config", None) or {}).get("approval_granted")
+            )
+        except Exception:  # noqa: BLE001
+            is_autonomous, approval_granted = False, False
+        refusal = tool_risk_refusal(
+            resolved_risk, is_autonomous=is_autonomous, approval_granted=approval_granted
+        )
+        if refusal is not None:
+            return refusal
+        return func(*args, **kwargs)
+
+    return wrapper
+
+
+# Status string constants (avoids importing the AgentExecution ORM model).
+EXECUTION_STATUS_COMPLETED = "completed"
+EXECUTION_STATUS_FAILED = "failed"
+
+_retry_candidates: List[type[BaseException]] = []
+
+# Lazy singleton for the default tracing adapter.
+_default_tracing: Optional[TracingPort] = None
+
+
+def _default_tracing_port() -> TracingPort:
+    """
+    Resolve the default TracingPort.
+
+    Tries to load the Langfuse adapter; falls back to the null adapter
+    so agent creation never fails due to a missing tracing backend.
+    """
+    global _default_tracing
+    if _default_tracing is None:
+        try:
+            from components.agents.infrastructure.adapters.tracing.langfuse import (
+                LangfuseTracingAdapter,
+            )
+            adapter = LangfuseTracingAdapter()
+            _default_tracing = adapter if adapter.is_available() else NullTracingAdapter()
+        except Exception:
+            logger.debug("Langfuse adapter unavailable, using NullTracingAdapter")
+            _default_tracing = NullTracingAdapter()
+    return _default_tracing
+
+try:  # pragma: no cover - optional dependency
+    from requests.exceptions import ChunkedEncodingError, ConnectionError as RequestsConnectionError, Timeout as RequestsTimeout
+except Exception:  # pragma: no cover - requests may be absent in some environments
+    ChunkedEncodingError = RequestsConnectionError = RequestsTimeout = None
+else:
+    _retry_candidates.extend([ChunkedEncodingError, RequestsConnectionError, RequestsTimeout])
+
+try:  # pragma: no cover - optional dependency
+    from urllib3.exceptions import ProtocolError
+except Exception:  # pragma: no cover
+    ProtocolError = None
+else:
+    _retry_candidates.append(ProtocolError)
+
+try:  # pragma: no cover - OpenAI package variants
+    from openai import error as openai_error  # type: ignore
+except Exception:  # pragma: no cover - OpenAI may not be installed locally
+    openai_error = None
+else:
+    for attr in (
+        "APIConnectionError",
+        "APITimeoutError",
+        "ServiceUnavailableError",
+        "RateLimitError",
+    ):
+        candidate = getattr(openai_error, attr, None)
+        if candidate:
+            _retry_candidates.append(candidate)
+
+RETRYABLE_AGENT_EXCEPTIONS: Tuple[type[BaseException], ...] = tuple(
+    {candidate for candidate in _retry_candidates if candidate}
+)
+
+
+@dataclass
+class AgentState:
+    """Represents the current state of an agent"""
+    agent_id: str
+    user_id: str
+    workspace_id: str
+    current_step: int = 0
+    total_steps: int = 0
+    context: Dict[str, Any] = field(default_factory=dict)
+    results: List[Dict[str, Any]] = field(default_factory=list)
+    errors: List[str] = field(default_factory=list)
+    created_at: datetime = field(default_factory=datetime.now)
+    updated_at: datetime = field(default_factory=datetime.now)
+    status: str = "initialized"  # initialized, running, completed, failed, paused
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert state to dictionary for serialization"""
+        return {
+            'agent_id': self.agent_id,
+            'user_id': self.user_id,
+            'workspace_id': self.workspace_id,
+            'current_step': self.current_step,
+            'total_steps': self.total_steps,
+            'context': self.context,
+            'results': self.results,
+            'errors': self.errors,
+            'created_at': self.created_at.isoformat(),
+            'updated_at': self.updated_at.isoformat(),
+            'status': self.status
+        }
+
+
+class BaseAgent(ABC):
+    """
+    Base class for all AI agents
+
+    Provides common functionality for:
+    - State management
+    - Tool integration
+    - Error handling
+    - Progress tracking
+    """
+
+    # Optional class-level profile (ADR 0003). Subclasses set this to
+    # advertise name / summary / capabilities / sample_prompts. The DB
+    # row's `config["profile"]` overrides any field set here per workspace.
+    profile: Dict[str, Any] = {}
+
+    # Populated by `__init_subclass__`. List of (method_name, meta) for
+    # every `@tool`-decorated method on the class (including those
+    # inherited from mixins via MRO). The default `_setup_tools()`
+    # promotes these to `langchain.tools.Tool` instances at __init__ time.
+    _decorated_tools: List[Tuple[str, Dict[str, Any]]] = []
+
+    def __init_subclass__(cls, **kwargs):
+        """Walk the new subclass's MRO and collect every `@tool`-decorated
+        method into `cls._decorated_tools`. De-dupes by tool name with
+        leftmost-MRO-wins so subclasses can override an inherited tool by
+        re-declaring a method with the same `@tool(name=...)`.
+        """
+        super().__init_subclass__(**kwargs)
+
+        seen_names: Dict[str, str] = {}  # tool name -> defining class name
+        collected: List[Tuple[str, Dict[str, Any]]] = []
+
+        for klass in cls.__mro__:
+            if klass in (object, BaseAgent):
+                continue
+            for attr_name, attr_value in vars(klass).items():
+                meta = getattr(attr_value, "_agent_tool_meta", None)
+                if not meta:
+                    continue
+                tool_name = meta.get("name") or attr_name
+                if tool_name in seen_names:
+                    logger.debug(
+                        "Tool '%s' on %s shadowed by earlier definition in %s",
+                        tool_name,
+                        klass.__name__,
+                        seen_names[tool_name],
+                    )
+                    continue
+                seen_names[tool_name] = klass.__name__
+                collected.append((attr_name, meta))
+
+        cls._decorated_tools = collected
+
+    def __init__(
+        self,
+        agent_id: str,
+        user_id: str,
+        workspace_id: str,
+        *,
+        tracing_port: Optional[TracingPort] = None,
+        llm_provider: Optional[LLMProviderPort] = None,
+        telemetry_callback_factory: Optional[Any] = None,
+        **kwargs,
+    ):
+        self.agent_id = agent_id
+        self.user_id = user_id
+        self.workspace_id = workspace_id
+        self._override_conversation_id: Optional[str] = None
+        self._tracing_port: TracingPort = tracing_port or _default_tracing_port()
+        self._llm_provider: Optional[LLMProviderPort] = llm_provider
+        self._telemetry_callback_factory = telemetry_callback_factory
+
+        # Persist incoming configuration for downstream use
+        self.config: Dict[str, Any] = dict(kwargs)
+        self.department_id: Optional[str] = self.config.get("department_id")
+
+        # Initialize memory service
+        self.memory_service = get_agent_memory_service(agent_id)
+
+        self.state = AgentState(
+            agent_id=agent_id,
+            user_id=user_id,
+            workspace_id=workspace_id
+        )
+        self.tools: List[BaseTool] = []
+        self._all_tools: List[BaseTool] = []
+
+        # Per-execution artifact collector. Tools that produce a
+        # downloadable result (PDF report, generated file) call
+        # ``self.collect_artifact({...})`` before returning their
+        # response string. ``execute()`` clears this at the start of
+        # each call and harvests it after the LLM finishes, so the
+        # artifacts ride out on the assistant ``ConversationMessage``'s
+        # ``metadata['artifacts']`` field. Frontend bubble reads that
+        # to render a paperclip download icon.
+        self._pending_artifacts: List[Dict[str, Any]] = []
+
+        # Use memory service instead of basic ConversationBufferMemory
+        self.memory = self.memory_service.get_memory(
+            memory_type=self.config.get('memory_type', 'window'),
+            window_size=self.config.get('window_size', 10)
+        )
+
+        self.telemetry_handler: Optional[Any] = None
+
+        self.agent_executor: Optional[AgentExecutor] = None
+        self.graph_executor: Optional[Any] = None  # LangGraph StateGraph (opt-in)
+        self._use_langgraph: bool = bool(self.config.get("use_langgraph", False))
+        self._setup_agent(**kwargs)
+    
+    def _resolve_llm_provider(self) -> LLMProviderPort:
+        """Lazily resolve the LLM provider, falling back to the default adapter."""
+        if self._llm_provider is None:
+            from components.agents.infrastructure.adapters.llm_provider_adapter import LLMFactoryAdapter
+            self._llm_provider = LLMFactoryAdapter()
+        return self._llm_provider
+
+    def collect_artifact(self, artifact: Dict[str, Any]) -> None:
+        """Stash a downloadable artifact produced by a tool this turn.
+
+        Tools that kick off PDF generation (financial / sponsorship /
+        donation reports) call this with a dict the chat bubble can
+        render as a paperclip download. ``execute()`` clears the
+        collector at the start of each turn and forwards whatever was
+        gathered into the assistant ``ConversationMessage``'s metadata
+        before persisting.
+
+        Expected dict shape (frontend contract):
+        ``{kind: str, id: str, title: str, download_url: str,
+        mime_type: str, status: str}``. ``status`` is typically
+        ``"rendering"`` because PDF render runs async in Celery; the
+        download endpoint itself returns 202 + retry-after if the file
+        isn't ready yet. The frontend handles polling.
+
+        Silently ignored if ``artifact`` isn't a dict — tools should
+        not crash the response just because the collector got malformed
+        input.
+        """
+        if isinstance(artifact, dict):
+            self._pending_artifacts.append(dict(artifact))
+
+    def _setup_agent(self, **kwargs):
+        """Setup the agent with tools and executor"""
+        # Initialize LLM via the injected port (no direct LLMFactory import)
+        llm_port = self._resolve_llm_provider()
+        self.llm = llm_port.get_llm(
+            provider_slug=self.config.get('provider', 'openai'),
+            model_name=self.config.get('model_name', 'gpt-4o-mini'),
+            temperature=self.config.get('temperature', 0.1),  # Lower temperature for agents
+        )
+        
+        # Setup tools
+        self._setup_tools()
+        self._all_tools = list(self.tools)
+
+        # Create agent executor (legacy ReAct or modern LangGraph)
+        self._create_agent_executor()
+
+        # Optionally build LangGraph executor as an alternative
+        if self._use_langgraph:
+            self._build_graph_executor()
+    
+    def _setup_tools(self):
+        """Setup agent-specific tools.
+
+        Default behavior (ADR 0003): if the subclass declared any
+        `@tool`-decorated methods, promote them to `langchain.tools.Tool`
+        instances and assign to `self.tools`. Subclasses that need
+        runtime-built tools (e.g. `DynamicAgent`) override this method
+        and the override wins.
+
+        Every agent — regardless of how it assembles its tools — gets a
+        universal ``retrieve_workspace_context`` tool appended so grounded
+        answers about the active workspace are always one call away.
+
+        If `self.tools` is already populated by the time we get here
+        (e.g. a subclass set it in `__init__` before calling super), we
+        leave the agent-specific tools alone and only append the
+        retrieval tool.
+        """
+        if not self.tools and getattr(type(self), "_decorated_tools", None):
+            promoted = []
+            for method_name, meta in type(self)._decorated_tools:
+                bound = getattr(self, method_name, None)
+                if not callable(bound):
+                    continue
+                # Build a StructuredTool — the tool-calling agent path
+                # needs typed schemas to dispatch arguments correctly.
+                # ``StructuredTool.from_function`` infers the schema from
+                # the bound method's signature (e.g. ``input_str: str``),
+                # producing a single-field pydantic model the LLM's
+                # function-calling API can populate. An explicit
+                # ``args_schema`` from ``@tool(...)`` overrides inference.
+                #
+                # Legacy single-string tools (the vast majority — 16+
+                # across the agents whose method signature is
+                # ``def foo(self, input_str: str)``) get adapted via
+                # ``_adapt_legacy_tool`` + the permissive
+                # ``LegacyStringToolInput`` schema. This lets the LLM
+                # pass either ``{input_str: "..."}`` or arbitrary
+                # kwargs like ``{active: true}``. Without this,
+                # pydantic rejects kwargs with "input_str: Field
+                # required" and chat surfaces a generic "validation
+                # error" the LLM can't recover from. Tools that
+                # supplied an explicit ``args_schema`` use the bound
+                # function as-is — they advertise their real shape.
+                explicit_schema = meta.get("args_schema")
+                if explicit_schema is not None:
+                    func_to_register = bound
+                    schema_to_register = explicit_schema
+                else:
+                    func_to_register = _adapt_legacy_tool(bound)
+                    schema_to_register = LegacyStringToolInput
+                func_to_register = _risk_gated(
+                    func_to_register,
+                    meta.get("name") or method_name,
+                    meta.get("risk"),
+                    self,
+                )
+                promoted.append(
+                    StructuredTool.from_function(
+                        func=func_to_register,
+                        name=meta.get("name") or method_name,
+                        description=meta.get("description") or method_name,
+                        args_schema=schema_to_register,
+                    )
+                )
+            self.tools = promoted
+
+        # Universal RAG tool — every agent can ground answers in the
+        # indexed workspace snapshot.  Subclasses that declare a tool
+        # with the same name win (leftmost-MRO-wins is enforced by the
+        # decorator collector).
+        if not any(
+            getattr(t, "name", None) == "retrieve_workspace_context"
+            for t in self.tools
+        ):
+            self.tools.append(self._build_workspace_retrieval_tool())
+
+    def _build_workspace_retrieval_tool(self) -> Tool:
+        """Return the ``retrieve_workspace_context`` tool bound to this agent."""
+
+        TOOL_NAME = "retrieve_workspace_context"
+
+        def _retrieve(query: str) -> str:
+            from components.agents.application.services.deep_run_context import (
+                noop_context,
+            )
+            from components.knowledge.application.providers.workspace_retrieval_provider import (
+                workspace_retrieval,
+            )
+
+            # When this tool runs inside a deep agent run, ``self`` has
+            # the run's DeepRunContext stashed; outside a run it's
+            # None. Falling back to the no-op context means tool code
+            # below is uniform — every emit goes somewhere.
+            ctx = (
+                getattr(self, "_active_deep_run_context", None)
+                or noop_context()
+            )
+
+            query_text = (query or "").strip()
+            if not query_text:
+                return (
+                    "retrieve_workspace_context requires a non-empty query — "
+                    "pass a short natural-language description of what you need."
+                )
+            ctx.info(
+                f"Searching workspace knowledge for: {query_text!r}",
+                tool_name=TOOL_NAME,
+            )
+            ctx.report_progress(20, 100, tool_name=TOOL_NAME)
+            # Tier 3 #9 — rewrite the query before search.  Short
+            # queries like "tldr" land closer to the snapshot chunks
+            # when expanded into mission / activity keywords.  The
+            # rewriter caches per (workspace_id, query) and falls
+            # back to the raw query on any error.
+            try:
+                from components.knowledge.application.use_cases.rewrite_query_for_retrieval_use_case import (
+                    RewriteQueryForRetrievalUseCase,
+                )
+
+                search_query = RewriteQueryForRetrievalUseCase().rewrite(
+                    workspace_id=str(self.workspace_id),
+                    query=query_text,
+                )
+            except Exception:  # pylint: disable=broad-except
+                logger.warning(
+                    "retrieve_workspace_context: rewriter failed, "
+                    "using raw query",
+                    exc_info=True,
+                )
+                search_query = query_text
+            # Tier 3 #10 — over-fetch then rerank.  Ask pgvector for
+            # k * 4 candidates under cosine, then a cross-encoder
+            # reranker re-scores them against the original query_text
+            # (not the rewritten one) and returns the best k.
+            # Reranker errors fall back to original cosine order
+            # truncated to k.
+            try:
+                from components.knowledge.application.use_cases.rerank_retrieved_chunks_use_case import (
+                    DEFAULT_FETCH_MULTIPLIER,
+                    RerankRetrievedChunksUseCase,
+                )
+
+                candidates = workspace_retrieval().search(
+                    workspace_id=str(self.workspace_id),
+                    query=search_query,
+                    k=5 * DEFAULT_FETCH_MULTIPLIER,
+                    # SEE-199 — scope retrieval to what the invoking actor's
+                    # role may read, so a member can't pull owner/admin-only
+                    # rollups through the agent's broad retrieval.
+                    viewer_role=resolve_workspace_role(
+                        getattr(self, "user_id", None),
+                        self.workspace_id,
+                    ),
+                )
+                chunks = RerankRetrievedChunksUseCase().rerank(
+                    query=query_text,
+                    chunks=candidates,
+                    top_k=5,
+                )
+            except Exception:
+                logger.exception(
+                    "retrieve_workspace_context failed for workspace %s",
+                    self.workspace_id,
+                )
+                ctx.warn(
+                    "Retrieval backend unavailable — answering without indexed context.",
+                    tool_name=TOOL_NAME,
+                )
+                return (
+                    "retrieve_workspace_context: retrieval backend "
+                    "unavailable — answer from other tools or say you "
+                    "don't know."
+                )
+
+            if not chunks:
+                ctx.warn(
+                    "No indexed context for this workspace yet.",
+                    tool_name=TOOL_NAME,
+                )
+                ctx.report_progress(100, 100, tool_name=TOOL_NAME)
+                return (
+                    "retrieve_workspace_context: no indexed context for "
+                    "this workspace yet. Answer from other tools or say "
+                    "you don't have that information."
+                )
+
+            total_chars = sum(len((chunk.content or "").strip()) for chunk in chunks)
+            ctx.info(
+                f"Retrieved {len(chunks)} chunks ({total_chars:,} characters)",
+                tool_name=TOOL_NAME,
+                payload={"chunks": len(chunks), "characters": total_chars},
+            )
+            ctx.report_progress(100, 100, tool_name=TOOL_NAME)
+
+            lines: List[str] = []
+            for index, chunk in enumerate(chunks, 1):
+                metadata = chunk.metadata or {}
+                section_title = (
+                    metadata.get("section_title")
+                    or metadata.get("section")
+                    or "workspace"
+                )
+                lines.append(f"[{index}] ({section_title})\n{chunk.content.strip()}")
+            return "\n\n".join(lines)
+
+        return StructuredTool.from_function(
+            func=_retrieve,
+            name="retrieve_workspace_context",
+            description=(
+                "Retrieve authoritative facts about the current workspace "
+                "(name, mission, story, sector, categories, team size, "
+                "operations, etc.) by semantic search over its indexed "
+                "snapshot. Input: a short natural-language query like "
+                "'mission and story' or 'team size'. Output: ranked "
+                "snippets from the workspace, or an explicit 'no indexed "
+                "context' message. ALWAYS call this before answering any "
+                "factual question about the workspace — do not guess."
+            ),
+        )
+    
+    def _create_agent_executor(self):
+        """Create the LangChain agent executor.
+
+        Prefers the **tool-calling agent** (``create_tool_calling_agent``)
+        which uses the LLM's native JSON function-calling API — no
+        ReAct ``Thought/Action/Observation`` scaffolding, no prose-vs-
+        format parse failures, no iteration burn from parse retries.
+
+        Falls back to the legacy ReAct agent when:
+          - ``use_react_agent=True`` is set in config (explicit opt-out)
+          - the installed LangChain is too old to expose
+            ``create_tool_calling_agent``
+          - building the tool-calling agent raises (typically because
+            the bound LLM doesn't advertise function-calling)
+        """
+        if not self.tools:
+            raise ValueError("No tools defined for agent")
+
+        force_react = bool(self.config.get("use_react_agent", False))
+        agent = None
+
+        if not force_react and _create_tool_calling_agent is not None:
+            try:
+                agent = _create_tool_calling_agent(
+                    llm=self.llm,
+                    tools=self.tools,
+                    prompt=self._create_chat_prompt_template(),
+                )
+                self._agent_impl = "tool_calling"
+            except Exception:
+                logger.warning(
+                    "Tool-calling agent construction failed for agent %s; "
+                    "falling back to ReAct",
+                    self.agent_id,
+                    exc_info=True,
+                )
+                agent = None
+
+        if agent is None:
+            agent = create_react_agent(
+                llm=self.llm,
+                tools=self.tools,
+                prompt=self._create_prompt_template(),
+            )
+            self._agent_impl = "react"
+
+        callbacks = []
+        try:
+            if self._telemetry_callback_factory is not None:
+                self.telemetry_handler = self._telemetry_callback_factory(agent_id=self.agent_id)
+            else:
+                # Lazy fallback — import only when no factory was injected
+                from components.agents.infrastructure.adapters.langchain.callbacks.telemetry import TelemetryCallback
+                self.telemetry_handler = TelemetryCallback(agent_id=self.agent_id)
+            callbacks.append(self.telemetry_handler)
+        except Exception:
+            logger.exception("Failed to initialise telemetry callback for agent %s", self.agent_id)
+            self.telemetry_handler = None
+        
+        # Add tracing callback via port (vendor-agnostic)
+        try:
+            session_id = None
+            try:
+                session_id = self.memory_service.get_conversation_id()
+            except Exception:
+                logger.debug("Could not resolve conversation_id for tracing session")
+
+            tracing_callback = self._tracing_port.get_langchain_callback(
+                agent_id=self.agent_id,
+                user_id=str(self.user_id),
+                session_id=session_id,
+            )
+            if tracing_callback is not None:
+                callbacks.append(tracing_callback)
+                # Also attach to the LLM if it supports callbacks
+                if hasattr(self.llm, "callbacks"):
+                    if self.llm.callbacks is None:
+                        self.llm.callbacks = [tracing_callback]
+                    elif tracing_callback not in self.llm.callbacks:
+                        self.llm.callbacks.append(tracing_callback)
+                logger.info(
+                    "Tracing callback attached for agent %s (session_id=%s)",
+                    self.agent_id,
+                    session_id,
+                )
+        except Exception:
+            logger.exception("Failed to attach tracing callback for agent %s", self.agent_id)
+
+        # Create executor with explicit runtime guardrails.
+        try:
+            configured_max_iterations = int(self.config.get('max_iterations', 25))
+        except (TypeError, ValueError):
+            configured_max_iterations = 25
+        try:
+            # Bumped 12 → 20 → 40. Each parse-error recovery in
+            # ``handle_parsing_errors=True`` mode costs an iteration,
+            # and chat-style workers often emit prose answers that the
+            # ReAct parser rejects a few times before settling into
+            # "Final Answer:" format. 40 is comfortably above the tail
+            # of parse-retry cost for simple workspace queries.
+            max_tool_calls = int(self.config.get('max_tool_calls', 40))
+        except (TypeError, ValueError):
+            max_tool_calls = 40
+        try:
+            # Bumped 45 → 90. LLM calls during parse-retry add up,
+            # and a legitimate chat run with 2-3 tool calls can easily
+            # take 30-40s; 45s was too tight.
+            max_execution_time_seconds = int(self.config.get('max_execution_time_seconds', 90))
+        except (TypeError, ValueError):
+            max_execution_time_seconds = 90
+
+        configured_max_iterations = max(configured_max_iterations, 1)
+        max_tool_calls = max(max_tool_calls, 1)
+        max_execution_time_seconds = max(max_execution_time_seconds, 5)
+        effective_max_iterations = min(configured_max_iterations, max_tool_calls)
+
+        self.agent_executor = AgentExecutor(
+            agent=agent,
+            tools=self.tools,
+            memory=self.memory,
+            verbose=bool(self.config.get("verbose", os.getenv("AGENT_VERBOSE", ""))),
+            handle_parsing_errors=True,
+            max_iterations=effective_max_iterations,
+            max_execution_time=max_execution_time_seconds,
+            # langchain 0.3.x only validates "force" here. "generate"
+            # used to work in older versions — it's unsupported now.
+            # We mitigate force's canned-message output by recovering
+            # the last intermediate observation downstream in the
+            # worker (see build_worker_from_agent).
+            early_stopping_method="force",
+            return_intermediate_steps=True,
+            callbacks=callbacks or None,
+        )
+        # Belt-and-suspenders: hard-set after construction. Some langchain
+        # versions silently revert this kwarg to "generate" via Pydantic
+        # validators, which then crashes with `Got unsupported early_stopping_method 'generate'`
+        # because the underlying RunnableMultiActionAgent only accepts "force".
+        try:
+            self.agent_executor.early_stopping_method = "force"
+        except Exception:
+            pass
+
+        # Patch the action agent's return_stopped_response to be permissive.
+        # If anything ever passes "generate" (which the underlying class
+        # rejects), fall back to the "force" behaviour instead of crashing.
+        try:
+            action_agent = self.agent_executor._action_agent  # type: ignore[attr-defined]
+            if action_agent is not None and not getattr(
+                action_agent, "_return_stopped_patched", False
+            ):
+                from langchain_core.agents import AgentFinish
+
+                def _safe_return_stopped(
+                    early_stopping_method,
+                    intermediate_steps,
+                    **kwargs,
+                ):
+                    return AgentFinish(
+                        {
+                            "output": (
+                                "Agent stopped due to iteration or time limit "
+                                "before reaching a final answer."
+                            )
+                        },
+                        "",
+                    )
+
+                action_agent.return_stopped_response = _safe_return_stopped  # type: ignore[assignment]
+                action_agent._return_stopped_patched = True  # type: ignore[attr-defined]
+        except Exception:
+            logger.debug("Could not patch return_stopped_response on action agent", exc_info=True)
+        
+        # PATCH: Ensure memory always uses correct conversation_id
+        self._patch_memory_conversation_id()
+        
+        # CRITICAL FIX: Override LangChain's memory save_context to prevent random conversation IDs
+        self._patch_langchain_memory()
+    
+    def _patch_memory_conversation_id(self):
+        """Patch LangChain's memory to ensure it uses our conversation_id"""
+        # Get the correct conversation ID from our memory service
+        correct_conversation_id = self.memory_service.get_conversation_id()
+        
+        # Ensure our SqlMessageHistory has the correct conversation_id
+        if hasattr(self.memory, 'chat_memory') and hasattr(self.memory.chat_memory, 'conversation_id'):
+            current_id = self.memory.chat_memory.conversation_id
+            if current_id != correct_conversation_id:
+                logger.warning(f"Patching conversation_id from {current_id} to {correct_conversation_id}")
+                self.memory.chat_memory.conversation_id = correct_conversation_id
+        
+        # Also patch the AgentExecutor's memory reference
+        if hasattr(self.agent_executor, 'memory') and hasattr(self.agent_executor.memory, 'chat_memory'):
+            if hasattr(self.agent_executor.memory.chat_memory, 'conversation_id'):
+                current_id = self.agent_executor.memory.chat_memory.conversation_id
+                if current_id != correct_conversation_id:
+                    logger.warning(f"Patching agent_executor memory conversation_id from {current_id} to {correct_conversation_id}")
+                    self.agent_executor.memory.chat_memory.conversation_id = correct_conversation_id
+    
+    def _patch_langchain_memory(self):
+        """PATCH: Override LangChain's memory.save_context to force correct conversation_id"""
+        def _resolve_conversation_id() -> str:
+            return self._override_conversation_id or self.memory_service.get_conversation_id()
+        
+        # If memory has no save_context attribute (e.g., pydantic-protected), skip patching safely
+        if not hasattr(self.memory, 'save_context'):
+            logger.warning('Memory has no save_context attribute; skipping patch')
+            return
+        
+        # Store the original save_context method (may be descriptor)
+        original_save_context = getattr(self.memory, 'save_context')
+        
+        def patched_save_context(inputs, outputs):
+            """Patched save_context that ensures correct conversation_id is used"""
+            logger.info(f"AgentMemoryService._patch_langchain_memory: Intercepting save_context call")
+            
+            # Ensure conversation exists before LangChain tries to save
+            correct_conversation_id = _resolve_conversation_id()
+            
+            # Force the correct conversation_id
+            if hasattr(self.memory, 'chat_memory') and hasattr(self.memory.chat_memory, 'conversation_id'):
+                current_id = self.memory.chat_memory.conversation_id
+                if current_id != correct_conversation_id:
+                    logger.warning(f"AgentMemoryService._patch_langchain_memory: Fixing conversation_id from {current_id} to {correct_conversation_id}")
+                    self.memory.chat_memory.conversation_id = correct_conversation_id
+            
+            # Call the original method
+            return original_save_context(inputs, outputs)
+        
+        # Replace the save_context method if allowed
+        try:
+            self.memory.save_context = patched_save_context
+            logger.info("AgentMemoryService._patch_langchain_memory: Patched memory.save_context")
+        except Exception as e:
+            logger.warning(f"Could not patch memory.save_context: {e}")
+
+    def _apply_run_context(self, run_context: Dict[str, Any]) -> None:
+        """Override conversation_id for run-scoped sub-agent execution."""
+        conversation_id = run_context.get("conversation_id")
+        if not conversation_id:
+            return
+        try:
+            from infrastructure.persistence.ai.conversations.models import Conversation
+
+            if not Conversation.objects.filter(id=conversation_id).exists():
+                Conversation.objects.create(
+                    id=conversation_id,
+                    user_id=self.user_id,
+                    title=f"{self.__class__.__name__} Run Context",
+                    metadata={
+                        "agent_id": str(self.agent_id),
+                        "agent_type": self.__class__.__name__,
+                        "workspace_id": str(self.workspace_id),
+                        "run_id": run_context.get("run_id"),
+                        "plan_id": run_context.get("plan_id"),
+                        # Internal orchestration artifact — not a
+                        # user-facing chat thread.  The list endpoint
+                        # filters these out so the UI sees only the
+                        # conversations ``AgentChatUseCase`` created.
+                        "internal": True,
+                    },
+                )
+        except Exception:
+            logger.warning("Failed to ensure run conversation for agent %s", self.agent_id, exc_info=True)
+
+        self._override_conversation_id = conversation_id
+        if hasattr(self.memory, 'chat_memory') and hasattr(self.memory.chat_memory, 'conversation_id'):
+            self.memory.chat_memory.conversation_id = conversation_id
+        if hasattr(self.agent_executor, 'memory') and hasattr(self.agent_executor.memory, 'chat_memory'):
+            if hasattr(self.agent_executor.memory.chat_memory, 'conversation_id'):
+                self.agent_executor.memory.chat_memory.conversation_id = conversation_id
+
+        limits = run_context.get("memory_limits") if isinstance(run_context, dict) else None
+        if limits and hasattr(self.memory, "chat_memory"):
+            for attr in ("max_messages", "max_message_chars", "max_total_chars"):
+                if attr in limits and hasattr(self.memory.chat_memory, attr):
+                    setattr(self.memory.chat_memory, attr, limits.get(attr))
+
+    def _apply_tool_policy(self, run_context: Optional[Dict[str, Any]]) -> Optional[List[BaseTool]]:
+        """Restrict tools per run_context; returns original tools if modified."""
+        if not run_context:
+            return None
+        allowed = run_context.get("allowed_tools") if isinstance(run_context, dict) else None
+        blocked = run_context.get("blocked_tools") if isinstance(run_context, dict) else None
+        if not allowed and not blocked:
+            return None
+
+        base_tools = self._all_tools or self.tools
+        filtered = []
+        for tool in base_tools:
+            if allowed and tool.name not in allowed:
+                continue
+            if blocked and tool.name in blocked:
+                continue
+            filtered.append(tool)
+
+        if filtered == self.tools:
+            return None
+
+        original = list(self.tools)
+        self.tools = filtered
+        self._create_agent_executor()
+        return original
+
+    def _restore_tool_policy(self, original_tools: Optional[List[BaseTool]]) -> None:
+        if not original_tools:
+            return
+        self.tools = list(original_tools)
+        self._create_agent_executor()
+
+    def _apply_custom_profile_tool_whitelist(self, run_context: Dict[str, Any]) -> None:
+        """
+        Apply per-agent tool whitelist as the tightest tool restriction.
+
+        Behavior:
+        - If `run_context["allowed_tools"]` is already set, intersect with `tool_whitelist`.
+        - If no `run_context["allowed_tools"]` is set, use `tool_whitelist` directly.
+        - If the whitelist contains no valid tool names for this agent, ignore it (so we don't
+          accidentally leave the agent with zero tools and a broken ReAct format).
+        """
+        custom_profile = self.config.get("custom_profile")
+        if not isinstance(custom_profile, dict):
+            return
+        raw_whitelist = custom_profile.get("tool_whitelist") or []
+        if isinstance(raw_whitelist, str):
+            raw_whitelist = [raw_whitelist]
+        if not isinstance(raw_whitelist, list):
+            return
+
+        requested = [str(name or "").strip() for name in raw_whitelist]
+        requested = [name for name in requested if name]
+        if not requested:
+            return
+
+        available_tools = self._all_tools or self.tools
+        available_names = {tool.name for tool in available_tools}
+        whitelist = [name for name in requested if name in available_names]
+        if not whitelist:
+            logger.warning(
+                "Agent %s tool_whitelist contained no valid tool names; ignoring. requested=%s available=%s",
+                self.agent_id,
+                requested,
+                sorted(available_names),
+            )
+            return
+
+        existing_allowed = run_context.get("allowed_tools")
+        if isinstance(existing_allowed, str):
+            existing_allowed = [existing_allowed]
+        if isinstance(existing_allowed, list):
+            allowed_set = {str(name or "").strip() for name in existing_allowed if str(name or "").strip()}
+            allowed = [name for name in whitelist if name in allowed_set]
+        else:
+            allowed = list(whitelist)
+
+        if not allowed:
+            logger.warning(
+                "Agent %s tool_whitelist would restrict allowed_tools to empty; ignoring. whitelist=%s allowed_tools=%s",
+                self.agent_id,
+                whitelist,
+                existing_allowed,
+            )
+            return
+
+        run_context["allowed_tools"] = allowed
+    
+    def _build_system_message(self) -> str:
+        """Compose the system message shared by both prompt flavours.
+
+        Keeps the profile blurb + persona/tone/output-format in one
+        place so the ReAct and tool-calling paths stay in sync.
+        """
+        profile = self._get_agent_profile()
+        profile_name = profile.get('name') or self.__class__.__name__.replace('Agent', ' Agent')
+        profile_summary = profile.get('summary') or ''
+        capabilities = profile.get('capabilities') or []
+
+        capabilities_section = ''
+        if capabilities:
+            joined = "\n".join(f"- {item}" for item in capabilities)
+            capabilities_section = f"\n\nYour core capabilities include:\n{joined}"
+
+        summary_section = f"\n{profile_summary}" if profile_summary else ''
+
+        customization = self._get_prompt_customization_vars()
+        persona = customization.get("persona", "").strip()
+        tone = customization.get("tone", "").strip()
+        output_format = customization.get("output_format", "").strip()
+        default_report_period = customization.get("default_report_period", "").strip()
+
+        custom_lines = []
+        if persona:
+            custom_lines.append(f"Persona: {persona}")
+        if tone:
+            custom_lines.append(f"Tone: {tone}")
+        if output_format:
+            custom_lines.append(f"Output format: {output_format}")
+        if default_report_period:
+            custom_lines.append(f"Default report period: {default_report_period}")
+        custom_block = ("\n\n" + "\n".join(custom_lines)) if custom_lines else ""
+
+        guidelines = (
+            "\n\nGuidelines:\n"
+            "- Call `retrieve_workspace_context` when the question needs "
+            "workspace identity, mission, story, sector, categories, tags, "
+            "operations, or owner-curated narrative context — that is what "
+            "the retrieval surface actually indexes today. For specific data "
+            "(recipient names, donor lists, transactions, budgets, grants, "
+            "campaigns, projects, audit history) call your domain tools "
+            "directly; the retrieval surface does not index that data today. "
+            "See `docs/plans/RAG_AUDIT_AND_ROADMAP.md` Tier 2 for the plan "
+            "to make the snapshot data-aware.\n"
+            "- Answer from whatever the tools return. The workspace snapshot "
+            "contains identity, mission, classification, operations, and "
+            "team/follower counts — enough for a TLDR or overview, but "
+            "names of donors, recipients, grants, or transactions are not "
+            "in there. Craft a 2-3 sentence summary from whatever metadata "
+            "you have.\n"
+            "- NEVER say \"there is not enough information\", \"the workspace "
+            "doesn't specify\", \"details are not available\", or similar "
+            "phrases. If the workspace has no narrative content, just say so "
+            "plainly (\"No mission description has been added yet — the "
+            "workspace has N teams and M members.\") and still answer from "
+            "the metadata you have.\n"
+            "- If `retrieve_workspace_context` returns empty, call a workspace "
+            "tool like `get_workspace_info` or `get_organization_info` (no "
+            "arguments needed — defaults to the active workspace) before "
+            "deflecting.\n"
+            "- Prefer detailed, grounded responses that surface the actual tool "
+            "output (bullet lists, line breaks) rather than paraphrasing.\n"
+            "- When the user asks for a plan, report, or \"full\" details, "
+            "paste the structured tool output directly in the final answer.\n"
+            "- If a tool returns zero items, say so explicitly (\"There are 0 "
+            "tasks in this workspace\") — don't deflect."
+        )
+
+        return (
+            f"You are the {profile_name} working for workspace {self.workspace_id}."
+            f"{summary_section}{capabilities_section}{custom_block}{guidelines}"
+        )
+
+    def _create_chat_prompt_template(self) -> ChatPromptTemplate:
+        """Build a chat prompt for the tool-calling agent path.
+
+        Tool-calling agents emit native JSON function calls instead of
+        the ReAct ``Thought/Action/Observation`` format, so the prompt
+        is just a system message + user message + the scratchpad as a
+        ``MessagesPlaceholder``. No parse failures, no iteration burn.
+        """
+        return ChatPromptTemplate.from_messages(
+            [
+                ("system", self._build_system_message()),
+                ("human", "{input}"),
+                MessagesPlaceholder("agent_scratchpad"),
+            ]
+        )
+
+    def _create_prompt_template(self) -> PromptTemplate:
+        """Legacy ReAct prompt — kept as a fallback for models that
+        don't support native tool calling (``create_tool_calling_agent``
+        is the default, see ``_create_agent_executor``)."""
+        system_message = self._build_system_message()
+        template = (
+            f"{system_message}\n\n"
+            "You have access to the following tools:\n{tools}\n\n"
+            "Use the following format:\n\n"
+            "Question: the input question you must answer\n"
+            "Thought: you should always think about what to do\n"
+            "Action: the action to take, should be one of [{tool_names}]\n"
+            "Action Input: the input to the action\n"
+            "Observation: the result of the action\n"
+            "... (this Thought/Action/Action Input/Observation can repeat N times)\n"
+            "Thought: I now know the final answer\n"
+            "Final Answer: the final answer to the original input question\n\n"
+            "Begin!\n\n"
+            "Question: {input}\n"
+            "Thought: {agent_scratchpad}"
+        )
+        return PromptTemplate(
+            template=template,
+            input_variables=[
+                "input",
+                "agent_scratchpad",
+                "tools",
+                "tool_names",
+            ],
+        )
+
+    def _get_prompt_customization_vars(self) -> Dict[str, str]:
+        """
+        Return prompt variables that customize the agent behavior.
+
+        These values are persisted via `PATCH /ai/agents/{agent_id}/settings/` under
+        `Agent.config["custom_profile"]` and mirrored to the runtime agent instance as `self.config`.
+        """
+        custom_profile = self.config.get("custom_profile")
+        if not isinstance(custom_profile, dict):
+            custom_profile = {}
+        return {
+            "persona": str(custom_profile.get("persona") or "").strip(),
+            "tone": str(custom_profile.get("tone") or "").strip(),
+            "output_format": str(custom_profile.get("output_format") or "").strip(),
+            "default_report_period": str(custom_profile.get("default_report_period") or "").strip(),
+        }
+
+    def _build_graph_executor(self, callbacks: list | None = None) -> None:
+        """Build a LangGraph StateGraph executor as an alternative to AgentExecutor.
+
+        Opt in via ``config["use_langgraph"] = True``.
+        """
+        if not self._use_langgraph:
+            return
+
+        profile = self._get_agent_profile()
+        profile_name = profile.get("name") or self.__class__.__name__
+        system_prompt = (
+            f"You are the {profile_name} working for workspace {self.workspace_id}. "
+            f"{profile.get('summary', '')}"
+        )
+
+        # Inject session memory context if available
+        session_ctx = self.config.get("session_memory_context", "")
+        if session_ctx:
+            system_prompt += f"\n\n{session_ctx}"
+
+        self.graph_executor = build_graph_executor(
+            llm=self.llm,
+            tools=self.tools,
+            system_prompt=system_prompt,
+            max_iterations=int(self.config.get("max_iterations", 15)),
+            callbacks=callbacks,
+        )
+        if self.graph_executor:
+            logger.info("LangGraph executor built for agent %s", self.agent_id)
+
+    def _invoke_graph_executor(self, query: str) -> Dict[str, Any]:
+        """Invoke the LangGraph executor and return a result dict compatible with AgentExecutor."""
+        if not self.graph_executor:
+            raise ValueError("Graph executor is not initialised")
+
+        result = self.graph_executor.invoke({
+            "messages": [HumanMessage(content=query)],
+            "iteration_count": 0,
+        })
+
+        answer = result.get("final_answer", "")
+        error = result.get("error")
+
+        if error:
+            return {"output": f"Error: {error}"}
+        return {"output": answer}
+
+    def _invoke_agent_executor(
+        self,
+        inputs: Dict[str, Any],
+        *,
+        retries: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Invoke the agent executor with automatic retries for transient LLM failures."""
+        # Use LangGraph if available and enabled
+        if self._use_langgraph and self.graph_executor:
+            query = inputs.get("input", "")
+            return self._invoke_graph_executor(query)
+
+        if not self.agent_executor:
+            raise ValueError("Agent executor is not initialised")
+
+        retry_budget = self.config.get('llm_retry_attempts', 1) if retries is None else retries
+        try:
+            retry_budget = int(retry_budget)
+        except (TypeError, ValueError):
+            retry_budget = 1
+        retry_budget = max(retry_budget, 0)
+
+        # Guardrail: bound prompt/input size to avoid runaway latency/cost.
+        try:
+            max_input_chars = int(self.config.get("max_input_chars", 12000))
+        except (TypeError, ValueError):
+            max_input_chars = 12000
+        max_input_chars = max(max_input_chars, 500)
+        input_preview = inputs.get('input', '') if isinstance(inputs, dict) else ''
+        if isinstance(input_preview, str) and len(input_preview) > max_input_chars:
+            raise ValueError(
+                f"Agent input exceeds max_input_chars ({len(input_preview)} > {max_input_chars})"
+            )
+
+        # Log before invoking to track LLM calls
+        logger.info("Agent %s invoking executor with input: %s", self.agent_id, inputs.get('input', '')[:100] if inputs.get('input') else str(inputs)[:100])
+        if hasattr(self.agent_executor, 'callbacks') and self.agent_executor.callbacks:
+            callback_types = [type(cb).__name__ for cb in self.agent_executor.callbacks]
+            logger.info("Agent %s executor has %d callbacks: %s", self.agent_id, len(self.agent_executor.callbacks), callback_types)
+        
+        if not RETRYABLE_AGENT_EXCEPTIONS or retry_budget == 0:
+            result = self.agent_executor.invoke(inputs)
+            logger.info("Agent %s executor completed (no retries)", self.agent_id)
+            return result
+
+        attempt = 0
+        while True:
+            try:
+                result = self.agent_executor.invoke(inputs)
+                logger.info("Agent %s executor completed on attempt %d", self.agent_id, attempt + 1)
+                return result
+            except RETRYABLE_AGENT_EXCEPTIONS as exc:  # pragma: no cover - depends on external API behaviour
+                if attempt >= retry_budget:
+                    raise
+                attempt += 1
+                import time  # local import keeps optional dependency scoped
+
+                wait_seconds = min(2 ** attempt, 5)
+                logger.warning(
+                    "Agent %s LLM invocation failed with %s (attempt %s/%s); retrying in %ss",
+                    self.agent_id,
+                    exc.__class__.__name__,
+                    attempt,
+                    retry_budget + 1,
+                    wait_seconds,
+                )
+                time.sleep(wait_seconds)
+
+    def _is_retryable_agent_error(self, exc: BaseException) -> bool:
+        return bool(RETRYABLE_AGENT_EXCEPTIONS) and isinstance(exc, RETRYABLE_AGENT_EXCEPTIONS)
+    
+    def execute(
+        self,
+        query: str,
+        *,
+        execution: Any = None,
+        execution_id: int = None,
+        task_id: str = None,
+        performed_by: Optional[str] = None,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Execute the agent with a given query
+        
+        Args:
+            query: The user's request
+            
+        Returns:
+            Dictionary containing the result and metadata
+        """
+        # Early input validation — before any memory/state work
+        try:
+            max_query_len = int(self.config.get("max_input_chars", 12000))
+        except (TypeError, ValueError):
+            max_query_len = 12000
+        if query and len(query) > max(max_query_len, 500):
+            return {
+                "success": False,
+                "error": f"Query too long ({len(query)} chars, max {max_query_len})",
+                "agent_id": self.agent_id,
+            }
+
+        logger.info("Agent %s execution started with query: %s", self.agent_id, query[:100] if query else "")
+        tool_restore: Optional[List[BaseTool]] = None
+        run_context = None
+        # Stash the active DeepRunContext (if the deep runner injected
+        # one) on self for the duration of this execute() call. Tool
+        # closures (e.g. _retrieve in _build_workspace_retrieval_tool)
+        # read it via ``self._active_deep_run_context`` and emit
+        # narrative log + progress lines mid-execution. Restored to
+        # None in finally so the same agent serving a follow-on call
+        # without a context doesn't leak the previous run's emit hook.
+        previous_deep_run_context = getattr(self, "_active_deep_run_context", None)
+        if context and isinstance(context, dict):
+            self._active_deep_run_context = context.get("deep_run_context")
+        else:
+            self._active_deep_run_context = None
+        # Reset the artifact collector for this turn so a previous call's
+        # PDF doesn't bleed into the next assistant message. Tools call
+        # ``self.collect_artifact(...)`` during execution; we harvest below.
+        self._pending_artifacts = []
+        try:
+            requested_run_context = None
+            if context and isinstance(context, dict):
+                requested_run_context = context.get("run_context")
+
+            custom_profile = self.config.get("custom_profile")
+            has_tool_whitelist = bool(
+                isinstance(custom_profile, dict) and custom_profile.get("tool_whitelist")
+            )
+
+            if isinstance(requested_run_context, dict) or has_tool_whitelist:
+                run_context = dict(requested_run_context or {})
+                if has_tool_whitelist:
+                    self._apply_custom_profile_tool_whitelist(run_context)
+                self._apply_run_context(run_context)
+                tool_restore = self._apply_tool_policy(run_context)
+            import time
+            start_time = time.time()
+            
+            self.state.status = "running"
+            self.state.updated_at = datetime.now()
+            if self.telemetry_handler:
+                self.telemetry_handler.reset()
+
+            meta_result = self._maybe_handle_meta_query(query)
+            if meta_result is not None:
+                execution_time_ms = int((time.time() - start_time) * 1000)
+                execution = self.memory_service.record_execution(
+                    query=query,
+                    result=meta_result,
+                    success=True,
+                    execution_time_ms=execution_time_ms,
+                    execution=execution,
+                    execution_id=execution_id,
+                    status=EXECUTION_STATUS_COMPLETED,
+                    progress=100,
+                    state=self._execution_state_with_telemetry(),
+                    task_id=task_id,
+                    add_user_message=execution is None and execution_id is None,
+                )
+
+                self.state.results.append({
+                    'query': query,
+                    'result': meta_result,
+                    'timestamp': datetime.now().isoformat(),
+                    'execution_id': str(execution.id)
+                })
+                self.state.status = "completed"
+                self.state.updated_at = datetime.now()
+
+                self._maybe_log_auto_action(
+                    performed_by=performed_by,
+                    query=query,
+                    result_text=meta_result,
+                    context=self._merge_session_context(context, execution),
+                )
+
+                result_payload = {
+                    'success': True,
+                    'result': meta_result,
+                    'execution_id': str(execution.id),
+                    'execution_time_ms': execution_time_ms,
+                    'agent_id': self.agent_id,
+                    'state': self.state.to_dict()
+                }
+                self._maybe_log_run_telemetry(run_context, success=True)
+                return result_payload
+
+            logger.info(f"Agent {self.agent_id} executing query: {query}")
+            
+            # Update Langfuse callback session_id before execution to ensure traces are grouped correctly
+            if self.agent_executor and hasattr(self.agent_executor, 'callbacks') and self.agent_executor.callbacks:
+                try:
+                    current_conversation_id = self.memory_service.get_conversation_id()
+                    for callback in self.agent_executor.callbacks:
+                        # Check if this is a Langfuse callback and update session_id
+                        if hasattr(callback, 'session_id'):
+                            if callback.session_id != current_conversation_id:
+                                callback.session_id = current_conversation_id
+                                logger.debug("Updated Langfuse callback session_id to %s for agent %s", 
+                                          current_conversation_id, self.agent_id)
+                except Exception as e:
+                    logger.debug("Could not update callback session_id: %s", e)
+            
+            # Execute the agent. Customization vars are bound on the
+            # PromptTemplate as partial_variables (see
+            # _create_prompt_template) so we only need to pass `input`
+            # here — passing extras would trigger LangChain's
+            # "One input key expected got [...]" validation error.
+            result = self._invoke_agent_executor({"input": query})
+
+            # Persist tool observations to DeepRunLog so the eval harness
+            # and the realtime chat UI can see which tools the agent ran
+            # with what arguments and what they returned. Only fires inside
+            # a deep-run (run_context is set with a thread_id); standalone
+            # execute() calls have no DeepRun to write against and skip
+            # this path. The persist call itself is fault-isolated so the
+            # chat reply never depends on observability succeeding.
+            try:
+                self._persist_tool_observations(
+                    run_context, result.get("intermediate_steps")
+                )
+            except Exception:  # pylint: disable=broad-except
+                logger.debug(
+                    "tool-observation persist failed for agent %s",
+                    self.agent_id,
+                    exc_info=True,
+                )
+
+            # Flush Langfuse callbacks to ensure traces are sent
+            if self.agent_executor and hasattr(self.agent_executor, 'callbacks') and self.agent_executor.callbacks:
+                for callback in self.agent_executor.callbacks:
+                    if hasattr(callback, 'flush'):
+                        try:
+                            callback.flush()
+                            logger.debug("Flushed Langfuse callback for agent %s", self.agent_id)
+                        except Exception as e:
+                            logger.warning("Failed to flush Langfuse callback: %s", e)
+            
+            execution_time_ms = int((time.time() - start_time) * 1000)
+            result_text = result.get('output', '')
+
+            # Snapshot any artifacts tools collected during this turn so
+            # they ride out on the assistant message's metadata. Read
+            # before clearing to keep the collector clean for follow-on
+            # calls without contaminating this one.
+            collected_artifacts = list(self._pending_artifacts)
+
+            # Record execution in memory service
+            execution = self.memory_service.record_execution(
+                query=query,
+                result=result_text,
+                success=True,
+                execution_time_ms=execution_time_ms,
+                execution=execution,
+                execution_id=execution_id,
+                status=EXECUTION_STATUS_COMPLETED,
+                progress=100,
+                state=self._execution_state_with_telemetry(),
+                task_id=task_id,
+                add_user_message=execution is None and execution_id is None,
+                artifacts=collected_artifacts or None,
+            )
+            
+            # Update state
+            self.state.results.append({
+                'query': query,
+                'result': result_text,
+                'timestamp': datetime.now().isoformat(),
+                'execution_id': str(execution.id)
+            })
+            self.state.status = "completed"
+            self.state.updated_at = datetime.now()
+
+            self._maybe_log_auto_action(
+                performed_by=performed_by,
+                query=query,
+                result_text=result_text,
+                context=self._merge_session_context(context, execution),
+            )
+
+            result_payload = {
+                'success': True,
+                'result': result_text,
+                'execution_id': str(execution.id),
+                'execution_time_ms': execution_time_ms,
+                'agent_id': self.agent_id,
+                'state': self.state.to_dict()
+            }
+            self._maybe_log_run_telemetry(run_context, success=True)
+            return result_payload
+            
+        except Exception as e:
+            execution_time_ms = int((time.time() - start_time) * 1000)
+            error_msg = str(e)
+            
+            logger.exception("Agent %s execution failed", self.agent_id)
+            
+            self.state.errors.append(error_msg)
+            self.state.status = "failed"
+            self.state.updated_at = datetime.now()
+
+            execution = self.memory_service.record_execution(
+                query=query,
+                result="",
+                success=False,
+                error_message=error_msg,
+                execution_time_ms=execution_time_ms,
+                execution=execution,
+                execution_id=execution_id,
+                status=EXECUTION_STATUS_FAILED,
+                progress=100,
+                state=self._execution_state_with_telemetry(),
+                task_id=task_id,
+                add_user_message=execution is None and execution_id is None,
+                add_agent_message=True,
+            )
+
+            result_payload = {
+                'success': False,
+                'error': error_msg,
+                'execution_id': str(execution.id),
+                'execution_time_ms': execution_time_ms,
+                'agent_id': self.agent_id,
+                'state': self.state.to_dict()
+            }
+            self._maybe_log_run_telemetry(run_context, success=False, error=error_msg)
+            return result_payload
+        finally:
+            if tool_restore:
+                self._restore_tool_policy(tool_restore)
+            # Restore the DeepRunContext slot to whatever it held before
+            # this call so re-entrant or back-to-back execute() calls
+            # don't leak each other's emit hooks. The agent itself is
+            # cached across calls.
+            self._active_deep_run_context = previous_deep_run_context
+
+    def _maybe_log_auto_action(
+        self,
+        *,
+        performed_by: Optional[str],
+        query: str,
+        result_text: str,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        # Phase 5 of the Agents-as-Teammates migration removed the AIAction
+        # row that used to back this audit trail. The teammate-attribution
+        # check + log line stay so SRE has greppable per-agent telemetry;
+        # nothing writes to the deleted AIAction table.
+        if not performed_by or not self.workspace_id:
+            return
+
+        try:
+            from components.agents.infrastructure.services.actions_service import get_ai_action_service
+
+            action_service = get_ai_action_service()
+            teammate = action_service.get_teammate(self.workspace_id)
+            if not teammate or str(teammate.user_id) != str(performed_by):
+                return
+
+            summary = result_text.strip() if result_text else "Execution completed with no textual result."
+
+            logger.info(
+                "agent_auto_run agent=%s workspace_id=%s action_type=%s "
+                "summary=%s",
+                self.__class__.__name__, self.workspace_id,
+                f"{self.__class__.__name__}.auto_run",
+                self._truncate(summary),
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.debug("Unable to log auto action for agent %s: %s", self.agent_id, exc)
+
+    @staticmethod
+    def _truncate(text: str, length: int = 500) -> str:
+        if len(text) <= length:
+            return text
+        return f"{text[:length - 3]}..."
+
+    @staticmethod
+    def _merge_session_context(base_context: Optional[Dict[str, Any]], execution: Any = None) -> Dict[str, Any]:
+        merged = dict(base_context or {})
+        if execution and getattr(execution, 'id', None):
+            merged.setdefault('session_id', str(execution.id))
+        return merged
+
+    def pause(self):
+        """Pause the agent execution"""
+        self.state.status = "paused"
+        self.state.updated_at = datetime.now()
+    
+    def resume(self):
+        """Resume the agent execution"""
+        self.state.status = "running"
+        self.state.updated_at = datetime.now()
+    
+    def get_state(self) -> Dict[str, Any]:
+        """Get current agent state"""
+        return self.state.to_dict()
+    
+    def get_memory_stats(self) -> Dict[str, Any]:
+        """Get memory statistics for this agent"""
+        return self.memory_service.get_memory_stats()
+    
+    def get_conversation_history(
+        self,
+        limit: Optional[int] = None,
+        offset: int = 0,
+        order: str = "asc",
+    ) -> List[Dict[str, Any]]:
+        """Get conversation history for this agent with pagination support."""
+        return self.memory_service.get_conversation_history(
+            limit=limit,
+            offset=offset,
+            order=order,
+        )
+    
+    def clear_memory(self) -> None:
+        """Clear all memory for this agent"""
+        self.memory_service.clear_memory()
+        logger.info(f"Cleared memory for agent {self.agent_id}")
+    
+    def add_system_message(self, content: str) -> None:
+        """Add system message to agent memory"""
+        self.memory_service.add_system_message(content)
+        logger.info(f"Added system message to agent {self.agent_id}")
+    
+    def add_context(self, key: str, value: Any):
+        """Add context to the agent state"""
+        self.state.context[key] = value
+        self.state.updated_at = datetime.now()
+    
+    def get_context(self, key: str) -> Any:
+        """Get context from the agent state"""
+        return self.state.context.get(key)
+
+    def _get_agent_profile(self) -> Dict[str, Any]:
+        # Class-level profile (ADR 0003) is the default. The DB row's
+        # `config["profile"]` overrides any field on a per-workspace
+        # basis. Falls back to the class docstring + class name when
+        # neither is set so legacy agents without a `profile` attribute
+        # still produce something useful.
+        class_profile = dict(getattr(type(self), 'profile', {}) or {})
+        profile_cfg = self.config.get('profile') or {}
+        summary_fallback = self.config.get('description') or (self.__doc__ or '').strip()
+        profile = {
+            'name': (
+                profile_cfg.get('name')
+                or class_profile.get('name')
+                or self.__class__.__name__.replace('Agent', ' Agent')
+            ),
+            'summary': (
+                profile_cfg.get('summary')
+                or class_profile.get('summary')
+                or summary_fallback
+            ),
+            'capabilities': (
+                profile_cfg.get('capabilities')
+                or class_profile.get('capabilities')
+                or []
+            ),
+            'sample_prompts': (
+                profile_cfg.get('sample_prompts')
+                or profile_cfg.get('examples')
+                or class_profile.get('sample_prompts')
+                or class_profile.get('examples')
+                or []
+            ),
+        }
+        notes = profile_cfg.get('notes') or class_profile.get('notes')
+        if notes:
+            profile['notes'] = notes
+        return profile
+
+    def _maybe_handle_meta_query(self, query: str) -> Optional[str]:
+        if not query:
+            return None
+        lowered = query.strip().lower()
+        triggers = [
+            "what is this agent",
+            "who are you",
+            "what can you do",
+            "help me understand",
+            "what are you",
+            "how can you help",
+            "what is your purpose",
+            "what do you do",
+            "tell me what you do",
+            "tell me what you can do",
+            "tell me about yourself",
+            "what should i ask you",
+            "what can i ask you",
+            "what are your capabilities",
+        ]
+        if not any(trigger in lowered for trigger in triggers):
+            return None
+
+        profile = self._get_agent_profile()
+        lines: List[str] = []
+        title = profile.get('name') or self.__class__.__name__
+        lines.append(f"{title} Overview")
+
+        summary = profile.get('summary')
+        if summary:
+            lines.append("")
+            lines.append(summary)
+
+        capabilities = profile.get('capabilities') or []
+        if capabilities:
+            lines.append("")
+            lines.append("Key capabilities:")
+            for capability in capabilities:
+                lines.append(f"- {capability}")
+
+        sample_prompts = profile.get('sample_prompts') or []
+        if sample_prompts:
+            lines.append("")
+            lines.append("Try asking:")
+            for prompt in sample_prompts:
+                lines.append(f"- {prompt}")
+
+        if profile.get('notes'):
+            lines.append("")
+            lines.append(profile['notes'])
+
+        return "\n".join(lines)
+
+    def _get_telemetry_snapshot(self) -> Optional[Dict[str, Any]]:
+        if not self.telemetry_handler:
+            return None
+        try:
+            return self.telemetry_handler.summary()
+        except Exception:
+            logger.debug("Failed to collect telemetry for agent %s", self.agent_id, exc_info=True)
+            return None
+
+    def _execution_state_with_telemetry(self) -> Dict[str, Any]:
+        state = self.state.to_dict()
+        telemetry = self._get_telemetry_snapshot()
+        if telemetry:
+            state['telemetry'] = telemetry
+        return state
+
+    # Max characters persisted per (tool_input, tool_output) on a
+    # tool_observation log row. 4000 covers ~all realistic agent tool
+    # outputs (donor lists, balance snapshots, retrieve_workspace_context
+    # bodies are ~800 chars each × 5 chunks) without inviting a 100KB
+    # CSV dump from a misbehaving tool to break the JSON column or the
+    # websocket envelope. Truncation is recorded via the
+    # `truncated_input` / `truncated_output` flags on the payload so the
+    # eval harness and chat UI can label trimmed cells.
+    _TOOL_OBSERVATION_MAX_CHARS = 4000
+
+    def _persist_tool_observations(
+        self,
+        run_context: Optional[Dict[str, Any]],
+        intermediate_steps: Optional[Any],
+    ) -> None:
+        """Log each (action, observation) the ReAct executor produced
+        as a ``tool_observation`` DeepRunLog row.
+
+        LangChain's ``AgentExecutor`` with ``return_intermediate_steps=True``
+        returns a list of ``(AgentAction, observation)`` pairs alongside
+        the final ``output``. The deep-run telemetry summary captures
+        *counts* of tool calls (``tools``, ``agent_actions``) but not
+        the (input, output) bodies themselves, which is the data the
+        RAG eval's Faithfulness metric needs to see to score answers
+        whose evidence came from a tool result (e.g.
+        ``donation_agent.top_donors`` reads the ORM directly and the
+        retrieved workspace-snapshot chunks won't contain those
+        donation rows).
+
+        Persisting per-step rows here also makes the frontend chat UI
+        able to render which tool ran and with what arguments — the
+        existing ``DeepRunLog.post_save`` signal bridge picks the rows
+        up and streams them over the per-run WebSocket channel.
+
+        Bounded to ``_TOOL_OBSERVATION_MAX_CHARS`` per field so a CSV
+        dump tool can't break the JSON column. Failures are swallowed
+        — observability must never crash the run. The caller already
+        wraps this in a try/except too, so this is belt-and-braces.
+        """
+        if not run_context or not isinstance(run_context, dict):
+            return
+        thread_id = run_context.get("run_id") or run_context.get("plan_id")
+        if not thread_id:
+            return
+        if not intermediate_steps:
+            return
+
+        try:
+            from components.agents.infrastructure.gateways.deep.logging import (
+                log_deep_event,
+            )
+        except Exception:  # pylint: disable=broad-except
+            logger.debug(
+                "deep logging unavailable; skipping tool observation persist",
+                exc_info=True,
+            )
+            return
+
+        max_chars = self._TOOL_OBSERVATION_MAX_CHARS
+
+        for step in intermediate_steps:
+            try:
+                action, observation = step[0], step[1]
+            except (TypeError, IndexError, KeyError):
+                # Future LangChain versions may change the tuple shape;
+                # skip anything that doesn't unpack cleanly rather than
+                # crash mid-loop.
+                continue
+            tool_name = getattr(action, "tool", "") or ""
+            if not tool_name:
+                continue
+
+            raw_input = getattr(action, "tool_input", "")
+            if isinstance(raw_input, dict):
+                try:
+                    raw_input_str = json.dumps(raw_input, default=str)
+                except Exception:  # pylint: disable=broad-except
+                    raw_input_str = str(raw_input)
+            else:
+                raw_input_str = "" if raw_input is None else str(raw_input)
+            raw_output_str = "" if observation is None else str(observation)
+
+            log_deep_event(
+                thread_id,
+                "tool_observation",
+                agent_type=self.__class__.__name__,
+                tool_name=tool_name,
+                payload={
+                    "tool_input": raw_input_str[:max_chars],
+                    "tool_output": raw_output_str[:max_chars],
+                    "truncated_input": len(raw_input_str) > max_chars,
+                    "truncated_output": len(raw_output_str) > max_chars,
+                },
+            )
+
+    def _maybe_log_run_telemetry(
+        self,
+        run_context: Optional[Dict[str, Any]],
+        *,
+        success: bool,
+        error: Optional[str] = None,
+    ) -> None:
+        if not run_context or not isinstance(run_context, dict):
+            return
+        run_id = run_context.get("run_id") or run_context.get("plan_id")
+        if not run_id:
+            return
+        telemetry = self._get_telemetry_snapshot()
+        if not telemetry and not error:
+            return
+        try:
+            from components.agents.infrastructure.gateways.deep.logging import log_deep_event
+
+            payload = {"telemetry": telemetry} if telemetry else {}
+            if error:
+                payload["error"] = error
+            log_deep_event(
+                run_id,
+                "run_telemetry",
+                status="success" if success else "failed",
+                agent_type=self.__class__.__name__,
+                payload=payload,
+            )
+        except Exception:
+            logger.debug("Failed to log deep run telemetry for agent %s", self.agent_id, exc_info=True)
+
+
+class AgentRegistry:
+    """Registry for managing available agents"""
+    
+    _agents: Dict[str, type] = {}
+
+    @classmethod
+    def _load_class(cls, dotted_path: str) -> type:
+        module_path, class_name = dotted_path.rsplit('.', 1)
+        module = import_module(module_path)
+        return getattr(module, class_name)
+
+    @classmethod
+    def register(cls, name: str, agent_class: Union[type, str]):
+        """Register an agent class or import path"""
+        if isinstance(agent_class, str):
+            agent_class = cls._load_class(agent_class)
+        cls._agents[name] = agent_class
+        logger.info("Registered agent: %s", name)
+    
+    @classmethod
+    def get_agent_class(cls, name: str) -> Optional[type]:
+        """Get an agent class by name"""
+        return cls._agents.get(name)
+    
+    @classmethod
+    def list_agents(cls) -> List[str]:
+        """List all registered agents"""
+        return list(cls._agents.keys())
+
+    @classmethod
+    def canonical_name_for(cls, slug: str) -> str:
+        """Resolve an agent slug or alias to its canonical (registered) name.
+
+        Returns the slug unchanged if it isn't in the registry — keeps
+        sentinels like ``clarify`` and unregistered planner outputs
+        intact so a downstream consumer can decide how to render them.
+        Used by the chat-header resource so the surface always shows
+        ``writing_agent`` rather than ``letter_agent`` etc.
+        """
+        if not slug:
+            return ""
+        agent_class = cls._agents.get(slug)
+        if agent_class is None:
+            return slug
+        return getattr(agent_class, "_canonical_agent_name", slug)
+
+    @classmethod
+    def display_name_for(cls, slug: str) -> str:
+        """Resolve a slug or alias to a human-readable label.
+
+        Reads ``profile['name']`` from the registered class when set,
+        otherwise titlecases the canonical slug. Fallbacks: if the slug
+        isn't in the registry, titlecase the raw slug so even
+        sentinels (e.g. ``clarify``) render as ``Clarify``.
+        """
+        if not slug:
+            return ""
+        agent_class = cls._agents.get(slug)
+        if agent_class is None:
+            return slug.replace("_", " ").title()
+        profile = getattr(agent_class, "profile", {}) or {}
+        explicit = profile.get("name") if isinstance(profile, dict) else None
+        if explicit:
+            return str(explicit)
+        canonical = getattr(agent_class, "_canonical_agent_name", slug)
+        return canonical.replace("_", " ").title()
+    
+    @classmethod
+    def create_agent(cls, name: str, agent_id: str, user_id: str, workspace_id: str, **kwargs) -> Optional[BaseAgent]:
+        """Create an agent instance"""
+        agent_class = cls.get_agent_class(name)
+        if not agent_class:
+            raise ValueError(f"Unknown agent: {name}")
+
+        return agent_class(agent_id, user_id, workspace_id, **kwargs)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Manual agent registration
+#
+# Most agents now self-register via `@register_agent` from the
+# `agents/` subpackage and are auto-discovered at app startup by
+# `AgentsCLIConfig.ready()`. See ADR 0003.
+#
+# All agents — including `ai_teammate` — now self-register via
+# `@register_agent` from the `agents/` subpackage. The legacy
+# `OrchestratorAgent` ReAct class has been retired; see
+# `agents/ai_teammate_agent.py` for the LangGraph-native replacement
+# and `application/services/detector_cycle.py` for the cron path.
+# ─────────────────────────────────────────────────────────────────────────

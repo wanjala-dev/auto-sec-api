@@ -1,0 +1,13 @@
+-r base.txt
+
+setuptools<81
+django-debug-toolbar==4.4.6
+flower==2.0.1
+watchfiles==1.0.4
+
+# Load + smoke testing — see .claude/rules/load-testing.md
+locust==2.31.5
+pydantic-settings==2.5.2
+
+# Include testing stack for local workflows
+-r testing.txt

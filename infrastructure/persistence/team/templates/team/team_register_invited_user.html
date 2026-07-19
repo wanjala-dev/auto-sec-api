@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <title>{{ site_full_name }} • Welcome Aboard</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #f5f6fa;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+            color: #0f172a;
+        }
+        a {
+            text-decoration: none;
+        }
+        .container {
+            width: 100%;
+            max-width: 640px;
+            margin: 0 auto;
+            padding: 32px 16px;
+        }
+    </style>
+</head>
+<body>
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color:#f5f6fa;">
+        <tr>
+            <td align="center">
+                <table role="presentation" class="container" cellspacing="0" cellpadding="0">
+                    <tr>
+                        <td style="padding:0 0 16px 0;text-align:center;">
+                            <span style="font-size:13px;letter-spacing:0.2em;font-weight:600;color:#65a30d;text-transform:uppercase;">{{ site_full_name }}</span>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="background-color:#ffffff;border-radius:18px;border:1px solid #e2e8f0;padding:36px 32px 28px 32px;">
+                            <p style="font-size:20px;line-height:1.4;margin:0 0 24px 0;">
+                                <strong>{{ workspace_name }}</strong> set up an account for you on {{ site_full_name }} so you can collaborate with the <strong>{{ team_name }}</strong> team.
+                            </p>
+
+                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border:1px solid #d9f99d;border-radius:16px;margin-bottom:24px;">
+                                <tr>
+                                    <td style="padding:24px;text-align:center;">
+                                        <div style="display:inline-block;width:64px;height:64px;line-height:64px;border-radius:999px;background-color:#ecfccb;border:1px solid #bbf7d0;font-size:24px;font-weight:600;color:#166534;margin-bottom:12px;">
+                                            {{ team_name|slice:":2"|upper }}
+                                        </div>
+                                        <div style="font-size:18px;font-weight:600;color:#0f172a;">{{ team_name }}</div>
+                                        <div style="font-size:14px;color:#6b7280;margin-top:4px;">Your new team workspace</div>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td style="padding:0 24px 28px 24px;text-align:center;">
+                                        <a href="{{ password_setup_url }}" style="display:inline-block;width:100%;max-width:320px;background-color:#16a34a;color:#ffffff;font-weight:600;font-size:16px;padding:12px 24px;border-radius:999px;">Set Password & Sign In</a>
+                                    </td>
+                                </tr>
+                            </table>
+
+                            <p style="font-size:15px;color:#475569;margin:0 0 12px 0;text-align:center;">
+                                Prefer to copy/paste? Use this secure link:
+                            </p>
+                            <p style="font-size:14px;color:#0f172a;text-align:center;margin:0 0 32px 0;">
+                                <a href="{{ password_setup_url }}" style="color:#16a34a;font-weight:600;">{{ password_setup_url }}</a>
+                            </p>
+
+                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color:#fefce8;border-radius:16px;padding:0 0 8px 0;margin-bottom:20px;">
+                                <tr>
+                                    <td style="padding:20px 24px 4px 24px;font-size:14px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.08em;">
+                                        After you sign in, you can:
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td style="padding:12px 24px 8px 24px;">
+                                        <div style="display:flex;align-items:flex-start;gap:12px;">
+                                            <span style="width:18px;height:18px;border-radius:50%;background-color:#fef9c3;color:#854d0e;font-size:12px;line-height:18px;text-align:center;font-weight:600;">1</span>
+                                            <div>
+                                                <div style="font-size:15px;font-weight:600;color:#0f172a;">Plan projects with your team</div>
+                                                <div style="font-size:14px;color:#475569;margin-top:2px;">Access boards, budgets, and shared workspaces immediately.</div>
+                                            </div>
+                                        </div>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td style="padding:12px 24px 8px 24px;">
+                                        <div style="display:flex;align-items:flex-start;gap:12px;">
+                                            <span style="width:18px;height:18px;border-radius:50%;background-color:#fef9c3;color:#854d0e;font-size:12px;line-height:18px;text-align:center;font-weight:600;">2</span>
+                                            <div>
+                                                <div style="font-size:15px;font-weight:600;color:#0f172a;">Stay in sync</div>
+                                                <div style="font-size:14px;color:#475569;margin-top:2px;">Comment, assign tasks, and receive updates alongside the rest of the team.</div>
+                                            </div>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </table>
+
+                            <p style="font-size:14px;color:#475569;margin:0 0 24px 0;text-align:center;">
+                                Need help? Just reply to this email and we’ll jump in.
+                            </p>
+
+                            <p style="font-size:12px;color:#94a3b8;margin:0;text-align:center;">
+                                © {{ current_year|default:2025 }} {{ site_full_name }}
+                            </p>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>

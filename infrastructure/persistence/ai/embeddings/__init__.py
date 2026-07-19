@@ -1,0 +1,1 @@
+"""AI Embeddings persistence app."""

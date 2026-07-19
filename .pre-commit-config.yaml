@@ -1,0 +1,64 @@
+# See https://pre-commit.com for more information
+default_language_version:
+  python: python3.12
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-ast
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: debug-statements
+      - id: end-of-file-fixer
+        exclude: '(\.min\.js|\.min\.css|static/|staticfies/|media/)$'
+      - id: trailing-whitespace
+        exclude: '(\.min\.js|\.min\.css|static/|staticfies/|media/)$'
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.10
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: pre-commit-django-migrations
+        name: Check django migrations
+        entry: ./manage.py makemigrations --check
+        language: system
+        types: [python]
+        pass_filenames: false
+
+  - repo: local
+    hooks:
+      - id: pytest-architecture
+        name: Architecture tests
+        entry: pytest tests/architecture/ -x -q
+        language: system
+        pass_filenames: false
+        types: [python]
+        stages: [push]
+
+      # Runs the prompt-hygiene test suite whenever any tracked prompt
+      # file or the hygiene rules / test file itself is edited. Catches
+      # ALL-CAPS urgency markers, anti-pattern phrasing, fallback-route
+      # phrases, missing `because:` clauses, and JSON-emitting prompts
+      # that lack a literal example block — all before the change
+      # leaves the developer's machine.
+      #
+      # The hook is intentionally written like `pytest-architecture`
+      # above (no `files:` filter, just `types: [python]`) because
+      # pre-commit's `files:` regex matching behaves oddly when the
+      # config is in a nested directory below the git toplevel — even
+      # patterns that re.search-match the path get reported as "no
+      # files to check, Skipped". The hygiene test itself is fast
+      # (~3s) and reads only string constants, so running it on every
+      # python edit is acceptable. See
+      # components/agents/tests/prompt_eval/README.md for the rules.
+      - id: pytest-prompt-hygiene
+        name: Prompt hygiene
+        entry: pytest components/agents/tests/prompt_eval/test_prompt_hygiene.py -x -q
+        language: system
+        pass_filenames: false
+        types: [python]

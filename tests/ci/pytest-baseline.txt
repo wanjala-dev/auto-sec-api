@@ -1,0 +1,15 @@
+# Documented pre-existing pytest failures — the CI unit-test gate ignores
+# these and fails ONLY on new failures (tests/ci/check_baseline.py).
+#
+# One junit identity per line: <dotted.module.Class>::<test_name>.
+# History of the drift: CLAUDE.md "Test-After-Change Rule" +
+# docs/triage/SPONSORSHIP_TEST_DRIFT_2026_06_03.md.
+#
+# Rules:
+#  - NEVER add to this file to make your own PR green — fix your test.
+#  - Additions are only legitimate when importing a newly-discovered
+#    pre-existing failure, with a triage-doc reference in the PR.
+#  - When you fix a baseline failure, prune its line in the same PR
+#    (the gate tells you which entries now pass).
+#
+# Seeded from the first CI run on 2026-07-06 (workflow: unit-tests.yml).
