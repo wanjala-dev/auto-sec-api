@@ -78,31 +78,22 @@ Notification = get_notifications_models_provider().Notification
 
 
 def _enrich_post_authors(posts: list[dict]) -> None:
-    """Inject ``author_name`` / ``author_avatar`` into serialized feed posts.
+    """Inject ``author_name`` into serialized feed posts.
 
     The FeedPostResource carries only ``author_id`` (the domain entity stays
-    user-detail-free). This is a presentation concern, so the controller
-    batch-resolves display names in ONE query (no N+1) and mutates the dicts in
-    place. Posts with an unresolved author fall back to ``None``.
+    user-detail-free). This is a presentation concern; the display names are
+    batch-resolved through ``SocialService`` in ONE query (no N+1) and the
+    dicts are mutated in place. Posts with an unresolved author fall back to
+    ``None``.
     """
     if not posts:
         return
-    from infrastructure.persistence.users.models import CustomUser
-
     author_ids = {p.get("author_id") for p in posts if p.get("author_id")}
     if not author_ids:
         return
-    users = {
-        str(u.id): u
-        for u in CustomUser.objects.filter(id__in=author_ids).only("id", "first_name", "last_name", "username", "email")
-    }
+    names = _social_service.resolve_user_display_names(author_ids)
     for post in posts:
-        user = users.get(str(post.get("author_id")))
-        if not user:
-            post["author_name"] = None
-            continue
-        name = f"{user.first_name or ''} {user.last_name or ''}".strip()
-        post["author_name"] = name or user.username or user.email
+        post["author_name"] = names.get(str(post.get("author_id")))
 
 
 # ── Followers ───────────────────────────────────────────────────────────
@@ -437,9 +428,7 @@ class WorkspaceFeedView(APIView):
         """Flag which posts the viewer has liked (one query for the page)."""
         if not posts:
             return
-        from infrastructure.persistence.social.models import Post
-
-        liked_ids = set(Post.objects.filter(id__in=[p["id"] for p in posts], likes=viewer).values_list("id", flat=True))
+        liked_ids = _social_service.viewer_liked_post_ids([p["id"] for p in posts], viewer)
         for post in posts:
             post["liked"] = post["id"] in liked_ids
 
@@ -538,21 +527,14 @@ class WorkspaceFeedPostLikeView(APIView):
     name = "workspace-feed-post-like"
 
     def post(self, request, pk):
-        from infrastructure.persistence.social.models import Post
-
-        post = Post.objects.filter(pk=pk, is_deleted=False).first()
-        if post is None:
+        result = _social_service.toggle_feed_post_like(pk, request.user)
+        if result is None:
             return Response(
                 {"success": False, "error": "Post not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        if post.likes.filter(pk=request.user.pk).exists():
-            post.likes.remove(request.user)
-            liked = False
-        else:
-            post.likes.add(request.user)
-            liked = True
-        return Response({"success": True, "data": {"liked": liked, "like_count": post.likes.count()}})
+        liked, like_count = result
+        return Response({"success": True, "data": {"liked": liked, "like_count": like_count}})
 
 
 class WorkspaceFeedPostCommentsView(APIView):
@@ -579,34 +561,27 @@ class WorkspaceFeedPostCommentsView(APIView):
         }
 
     def get(self, request, pk):
-        from infrastructure.persistence.social.models import Comment, Post
-
-        if not Post.objects.filter(pk=pk).exists():
+        if not _social_service.post_exists(pk):
             return Response(
                 {"success": False, "error": "Post not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        comments = (
-            Comment.objects.filter(post_id=pk, is_deleted=False).select_related("author").order_by("-created_on")[:100]
-        )
+        comments = _social_service.list_post_comments(pk, limit=100)
         return Response({"success": True, "data": [self._serialize(c) for c in comments]})
 
     def post(self, request, pk):
-        from infrastructure.persistence.social.models import Comment, Post
-
         body = (request.data.get("comment") or request.data.get("body") or "").strip()
         if not body:
             return Response(
                 {"success": False, "error": "Comment body is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        post = Post.objects.filter(pk=pk, is_deleted=False).first()
-        if post is None:
+        comment = _social_service.add_post_comment(post_id=pk, author=request.user, body=body)
+        if comment is None:
             return Response(
                 {"success": False, "error": "Post not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        comment = Comment.objects.create(post=post, author=request.user, comment=body)
         return Response(
             {"success": True, "data": self._serialize(comment)},
             status=status.HTTP_201_CREATED,

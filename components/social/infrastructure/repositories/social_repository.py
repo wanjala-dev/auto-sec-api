@@ -39,6 +39,49 @@ class SocialRepository:
         comment.save()
         return comment
 
+    def get_active_post(self, post_id):
+        from infrastructure.persistence.social.models import Post
+        return Post.objects.filter(pk=post_id, is_deleted=False).first()
+
+    def post_exists(self, post_id) -> bool:
+        from infrastructure.persistence.social.models import Post
+        return Post.objects.filter(pk=post_id).exists()
+
+    def liked_post_ids(self, post_ids, user) -> set:
+        """IDs (subset of ``post_ids``) the user has liked — one query."""
+        from infrastructure.persistence.social.models import Post
+        return set(Post.objects.filter(id__in=post_ids, likes=user).values_list("id", flat=True))
+
+    def like_count(self, post) -> int:
+        return post.likes.count()
+
+    def list_post_comments(self, post_id, limit: int = 100):
+        from infrastructure.persistence.social.models import Comment
+        return list(
+            Comment.objects.filter(post_id=post_id, is_deleted=False)
+            .select_related("author")
+            .order_by("-created_on")[:limit]
+        )
+
+    def add_post_comment(self, *, post, author, body: str):
+        from infrastructure.persistence.social.models import Comment
+        return Comment.objects.create(post=post, author=author, comment=body)
+
+    # ── User display resolution ─────────────────────────────────────────
+
+    def resolve_user_display_names(self, user_ids) -> dict:
+        """Batch-resolve ``{user_id: display_name}`` in ONE query (no N+1)."""
+        from infrastructure.persistence.users.models import CustomUser
+
+        users = CustomUser.objects.filter(id__in=user_ids).only(
+            "id", "first_name", "last_name", "username", "email"
+        )
+        resolved: dict = {}
+        for user in users:
+            name = f"{user.first_name or ''} {user.last_name or ''}".strip()
+            resolved[str(user.id)] = name or user.username or user.email
+        return resolved
+
     # ── Tags ─────────────────────────────────────────────────────────────
 
     def get_tag_queryset(self) -> QuerySet:
