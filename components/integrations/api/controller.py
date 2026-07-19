@@ -15,21 +15,37 @@ Flow (the pattern production security vendors use):
    (``organizations:ListAccounts``) into AwsAccountLink rows. Verification is
    per-account so one broken account degrades — never breaks — the org.
 
-The role's inline policy is LEAST-PRIVILEGE read: CloudTrail S3 objects, the
-notification SQS queue, org account listing (management only), and scoped
-KMS decrypt for encrypted trails.
+Controllers here are THIN: parse a request DTO, call the application
+service / use case resolved from the provider, serialize a resource DTO.
+All ORM access lives in ``AwsConnectionRepository``; the STS/boto3 call
+lives behind ``OrgVerificationPort``.
 """
 
 from __future__ import annotations
 
-import json
 import logging
-import secrets
 
 from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from components.integrations.api.requests.create_aws_connection_request import (
+    CreateAwsConnectionRequest,
+)
+from components.integrations.api.requests.open_draft_pr_request import (
+    OpenDraftPrRequest,
+)
+from components.integrations.api.resources.aws_connection_resource import (
+    AwsConnectionResource,
+)
+from components.integrations.api.resources.draft_pr_resource import DraftPrResource
+from components.integrations.application.aws_connection_service import (
+    OrgVerificationError,
+)
+from components.integrations.application.providers.aws_connection_provider import (
+    get_aws_connection_service,
+    get_onboarding_template_use_case,
+)
 from components.membership.api.permissions import has_workspace_permission
 
 logger = logging.getLogger(__name__)
@@ -37,265 +53,32 @@ logger = logging.getLogger(__name__)
 CanManageIntegrations = has_workspace_permission("manage_integrations")
 
 
-# Our platform's AWS account — the ONLY principal the customer role trusts.
-# Resolved from settings/env at request time (never hardcoded per-tenant).
-def _vendor_account_id() -> str:
-    from django.conf import settings
-
-    acct = getattr(settings, "AUTOSEC_VENDOR_AWS_ACCOUNT_ID", "") or __import__("os").environ.get(
-        "AUTOSEC_VENDOR_AWS_ACCOUNT_ID", ""
-    )
-    if not (acct.isdigit() and len(acct) == 12):
-        # NEVER emit a placeholder into a customer trust policy — a role
-        # trusting a wrong/nonexistent account is a silent onboarding break.
-        raise RuntimeError(
-            "AUTOSEC_VENDOR_AWS_ACCOUNT_ID is not configured — set the "
-            "platform's AWS account id before generating onboarding templates."
-        )
-    return acct
-
-
-def _serialize(conn) -> dict:
-    return {
-        "id": str(conn.id),
-        "name": conn.name,
-        "management_account_id": conn.management_account_id,
-        "organization_id": conn.organization_id,
-        "role_name": conn.role_name,
-        "external_id": conn.external_id,
-        "org_wide": conn.org_wide,
-        "regions": conn.regions,
-        "trail_s3_bucket": conn.trail_s3_bucket,
-        "sqs_queue_url": conn.sqs_queue_url,
-        "status": conn.status,
-        "last_verified_at": conn.last_verified_at.isoformat() if conn.last_verified_at else None,
-        "last_error": conn.last_error,
-        "accounts": [
-            {
-                "account_id": a.account_id,
-                "account_name": a.account_name,
-                "status": a.status,
-            }
-            for a in conn.accounts.all()[:200]
-        ],
-    }
-
-
-def build_cloudformation_template(conn) -> dict:
-    """The customer-side template: audit role (+ optional org StackSet)."""
-    vendor = _vendor_account_id()
-    role = {
-        "Type": "AWS::IAM::Role",
-        "Properties": {
-            "RoleName": conn.role_name,
-            "AssumeRolePolicyDocument": {
-                "Version": "2012-10-17",
-                "Statement": [
-                    {
-                        "Effect": "Allow",
-                        "Principal": {"AWS": f"arn:aws:iam::{vendor}:root"},
-                        "Action": "sts:AssumeRole",
-                        "Condition": {"StringEquals": {"sts:ExternalId": conn.external_id}},
-                    }
-                ],
-            },
-            "Policies": [
-                {
-                    "PolicyName": "AutoSecAuditReadOnly",
-                    "PolicyDocument": {
-                        "Version": "2012-10-17",
-                        "Statement": [
-                            {
-                                "Sid": "TrailObjects",
-                                "Effect": "Allow",
-                                "Action": ["s3:GetObject", "s3:GetBucketLocation", "s3:ListBucket"],
-                                "Resource": ["arn:aws:s3:::*cloudtrail*", "arn:aws:s3:::*cloudtrail*/*"],
-                            },
-                            {
-                                "Sid": "TrailQueue",
-                                "Effect": "Allow",
-                                "Action": [
-                                    "sqs:ReceiveMessage",
-                                    "sqs:DeleteMessage",
-                                    "sqs:GetQueueAttributes",
-                                ],
-                                "Resource": "*",
-                                "Condition": {"StringLike": {"aws:ResourceTag/autosec": "*"}},
-                            },
-                            {
-                                "Sid": "OrgDiscovery",
-                                "Effect": "Allow",
-                                "Action": ["organizations:ListAccounts", "organizations:DescribeOrganization"],
-                                "Resource": "*",
-                            },
-                            {
-                                "Sid": "TrailKms",
-                                "Effect": "Allow",
-                                "Action": ["kms:Decrypt"],
-                                "Resource": "*",
-                                "Condition": {"StringLike": {"kms:ViaService": "s3.*.amazonaws.com"}},
-                            },
-                        ],
-                    },
-                }
-            ],
-        },
-    }
-    resources = {"AutoSecAuditRole": role}
-    if conn.org_wide:
-        # Member-account role rollout: service-managed StackSet with
-        # auto-deployment — future accounts are covered automatically.
-        member_template = {
-            "AWSTemplateFormatVersion": "2010-09-09",
-            "Resources": {
-                "AutoSecAuditRole": json.loads(json.dumps(role))  # same role, member scope
-            },
-        }
-        # Members don't need org discovery.
-        member_template["Resources"]["AutoSecAuditRole"]["Properties"]["Policies"][0]["PolicyDocument"]["Statement"] = [
-            s
-            for s in member_template["Resources"]["AutoSecAuditRole"]["Properties"]["Policies"][0]["PolicyDocument"][
-                "Statement"
-            ]
-            if s["Sid"] != "OrgDiscovery"
-        ]
-        resources["AutoSecOrgStackSet"] = {
-            "Type": "AWS::CloudFormation::StackSet",
-            "Properties": {
-                "StackSetName": f"AutoSec-{str(conn.id)[:8]}",
-                "PermissionModel": "SERVICE_MANAGED",
-                "AutoDeployment": {"Enabled": True, "RetainStacksOnAccountRemoval": False},
-                "Capabilities": ["CAPABILITY_NAMED_IAM"],
-                "StackInstancesGroup": [
-                    {
-                        "DeploymentTargets": {"OrganizationalUnitIds": [{"Ref": "RootOuId"}]},
-                        "Regions": ["us-east-1"],
-                    }
-                ],
-                "TemplateBody": json.dumps(member_template),
-            },
-        }
-    template = {
-        "AWSTemplateFormatVersion": "2010-09-09",
-        "Description": "Auto-Sec read-only audit access (CloudTrail ingestion).",
-        "Parameters": (
-            {"RootOuId": {"Type": "String", "Description": "Root OU id (r-xxxx) for org-wide rollout."}}
-            if conn.org_wide
-            else {}
-        ),
-        "Resources": resources,
-    }
-    return template
-
-
-def build_terraform_module(conn) -> str:
-    """Terraform equivalent for IaC-first customers (same role + trust).
-
-    Single-account: the audit role in the management account. Org-wide: the
-    customer applies the same module per account via their own orchestration
-    (or uses our CloudFormation StackSet path — service-managed StackSets are
-    a CFN-native capability, which is why vendors ship BOTH formats).
-    """
-    vendor = _vendor_account_id()
-    return f'''variable "external_id" {{
-  description = "Auto-Sec vendor-generated external id (confused-deputy token)"
-  type        = string
-  default     = "{conn.external_id}"
-}}
-
-resource "aws_iam_role" "autosec_audit" {{
-  name = "{conn.role_name}"
-
-  assume_role_policy = jsonencode({{
-    Version = "2012-10-17"
-    Statement = [{{
-      Effect    = "Allow"
-      Principal = {{ AWS = "arn:aws:iam::{vendor}:root" }}
-      Action    = "sts:AssumeRole"
-      Condition = {{ StringEquals = {{ "sts:ExternalId" = var.external_id }} }}
-    }}]
-  }})
-}}
-
-resource "aws_iam_role_policy" "autosec_audit_read" {{
-  name = "AutoSecAuditReadOnly"
-  role = aws_iam_role.autosec_audit.id
-
-  policy = jsonencode({{
-    Version = "2012-10-17"
-    Statement = [
-      {{
-        Sid      = "TrailObjects"
-        Effect   = "Allow"
-        Action   = ["s3:GetObject", "s3:GetBucketLocation", "s3:ListBucket"]
-        Resource = ["arn:aws:s3:::*cloudtrail*", "arn:aws:s3:::*cloudtrail*/*"]
-      }},
-      {{
-        Sid      = "TrailQueue"
-        Effect   = "Allow"
-        Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
-        Resource = "*"
-        Condition = {{ StringLike = {{ "aws:ResourceTag/autosec" = "*" }} }}
-      }},
-      {{
-        Sid      = "OrgDiscovery"
-        Effect   = "Allow"
-        Action   = ["organizations:ListAccounts", "organizations:DescribeOrganization"]
-        Resource = "*"
-      }},
-      {{
-        Sid      = "TrailKms"
-        Effect   = "Allow"
-        Action   = ["kms:Decrypt"]
-        Resource = "*"
-        Condition = {{ StringLike = {{ "kms:ViaService" = "s3.*.amazonaws.com" }} }}
-      }}
-    ]
-  }})
-}}
-
-output "autosec_role_arn" {{
-  value = aws_iam_role.autosec_audit.arn
-}}
-'''
-
-
 class AwsConnectionListCreateView(APIView):
     permission_classes = (permissions.IsAuthenticated, CanManageIntegrations)
     name = "integrations-aws"
 
     def get(self, request, workspace_id):
-        from infrastructure.persistence.integrations.models import AwsOrganizationConnection
-
-        conns = AwsOrganizationConnection.objects.filter(workspace_id=workspace_id).prefetch_related("accounts")
-        return Response({"success": True, "data": [_serialize(c) for c in conns]})
+        conns = get_aws_connection_service().list_connections(workspace_id)
+        return Response({"success": True, "data": [AwsConnectionResource.from_model(c).to_dict() for c in conns]})
 
     def post(self, request, workspace_id):
-        from infrastructure.persistence.integrations.models import AwsOrganizationConnection
-
-        mgmt = (request.data.get("management_account_id") or "").strip()
-        if not (mgmt.isdigit() and len(mgmt) == 12):
-            return Response(
-                {"success": False, "error": "management_account_id must be a 12-digit AWS account id."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        conn, created = AwsOrganizationConnection.objects.get_or_create(
+        req = CreateAwsConnectionRequest.from_payload(request.data)
+        error = req.validation_error()
+        if error:
+            return Response({"success": False, "error": error}, status=status.HTTP_400_BAD_REQUEST)
+        conn, created = get_aws_connection_service().create_connection(
             workspace_id=workspace_id,
-            management_account_id=mgmt,
-            defaults={
-                "name": request.data.get("name") or "AWS Organization",
-                "role_name": request.data.get("role_name") or "AutoSecAuditRole",
-                "org_wide": bool(request.data.get("org_wide", True)),
-                "regions": request.data.get("regions") or [],
-                "trail_s3_bucket": request.data.get("trail_s3_bucket") or "",
-                "sqs_queue_url": request.data.get("sqs_queue_url") or "",
-                # Vendor-generated, URL-safe, unique — the confused-deputy token.
-                "external_id": f"autosec-{secrets.token_urlsafe(24)}",
-                "created_by": request.user,
-            },
+            created_by=request.user,
+            name=req.name,
+            role_name=req.role_name,
+            management_account_id=req.management_account_id,
+            org_wide=req.org_wide,
+            regions=req.regions,
+            trail_s3_bucket=req.trail_s3_bucket,
+            sqs_queue_url=req.sqs_queue_url,
         )
         return Response(
-            {"success": True, "data": _serialize(conn), "created": created},
+            {"success": True, "data": AwsConnectionResource.from_model(conn).to_dict(), "created": created},
             status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
         )
 
@@ -305,19 +88,18 @@ class AwsConnectionTemplateView(APIView):
     name = "integrations-aws-cloudformation"
 
     def get(self, request, workspace_id, connection_id):
-        from infrastructure.persistence.integrations.models import AwsOrganizationConnection
-
-        conn = AwsOrganizationConnection.objects.filter(id=connection_id, workspace_id=workspace_id).first()
+        conn = get_aws_connection_service().get_connection(workspace_id, connection_id)
         if conn is None:
             return Response({"success": False, "error": "Connection not found."}, status=404)
+        use_case = get_onboarding_template_use_case()
         fmt = (request.query_params.get("fmt") or "cloudformation").lower()
         if fmt == "terraform":
-            return Response({"success": True, "format": "terraform", "data": build_terraform_module(conn)})
+            return Response({"success": True, "format": "terraform", "data": use_case.terraform(conn)})
         return Response(
             {
                 "success": True,
                 "format": "cloudformation",
-                "data": build_cloudformation_template(conn),
+                "data": use_case.cloudformation(conn),
             }
         )
 
@@ -327,58 +109,18 @@ class AwsConnectionVerifyView(APIView):
     name = "integrations-aws-verify"
 
     def post(self, request, workspace_id, connection_id):
-        from django.utils import timezone
-
-        from infrastructure.persistence.integrations.models import (
-            AwsAccountLink,
-            AwsOrganizationConnection,
-        )
-
-        conn = AwsOrganizationConnection.objects.filter(id=connection_id, workspace_id=workspace_id).first()
+        service = get_aws_connection_service()
+        conn = service.get_connection(workspace_id, connection_id)
         if conn is None:
             return Response({"success": False, "error": "Connection not found."}, status=404)
-
-        from components.integrations.infrastructure.adapters.sts_org_adapter import (
-            StsOrgAdapter,
-        )
-
-        adapter = StsOrgAdapter()
         try:
-            result = adapter.verify_and_discover(
-                management_account_id=conn.management_account_id,
-                role_name=conn.role_name,
-                external_id=conn.external_id,
-                discover=conn.org_wide,
-            )
-        except Exception as exc:
-            logger.exception(
-                "aws_connection_verify_failed connection_id=%s workspace_id=%s",
-                connection_id,
-                workspace_id,
-            )
-            conn.status = AwsOrganizationConnection.Status.ERROR
-            conn.last_error = str(exc)[:2000]
-            conn.save(update_fields=["status", "last_error", "updated_at"])
+            conn = service.verify_connection(conn)
+        except OrgVerificationError as exc:
             return Response(
-                {"success": False, "error": conn.last_error},
+                {"success": False, "error": str(exc)},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
-
-        conn.status = AwsOrganizationConnection.Status.CONNECTED
-        conn.organization_id = result.get("organization_id") or conn.organization_id
-        conn.last_verified_at = timezone.now()
-        conn.last_error = ""
-        conn.save()
-        for acct in result.get("accounts") or []:
-            AwsAccountLink.objects.update_or_create(
-                connection=conn,
-                account_id=acct["id"],
-                defaults={
-                    "account_name": acct.get("name") or "",
-                    "status": AwsAccountLink.Status.DISCOVERED,
-                },
-            )
-        return Response({"success": True, "data": _serialize(conn)})
+        return Response({"success": True, "data": AwsConnectionResource.from_model(conn).to_dict()})
 
 
 class FindingOpenDraftPrView(APIView):
@@ -417,12 +159,13 @@ class FindingOpenDraftPrView(APIView):
             DraftPrPreconditionError,
         )
 
+        req = OpenDraftPrRequest.from_payload(request.data)
         try:
             result = get_open_draft_pr_use_case().execute(
                 workspace_id=str(workspace_id),
                 task_id=str(task_id),
                 performed_by=str(request.user.id),
-                repo=(request.data.get("repo") or "").strip() or None,
+                repo=req.repo,
             )
         except DraftPrPreconditionError as exc:
             return Response(
@@ -437,15 +180,7 @@ class FindingOpenDraftPrView(APIView):
             )
 
         return Response(
-            {
-                "success": True,
-                "data": {
-                    "url": result.url,
-                    "repo": result.repo,
-                    "branch": result.branch,
-                    "created": result.created,
-                },
-            },
+            {"success": True, "data": DraftPrResource.from_result(result).to_dict()},
             status=status.HTTP_201_CREATED if result.created else status.HTTP_200_OK,
         )
 
@@ -466,9 +201,7 @@ class AwsConnectionLogStreamView(APIView):
     def get(self, request, workspace_id, connection_id):
         from django.core.cache import cache
 
-        from infrastructure.persistence.integrations.models import AwsOrganizationConnection
-
-        conn = AwsOrganizationConnection.objects.filter(id=connection_id, workspace_id=workspace_id).first()
+        conn = get_aws_connection_service().get_connection(workspace_id, connection_id)
         if conn is None:
             return Response({"success": False, "error": "Connection not found."}, status=404)
 
