@@ -133,6 +133,24 @@ class TriageAgent(WorkspaceContextMixin, BaseAgent):
         return task_tools.create_task(self, payload)
 
     @tool(
+        name="open_draft_pr",
+        description=(
+            "Open a DRAFT GitHub pull request that patches the file implicated "
+            "by a triaged Log-Watch finding. Requires an installed GitHub "
+            "connection (with the target repo on its allowlist) AND the triage "
+            "agent's open_draft_pr capability enabled in its settings. Only "
+            "works on findings that are already triaged and NOT flagged "
+            "needs_human. Irreversible tier: needs explicit human approval; "
+            "autonomous runs are denied and must surface the finding instead. "
+            'Input: JSON {"task_id": "<id>", "repo": "<owner/repo>" (optional '
+            "— defaults to the connection's first allowlisted repo)}."
+        ),
+        risk=ToolRisk.IRREVERSIBLE,
+    )
+    def open_draft_pr(self, input_str: str) -> str:
+        return triage_tools.open_draft_pr(self, input_str)
+
+    @tool(
         name="get_team_members",
         description=(
             "List SOC team members in this workspace (name + id) so a finding can be assigned to a real person."

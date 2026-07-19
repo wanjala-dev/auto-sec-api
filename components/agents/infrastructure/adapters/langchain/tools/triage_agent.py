@@ -102,3 +102,44 @@ def triage_finding(agent, input_str: str) -> str:
         describe_action=describe_action,
         suggestion_text=suggestion_text,
     )
+
+
+def open_draft_pr(agent, input_str: str) -> str:
+    """IRREVERSIBLE — open a DRAFT GitHub PR for one triaged finding.
+
+    Thin delegation to the integrations use case (the single choke point that
+    enforces EVERY precondition: installed connection, repo allowlist, finding
+    triaged + not needs_human, capability enabled). The risk gate denies
+    autonomous runs before this body executes; ``performed_by`` is therefore
+    the approving human principal driving this run.
+    """
+    from components.integrations.application.providers.github_pr_provider import get_open_draft_pr_use_case
+    from components.integrations.application.use_cases.open_draft_pr_use_case import DraftPrPreconditionError
+
+    raw = (input_str or "").strip()
+    try:
+        data = json.loads(raw) if raw.startswith("{") else {"task_id": raw}
+    except (ValueError, TypeError):
+        data = {"task_id": raw}
+    task_id = (data.get("task_id") or "").strip()
+    if not task_id:
+        return "task_id is required to open a draft PR."
+
+    from components.integrations.application.ports.github_pr_port import GitHubApiError
+
+    try:
+        result = get_open_draft_pr_use_case().execute(
+            workspace_id=str(agent.workspace_id),
+            task_id=task_id,
+            performed_by=str(agent.user_id),
+            repo=(data.get("repo") or "").strip() or None,
+        )
+    except DraftPrPreconditionError as exc:
+        return f"Cannot open a draft PR ({exc.reason}): {exc}"
+    except GitHubApiError as exc:
+        logger.exception("open_draft_pr github api error task_id=%s", task_id)
+        return f"GitHub API error while opening the draft PR: {exc}"
+
+    if not result.created:
+        return f"A draft PR already exists for this finding: {result.url}"
+    return f"Opened draft PR {result.url} (repo {result.repo}, branch {result.branch})."
