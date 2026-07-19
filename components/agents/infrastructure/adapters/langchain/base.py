@@ -4,32 +4,30 @@ Base Agent Framework
 Provides the foundation for all AI agents with common functionality,
 state management, and LangChain integration.
 """
-from abc import ABC, abstractmethod
-from typing import Dict, List, Any, Optional, Union, Tuple
-from dataclasses import dataclass, field
-from datetime import datetime
+
 import functools
 import json
 import logging
-import os
+from abc import ABC
+from dataclasses import dataclass, field
+from datetime import datetime
 from importlib import import_module
+from typing import Any, Union
 
-from langchain.agents import AgentExecutor, create_react_agent
-from langchain.tools import StructuredTool, Tool
-from langchain.tools.base import BaseTool
-from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
-from langchain.schema import BaseMessage, HumanMessage, SystemMessage
-from langchain.memory import ConversationBufferMemory
+# LangChain 1.x — the tool-calling agent graph. `create_agent` replaces the
+# 0.3 `AgentExecutor` + `create_react_agent` / `create_tool_calling_agent`
+# construction. See docs/plans/LANGCHAIN_1X_MIGRATION_2026-07-18.md.
+from langchain.agents import create_agent
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.tools import StructuredTool, Tool
+from langchain_core.tools.base import BaseTool
 
-try:  # pragma: no cover — LangChain >= 0.1 has this; fall back to ReAct if not.
-    from langchain.agents import create_tool_calling_agent as _create_tool_calling_agent
-except ImportError:
-    _create_tool_calling_agent = None
-
-from components.agents.application.ports.tracing_port import TracingPort, NullTracingAdapter
 from components.agents.application.ports.llm_provider_port import LLMProviderPort
+from components.agents.application.ports.tracing_port import NullTracingAdapter, TracingPort
 from components.agents.infrastructure.adapters.langchain.graph_agent import build_graph_executor
-from components.agents.infrastructure.adapters.langchain.memory_service import AgentMemoryService, get_agent_memory_service
+from components.agents.infrastructure.adapters.langchain.memory_service import (
+    get_agent_memory_service,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,8 +56,8 @@ class ToolResult:
 
     ok: bool = True
     message: str = ""
-    data: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
+    data: dict[str, Any] | None = None
+    error: str | None = None
 
     def serialize(self) -> str:
         if not self.ok:
@@ -72,10 +70,12 @@ class ToolResult:
         return self.message or "OK"
 
 
-def tool(name: Optional[str] = None,
-         description: Optional[str] = None,
-         args_schema: Optional[type] = None,
-         risk: Optional[str] = None):
+def tool(
+    name: str | None = None,
+    description: str | None = None,
+    args_schema: type | None = None,
+    risk: str | None = None,
+):
     """Mark a method on a `BaseAgent` subclass as an LLM-invocable tool.
 
     The base class's `__init_subclass__` collects every method tagged with
@@ -129,7 +129,8 @@ def tool(name: Optional[str] = None,
 # (typed Pydantic models) are not adapted — they already advertise their
 # real shape to the LLM.
 try:
-    from pydantic import BaseModel as _PdModel, ConfigDict as _PdConfigDict
+    from pydantic import BaseModel as _PdModel
+    from pydantic import ConfigDict as _PdConfigDict
 except ImportError:  # pragma: no cover — pydantic v1 fallback
     from pydantic.v1 import BaseModel as _PdModel  # type: ignore
 
@@ -144,6 +145,7 @@ class LegacyStringToolInput(_PdModel):
     if _PdConfigDict is not None:
         model_config = _PdConfigDict(extra="allow")
     else:  # pragma: no cover — pydantic v1
+
         class Config:  # type: ignore[no-redef]
             extra = "allow"
 
@@ -167,7 +169,136 @@ def _adapt_legacy_tool(bound):
     return adapter
 
 
-def register_agent(name: str, aliases: Tuple[str, ...] = ()):
+class _GraphExecutorHandle:
+    """Adapts a LangChain 1.x ``create_agent`` graph to the legacy
+    ``AgentExecutor.invoke`` contract the rest of ``BaseAgent`` expects.
+
+    ``execute()`` calls ``self.agent_executor.invoke({"input": query})`` and
+    reads ``result["output"]`` + ``result["intermediate_steps"]``. The 1.x
+    graph instead speaks ``{"messages": [...]}`` in and out. This handle
+    translates both directions so the migration is confined to the executor
+    seam:
+
+      - IN:  ``{"input": q}`` → ``{"messages": [*history, HumanMessage(q)]}``
+      - OUT: final answer  = ``result["messages"][-1].content``
+             intermediate  = ``(AgentAction-like, observation)`` pairs
+                             reconstructed from ``AIMessage.tool_calls`` +
+                             the following ``ToolMessage`` so
+                             ``_persist_tool_observations`` keeps working.
+
+    Conversation memory (the 0.3 ``ConversationBufferMemory`` replacement):
+    ``history_provider`` returns the SQL-persisted window of prior messages
+    (``BaseAgent.memory.load_messages()``), which is threaded into the graph
+    input on every invoke. Persistence of the NEW turn stays where it always
+    was — ``memory_service.record_execution`` in ``execute()`` — so there is
+    exactly one durable store (Postgres) and no process-local checkpointer
+    that would silently fork the conversation across workers.
+
+    ``AgentTestCase`` never sees this class — it overwrites
+    ``self.agent_executor`` with its own scripted stub — so unit tests are
+    untouched. ``.callbacks`` is exposed so the ``execute()`` Langfuse-flush
+    loop still finds the run callbacks.
+    """
+
+    def __init__(
+        self,
+        *,
+        graph,
+        callbacks=None,
+        recursion_limit: int = 50,
+        history_provider=None,
+        rubric_provider=None,
+    ):
+        self._graph = graph
+        self.callbacks = list(callbacks or [])
+        self._recursion_limit = recursion_limit
+        self._history_provider = history_provider
+        self._rubric_provider = rubric_provider
+
+    def _build_config(self) -> dict:
+        config: dict[str, Any] = {"recursion_limit": self._recursion_limit}
+        if self.callbacks:
+            config["callbacks"] = self.callbacks
+        return config
+
+    def _load_history(self) -> list[BaseMessage]:
+        """Prior-turn messages from the durable SQL store (windowed).
+
+        Degrades to an empty history on any failure — a memory outage must
+        never take down the chat turn itself.
+        """
+        if not callable(self._history_provider):
+            return []
+        try:
+            history = self._history_provider() or []
+        except Exception:
+            logger.warning("history_provider failed; invoking without prior context", exc_info=True)
+            return []
+        return [msg for msg in history if isinstance(msg, BaseMessage)]
+
+    def invoke(self, inputs: dict[str, Any]) -> dict[str, Any]:
+        query = inputs.get("input", "") if isinstance(inputs, dict) else str(inputs)
+        state: dict[str, Any] = {"messages": [*self._load_history(), HumanMessage(content=query)]}
+        # deepagents.RubricMiddleware activates via the invocation state:
+        # with no "rubric" key it is a no-op. The provider returns the
+        # agent-type rubric only when the middleware is attached + enabled.
+        if callable(self._rubric_provider):
+            try:
+                rubric = self._rubric_provider()
+            except Exception:
+                rubric = None
+            if rubric:
+                state["rubric"] = rubric
+        result = self._graph.invoke(state, config=self._build_config())
+        messages = result.get("messages", []) if isinstance(result, dict) else []
+        output = ""
+        for msg in reversed(messages):
+            content = getattr(msg, "content", None)
+            if isinstance(msg, AIMessage) and content and not getattr(msg, "tool_calls", None):
+                output = content if isinstance(content, str) else str(content)
+                break
+        if not output and messages:
+            last = messages[-1]
+            output = getattr(last, "content", "") or ""
+        return {
+            "input": query,
+            "output": output,
+            "intermediate_steps": self._reconstruct_intermediate_steps(messages),
+        }
+
+    @staticmethod
+    def _reconstruct_intermediate_steps(messages) -> list:
+        """Rebuild ``[(AgentAction-like, observation)]`` pairs from the
+        graph transcript so ``_persist_tool_observations`` (which unpacks
+        ``step[0].tool`` / ``step[0].tool_input`` / ``step[1]``) still logs
+        each tool call to DeepRunLog."""
+        from types import SimpleNamespace
+
+        # Map tool_call_id → tool output from ToolMessages.
+        observations: dict[str, Any] = {}
+        for msg in messages:
+            if isinstance(msg, ToolMessage):
+                observations[getattr(msg, "tool_call_id", "")] = getattr(msg, "content", "")
+
+        steps = []
+        for msg in messages:
+            tool_calls = getattr(msg, "tool_calls", None) if isinstance(msg, AIMessage) else None
+            if not tool_calls:
+                continue
+            for call in tool_calls:
+                name = call.get("name") if isinstance(call, dict) else getattr(call, "name", "")
+                args = call.get("args") if isinstance(call, dict) else getattr(call, "args", {})
+                call_id = call.get("id") if isinstance(call, dict) else getattr(call, "id", "")
+                action = SimpleNamespace(
+                    tool=name,
+                    tool_input=args,
+                    log=f"Invoking {name} with {args}",
+                )
+                steps.append((action, observations.get(call_id, "")))
+        return steps
+
+
+def register_agent(name: str, aliases: tuple[str, ...] = ()):
     """Register an agent class in the `AgentRegistry` at class definition time.
 
     Replaces the manual `AgentRegistry.register("name", BlogAgent)` block at
@@ -237,9 +368,7 @@ def requires_role(*allowed_roles: str):
                         "directly. Surface it as a finding for a workspace "
                         "admin to review."
                     )
-                if Workspace.objects.filter(
-                    id=workspace_id, workspace_owner_id=user_id
-                ).exists():
+                if Workspace.objects.filter(id=workspace_id, workspace_owner_id=user_id).exists():
                     return func(self, *args, **kwargs)
                 has_role = WorkspaceMembership.objects.filter(
                     workspace_id=workspace_id,
@@ -247,7 +376,7 @@ def requires_role(*allowed_roles: str):
                     status=WorkspaceMembership.Status.ACTIVE,
                     role__in=allowed,
                 ).exists()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning(
                     "requires_role check failed for %s: %s",
                     func.__name__,
@@ -288,9 +417,7 @@ def resolve_workspace_role(user_id, workspace_id):
         # it reads every tier. Its write/action cap lives in ``requires_role``.
         if is_ai_service_principal(user_id, workspace_id):
             return "ai_service"
-        if Workspace.objects.filter(
-            id=workspace_id, workspace_owner_id=user_id
-        ).exists():
+        if Workspace.objects.filter(id=workspace_id, workspace_owner_id=user_id).exists():
             return "owner"
         return (
             WorkspaceMembership.objects.filter(
@@ -301,7 +428,7 @@ def resolve_workspace_role(user_id, workspace_id):
             .values_list("role", flat=True)
             .first()
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning(
             "resolve_workspace_role failed user_id=%s workspace_id=%s: %s",
             user_id,
@@ -326,10 +453,8 @@ def is_ai_service_principal(user_id, workspace_id) -> bool:
     from infrastructure.persistence.ai.models import AITeammateProfile
 
     try:
-        return AITeammateProfile.objects.filter(
-            workspace_id=workspace_id, user_id=user_id
-        ).exists()
-    except Exception as exc:  # noqa: BLE001
+        return AITeammateProfile.objects.filter(workspace_id=workspace_id, user_id=user_id).exists()
+    except Exception as exc:
         logger.warning(
             "is_ai_service_principal check failed user_id=%s workspace_id=%s: %s",
             user_id,
@@ -360,14 +485,10 @@ def _risk_gated(func, tool_name, explicit_risk, agent):
             is_autonomous = is_ai_service_principal(
                 getattr(agent, "user_id", None), getattr(agent, "workspace_id", None)
             )
-            approval_granted = bool(
-                (getattr(agent, "config", None) or {}).get("approval_granted")
-            )
-        except Exception:  # noqa: BLE001
+            approval_granted = bool((getattr(agent, "config", None) or {}).get("approval_granted"))
+        except Exception:
             is_autonomous, approval_granted = False, False
-        refusal = tool_risk_refusal(
-            resolved_risk, is_autonomous=is_autonomous, approval_granted=approval_granted
-        )
+        refusal = tool_risk_refusal(resolved_risk, is_autonomous=is_autonomous, approval_granted=approval_granted)
         if refusal is not None:
             return refusal
         return func(*args, **kwargs)
@@ -379,10 +500,10 @@ def _risk_gated(func, tool_name, explicit_risk, agent):
 EXECUTION_STATUS_COMPLETED = "completed"
 EXECUTION_STATUS_FAILED = "failed"
 
-_retry_candidates: List[type[BaseException]] = []
+_retry_candidates: list[type[BaseException]] = []
 
 # Lazy singleton for the default tracing adapter.
-_default_tracing: Optional[TracingPort] = None
+_default_tracing: TracingPort | None = None
 
 
 def _default_tracing_port() -> TracingPort:
@@ -398,6 +519,7 @@ def _default_tracing_port() -> TracingPort:
             from components.agents.infrastructure.adapters.tracing.langfuse import (
                 LangfuseTracingAdapter,
             )
+
             adapter = LangfuseTracingAdapter()
             _default_tracing = adapter if adapter.is_available() else NullTracingAdapter()
         except Exception:
@@ -405,8 +527,17 @@ def _default_tracing_port() -> TracingPort:
             _default_tracing = NullTracingAdapter()
     return _default_tracing
 
+
 try:  # pragma: no cover - optional dependency
-    from requests.exceptions import ChunkedEncodingError, ConnectionError as RequestsConnectionError, Timeout as RequestsTimeout
+    from requests.exceptions import (
+        ChunkedEncodingError,
+    )
+    from requests.exceptions import (
+        ConnectionError as RequestsConnectionError,
+    )
+    from requests.exceptions import (
+        Timeout as RequestsTimeout,
+    )
 except Exception:  # pragma: no cover - requests may be absent in some environments
     ChunkedEncodingError = RequestsConnectionError = RequestsTimeout = None
 else:
@@ -434,7 +565,7 @@ else:
         if candidate:
             _retry_candidates.append(candidate)
 
-RETRYABLE_AGENT_EXCEPTIONS: Tuple[type[BaseException], ...] = tuple(
+RETRYABLE_AGENT_EXCEPTIONS: tuple[type[BaseException], ...] = tuple(
     {candidate for candidate in _retry_candidates if candidate}
 )
 
@@ -442,32 +573,33 @@ RETRYABLE_AGENT_EXCEPTIONS: Tuple[type[BaseException], ...] = tuple(
 @dataclass
 class AgentState:
     """Represents the current state of an agent"""
+
     agent_id: str
     user_id: str
     workspace_id: str
     current_step: int = 0
     total_steps: int = 0
-    context: Dict[str, Any] = field(default_factory=dict)
-    results: List[Dict[str, Any]] = field(default_factory=list)
-    errors: List[str] = field(default_factory=list)
+    context: dict[str, Any] = field(default_factory=dict)
+    results: list[dict[str, Any]] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
     status: str = "initialized"  # initialized, running, completed, failed, paused
-    
-    def to_dict(self) -> Dict[str, Any]:
+
+    def to_dict(self) -> dict[str, Any]:
         """Convert state to dictionary for serialization"""
         return {
-            'agent_id': self.agent_id,
-            'user_id': self.user_id,
-            'workspace_id': self.workspace_id,
-            'current_step': self.current_step,
-            'total_steps': self.total_steps,
-            'context': self.context,
-            'results': self.results,
-            'errors': self.errors,
-            'created_at': self.created_at.isoformat(),
-            'updated_at': self.updated_at.isoformat(),
-            'status': self.status
+            "agent_id": self.agent_id,
+            "user_id": self.user_id,
+            "workspace_id": self.workspace_id,
+            "current_step": self.current_step,
+            "total_steps": self.total_steps,
+            "context": self.context,
+            "results": self.results,
+            "errors": self.errors,
+            "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat(),
+            "status": self.status,
         }
 
 
@@ -485,13 +617,49 @@ class BaseAgent(ABC):
     # Optional class-level profile (ADR 0003). Subclasses set this to
     # advertise name / summary / capabilities / sample_prompts. The DB
     # row's `config["profile"]` overrides any field set here per workspace.
-    profile: Dict[str, Any] = {}
+    profile: dict[str, Any] = {}
+
+    @staticmethod
+    def parse_tool_input(
+        input_str, *, defaults: dict[str, Any] | None = None, text_key: str = "title"
+    ) -> dict[str, Any]:
+        """Normalize a `@tool` string argument into a dict.
+
+        The LLM passes tool arguments as a single string that is USUALLY a JSON
+        object but sometimes just bare text. Rather than every tool re-deriving
+        the same ``try: json.loads(...) except: {"title": raw}`` block (a
+        copy-paste that predates this helper — see the older triage tools), call
+        this once:
+
+            data = self.parse_tool_input(input_str, defaults={"severity": "medium"})
+
+        - A JSON object string → parsed dict (merged over ``defaults``).
+        - Any other non-empty string → ``{text_key: <the string>}`` (merged over
+          ``defaults``) so bare-text calls still work.
+        - Empty / None → a copy of ``defaults`` (or ``{}``).
+
+        Keeps tool bodies focused on behaviour, not argument plumbing.
+        """
+        base = dict(defaults or {})
+        raw = (input_str or "").strip()
+        if not raw:
+            return base
+        if raw.startswith("{"):
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    base.update(parsed)
+                    return base
+            except (ValueError, TypeError):
+                pass
+        base[text_key] = raw
+        return base
 
     # Populated by `__init_subclass__`. List of (method_name, meta) for
     # every `@tool`-decorated method on the class (including those
     # inherited from mixins via MRO). The default `_setup_tools()`
     # promotes these to `langchain.tools.Tool` instances at __init__ time.
-    _decorated_tools: List[Tuple[str, Dict[str, Any]]] = []
+    _decorated_tools: list[tuple[str, dict[str, Any]]] = []
 
     def __init_subclass__(cls, **kwargs):
         """Walk the new subclass's MRO and collect every `@tool`-decorated
@@ -501,8 +669,8 @@ class BaseAgent(ABC):
         """
         super().__init_subclass__(**kwargs)
 
-        seen_names: Dict[str, str] = {}  # tool name -> defining class name
-        collected: List[Tuple[str, Dict[str, Any]]] = []
+        seen_names: dict[str, str] = {}  # tool name -> defining class name
+        collected: list[tuple[str, dict[str, Any]]] = []
 
         for klass in cls.__mro__:
             if klass in (object, BaseAgent):
@@ -531,33 +699,29 @@ class BaseAgent(ABC):
         user_id: str,
         workspace_id: str,
         *,
-        tracing_port: Optional[TracingPort] = None,
-        llm_provider: Optional[LLMProviderPort] = None,
-        telemetry_callback_factory: Optional[Any] = None,
+        tracing_port: TracingPort | None = None,
+        llm_provider: LLMProviderPort | None = None,
+        telemetry_callback_factory: Any | None = None,
         **kwargs,
     ):
         self.agent_id = agent_id
         self.user_id = user_id
         self.workspace_id = workspace_id
-        self._override_conversation_id: Optional[str] = None
+        self._override_conversation_id: str | None = None
         self._tracing_port: TracingPort = tracing_port or _default_tracing_port()
-        self._llm_provider: Optional[LLMProviderPort] = llm_provider
+        self._llm_provider: LLMProviderPort | None = llm_provider
         self._telemetry_callback_factory = telemetry_callback_factory
 
         # Persist incoming configuration for downstream use
-        self.config: Dict[str, Any] = dict(kwargs)
-        self.department_id: Optional[str] = self.config.get("department_id")
+        self.config: dict[str, Any] = dict(kwargs)
+        self.department_id: str | None = self.config.get("department_id")
 
         # Initialize memory service
         self.memory_service = get_agent_memory_service(agent_id)
 
-        self.state = AgentState(
-            agent_id=agent_id,
-            user_id=user_id,
-            workspace_id=workspace_id
-        )
-        self.tools: List[BaseTool] = []
-        self._all_tools: List[BaseTool] = []
+        self.state = AgentState(agent_id=agent_id, user_id=user_id, workspace_id=workspace_id)
+        self.tools: list[BaseTool] = []
+        self._all_tools: list[BaseTool] = []
 
         # Per-execution artifact collector. Tools that produce a
         # downloadable result (PDF report, generated file) call
@@ -567,29 +731,33 @@ class BaseAgent(ABC):
         # artifacts ride out on the assistant ``ConversationMessage``'s
         # ``metadata['artifacts']`` field. Frontend bubble reads that
         # to render a paperclip download icon.
-        self._pending_artifacts: List[Dict[str, Any]] = []
+        self._pending_artifacts: list[dict[str, Any]] = []
 
         # Use memory service instead of basic ConversationBufferMemory
         self.memory = self.memory_service.get_memory(
-            memory_type=self.config.get('memory_type', 'window'),
-            window_size=self.config.get('window_size', 10)
+            memory_type=self.config.get("memory_type", "window"), window_size=self.config.get("window_size", 10)
         )
 
-        self.telemetry_handler: Optional[Any] = None
+        self.telemetry_handler: Any | None = None
 
-        self.agent_executor: Optional[AgentExecutor] = None
-        self.graph_executor: Optional[Any] = None  # LangGraph StateGraph (opt-in)
+        # In 1.x this is a ``_GraphExecutorHandle`` wrapping a ``create_agent``
+        # graph (or the ``AgentTestCase`` scripted stub). Typed ``Any`` because
+        # the legacy ``AgentExecutor`` type no longer exists.
+        self.agent_executor: Any | None = None
+        self._graph_agent: Any | None = None  # the raw create_agent graph
+        self.graph_executor: Any | None = None  # LangGraph StateGraph (opt-in)
         self._use_langgraph: bool = bool(self.config.get("use_langgraph", False))
         self._setup_agent(**kwargs)
-    
+
     def _resolve_llm_provider(self) -> LLMProviderPort:
         """Lazily resolve the LLM provider, falling back to the default adapter."""
         if self._llm_provider is None:
             from components.agents.infrastructure.adapters.llm_provider_adapter import LLMFactoryAdapter
+
             self._llm_provider = LLMFactoryAdapter()
         return self._llm_provider
 
-    def collect_artifact(self, artifact: Dict[str, Any]) -> None:
+    def collect_artifact(self, artifact: dict[str, Any]) -> None:
         """Stash a downloadable artifact produced by a tool this turn.
 
         Tools that kick off PDF generation (financial / sponsorship /
@@ -618,11 +786,11 @@ class BaseAgent(ABC):
         # Initialize LLM via the injected port (no direct LLMFactory import)
         llm_port = self._resolve_llm_provider()
         self.llm = llm_port.get_llm(
-            provider_slug=self.config.get('provider', 'openai'),
-            model_name=self.config.get('model_name', 'gpt-4o-mini'),
-            temperature=self.config.get('temperature', 0.1),  # Lower temperature for agents
+            provider_slug=self.config.get("provider", "openai"),
+            model_name=self.config.get("model_name", "gpt-4o-mini"),
+            temperature=self.config.get("temperature", 0.1),  # Lower temperature for agents
         )
-        
+
         # Setup tools
         self._setup_tools()
         self._all_tools = list(self.tools)
@@ -633,7 +801,7 @@ class BaseAgent(ABC):
         # Optionally build LangGraph executor as an alternative
         if self._use_langgraph:
             self._build_graph_executor()
-    
+
     def _setup_tools(self):
         """Setup agent-specific tools.
 
@@ -705,10 +873,7 @@ class BaseAgent(ABC):
         # indexed workspace snapshot.  Subclasses that declare a tool
         # with the same name win (leftmost-MRO-wins is enforced by the
         # decorator collector).
-        if not any(
-            getattr(t, "name", None) == "retrieve_workspace_context"
-            for t in self.tools
-        ):
+        if not any(getattr(t, "name", None) == "retrieve_workspace_context" for t in self.tools):
             self.tools.append(self._build_workspace_retrieval_tool())
 
     def _build_workspace_retrieval_tool(self) -> Tool:
@@ -728,10 +893,7 @@ class BaseAgent(ABC):
             # the run's DeepRunContext stashed; outside a run it's
             # None. Falling back to the no-op context means tool code
             # below is uniform — every emit goes somewhere.
-            ctx = (
-                getattr(self, "_active_deep_run_context", None)
-                or noop_context()
-            )
+            ctx = getattr(self, "_active_deep_run_context", None) or noop_context()
 
             query_text = (query or "").strip()
             if not query_text:
@@ -760,8 +922,7 @@ class BaseAgent(ABC):
                 )
             except Exception:  # pylint: disable=broad-except
                 logger.warning(
-                    "retrieve_workspace_context: rewriter failed, "
-                    "using raw query",
+                    "retrieve_workspace_context: rewriter failed, using raw query",
                     exc_info=True,
                 )
                 search_query = query_text
@@ -829,14 +990,10 @@ class BaseAgent(ABC):
             )
             ctx.report_progress(100, 100, tool_name=TOOL_NAME)
 
-            lines: List[str] = []
+            lines: list[str] = []
             for index, chunk in enumerate(chunks, 1):
                 metadata = chunk.metadata or {}
-                section_title = (
-                    metadata.get("section_title")
-                    or metadata.get("section")
-                    or "workspace"
-                )
+                section_title = metadata.get("section_title") or metadata.get("section") or "workspace"
                 lines.append(f"[{index}] ({section_title})\n{chunk.content.strip()}")
             return "\n\n".join(lines)
 
@@ -854,52 +1011,40 @@ class BaseAgent(ABC):
                 "factual question about the workspace — do not guess."
             ),
         )
-    
+
     def _create_agent_executor(self):
-        """Create the LangChain agent executor.
+        """Build the LangChain 1.x tool-calling agent graph (``create_agent``).
 
-        Prefers the **tool-calling agent** (``create_tool_calling_agent``)
-        which uses the LLM's native JSON function-calling API — no
-        ReAct ``Thought/Action/Observation`` scaffolding, no prose-vs-
-        format parse failures, no iteration burn from parse retries.
+        Replaces the 0.3 ``AgentExecutor`` + ``create_react_agent`` /
+        ``create_tool_calling_agent`` construction. ``create_agent`` is a
+        native tool-calling graph — it has no ReAct ``Thought/Action/
+        Observation`` prose format, so the whole class of parse-error
+        scaffolding the old path carried (``handle_parsing_errors``,
+        ``early_stopping_method="force"``, the ``return_stopped_response``
+        monkeypatch, the ReAct fallback) is gone.
 
-        Falls back to the legacy ReAct agent when:
-          - ``use_react_agent=True`` is set in config (explicit opt-out)
-          - the installed LangChain is too old to expose
-            ``create_tool_calling_agent``
-          - building the tool-calling agent raises (typically because
-            the bound LLM doesn't advertise function-calling)
+        Migration notes (docs/plans/LANGCHAIN_1X_MIGRATION_2026-07-18.md):
+          - ``self.llm`` is a ``BaseChatModel`` instance; ``create_agent``
+            accepts it directly for ``model=`` so the provider port
+            abstraction is preserved (no ``"provider:model"`` string).
+          - Tools are the same ``StructuredTool`` / ``Tool`` instances the
+            decorator framework promotes — tool NAMES are byte-stable, so
+            ``Agent.config.custom_profile.tool_whitelist`` still resolves.
+          - Memory: the 0.3 ``ConversationBufferMemory`` + conversation-id
+            monkeypatches are replaced by SQL-history threading — the handle
+            prepends ``self.memory.load_messages()`` (the durable
+            Conversation/ConversationMessage window) to every graph invoke,
+            and ``memory_service.record_execution`` keeps persisting the new
+            turn. One store, no process-local checkpointer fork.
+          - The graph is stored on ``self._graph_agent``; ``self.agent_executor``
+            is kept as the invocation handle so the ``AgentTestCase`` seam
+            (which installs a scripted stub on ``self.agent_executor``) and
+            the ``.callbacks`` flush loop in ``execute()`` keep working.
         """
         if not self.tools:
             raise ValueError("No tools defined for agent")
 
-        force_react = bool(self.config.get("use_react_agent", False))
-        agent = None
-
-        if not force_react and _create_tool_calling_agent is not None:
-            try:
-                agent = _create_tool_calling_agent(
-                    llm=self.llm,
-                    tools=self.tools,
-                    prompt=self._create_chat_prompt_template(),
-                )
-                self._agent_impl = "tool_calling"
-            except Exception:
-                logger.warning(
-                    "Tool-calling agent construction failed for agent %s; "
-                    "falling back to ReAct",
-                    self.agent_id,
-                    exc_info=True,
-                )
-                agent = None
-
-        if agent is None:
-            agent = create_react_agent(
-                llm=self.llm,
-                tools=self.tools,
-                prompt=self._create_prompt_template(),
-            )
-            self._agent_impl = "react"
+        self._agent_impl = "create_agent"
 
         callbacks = []
         try:
@@ -908,12 +1053,13 @@ class BaseAgent(ABC):
             else:
                 # Lazy fallback — import only when no factory was injected
                 from components.agents.infrastructure.adapters.langchain.callbacks.telemetry import TelemetryCallback
+
                 self.telemetry_handler = TelemetryCallback(agent_id=self.agent_id)
             callbacks.append(self.telemetry_handler)
         except Exception:
             logger.exception("Failed to initialise telemetry callback for agent %s", self.agent_id)
             self.telemetry_handler = None
-        
+
         # Add tracing callback via port (vendor-agnostic)
         try:
             session_id = None
@@ -943,187 +1089,186 @@ class BaseAgent(ABC):
         except Exception:
             logger.exception("Failed to attach tracing callback for agent %s", self.agent_id)
 
-        # Create executor with explicit runtime guardrails.
+        # Runtime guardrails. In 1.x these are expressed as middleware
+        # (a step-cap middleware) rather than AgentExecutor kwargs. The
+        # values are parsed here and bound to the recursion limit at
+        # invoke time (see ``_invoke_agent_executor``). max_execution_time
+        # has no direct create_agent equivalent — it moves to an invoke
+        # timeout guard (Phase 5); parsed here so config stays honoured.
         try:
-            configured_max_iterations = int(self.config.get('max_iterations', 25))
+            configured_max_iterations = int(self.config.get("max_iterations", 25))
         except (TypeError, ValueError):
             configured_max_iterations = 25
         try:
-            # Bumped 12 → 20 → 40. Each parse-error recovery in
-            # ``handle_parsing_errors=True`` mode costs an iteration,
-            # and chat-style workers often emit prose answers that the
-            # ReAct parser rejects a few times before settling into
-            # "Final Answer:" format. 40 is comfortably above the tail
-            # of parse-retry cost for simple workspace queries.
-            max_tool_calls = int(self.config.get('max_tool_calls', 40))
+            max_tool_calls = int(self.config.get("max_tool_calls", 40))
         except (TypeError, ValueError):
             max_tool_calls = 40
         try:
-            # Bumped 45 → 90. LLM calls during parse-retry add up,
-            # and a legitimate chat run with 2-3 tool calls can easily
-            # take 30-40s; 45s was too tight.
-            max_execution_time_seconds = int(self.config.get('max_execution_time_seconds', 90))
+            max_execution_time_seconds = int(self.config.get("max_execution_time_seconds", 90))
         except (TypeError, ValueError):
             max_execution_time_seconds = 90
 
         configured_max_iterations = max(configured_max_iterations, 1)
         max_tool_calls = max(max_tool_calls, 1)
         max_execution_time_seconds = max(max_execution_time_seconds, 5)
-        effective_max_iterations = min(configured_max_iterations, max_tool_calls)
+        # Each tool call is one model turn + one tool turn in the graph, so
+        # the LangGraph recursion limit must be ~2× the tool-call budget
+        # (plus a small margin for the final answer turn).
+        self._max_tool_calls = min(configured_max_iterations, max_tool_calls)
+        self._graph_recursion_limit = (self._max_tool_calls * 2) + 2
+        self._max_execution_time_seconds = max_execution_time_seconds
+        self._run_callbacks = callbacks
 
-        self.agent_executor = AgentExecutor(
-            agent=agent,
+        # No checkpointer: conversation continuity is SQL-backed. The durable
+        # store is the Conversation/ConversationMessage tables (written by
+        # ``memory_service.record_execution`` in ``execute()``); prior turns
+        # are threaded into the graph input by the handle's
+        # ``history_provider`` (``self.memory.load_messages()``). A process-
+        # local InMemorySaver here would fork the conversation per worker AND
+        # double-append turns already loaded from SQL.
+        self._graph_agent = create_agent(
+            model=self.llm,
             tools=self.tools,
-            memory=self.memory,
-            verbose=bool(self.config.get("verbose", os.getenv("AGENT_VERBOSE", ""))),
-            handle_parsing_errors=True,
-            max_iterations=effective_max_iterations,
-            max_execution_time=max_execution_time_seconds,
-            # langchain 0.3.x only validates "force" here. "generate"
-            # used to work in older versions — it's unsupported now.
-            # We mitigate force's canned-message output by recovering
-            # the last intermediate observation downstream in the
-            # worker (see build_worker_from_agent).
-            early_stopping_method="force",
-            return_intermediate_steps=True,
-            callbacks=callbacks or None,
+            system_prompt=self._build_system_message(),
+            middleware=self._build_agent_middleware(),
         )
-        # Belt-and-suspenders: hard-set after construction. Some langchain
-        # versions silently revert this kwarg to "generate" via Pydantic
-        # validators, which then crashes with `Got unsupported early_stopping_method 'generate'`
-        # because the underlying RunnableMultiActionAgent only accepts "force".
+        # Keep ``self.agent_executor`` as the invocation handle. It carries
+        # the run callbacks so the ``execute()`` flush loop still finds
+        # them, and ``AgentTestCase`` overwrites it with a scripted stub.
+        self.agent_executor = _GraphExecutorHandle(
+            graph=self._graph_agent,
+            callbacks=callbacks,
+            recursion_limit=self._graph_recursion_limit,
+            history_provider=self._load_history_messages,
+            rubric_provider=self._resolve_active_rubric,
+        )
+
+    def _build_agent_middleware(self) -> list:
+        """Middleware for ``create_agent`` (LangChain 1.x cross-cutting hooks).
+
+        Empty by default. ``deepagents.RubricMiddleware`` is attached for
+        critic-enabled worker types when the global setting
+        ``DEEP_RUBRIC_MIDDLEWARE_ENABLED`` or the agent config opts in — see
+        ``components.agents.infrastructure.adapters.langchain.deep.rubric``.
+        The hand-rolled ``deep/critic.py`` loop remains the fallback while the
+        flag is off.
+        """
+        middleware: list = []
+        self._rubric_middleware_attached = False
+        rubric_cfg = self.config.get("rubric_middleware")
+        if not rubric_cfg:
+            try:
+                from components.agents.infrastructure.adapters.langchain.deep.rubric import (
+                    rubric_middleware_enabled,
+                )
+
+                rubric_cfg = rubric_middleware_enabled(self.config)
+            except Exception:
+                rubric_cfg = False
+        if rubric_cfg:
+            try:
+                from components.agents.infrastructure.adapters.langchain.deep.rubric import (
+                    build_rubric_middleware,
+                )
+
+                mw = build_rubric_middleware(
+                    agent=self,
+                    config=rubric_cfg if isinstance(rubric_cfg, dict) else {},
+                )
+                if mw is not None:
+                    middleware.append(mw)
+                    self._rubric_middleware_attached = True
+            except Exception:
+                # The rubric loop is a quality enhancement, never a gate that
+                # can block agent construction — degrade to no middleware.
+                logger.exception("rubric middleware unavailable for agent %s; continuing without", self.agent_id)
+        return middleware
+
+    def _resolve_active_rubric(self) -> str | None:
+        """The rubric to place on the invocation state, or ``None``.
+
+        deepagents' ``RubricMiddleware`` is state-activated: it only grades
+        when ``state["rubric"]`` is set. Only agents that actually carry the
+        middleware get a rubric on their invokes.
+        """
+        if not getattr(self, "_rubric_middleware_attached", False):
+            return None
         try:
-            self.agent_executor.early_stopping_method = "force"
+            from components.agents.infrastructure.adapters.langchain.deep.rubric import (
+                resolve_rubric_text,
+            )
+
+            return resolve_rubric_text(self)
         except Exception:
-            pass
+            return None
 
-        # Patch the action agent's return_stopped_response to be permissive.
-        # If anything ever passes "generate" (which the underlying class
-        # rejects), fall back to the "force" behaviour instead of crashing.
-        try:
-            action_agent = self.agent_executor._action_agent  # type: ignore[attr-defined]
-            if action_agent is not None and not getattr(
-                action_agent, "_return_stopped_patched", False
-            ):
-                from langchain_core.agents import AgentFinish
+    def _load_history_messages(self) -> list:
+        """Prior conversation turns for the graph input (SQL-backed window).
 
-                def _safe_return_stopped(
-                    early_stopping_method,
-                    intermediate_steps,
-                    **kwargs,
-                ):
-                    return AgentFinish(
-                        {
-                            "output": (
-                                "Agent stopped due to iteration or time limit "
-                                "before reaching a final answer."
-                            )
-                        },
-                        "",
-                    )
+        Replaces the 0.3 ``ConversationBufferMemory`` injection AND the two
+        conversation-id monkeypatches (``_patch_memory_conversation_id`` /
+        ``_patch_langchain_memory``): the memory object is now a plain
+        SQL-window loader whose conversation_id is authoritative because it
+        is constructed FROM ``memory_service.get_conversation_id()`` — there
+        is no LangChain-internal save path left to drift it.
+        """
+        memory = getattr(self, "memory", None)
+        if memory is None:
+            return []
+        loader = getattr(memory, "load_messages", None)
+        if callable(loader):
+            return loader()
+        # Duck-typed fallback: anything exposing chat-history messages.
+        chat_memory = getattr(memory, "chat_memory", None)
+        messages = getattr(chat_memory, "messages", None)
+        return list(messages) if messages else []
 
-                action_agent.return_stopped_response = _safe_return_stopped  # type: ignore[assignment]
-                action_agent._return_stopped_patched = True  # type: ignore[attr-defined]
-        except Exception:
-            logger.debug("Could not patch return_stopped_response on action agent", exc_info=True)
-        
-        # PATCH: Ensure memory always uses correct conversation_id
-        self._patch_memory_conversation_id()
-        
-        # CRITICAL FIX: Override LangChain's memory save_context to prevent random conversation IDs
-        self._patch_langchain_memory()
-    
-    def _patch_memory_conversation_id(self):
-        """Patch LangChain's memory to ensure it uses our conversation_id"""
-        # Get the correct conversation ID from our memory service
-        correct_conversation_id = self.memory_service.get_conversation_id()
-        
-        # Ensure our SqlMessageHistory has the correct conversation_id
-        if hasattr(self.memory, 'chat_memory') and hasattr(self.memory.chat_memory, 'conversation_id'):
-            current_id = self.memory.chat_memory.conversation_id
-            if current_id != correct_conversation_id:
-                logger.warning(f"Patching conversation_id from {current_id} to {correct_conversation_id}")
-                self.memory.chat_memory.conversation_id = correct_conversation_id
-        
-        # Also patch the AgentExecutor's memory reference
-        if hasattr(self.agent_executor, 'memory') and hasattr(self.agent_executor.memory, 'chat_memory'):
-            if hasattr(self.agent_executor.memory.chat_memory, 'conversation_id'):
-                current_id = self.agent_executor.memory.chat_memory.conversation_id
-                if current_id != correct_conversation_id:
-                    logger.warning(f"Patching agent_executor memory conversation_id from {current_id} to {correct_conversation_id}")
-                    self.agent_executor.memory.chat_memory.conversation_id = correct_conversation_id
-    
-    def _patch_langchain_memory(self):
-        """PATCH: Override LangChain's memory.save_context to force correct conversation_id"""
-        def _resolve_conversation_id() -> str:
-            return self._override_conversation_id or self.memory_service.get_conversation_id()
-        
-        # If memory has no save_context attribute (e.g., pydantic-protected), skip patching safely
-        if not hasattr(self.memory, 'save_context'):
-            logger.warning('Memory has no save_context attribute; skipping patch')
-            return
-        
-        # Store the original save_context method (may be descriptor)
-        original_save_context = getattr(self.memory, 'save_context')
-        
-        def patched_save_context(inputs, outputs):
-            """Patched save_context that ensures correct conversation_id is used"""
-            logger.info(f"AgentMemoryService._patch_langchain_memory: Intercepting save_context call")
-            
-            # Ensure conversation exists before LangChain tries to save
-            correct_conversation_id = _resolve_conversation_id()
-            
-            # Force the correct conversation_id
-            if hasattr(self.memory, 'chat_memory') and hasattr(self.memory.chat_memory, 'conversation_id'):
-                current_id = self.memory.chat_memory.conversation_id
-                if current_id != correct_conversation_id:
-                    logger.warning(f"AgentMemoryService._patch_langchain_memory: Fixing conversation_id from {current_id} to {correct_conversation_id}")
-                    self.memory.chat_memory.conversation_id = correct_conversation_id
-            
-            # Call the original method
-            return original_save_context(inputs, outputs)
-        
-        # Replace the save_context method if allowed
-        try:
-            self.memory.save_context = patched_save_context
-            logger.info("AgentMemoryService._patch_langchain_memory: Patched memory.save_context")
-        except Exception as e:
-            logger.warning(f"Could not patch memory.save_context: {e}")
-
-    def _apply_run_context(self, run_context: Dict[str, Any]) -> None:
+    def _apply_run_context(self, run_context: dict[str, Any]) -> None:
         """Override conversation_id for run-scoped sub-agent execution."""
         conversation_id = run_context.get("conversation_id")
         if not conversation_id:
             return
         try:
+            from django.db import transaction
+
             from infrastructure.persistence.ai.conversations.models import Conversation
 
-            if not Conversation.objects.filter(id=conversation_id).exists():
-                Conversation.objects.create(
+            # Idempotent create wrapped in a savepoint. Two run-scoped sub-agent
+            # instances can share one conversation_id and both pass the
+            # existence check before either commits; the loser hits a duplicate
+            # pkey. Without the savepoint that caught IntegrityError poisons the
+            # OUTER transaction (Postgres aborts it), and every later query in
+            # the run then fails with "current transaction is aborted" — which
+            # is what surfaced the run-level IntegrityError. get_or_create +
+            # atomic() makes the collision a true no-op.
+            with transaction.atomic():
+                Conversation.objects.get_or_create(
                     id=conversation_id,
-                    user_id=self.user_id,
-                    title=f"{self.__class__.__name__} Run Context",
-                    metadata={
-                        "agent_id": str(self.agent_id),
-                        "agent_type": self.__class__.__name__,
-                        "workspace_id": str(self.workspace_id),
-                        "run_id": run_context.get("run_id"),
-                        "plan_id": run_context.get("plan_id"),
-                        # Internal orchestration artifact — not a
-                        # user-facing chat thread.  The list endpoint
-                        # filters these out so the UI sees only the
-                        # conversations ``AgentChatUseCase`` created.
-                        "internal": True,
+                    defaults={
+                        "user_id": self.user_id,
+                        "title": f"{self.__class__.__name__} Run Context",
+                        "metadata": {
+                            "agent_id": str(self.agent_id),
+                            "agent_type": self.__class__.__name__,
+                            "workspace_id": str(self.workspace_id),
+                            "run_id": run_context.get("run_id"),
+                            "plan_id": run_context.get("plan_id"),
+                            # Internal orchestration artifact — not a
+                            # user-facing chat thread. The list endpoint
+                            # filters these out so the UI sees only the
+                            # conversations ``AgentChatUseCase`` created.
+                            "internal": True,
+                        },
                     },
                 )
         except Exception:
             logger.warning("Failed to ensure run conversation for agent %s", self.agent_id, exc_info=True)
 
         self._override_conversation_id = conversation_id
-        if hasattr(self.memory, 'chat_memory') and hasattr(self.memory.chat_memory, 'conversation_id'):
+        if hasattr(self.memory, "chat_memory") and hasattr(self.memory.chat_memory, "conversation_id"):
             self.memory.chat_memory.conversation_id = conversation_id
-        if hasattr(self.agent_executor, 'memory') and hasattr(self.agent_executor.memory, 'chat_memory'):
-            if hasattr(self.agent_executor.memory.chat_memory, 'conversation_id'):
+        if hasattr(self.agent_executor, "memory") and hasattr(self.agent_executor.memory, "chat_memory"):
+            if hasattr(self.agent_executor.memory.chat_memory, "conversation_id"):
                 self.agent_executor.memory.chat_memory.conversation_id = conversation_id
 
         limits = run_context.get("memory_limits") if isinstance(run_context, dict) else None
@@ -1132,7 +1277,7 @@ class BaseAgent(ABC):
                 if attr in limits and hasattr(self.memory.chat_memory, attr):
                     setattr(self.memory.chat_memory, attr, limits.get(attr))
 
-    def _apply_tool_policy(self, run_context: Optional[Dict[str, Any]]) -> Optional[List[BaseTool]]:
+    def _apply_tool_policy(self, run_context: dict[str, Any] | None) -> list[BaseTool] | None:
         """Restrict tools per run_context; returns original tools if modified."""
         if not run_context:
             return None
@@ -1158,13 +1303,13 @@ class BaseAgent(ABC):
         self._create_agent_executor()
         return original
 
-    def _restore_tool_policy(self, original_tools: Optional[List[BaseTool]]) -> None:
+    def _restore_tool_policy(self, original_tools: list[BaseTool] | None) -> None:
         if not original_tools:
             return
         self.tools = list(original_tools)
         self._create_agent_executor()
 
-    def _apply_custom_profile_tool_whitelist(self, run_context: Dict[str, Any]) -> None:
+    def _apply_custom_profile_tool_whitelist(self, run_context: dict[str, Any]) -> None:
         """
         Apply per-agent tool whitelist as the tightest tool restriction.
 
@@ -1219,7 +1364,7 @@ class BaseAgent(ABC):
             return
 
         run_context["allowed_tools"] = allowed
-    
+
     def _build_system_message(self) -> str:
         """Compose the system message shared by both prompt flavours.
 
@@ -1227,16 +1372,16 @@ class BaseAgent(ABC):
         place so the ReAct and tool-calling paths stay in sync.
         """
         profile = self._get_agent_profile()
-        profile_name = profile.get('name') or self.__class__.__name__.replace('Agent', ' Agent')
-        profile_summary = profile.get('summary') or ''
-        capabilities = profile.get('capabilities') or []
+        profile_name = profile.get("name") or self.__class__.__name__.replace("Agent", " Agent")
+        profile_summary = profile.get("summary") or ""
+        capabilities = profile.get("capabilities") or []
 
-        capabilities_section = ''
+        capabilities_section = ""
         if capabilities:
             joined = "\n".join(f"- {item}" for item in capabilities)
             capabilities_section = f"\n\nYour core capabilities include:\n{joined}"
 
-        summary_section = f"\n{profile_summary}" if profile_summary else ''
+        summary_section = f"\n{profile_summary}" if profile_summary else ""
 
         customization = self._get_prompt_customization_vars()
         persona = customization.get("persona", "").strip()
@@ -1272,11 +1417,11 @@ class BaseAgent(ABC):
             "names of donors, recipients, grants, or transactions are not "
             "in there. Craft a 2-3 sentence summary from whatever metadata "
             "you have.\n"
-            "- NEVER say \"there is not enough information\", \"the workspace "
-            "doesn't specify\", \"details are not available\", or similar "
+            '- NEVER say "there is not enough information", "the workspace '
+            'doesn\'t specify", "details are not available", or similar '
             "phrases. If the workspace has no narrative content, just say so "
-            "plainly (\"No mission description has been added yet — the "
-            "workspace has N teams and M members.\") and still answer from "
+            'plainly ("No mission description has been added yet — the '
+            'workspace has N teams and M members.") and still answer from '
             "the metadata you have.\n"
             "- If `retrieve_workspace_context` returns empty, call a workspace "
             "tool like `get_workspace_info` or `get_organization_info` (no "
@@ -1284,9 +1429,9 @@ class BaseAgent(ABC):
             "deflecting.\n"
             "- Prefer detailed, grounded responses that surface the actual tool "
             "output (bullet lists, line breaks) rather than paraphrasing.\n"
-            "- When the user asks for a plan, report, or \"full\" details, "
+            '- When the user asks for a plan, report, or "full" details, '
             "paste the structured tool output directly in the final answer.\n"
-            "- If a tool returns zero items, say so explicitly (\"There are 0 "
+            '- If a tool returns zero items, say so explicitly ("There are 0 '
             "tasks in this workspace\") — don't deflect."
         )
 
@@ -1295,54 +1440,14 @@ class BaseAgent(ABC):
             f"{summary_section}{capabilities_section}{custom_block}{guidelines}"
         )
 
-    def _create_chat_prompt_template(self) -> ChatPromptTemplate:
-        """Build a chat prompt for the tool-calling agent path.
+    # NOTE (LangChain 1.x migration, 2026-07-18): ``_create_chat_prompt_template``
+    # and the legacy ReAct ``_create_prompt_template`` were DELETED. ``create_agent``
+    # takes the system prompt as a plain ``system_prompt=`` string
+    # (``_build_system_message()``) and manages the message list itself — there is
+    # no ``{input}`` / ``agent_scratchpad`` placeholder template, and no ReAct prose
+    # format (hence no fallback template). See ``_create_agent_executor``.
 
-        Tool-calling agents emit native JSON function calls instead of
-        the ReAct ``Thought/Action/Observation`` format, so the prompt
-        is just a system message + user message + the scratchpad as a
-        ``MessagesPlaceholder``. No parse failures, no iteration burn.
-        """
-        return ChatPromptTemplate.from_messages(
-            [
-                ("system", self._build_system_message()),
-                ("human", "{input}"),
-                MessagesPlaceholder("agent_scratchpad"),
-            ]
-        )
-
-    def _create_prompt_template(self) -> PromptTemplate:
-        """Legacy ReAct prompt — kept as a fallback for models that
-        don't support native tool calling (``create_tool_calling_agent``
-        is the default, see ``_create_agent_executor``)."""
-        system_message = self._build_system_message()
-        template = (
-            f"{system_message}\n\n"
-            "You have access to the following tools:\n{tools}\n\n"
-            "Use the following format:\n\n"
-            "Question: the input question you must answer\n"
-            "Thought: you should always think about what to do\n"
-            "Action: the action to take, should be one of [{tool_names}]\n"
-            "Action Input: the input to the action\n"
-            "Observation: the result of the action\n"
-            "... (this Thought/Action/Action Input/Observation can repeat N times)\n"
-            "Thought: I now know the final answer\n"
-            "Final Answer: the final answer to the original input question\n\n"
-            "Begin!\n\n"
-            "Question: {input}\n"
-            "Thought: {agent_scratchpad}"
-        )
-        return PromptTemplate(
-            template=template,
-            input_variables=[
-                "input",
-                "agent_scratchpad",
-                "tools",
-                "tool_names",
-            ],
-        )
-
-    def _get_prompt_customization_vars(self) -> Dict[str, str]:
+    def _get_prompt_customization_vars(self) -> dict[str, str]:
         """
         Return prompt variables that customize the agent behavior.
 
@@ -1370,8 +1475,7 @@ class BaseAgent(ABC):
         profile = self._get_agent_profile()
         profile_name = profile.get("name") or self.__class__.__name__
         system_prompt = (
-            f"You are the {profile_name} working for workspace {self.workspace_id}. "
-            f"{profile.get('summary', '')}"
+            f"You are the {profile_name} working for workspace {self.workspace_id}. {profile.get('summary', '')}"
         )
 
         # Inject session memory context if available
@@ -1389,15 +1493,17 @@ class BaseAgent(ABC):
         if self.graph_executor:
             logger.info("LangGraph executor built for agent %s", self.agent_id)
 
-    def _invoke_graph_executor(self, query: str) -> Dict[str, Any]:
+    def _invoke_graph_executor(self, query: str) -> dict[str, Any]:
         """Invoke the LangGraph executor and return a result dict compatible with AgentExecutor."""
         if not self.graph_executor:
             raise ValueError("Graph executor is not initialised")
 
-        result = self.graph_executor.invoke({
-            "messages": [HumanMessage(content=query)],
-            "iteration_count": 0,
-        })
+        result = self.graph_executor.invoke(
+            {
+                "messages": [HumanMessage(content=query)],
+                "iteration_count": 0,
+            }
+        )
 
         answer = result.get("final_answer", "")
         error = result.get("error")
@@ -1408,10 +1514,10 @@ class BaseAgent(ABC):
 
     def _invoke_agent_executor(
         self,
-        inputs: Dict[str, Any],
+        inputs: dict[str, Any],
         *,
-        retries: Optional[int] = None,
-    ) -> Dict[str, Any]:
+        retries: int | None = None,
+    ) -> dict[str, Any]:
         """Invoke the agent executor with automatic retries for transient LLM failures."""
         # Use LangGraph if available and enabled
         if self._use_langgraph and self.graph_executor:
@@ -1421,7 +1527,7 @@ class BaseAgent(ABC):
         if not self.agent_executor:
             raise ValueError("Agent executor is not initialised")
 
-        retry_budget = self.config.get('llm_retry_attempts', 1) if retries is None else retries
+        retry_budget = self.config.get("llm_retry_attempts", 1) if retries is None else retries
         try:
             retry_budget = int(retry_budget)
         except (TypeError, ValueError):
@@ -1434,18 +1540,25 @@ class BaseAgent(ABC):
         except (TypeError, ValueError):
             max_input_chars = 12000
         max_input_chars = max(max_input_chars, 500)
-        input_preview = inputs.get('input', '') if isinstance(inputs, dict) else ''
+        input_preview = inputs.get("input", "") if isinstance(inputs, dict) else ""
         if isinstance(input_preview, str) and len(input_preview) > max_input_chars:
-            raise ValueError(
-                f"Agent input exceeds max_input_chars ({len(input_preview)} > {max_input_chars})"
-            )
+            raise ValueError(f"Agent input exceeds max_input_chars ({len(input_preview)} > {max_input_chars})")
 
         # Log before invoking to track LLM calls
-        logger.info("Agent %s invoking executor with input: %s", self.agent_id, inputs.get('input', '')[:100] if inputs.get('input') else str(inputs)[:100])
-        if hasattr(self.agent_executor, 'callbacks') and self.agent_executor.callbacks:
+        logger.info(
+            "Agent %s invoking executor with input: %s",
+            self.agent_id,
+            inputs.get("input", "")[:100] if inputs.get("input") else str(inputs)[:100],
+        )
+        if hasattr(self.agent_executor, "callbacks") and self.agent_executor.callbacks:
             callback_types = [type(cb).__name__ for cb in self.agent_executor.callbacks]
-            logger.info("Agent %s executor has %d callbacks: %s", self.agent_id, len(self.agent_executor.callbacks), callback_types)
-        
+            logger.info(
+                "Agent %s executor has %d callbacks: %s",
+                self.agent_id,
+                len(self.agent_executor.callbacks),
+                callback_types,
+            )
+
         if not RETRYABLE_AGENT_EXCEPTIONS or retry_budget == 0:
             result = self.agent_executor.invoke(inputs)
             logger.info("Agent %s executor completed (no retries)", self.agent_id)
@@ -1463,7 +1576,7 @@ class BaseAgent(ABC):
                 attempt += 1
                 import time  # local import keeps optional dependency scoped
 
-                wait_seconds = min(2 ** attempt, 5)
+                wait_seconds = min(2**attempt, 5)
                 logger.warning(
                     "Agent %s LLM invocation failed with %s (attempt %s/%s); retrying in %ss",
                     self.agent_id,
@@ -1476,7 +1589,7 @@ class BaseAgent(ABC):
 
     def _is_retryable_agent_error(self, exc: BaseException) -> bool:
         return bool(RETRYABLE_AGENT_EXCEPTIONS) and isinstance(exc, RETRYABLE_AGENT_EXCEPTIONS)
-    
+
     def execute(
         self,
         query: str,
@@ -1484,15 +1597,15 @@ class BaseAgent(ABC):
         execution: Any = None,
         execution_id: int = None,
         task_id: str = None,
-        performed_by: Optional[str] = None,
-        context: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        performed_by: str | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         Execute the agent with a given query
-        
+
         Args:
             query: The user's request
-            
+
         Returns:
             Dictionary containing the result and metadata
         """
@@ -1509,7 +1622,7 @@ class BaseAgent(ABC):
             }
 
         logger.info("Agent %s execution started with query: %s", self.agent_id, query[:100] if query else "")
-        tool_restore: Optional[List[BaseTool]] = None
+        tool_restore: list[BaseTool] | None = None
         run_context = None
         # Stash the active DeepRunContext (if the deep runner injected
         # one) on self for the duration of this execute() call. Tool
@@ -1533,9 +1646,7 @@ class BaseAgent(ABC):
                 requested_run_context = context.get("run_context")
 
             custom_profile = self.config.get("custom_profile")
-            has_tool_whitelist = bool(
-                isinstance(custom_profile, dict) and custom_profile.get("tool_whitelist")
-            )
+            has_tool_whitelist = bool(isinstance(custom_profile, dict) and custom_profile.get("tool_whitelist"))
 
             if isinstance(requested_run_context, dict) or has_tool_whitelist:
                 run_context = dict(requested_run_context or {})
@@ -1544,8 +1655,9 @@ class BaseAgent(ABC):
                 self._apply_run_context(run_context)
                 tool_restore = self._apply_tool_policy(run_context)
             import time
+
             start_time = time.time()
-            
+
             self.state.status = "running"
             self.state.updated_at = datetime.now()
             if self.telemetry_handler:
@@ -1568,12 +1680,14 @@ class BaseAgent(ABC):
                     add_user_message=execution is None and execution_id is None,
                 )
 
-                self.state.results.append({
-                    'query': query,
-                    'result': meta_result,
-                    'timestamp': datetime.now().isoformat(),
-                    'execution_id': str(execution.id)
-                })
+                self.state.results.append(
+                    {
+                        "query": query,
+                        "result": meta_result,
+                        "timestamp": datetime.now().isoformat(),
+                        "execution_id": str(execution.id),
+                    }
+                )
                 self.state.status = "completed"
                 self.state.updated_at = datetime.now()
 
@@ -1585,37 +1699,40 @@ class BaseAgent(ABC):
                 )
 
                 result_payload = {
-                    'success': True,
-                    'result': meta_result,
-                    'execution_id': str(execution.id),
-                    'execution_time_ms': execution_time_ms,
-                    'agent_id': self.agent_id,
-                    'state': self.state.to_dict()
+                    "success": True,
+                    "result": meta_result,
+                    "execution_id": str(execution.id),
+                    "execution_time_ms": execution_time_ms,
+                    "agent_id": self.agent_id,
+                    "state": self.state.to_dict(),
                 }
                 self._maybe_log_run_telemetry(run_context, success=True)
                 return result_payload
 
             logger.info(f"Agent {self.agent_id} executing query: {query}")
-            
+
             # Update Langfuse callback session_id before execution to ensure traces are grouped correctly
-            if self.agent_executor and hasattr(self.agent_executor, 'callbacks') and self.agent_executor.callbacks:
+            if self.agent_executor and hasattr(self.agent_executor, "callbacks") and self.agent_executor.callbacks:
                 try:
                     current_conversation_id = self.memory_service.get_conversation_id()
                     for callback in self.agent_executor.callbacks:
                         # Check if this is a Langfuse callback and update session_id
-                        if hasattr(callback, 'session_id'):
+                        if hasattr(callback, "session_id"):
                             if callback.session_id != current_conversation_id:
                                 callback.session_id = current_conversation_id
-                                logger.debug("Updated Langfuse callback session_id to %s for agent %s", 
-                                          current_conversation_id, self.agent_id)
+                                logger.debug(
+                                    "Updated Langfuse callback session_id to %s for agent %s",
+                                    current_conversation_id,
+                                    self.agent_id,
+                                )
                 except Exception as e:
                     logger.debug("Could not update callback session_id: %s", e)
-            
-            # Execute the agent. Customization vars are bound on the
-            # PromptTemplate as partial_variables (see
-            # _create_prompt_template) so we only need to pass `input`
-            # here — passing extras would trigger LangChain's
-            # "One input key expected got [...]" validation error.
+
+            # Execute the agent. The ``{"input": query}`` contract is kept
+            # for the scripted ``AgentTestCase`` stub AND the real 1.x path:
+            # ``_GraphExecutorHandle.invoke`` translates it to a
+            # ``{"messages": [...]}`` graph state and back (customization is
+            # baked into the create_agent ``system_prompt`` at build time).
             result = self._invoke_agent_executor({"input": query})
 
             # Persist tool observations to DeepRunLog so the eval harness
@@ -1626,9 +1743,7 @@ class BaseAgent(ABC):
             # this path. The persist call itself is fault-isolated so the
             # chat reply never depends on observability succeeding.
             try:
-                self._persist_tool_observations(
-                    run_context, result.get("intermediate_steps")
-                )
+                self._persist_tool_observations(run_context, result.get("intermediate_steps"))
             except Exception:  # pylint: disable=broad-except
                 logger.debug(
                     "tool-observation persist failed for agent %s",
@@ -1637,17 +1752,17 @@ class BaseAgent(ABC):
                 )
 
             # Flush Langfuse callbacks to ensure traces are sent
-            if self.agent_executor and hasattr(self.agent_executor, 'callbacks') and self.agent_executor.callbacks:
+            if self.agent_executor and hasattr(self.agent_executor, "callbacks") and self.agent_executor.callbacks:
                 for callback in self.agent_executor.callbacks:
-                    if hasattr(callback, 'flush'):
+                    if hasattr(callback, "flush"):
                         try:
                             callback.flush()
                             logger.debug("Flushed Langfuse callback for agent %s", self.agent_id)
                         except Exception as e:
                             logger.warning("Failed to flush Langfuse callback: %s", e)
-            
+
             execution_time_ms = int((time.time() - start_time) * 1000)
-            result_text = result.get('output', '')
+            result_text = result.get("output", "")
 
             # Snapshot any artifacts tools collected during this turn so
             # they ride out on the assistant message's metadata. Read
@@ -1670,14 +1785,16 @@ class BaseAgent(ABC):
                 add_user_message=execution is None and execution_id is None,
                 artifacts=collected_artifacts or None,
             )
-            
+
             # Update state
-            self.state.results.append({
-                'query': query,
-                'result': result_text,
-                'timestamp': datetime.now().isoformat(),
-                'execution_id': str(execution.id)
-            })
+            self.state.results.append(
+                {
+                    "query": query,
+                    "result": result_text,
+                    "timestamp": datetime.now().isoformat(),
+                    "execution_id": str(execution.id),
+                }
+            )
             self.state.status = "completed"
             self.state.updated_at = datetime.now()
 
@@ -1689,22 +1806,22 @@ class BaseAgent(ABC):
             )
 
             result_payload = {
-                'success': True,
-                'result': result_text,
-                'execution_id': str(execution.id),
-                'execution_time_ms': execution_time_ms,
-                'agent_id': self.agent_id,
-                'state': self.state.to_dict()
+                "success": True,
+                "result": result_text,
+                "execution_id": str(execution.id),
+                "execution_time_ms": execution_time_ms,
+                "agent_id": self.agent_id,
+                "state": self.state.to_dict(),
             }
             self._maybe_log_run_telemetry(run_context, success=True)
             return result_payload
-            
+
         except Exception as e:
             execution_time_ms = int((time.time() - start_time) * 1000)
             error_msg = str(e)
-            
+
             logger.exception("Agent %s execution failed", self.agent_id)
-            
+
             self.state.errors.append(error_msg)
             self.state.status = "failed"
             self.state.updated_at = datetime.now()
@@ -1726,12 +1843,12 @@ class BaseAgent(ABC):
             )
 
             result_payload = {
-                'success': False,
-                'error': error_msg,
-                'execution_id': str(execution.id),
-                'execution_time_ms': execution_time_ms,
-                'agent_id': self.agent_id,
-                'state': self.state.to_dict()
+                "success": False,
+                "error": error_msg,
+                "execution_id": str(execution.id),
+                "execution_time_ms": execution_time_ms,
+                "agent_id": self.agent_id,
+                "state": self.state.to_dict(),
             }
             self._maybe_log_run_telemetry(run_context, success=False, error=error_msg)
             return result_payload
@@ -1747,10 +1864,10 @@ class BaseAgent(ABC):
     def _maybe_log_auto_action(
         self,
         *,
-        performed_by: Optional[str],
+        performed_by: str | None,
         query: str,
         result_text: str,
-        context: Optional[Dict[str, Any]] = None,
+        context: dict[str, Any] | None = None,
     ) -> None:
         # Phase 5 of the Agents-as-Teammates migration removed the AIAction
         # row that used to back this audit trail. The teammate-attribution
@@ -1770,9 +1887,9 @@ class BaseAgent(ABC):
             summary = result_text.strip() if result_text else "Execution completed with no textual result."
 
             logger.info(
-                "agent_auto_run agent=%s workspace_id=%s action_type=%s "
-                "summary=%s",
-                self.__class__.__name__, self.workspace_id,
+                "agent_auto_run agent=%s workspace_id=%s action_type=%s summary=%s",
+                self.__class__.__name__,
+                self.workspace_id,
                 f"{self.__class__.__name__}.auto_run",
                 self._truncate(summary),
             )
@@ -1783,104 +1900,96 @@ class BaseAgent(ABC):
     def _truncate(text: str, length: int = 500) -> str:
         if len(text) <= length:
             return text
-        return f"{text[:length - 3]}..."
+        return f"{text[: length - 3]}..."
 
     @staticmethod
-    def _merge_session_context(base_context: Optional[Dict[str, Any]], execution: Any = None) -> Dict[str, Any]:
+    def _merge_session_context(base_context: dict[str, Any] | None, execution: Any = None) -> dict[str, Any]:
         merged = dict(base_context or {})
-        if execution and getattr(execution, 'id', None):
-            merged.setdefault('session_id', str(execution.id))
+        if execution and getattr(execution, "id", None):
+            merged.setdefault("session_id", str(execution.id))
         return merged
 
     def pause(self):
         """Pause the agent execution"""
         self.state.status = "paused"
         self.state.updated_at = datetime.now()
-    
+
     def resume(self):
         """Resume the agent execution"""
         self.state.status = "running"
         self.state.updated_at = datetime.now()
-    
-    def get_state(self) -> Dict[str, Any]:
+
+    def get_state(self) -> dict[str, Any]:
         """Get current agent state"""
         return self.state.to_dict()
-    
-    def get_memory_stats(self) -> Dict[str, Any]:
+
+    def get_memory_stats(self) -> dict[str, Any]:
         """Get memory statistics for this agent"""
         return self.memory_service.get_memory_stats()
-    
+
     def get_conversation_history(
         self,
-        limit: Optional[int] = None,
+        limit: int | None = None,
         offset: int = 0,
         order: str = "asc",
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Get conversation history for this agent with pagination support."""
         return self.memory_service.get_conversation_history(
             limit=limit,
             offset=offset,
             order=order,
         )
-    
+
     def clear_memory(self) -> None:
         """Clear all memory for this agent"""
         self.memory_service.clear_memory()
         logger.info(f"Cleared memory for agent {self.agent_id}")
-    
+
     def add_system_message(self, content: str) -> None:
         """Add system message to agent memory"""
         self.memory_service.add_system_message(content)
         logger.info(f"Added system message to agent {self.agent_id}")
-    
+
     def add_context(self, key: str, value: Any):
         """Add context to the agent state"""
         self.state.context[key] = value
         self.state.updated_at = datetime.now()
-    
+
     def get_context(self, key: str) -> Any:
         """Get context from the agent state"""
         return self.state.context.get(key)
 
-    def _get_agent_profile(self) -> Dict[str, Any]:
+    def _get_agent_profile(self) -> dict[str, Any]:
         # Class-level profile (ADR 0003) is the default. The DB row's
         # `config["profile"]` overrides any field on a per-workspace
         # basis. Falls back to the class docstring + class name when
         # neither is set so legacy agents without a `profile` attribute
         # still produce something useful.
-        class_profile = dict(getattr(type(self), 'profile', {}) or {})
-        profile_cfg = self.config.get('profile') or {}
-        summary_fallback = self.config.get('description') or (self.__doc__ or '').strip()
+        class_profile = dict(getattr(type(self), "profile", {}) or {})
+        profile_cfg = self.config.get("profile") or {}
+        summary_fallback = self.config.get("description") or (self.__doc__ or "").strip()
         profile = {
-            'name': (
-                profile_cfg.get('name')
-                or class_profile.get('name')
-                or self.__class__.__name__.replace('Agent', ' Agent')
+            "name": (
+                profile_cfg.get("name")
+                or class_profile.get("name")
+                or self.__class__.__name__.replace("Agent", " Agent")
             ),
-            'summary': (
-                profile_cfg.get('summary')
-                or class_profile.get('summary')
-                or summary_fallback
-            ),
-            'capabilities': (
-                profile_cfg.get('capabilities')
-                or class_profile.get('capabilities')
-                or []
-            ),
-            'sample_prompts': (
-                profile_cfg.get('sample_prompts')
-                or profile_cfg.get('examples')
-                or class_profile.get('sample_prompts')
-                or class_profile.get('examples')
+            "summary": (profile_cfg.get("summary") or class_profile.get("summary") or summary_fallback),
+            "capabilities": (profile_cfg.get("capabilities") or class_profile.get("capabilities") or []),
+            "sample_prompts": (
+                profile_cfg.get("sample_prompts")
+                or profile_cfg.get("examples")
+                or class_profile.get("sample_prompts")
+                or class_profile.get("examples")
                 or []
             ),
         }
-        notes = profile_cfg.get('notes') or class_profile.get('notes')
+        notes = profile_cfg.get("notes") or class_profile.get("notes")
         if notes:
-            profile['notes'] = notes
+            profile["notes"] = notes
         return profile
 
-    def _maybe_handle_meta_query(self, query: str) -> Optional[str]:
+    def _maybe_handle_meta_query(self, query: str) -> str | None:
         if not query:
             return None
         lowered = query.strip().lower()
@@ -1904,36 +2013,36 @@ class BaseAgent(ABC):
             return None
 
         profile = self._get_agent_profile()
-        lines: List[str] = []
-        title = profile.get('name') or self.__class__.__name__
+        lines: list[str] = []
+        title = profile.get("name") or self.__class__.__name__
         lines.append(f"{title} Overview")
 
-        summary = profile.get('summary')
+        summary = profile.get("summary")
         if summary:
             lines.append("")
             lines.append(summary)
 
-        capabilities = profile.get('capabilities') or []
+        capabilities = profile.get("capabilities") or []
         if capabilities:
             lines.append("")
             lines.append("Key capabilities:")
             for capability in capabilities:
                 lines.append(f"- {capability}")
 
-        sample_prompts = profile.get('sample_prompts') or []
+        sample_prompts = profile.get("sample_prompts") or []
         if sample_prompts:
             lines.append("")
             lines.append("Try asking:")
             for prompt in sample_prompts:
                 lines.append(f"- {prompt}")
 
-        if profile.get('notes'):
+        if profile.get("notes"):
             lines.append("")
-            lines.append(profile['notes'])
+            lines.append(profile["notes"])
 
         return "\n".join(lines)
 
-    def _get_telemetry_snapshot(self) -> Optional[Dict[str, Any]]:
+    def _get_telemetry_snapshot(self) -> dict[str, Any] | None:
         if not self.telemetry_handler:
             return None
         try:
@@ -1942,11 +2051,11 @@ class BaseAgent(ABC):
             logger.debug("Failed to collect telemetry for agent %s", self.agent_id, exc_info=True)
             return None
 
-    def _execution_state_with_telemetry(self) -> Dict[str, Any]:
+    def _execution_state_with_telemetry(self) -> dict[str, Any]:
         state = self.state.to_dict()
         telemetry = self._get_telemetry_snapshot()
         if telemetry:
-            state['telemetry'] = telemetry
+            state["telemetry"] = telemetry
         return state
 
     # Max characters persisted per (tool_input, tool_output) on a
@@ -1961,8 +2070,8 @@ class BaseAgent(ABC):
 
     def _persist_tool_observations(
         self,
-        run_context: Optional[Dict[str, Any]],
-        intermediate_steps: Optional[Any],
+        run_context: dict[str, Any] | None,
+        intermediate_steps: Any | None,
     ) -> None:
         """Log each (action, observation) the ReAct executor produced
         as a ``tool_observation`` DeepRunLog row.
@@ -2046,10 +2155,10 @@ class BaseAgent(ABC):
 
     def _maybe_log_run_telemetry(
         self,
-        run_context: Optional[Dict[str, Any]],
+        run_context: dict[str, Any] | None,
         *,
         success: bool,
-        error: Optional[str] = None,
+        error: str | None = None,
     ) -> None:
         if not run_context or not isinstance(run_context, dict):
             return
@@ -2078,12 +2187,12 @@ class BaseAgent(ABC):
 
 class AgentRegistry:
     """Registry for managing available agents"""
-    
-    _agents: Dict[str, type] = {}
+
+    _agents: dict[str, type] = {}
 
     @classmethod
     def _load_class(cls, dotted_path: str) -> type:
-        module_path, class_name = dotted_path.rsplit('.', 1)
+        module_path, class_name = dotted_path.rsplit(".", 1)
         module = import_module(module_path)
         return getattr(module, class_name)
 
@@ -2094,14 +2203,14 @@ class AgentRegistry:
             agent_class = cls._load_class(agent_class)
         cls._agents[name] = agent_class
         logger.info("Registered agent: %s", name)
-    
+
     @classmethod
-    def get_agent_class(cls, name: str) -> Optional[type]:
+    def get_agent_class(cls, name: str) -> type | None:
         """Get an agent class by name"""
         return cls._agents.get(name)
-    
+
     @classmethod
-    def list_agents(cls) -> List[str]:
+    def list_agents(cls) -> list[str]:
         """List all registered agents"""
         return list(cls._agents.keys())
 
@@ -2142,9 +2251,9 @@ class AgentRegistry:
             return str(explicit)
         canonical = getattr(agent_class, "_canonical_agent_name", slug)
         return canonical.replace("_", " ").title()
-    
+
     @classmethod
-    def create_agent(cls, name: str, agent_id: str, user_id: str, workspace_id: str, **kwargs) -> Optional[BaseAgent]:
+    def create_agent(cls, name: str, agent_id: str, user_id: str, workspace_id: str, **kwargs) -> BaseAgent | None:
         """Create an agent instance"""
         agent_class = cls.get_agent_class(name)
         if not agent_class:

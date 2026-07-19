@@ -2,7 +2,7 @@ aiohttp>=3.10.0
 aiosignal==1.3.1
 amqp==5.2.0
 annotated-types==0.7.0
-anyio==4.4.0
+anyio==4.14.2
 asgiref==3.11.1
 async-timeout==4.0.2
 attrs==22.2.0
@@ -69,9 +69,10 @@ frozenlist>=1.4.0
 geoip2>=4.8.0
 gunicorn==23.0.0
 h11==0.14.0
-httpcore==1.0.5
+httpcore>=1.0.5,<2
 httplib2==0.21.0
-httpx==0.27.2
+# httpx range: google-genai 2.x wants >=0.28; openai/langfuse compatible
+httpx>=0.27.2,<0.29
 idna==3.8
 importlib-metadata==6.8.0
 inflection==0.5.1
@@ -81,24 +82,30 @@ jsonpatch==1.33
 jsonpointer==3.0.0
 jsonschema==4.17.3
 kombu==5.4.0
-# ── LangChain 0.3 stack. The 1.x migration (to unlock deepagents.RubricMiddleware)
-# is planned as its own deliberate pass — see docs/plans/LANGCHAIN_1X_MIGRATION_2026-07-18.md.
-# Do NOT bump these to 1.x without migrating base.py (AgentExecutor→create_agent),
-# graph_agent.py, and the langgraph 0.2→1.x orchestrator together.
-langchain==0.3.25
-langchain-community==0.3.24
-langchain-core==0.3.83
-langchain-text-splitters==0.3.8
-langchain-openai==0.3.17
-langchain-postgres>=0.0.12
+# ── LangChain 1.x stack (migrated 2026-07-19 to unlock deepagents.RubricMiddleware).
+# See docs/plans/LANGCHAIN_1X_MIGRATION_2026-07-18.md. deepagents 0.6.12 drives the
+# lower bounds: langchain>=1.3.11, langchain-core>=1.4.8, langchain-anthropic>=1.4.7.
+# langchain-openai 1.3.5 forces openai>=2.45.0 (major openai-SDK bump — risk R1;
+# the only direct SDK call site, shared_platform/openai_client.py, survives 2.x).
+langchain==1.3.14
+# langchain-classic carries the legacy chains (ConversationalRetrievalChain used by
+# agents/…/chains/retrieval.py). Vendor-maintained 1.x-compatible package, NOT a shim.
+langchain-classic==1.0.8
+langchain-community==0.4.2
+langchain-core==1.4.9
+langchain-text-splitters==1.1.2
+langchain-openai==1.3.5
+langchain-anthropic==1.4.7
+langchain-postgres==0.0.17
 pgvector>=0.3.6
-langgraph>=0.2.76,<0.3
-langgraph-checkpoint>=2.1.2,<3
-# langfuse 2.48.0 targets langchain-core 0.x callbacks; a 3.x bump is likely required
-# for core 1.x compatibility (migration doc risk R2). Tracing degrades gracefully via
-# NullTracingAdapter, so this is not a blocker for the core-worker spike. VERIFY at resolve.
+langgraph==1.2.9
+langgraph-checkpoint==4.1.1
+deepagents==0.6.12
+# langfuse 2.x targets langchain-core 0.x callbacks; its LC handler may not attach on
+# core 1.x (risk R2). Tracing degrades gracefully via NullTracingAdapter — handler
+# construction failure is caught by the TracingPort. Bump to langfuse 3.x in a follow-up.
 langfuse==2.48.0
-langsmith>=0.8.11,<0.9
+langsmith==0.8.18
 Markdown==3.4.1
 MarkupSafe==2.1.2
 marshmallow==3.19.0
@@ -106,9 +113,12 @@ multidict>=6.1.0
 mypy-extensions==1.0.0
 numpy==1.26.4
 oauthlib==3.2.2
-openai==1.109.1
+# openai 2.x forced by langchain-openai 1.3.5 (>=2.45.0). Direct-SDK audit (risk R1):
+# the single call site (components/shared_platform/.../openai_client.py) uses
+# OpenAI(...), RateLimitError, client.completions.create — all present in 2.x.
+openai==2.46.0
 openpyxl==3.1.5
-orjson==3.10.7
+orjson==3.11.9
 packaging==24.1
 Pillow>=10.4.0
 plaid-python==39.2.0
@@ -120,8 +130,11 @@ psycopg[binary,pool]==3.2.3
 pyasn1==0.4.8
 pyasn1-modules==0.2.8
 pycparser==2.21
-pydantic==2.8.2
-pydantic-core==2.20.1
+# Loosened from ==2.8.2/==2.20.1 for the LangChain 1.x stack: deepagents /
+# langchain-core 1.x / openai 2.x resolve their own compatible pydantic; the
+# exact pydantic-core pin must float with it (they are lock-step releases).
+pydantic==2.13.4
+pydantic-core==2.46.4
 pyhcl==0.4.4
 PyJWT>=2.8.0
 pyparsing==3.0.9
@@ -137,10 +150,12 @@ PyPDF2==3.0.1
 pypdf==6.1.0
 redis==5.0.1
 regex==2024.7.24
-google-auth==2.13.0
+# bumped: google-genai (via deepagents->langchain-google-genai) needs modern google-auth
+google-auth==2.55.2
 google-api-core==2.10.2
 google==3.0.0
-requests==2.32.3
+# >=2.32.5 required by langchain-community 0.4.x (LangChain 1.x stack)
+requests==2.34.2
 requests-oauthlib==1.3.1
 rsa==4.9
 ruamel.yaml>=0.18.0
@@ -166,11 +181,13 @@ tabulate==0.8.3
 tenacity==8.5.0
 termcolor==1.1.0
 text-unidecode==1.3
-tiktoken==0.7.0
+# loosened for langchain-openai 1.x (needs a current tokenizer registry)
+tiktoken==0.13.0
 toposort==1.10
 tqdm==4.65.0
 typing-inspect==0.9.0
-typing_extensions==4.12.2
+# >=4.14 required by openai 2.x (LangChain 1.x stack)
+typing_extensions==4.16.0
 tzdata==2024.1
 uritemplate==4.1.1
 urllib3==2.2.2

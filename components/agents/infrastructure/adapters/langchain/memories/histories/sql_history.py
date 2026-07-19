@@ -3,13 +3,19 @@
 Replaces raw SQL (``connection.cursor()``) with Django ORM calls through
 lazy-imported models.  This keeps the module loadable without pulling the
 full model graph at import time.
-"""
-import logging
-from typing import List, Optional
 
-from langchain.schema import AIMessage, BaseChatMessageHistory, BaseMessage, HumanMessage, SystemMessage
-# Use LangChain's Pydantic v1 shim to avoid v2 property resolution issues.
-from langchain_core.pydantic_v1 import BaseModel
+LangChain 1.x migration (2026-07-19): ``BaseChatMessageHistory`` now comes
+from ``langchain_core.chat_history`` (the ``langchain.schema`` shim was
+removed) and is a plain ABC — the ``langchain_core.pydantic_v1`` BaseModel
+mixin is gone (that shim no longer exists in core 1.x), so the fields are
+ordinary constructor arguments. ``messages`` stays a read-through property
+over the ORM; nothing upstream mutates it in place.
+"""
+
+import logging
+
+from langchain_core.chat_history import BaseChatMessageHistory
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 logger = logging.getLogger(__name__)
 
@@ -20,30 +26,35 @@ def _get_conversation_models():
         Conversation,
         ConversationMessage,
     )
+
     return Conversation, ConversationMessage
 
 
-class SqlMessageHistory(BaseChatMessageHistory, BaseModel):
+class SqlMessageHistory(BaseChatMessageHistory):
     """SQL-based message history for conversations.
 
     NOTE: This class can optionally cap the message count and content length
     returned to LLM memory so long conversations do not exceed model limits.
     """
 
-    conversation_id: str
-    max_messages: Optional[int] = None
-    max_message_chars: Optional[int] = None
-    max_total_chars: Optional[int] = None
-
-    def __init__(self, **data):  # type: ignore[override]
-        super().__init__(**data)
+    def __init__(
+        self,
+        conversation_id: str,
+        max_messages: int | None = None,
+        max_message_chars: int | None = None,
+        max_total_chars: int | None = None,
+    ):
+        self.conversation_id = conversation_id
+        self.max_messages = max_messages
+        self.max_message_chars = max_message_chars
+        self.max_total_chars = max_total_chars
         try:
             self._ensure_conversation_exists()
         except Exception:  # pragma: no cover - defensive only
-            logger.exception("Failed to ensure conversation %s exists", getattr(self, 'conversation_id', '<unknown>'))
+            logger.exception("Failed to ensure conversation %s exists", conversation_id)
 
     @property
-    def messages(self) -> List[BaseMessage]:
+    def messages(self) -> list[BaseMessage]:
         """Get all messages for this conversation"""
         _, ConversationMessage = _get_conversation_models()
 
@@ -53,24 +64,22 @@ class SqlMessageHistory(BaseChatMessageHistory, BaseModel):
 
         if self.max_messages:
             # Get last N messages (DESC then reverse)
-            rows = list(
-                qs.order_by("-created_at")[:self.max_messages]
-            )
+            rows = list(qs.order_by("-created_at")[: self.max_messages])
             rows.reverse()
         else:
             rows = list(qs.order_by("created_at"))
 
         messages = []
-        for role, content, created_at in rows:
+        for role, content, _created_at in rows:
             content = content or ""
             if self.max_message_chars and len(content) > self.max_message_chars:
-                content = f"{content[:self.max_message_chars].rstrip()}..."
+                content = f"{content[: self.max_message_chars].rstrip()}..."
 
-            if role == 'human':
+            if role == "human":
                 messages.append(HumanMessage(content=content))
-            elif role == 'assistant':
+            elif role == "assistant":
                 messages.append(AIMessage(content=content))
-            elif role == 'system':
+            elif role == "system":
                 messages.append(SystemMessage(content=content))
 
         if self.max_total_chars:
@@ -95,13 +104,13 @@ class SqlMessageHistory(BaseChatMessageHistory, BaseModel):
 
             # Determine role from message type
             if isinstance(message, HumanMessage):
-                role = 'human'
+                role = "human"
             elif isinstance(message, AIMessage):
-                role = 'assistant'
+                role = "assistant"
             elif isinstance(message, SystemMessage):
-                role = 'system'
+                role = "system"
             else:
-                role = 'human'  # Default fallback
+                role = "human"  # Default fallback
 
             ConversationMessage.objects.create(
                 conversation_id=self.conversation_id,
@@ -118,38 +127,42 @@ class SqlMessageHistory(BaseChatMessageHistory, BaseModel):
         _, ConversationMessage = _get_conversation_models()
         ConversationMessage.objects.filter(conversation_id=self.conversation_id).delete()
 
-    # Override additional BaseChatMessageHistory methods to ensure UUID generation
+    # Convenience helpers kept from the 0.3 implementation.
     def add_user_message(self, content: str) -> None:
-        """Add user message (Override to ensure UUID generation)"""
+        """Add user message"""
         self.add_message(HumanMessage(content=content))
 
     def add_ai_message(self, content: str) -> None:
-        """Add AI message (Override to ensure UUID generation)"""
+        """Add AI message"""
         self.add_message(AIMessage(content=content))
 
     def add_system_message(self, content: str) -> None:
-        """Add system message (Override to ensure UUID generation)"""
+        """Add system message"""
         self.add_message(SystemMessage(content=content))
 
-    def add_messages(self, messages: List[BaseMessage]) -> None:
-        """Add multiple messages (Override to ensure UUID generation)"""
+    def add_messages(self, messages: list[BaseMessage]) -> None:
+        """Add multiple messages"""
         for message in messages:
             self.add_message(message)
 
-    def get_messages_by_conversation_id(self, conversation_id: str) -> List[BaseMessage]:
+    def get_messages_by_conversation_id(self, conversation_id: str) -> list[BaseMessage]:
         """Get messages for a specific conversation ID"""
         _, ConversationMessage = _get_conversation_models()
-        rows = ConversationMessage.objects.filter(
-            conversation_id=conversation_id,
-        ).order_by("created_at").values_list("role", "content")
+        rows = (
+            ConversationMessage.objects.filter(
+                conversation_id=conversation_id,
+            )
+            .order_by("created_at")
+            .values_list("role", "content")
+        )
 
         messages = []
         for role, content in rows:
-            if role == 'human':
+            if role == "human":
                 messages.append(HumanMessage(content=content))
-            elif role == 'assistant':
+            elif role == "assistant":
                 messages.append(AIMessage(content=content))
-            elif role == 'system':
+            elif role == "system":
                 messages.append(SystemMessage(content=content))
         return messages
 
@@ -160,7 +173,7 @@ class SqlMessageHistory(BaseChatMessageHistory, BaseModel):
         try:
             Conversation.objects.get(id=self.conversation_id)
         except Conversation.DoesNotExist:
-            metadata = {'source': 'sql_message_history_fallback'}
+            metadata = {"source": "sql_message_history_fallback"}
             Conversation.objects.create(
                 id=self.conversation_id,
                 user_id=None,

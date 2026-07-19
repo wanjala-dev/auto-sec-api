@@ -10,6 +10,7 @@ This is a light wrapper that:
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from typing import Any
 
@@ -27,6 +28,8 @@ from components.agents.infrastructure.gateways.deep.logging import log_deep_even
 
 from .adapters import build_worker_from_agent
 from .orchestrator import build_orchestrator, llm_synthesizer
+
+logger = logging.getLogger(__name__)
 
 
 def build_clarify_worker(
@@ -355,12 +358,28 @@ def execute_plan_once(
                 pass
         return result
 
-    # Verification loop (L2) — optionally wrap the worker so critic-enabled
-    # agents (triage/optimization) self-verify: grade the answer, and on failure
-    # re-run once with the critique appended. Bounded by ``max_reflections``;
-    # off by default (0) so the interactive path is unchanged. See critic.py +
+    # Verification loop (L2). Two implementations, exactly ONE active per run:
+    #
+    # - ``deepagents.RubricMiddleware`` (the target): attached to the worker's
+    #   ``create_agent`` graph by ``BaseAgent._build_agent_middleware`` when
+    #   ``DEEP_RUBRIC_MIDDLEWARE_ENABLED`` / ``agent_config["rubric_middleware"]``
+    #   opts in — grader on the cheap tier, ≤2 iterations, grading grounded via
+    #   the ``verify_suggestion_grounded`` tool. See deep/rubric.py.
+    # - ``reflective_worker`` + ``WorkerCritic`` (the fallback): the hand-rolled
+    #   loop, kept until the middleware swap is verified in production. Skipped
+    #   when the middleware is active so answers aren't double-verified.
+    #
+    # Bounded by ``max_reflections``; off by default (0) so the interactive
+    # path is unchanged. See critic.py +
     # docs/plans/LOOP_ENGINEERING_SELF_IMPROVEMENT_2026-07-19.md.
-    if max_reflections > 0:
+    from .rubric import rubric_middleware_enabled
+
+    if rubric_middleware_enabled(agent_config):
+        logger.info(
+            "deep_run verification=rubric_middleware thread_id=%s (reflective_worker fallback skipped)",
+            run_thread,
+        )
+    elif max_reflections > 0:
         from .critic import CRITIC_ENABLED_AGENTS, WorkerCritic, reflective_worker
 
         def _effective_agent_type(task) -> str:
@@ -450,10 +469,30 @@ def execute_plan_once(
     return state
 
 
-def resume_plan(thread_id: str, *, graph, plan_state: PlanState | None = None) -> PlanState:
+def resume_plan(
+    thread_id: str,
+    *,
+    graph,
+    decision: dict | None = None,
+    plan_state: PlanState | None = None,
+) -> PlanState:
+    """Resume a previously interrupted graph run by thread_id.
+
+    langgraph 1.x makes ``Command(resume=...)`` first-class: the resume value
+    is delivered to the pending ``interrupt()`` call in the approval node
+    (see orchestrator.approval_node). ``decision`` is the payload that
+    ``interrupt()`` returns — e.g. ``{"approved": True}`` /
+    ``{"approved": False}``; it defaults to an approval so legacy callers
+    that just "poked" the thread keep their effective behaviour.
+
+    ``plan_state`` is the legacy 0.x escape hatch (re-invoke with explicit
+    state on the same checkpointer thread). When provided it wins, so old
+    call sites remain valid; new callers should pass ``decision``.
     """
-    Resume a previously interrupted graph run by thread_id. In langgraph 0.0.69,
-    explicit Command(resume=...) is not available; callers should reuse the same
-    checkpointer thread_id when invoking the graph.
-    """
-    return graph.invoke(plan_state or {}, config={"configurable": {"thread_id": thread_id}})
+    config = {"configurable": {"thread_id": thread_id}}
+    if plan_state is not None:
+        return graph.invoke(plan_state, config=config)
+
+    from langgraph.types import Command
+
+    return graph.invoke(Command(resume=decision if decision is not None else {"approved": True}), config=config)

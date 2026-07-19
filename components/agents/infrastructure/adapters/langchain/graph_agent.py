@@ -18,13 +18,16 @@ import logging
 import operator
 from typing import Annotated, Any, TypedDict
 
-from langchain.schema import AIMessage, BaseMessage, HumanMessage, SystemMessage
-from langchain.tools import Tool as LangChainTool
+# LangChain 1.x — `langchain.schema` / `langchain.tools` re-export shims removed;
+# import from langchain_core directly.
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.tools import Tool as LangChainTool
 
 logger = logging.getLogger(__name__)
 
 
 # ── Graph State ──────────────────────────────────────────────────────
+
 
 class AgentGraphState(TypedDict, total=False):
     """Shared state flowing through the agent graph."""
@@ -38,6 +41,7 @@ class AgentGraphState(TypedDict, total=False):
 
 
 # ── Graph Builder ────────────────────────────────────────────────────
+
 
 def build_graph_executor(
     *,
@@ -57,10 +61,7 @@ def build_graph_executor(
     try:
         from langgraph.graph import END, StateGraph
     except ImportError:
-        logger.warning(
-            "langgraph not installed — cannot build graph executor. "
-            "Install with: pip install langgraph"
-        )
+        logger.warning("langgraph not installed — cannot build graph executor. Install with: pip install langgraph")
         return None
 
     tool_map = {tool.name: tool for tool in tools}
@@ -141,14 +142,10 @@ def build_graph_executor(
                 else:
                     output = tool.invoke(str(tool_args))
                 results.append({"tool": tool_name, "output": str(output)})
-                result_messages.append(
-                    HumanMessage(content=f"Tool '{tool_name}' result:\n{output}")
-                )
+                result_messages.append(HumanMessage(content=f"Tool '{tool_name}' result:\n{output}"))
             except Exception as e:
                 results.append({"tool": tool_name, "error": str(e)})
-                result_messages.append(
-                    HumanMessage(content=f"Tool '{tool_name}' error: {e}")
-                )
+                result_messages.append(HumanMessage(content=f"Tool '{tool_name}' error: {e}"))
 
         return {
             "messages": result_messages,

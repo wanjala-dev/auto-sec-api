@@ -12,6 +12,7 @@ SAFETY:
   instead of dispatching more work.
 - Worker exceptions are caught and counted; they do NOT crash the graph.
 """
+
 from __future__ import annotations
 
 import logging
@@ -19,17 +20,12 @@ import time
 import uuid
 from collections.abc import Callable, Iterable
 
-from langgraph.constants import Send
+# langgraph 1.x: `Send` moved from langgraph.constants to langgraph.types;
+# `interrupt` has lived there since 0.2 and is first-class in 1.x (resumed
+# via `Command(resume=...)` — see runner.resume_plan).
 from langgraph.graph import END, START, StateGraph
-
-# `interrupt` is langgraph >= 0.2. Older installs raise ImportError; we
-# fall back to a no-op so the import path stays safe but HITL gates are
-# only effective on supported versions.
-try:
-    from langgraph.types import interrupt as _lg_interrupt  # type: ignore
-except Exception:  # pragma: no cover - older langgraph
-    def _lg_interrupt(payload):  # type: ignore
-        return payload
+from langgraph.types import Send
+from langgraph.types import interrupt as _lg_interrupt
 
 from components.agents.domain.value_objects.plan_schemas import (
     ExecutionBudget,
@@ -156,13 +152,12 @@ def _format_honest_failure_answer(goal: str | None, summaries: list[str]) -> str
     """
     goal_line = goal.strip() if isinstance(goal, str) else ""
     header = (
-        f"I couldn't answer that. The agent for \"{goal_line}\" stopped "
+        f'I couldn\'t answer that. The agent for "{goal_line}" stopped '
         "before reaching a final answer — most likely because no tool on "
         "the routed agent matched the question. Try rephrasing, or ask "
         "what this agent can do."
         if goal_line
-        else
-        "I couldn't answer that. The agent stopped before reaching a "
+        else "I couldn't answer that. The agent stopped before reaching a "
         "final answer — most likely because no tool on the routed agent "
         "matched the question. Try rephrasing, or ask what this agent "
         "can do."
@@ -267,7 +262,8 @@ def llm_synthesizer(state: PlanState) -> dict:
         }
 
     try:
-        from langchain.schema import HumanMessage, SystemMessage
+        from langchain_core.messages import HumanMessage, SystemMessage
+
         from components.knowledge.infrastructure.factories.llms.factory import LLMFactory
 
         llm = LLMFactory.get_llm()
@@ -304,10 +300,12 @@ def llm_synthesizer(state: PlanState) -> dict:
             "decide whether to replan."
             f"{failure_caveat}"
         )
-        response = llm.invoke([
-            SystemMessage(content="You are a deep-agent synthesizer."),
-            HumanMessage(content=prompt),
-        ])
+        response = llm.invoke(
+            [
+                SystemMessage(content="You are a deep-agent synthesizer."),
+                HumanMessage(content=prompt),
+            ]
+        )
         text = (getattr(response, "content", None) or str(response)).strip()
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("llm_synthesizer failed, falling back to no-op: %s", exc)

@@ -22,7 +22,7 @@ These assertions lock in both halves of that fix.
 
 from __future__ import annotations
 
-from langchain.tools import StructuredTool
+from langchain_core.tools import StructuredTool
 
 from components.agents.application.use_cases import agent_chat_use_case
 from components.agents.infrastructure.adapters.langchain.agents.workspace_agent import (
