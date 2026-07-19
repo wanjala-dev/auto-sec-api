@@ -351,14 +351,6 @@ CELERY_BEAT_SCHEDULE = {
         "task": "identity.sweep_user_sessions",
         "schedule": crontab(hour=4, minute=20),
     },
-    # Recommendations projection sweep — (re)builds embedding cards for
-    # campaigns/events/products/orgs. Hash-skips unchanged rows, so an
-    # unchanged catalog is nearly free; hourly is fresh enough since the
-    # serving surface (Phase 1) reads the projection, not the sources.
-    "recommendations_refresh_recommendable_items": {
-        "task": "recommendations.refresh_recommendable_items",
-        "schedule": crontab(minute=17),
-    },
     # Fire due recurring workflow schedules (user-defined daily/weekly/monthly
     # automations). Every minute so a scheduled time is honoured within ~60s;
     # the task is idempotent (advances next_run_at + per-fire idempotency key).
@@ -383,14 +375,6 @@ CELERY_BEAT_SCHEDULE = {
         "task": "infrastructure.ai.embeddings.tasks.create_embeddings_for_workspace_content",
         "schedule": timedelta(hours=1),
     },
-    "budget_history_pre_warm": {
-        "task": "compute_budget_history_for_all_workspaces",
-        "schedule": timedelta(hours=1),
-    },
-    "materialize_due_recurring_transactions": {
-        "task": "budget.tasks.materialize_due_recurring_transactions",
-        "schedule": timedelta(hours=1),
-    },
     "workspace_setup_banner_sync": {
         "task": "infrastructure.workspaces.tasks.sync_workspace_setup_banners",
         "schedule": timedelta(minutes=30),
@@ -398,14 +382,6 @@ CELERY_BEAT_SCHEDULE = {
     "workspace_temp_workspace_cleanup": {
         "task": "infrastructure.workspaces.tasks.prune_temporary_workspaces",
         "schedule": timedelta(hours=1),
-    },
-    "recipient_aggregation_reconciliation": {
-        "task": "refresh_all_recipient_aggregations",
-        "schedule": timedelta(hours=24),
-    },
-    "rebuild_elasticsearch_indexes": {
-        "task": "infrastructure.search.tasks.rebuild_elasticsearch_indexes",
-        "schedule": crontab(hour=0, minute=0),
     },
     "workspace_index_nightly_refresh": {
         # Re-embed every active workspace into the pgvector store so drift
@@ -424,17 +400,9 @@ CELERY_BEAT_SCHEDULE = {
         "task": "components.knowledge.index_freshness.prune_index_freshness_samples",
         "schedule": crontab(hour=4, minute=0),
     },
-    "reconcile_unbudgeted_transactions": {
-        "task": "budgeting.tasks.reconcile_unbudgeted_transactions",
-        "schedule": crontab(hour=2, minute=0),  # 2 AM UTC daily
-    },
     "notification_archival": {
         "task": "notifications.archive_old_notifications",
         "schedule": crontab(hour=3, minute=30),  # 3:30 AM UTC daily
-    },
-    "flow_prediction_pre_warm": {
-        "task": "budgeting.tasks.pre_warm_all_flow_predictions",
-        "schedule": crontab(hour=3, minute=15),  # 3:15 AM UTC daily
     },
     # Recycle bin lifecycle
     "recycle_bin_auto_tombstone": {
@@ -461,13 +429,5 @@ CELERY_BEAT_SCHEDULE = {
     "ai_usage_reset_monthly": {
         "task": "ai.reset_monthly_ai_usage_windows",
         "schedule": crontab(hour=0, minute=10, day_of_month=1),  # 00:10 UTC on day 1
-    },
-    # Belt-and-braces bank-feed sync (Phase 2 — PR 2.2).
-    # Primary trigger is the Plaid webhook (PlaidWebhookController); this
-    # catches missed deliveries. 6 hours balances freshness vs. Plaid
-    # rate-limit headroom.
-    "sync_all_active_bank_connections": {
-        "task": "budgeting.bank_feed.sync_all_active_bank_connections",
-        "schedule": 6 * 60 * 60,  # 6 hours in seconds
     },
 }
