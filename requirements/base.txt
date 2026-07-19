@@ -101,10 +101,14 @@ pgvector>=0.3.6
 langgraph==1.2.9
 langgraph-checkpoint==4.1.1
 deepagents==0.6.12
-# langfuse 2.x targets langchain-core 0.x callbacks; its LC handler may not attach on
-# core 1.x (risk R2). Tracing degrades gracefully via NullTracingAdapter — handler
-# construction failure is caught by the TracingPort. Bump to langfuse 3.x in a follow-up.
-langfuse==2.48.0
+# langfuse 3.x (OTEL-based) — SDK for the self-hosted Langfuse v3 server.
+# 3.x moved the LC handler to langfuse.langchain.CallbackHandler (constructs cleanly
+# against langchain-core 1.x, verified 2026-07-19); client init is a per-public-key
+# singleton registry. The tracing adapter subclasses a PRIVATE handler hook
+# (_parse_langfuse_trace_attributes_from_metadata) for session/user attribution —
+# re-verify components/agents/infrastructure/adapters/tracing/langfuse.py on ANY bump.
+# Pulls in opentelemetry-{api,sdk,exporter-otlp-proto-http} >=1.33.1,<2.
+langfuse==3.15.0
 langsmith==0.8.18
 Markdown==3.4.1
 MarkupSafe==2.1.2
