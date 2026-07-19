@@ -13,7 +13,11 @@
 #   - Flower monitoring UI
 # =============================================================================
 
-x-backend-image: &backend-image wanjala-api-backend:dev
+# Auto-Sec's OWN image tag — deliberately NOT wanjala-api-backend:dev. Both
+# stacks run on this machine and previously shared that tag, so rebuilding
+# auto-sec would have silently swapped the image under wanjala's containers
+# (and vice versa). One product, one tag.
+x-backend-image: &backend-image auto-sec-backend:dev
 
 services:
 

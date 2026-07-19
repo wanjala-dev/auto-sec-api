@@ -73,8 +73,12 @@ ENTRYPOINT ["/entrypoint"]
 FROM base AS prod
 
 COPY ./requirements /requirements
-RUN pip install --no-cache-dir -r /requirements/production.txt \
-    && pip uninstall -y \
+# NOTE: install and uninstall are SEPARATE steps on purpose. The old
+# `pip install … && pip uninstall … || true` let the `|| true` (meant for the
+# uninstall) swallow a pip-install FAILURE — producing a "successful" image
+# with no dependencies installed (caught 2026-07-19 building the 1.x image).
+RUN pip install --no-cache-dir -r /requirements/production.txt
+RUN pip uninstall -y \
         django-elasticsearch-dsl elasticsearch elasticsearch-dsl \
         elastic-apm elastic-transport \
         langfuse \
