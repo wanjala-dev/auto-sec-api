@@ -2,6 +2,7 @@
 
 No Django imports — depends only on ports.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -58,3 +59,13 @@ class PatchAgentSettingsUseCase(CommandHandler[PatchAgentSettingsCommand]):
 
     def execute(self, *, command: PatchAgentSettingsCommand) -> PatchAgentSettingsResult:
         return self._port.patch_agent_settings(command=command)
+
+
+class PatchAgentCapabilitiesUseCase:
+    """Toggle allowlisted, risk-gating capabilities (e.g. ``open_draft_pr``)."""
+
+    def __init__(self, port: AgentProfilePort) -> None:
+        self._port = port
+
+    def execute(self, *, command):
+        return self._port.patch_agent_capabilities(command=command)

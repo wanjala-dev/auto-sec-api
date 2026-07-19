@@ -65,6 +65,7 @@ from components.agents.application.use_cases.agent_memory_command_use_case impor
 from components.agents.application.use_cases.agent_profile_use_case import (
     GetAgentProfileQuery,
     GetAgentStateQuery,
+    PatchAgentCapabilitiesUseCase,
     PatchAgentProfileUseCase,
     PatchAgentSettingsUseCase,
 )
@@ -531,6 +532,10 @@ class AIProvider:
     @staticmethod
     def build_patch_agent_settings_use_case() -> PatchAgentSettingsUseCase:
         return PatchAgentSettingsUseCase(port=AIProvider._profile_port())
+
+    @staticmethod
+    def build_patch_agent_capabilities_use_case() -> PatchAgentCapabilitiesUseCase:
+        return PatchAgentCapabilitiesUseCase(port=AIProvider._profile_port())
 
     # ── Engagement use cases ──────────────────────────────────────────
 

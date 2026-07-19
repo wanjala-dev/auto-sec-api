@@ -3,15 +3,11 @@
 Extracted from agents_controller.py get_agent_state, get_agent_profile,
 patch_agent_profile, patch_agent_settings.
 """
+
 from __future__ import annotations
 
 from typing import Any
 
-from components.agents.domain.errors import (
-    AgentEngagementError,
-    AgentNotFoundError,
-    AgentPermissionError,
-)
 from components.agents.application.ports.agent_profile_port import (
     AgentProfileData,
     AgentProfilePort,
@@ -23,15 +19,20 @@ from components.agents.application.ports.agent_profile_port import (
     PatchAgentSettingsCommand,
     PatchAgentSettingsResult,
 )
+from components.agents.domain.errors import (
+    AgentEngagementError,
+    AgentNotFoundError,
+    AgentPermissionError,
+)
 
 
 class OrmAgentProfileRepository(AgentProfilePort):
-
     # ── helpers ───────────────────────────────────────────────────────
 
     @staticmethod
     def _get_agent_with_engagement(agent_id: str):
         from django.db.models import Avg, Count, Q
+
         from infrastructure.persistence.ai.agents.models import Agent
 
         agent = (
@@ -70,10 +71,12 @@ class OrmAgentProfileRepository(AgentProfilePort):
         if not workspace:
             raise AgentPermissionError("Permission denied")
         from components.workspace.application.facades.workspace_facade import user_is_workspace_member
+
         if user_is_workspace_member(user, workspace):
             return
         if include_followers:
             from infrastructure.persistence.ai.agents.models import AgentFollow
+
             if AgentFollow.objects.filter(agent=agent, user=user).exists():
                 return
         raise AgentPermissionError("Permission denied")
@@ -81,6 +84,7 @@ class OrmAgentProfileRepository(AgentProfilePort):
     @staticmethod
     def _check_ai_permission(http_request, agent, perm: str) -> None:
         from components.agents.application.facades.agent_permissions_facade import AgentAIPermission
+
         checker = AgentAIPermission()
 
         class _View:
@@ -95,9 +99,9 @@ class OrmAgentProfileRepository(AgentProfilePort):
     # ── port methods ─────────────────────────────────────────────────
 
     def get_agent_state(self, *, request: GetAgentStateRequest) -> AgentStateData:
-        from infrastructure.persistence.ai.agents.models import AgentProfile
-        from components.agents.mappers.rest.agents_serializers import AgentProfileSerializer
         from components.agents.infrastructure.services.agents_service import get_agent_service
+        from components.agents.mappers.rest.agents_serializers import AgentProfileSerializer
+        from infrastructure.persistence.ai.agents.models import AgentProfile
 
         agent_record = self._get_agent_with_engagement(request.agent_id)
 
@@ -122,13 +126,17 @@ class OrmAgentProfileRepository(AgentProfilePort):
         )
 
     def get_agent_profile(self, *, request: GetAgentProfileRequest) -> AgentProfileData:
+        from components.agents.mappers.rest.agents_serializers import (
+            AgentEngagementCountsSerializer,
+            AgentProfileSerializer,
+        )
         from infrastructure.persistence.ai.agents.models import AgentProfile
-        from components.agents.mappers.rest.agents_serializers import AgentProfileSerializer, AgentEngagementCountsSerializer
 
         agent = self._get_agent_with_engagement(request.agent_id)
         profile, _ = AgentProfile.objects.get_or_create(agent=agent)
         self._check_access(
-            request.user, agent,
+            request.user,
+            agent,
             include_followers=bool(profile and profile.allow_followers),
         )
 
@@ -143,8 +151,11 @@ class OrmAgentProfileRepository(AgentProfilePort):
         )
 
     def patch_agent_profile(self, *, command: PatchAgentProfileCommand) -> PatchAgentProfileResult:
+        from components.agents.mappers.rest.agents_serializers import (
+            AgentEngagementCountsSerializer,
+            AgentProfileSerializer,
+        )
         from infrastructure.persistence.ai.agents.models import AgentProfile
-        from components.agents.mappers.rest.agents_serializers import AgentProfileSerializer, AgentEngagementCountsSerializer
 
         agent = self._get_agent_with_engagement(command.agent_id)
         profile, _ = AgentProfile.objects.get_or_create(agent=agent)
@@ -167,8 +178,8 @@ class OrmAgentProfileRepository(AgentProfilePort):
         )
 
     def patch_agent_settings(self, *, command: PatchAgentSettingsCommand) -> PatchAgentSettingsResult:
-        from infrastructure.persistence.ai.agents.models import Agent, AgentProfile
         from components.agents.mappers.rest.agents_serializers import AgentProfileSerializer
+        from infrastructure.persistence.ai.agents.models import Agent, AgentProfile
 
         agent = self._get_agent_with_engagement(command.agent_id)
         profile, _ = AgentProfile.objects.get_or_create(agent=agent)
@@ -177,11 +188,7 @@ class OrmAgentProfileRepository(AgentProfilePort):
             self._check_ai_permission(command.http_request, agent, "ai_manage")
 
         # Update custom settings
-        custom_profile = (
-            (agent.config or {}).get("custom_profile", {})
-            if isinstance(agent.config, dict)
-            else {}
-        )
+        custom_profile = (agent.config or {}).get("custom_profile", {}) if isinstance(agent.config, dict) else {}
         allowed_keys = {"persona", "tone", "tool_whitelist", "output_format", "default_report_period"}
         sanitized_updates = {k: v for k, v in (command.data or {}).items() if k in allowed_keys}
 
@@ -194,6 +201,7 @@ class OrmAgentProfileRepository(AgentProfilePort):
 
             try:
                 from components.agents.infrastructure.services.agents_service import get_agent_service
+
                 service = get_agent_service()
                 instance = service.get_agent(str(agent.agent_id))
                 if instance:
@@ -210,3 +218,37 @@ class OrmAgentProfileRepository(AgentProfilePort):
             Agent.objects.filter(agent_id=agent.agent_id).update(status="paused")
 
         return PatchAgentSettingsResult(profile=serializer.data)
+
+    # Capabilities toggleable via the API. Adding a new gated capability means
+    # adding it here AND wiring the tool/use case that reads it — never accept
+    # arbitrary keys (capabilities unlock risk-gated tools; this allowlist is
+    # the API-side half of that gate).
+    ALLOWED_CAPABILITIES = {"open_draft_pr"}
+
+    def patch_agent_capabilities(self, *, command):
+        """Merge boolean toggles into ``Agent.config.capabilities``.
+
+        Same permission gate as settings (``ai_manage``), but a separate,
+        stricter surface: only allowlisted capability keys, values coerced to
+        bool, and the merged map returned so the UI can render current state.
+        """
+        from components.agents.application.ports.agent_profile_port import PatchAgentCapabilitiesResult
+        from infrastructure.persistence.ai.agents.models import Agent
+
+        agent = self._get_agent_with_engagement(command.agent_id)
+
+        if command.http_request:
+            self._check_ai_permission(command.http_request, agent, "ai_manage")
+
+        unknown = set((command.data or {}).keys()) - self.ALLOWED_CAPABILITIES
+        if unknown:
+            raise AgentEngagementError(f"Unknown capabilities: {', '.join(sorted(unknown))}")
+        updates = {key: bool(value) for key, value in (command.data or {}).items()}
+
+        merged_config = dict(agent.config or {})
+        capabilities = dict(merged_config.get("capabilities") or {})
+        capabilities.update(updates)
+        merged_config["capabilities"] = capabilities
+        Agent.objects.filter(agent_id=agent.agent_id).update(config=merged_config)
+
+        return PatchAgentCapabilitiesResult(capabilities=capabilities)

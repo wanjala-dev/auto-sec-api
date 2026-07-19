@@ -156,6 +156,11 @@ class AgentsService:
         use_case = self.provider.build_patch_agent_settings_use_case()
         return use_case.execute(command)
 
+    def patch_agent_capabilities(self, command) -> Any:
+        """Toggle allowlisted, risk-gating agent capabilities."""
+        use_case = self.provider.build_patch_agent_capabilities_use_case()
+        return use_case.execute(command=command)
+
     def follow_agent(self, command) -> Any:
         """Follow an agent."""
         use_case = self.provider.build_follow_agent_use_case()
