@@ -5,7 +5,16 @@
 verification loop on the current 0.3 stack; the two converge when we swap
 `deep/critic.py`'s `WorkerCritic` / `reflective_worker` for the real
 `RubricMiddleware` once 1.x lands.
-**Status:** Plan + reviewable spike (base.py core-worker construction). Full migration NOT yet done.
+**Status:** EXECUTED 2026-07-19 on branch `feat/langchain-1x-migration` (Phases 1-6 landed;
+verified in a fresh python:3.12 venv — see the branch commits). Corrections found at
+execution time vs this plan: (a) `RubricMiddleware` takes NO `rubric` kwarg — the rubric
+rides the *invocation state* (`state["rubric"]`; no rubric = no-op) and `model` is REQUIRED;
+(b) memory replacement shipped as SQL-history threading into the `create_agent` input
+(handle-level `history_provider`), NOT a checkpointer — a process-local saver would fork
+conversations per worker; (c) `langchain-classic` added for `ConversationalRetrievalChain`;
+(d) langgraph-checkpoint 4.x serde is typed-only (`dumps_typed`/`loads_typed`) — the
+DatabaseSaver stores type tags beside the blobs; (e) langfuse 2.48's LC handler does NOT
+load under core 1.x (R2 confirmed) — tracing degrades to NullTracingAdapter until the 3.x bump.
 
 ---
 
