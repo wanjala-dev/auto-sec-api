@@ -121,7 +121,7 @@ FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:3001")
 
 LANGFUSE_SECRET_KEY = env("LANGFUSE_SECRET_KEY", default="")
 LANGFUSE_PUBLIC_KEY = env("LANGFUSE_PUBLIC_KEY", default="")
-LANGFUSE_BASE_URL = env("LANGFUSE_BASE_URL", default="http://localhost:3100")
+LANGFUSE_BASE_URL = env("LANGFUSE_BASE_URL", default="http://langfuse:3000")
 LANGFUSE_HOST = env("LANGFUSE_HOST", default="http://langfuse:3000")
 
 

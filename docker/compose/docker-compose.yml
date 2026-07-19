@@ -24,7 +24,7 @@ x-common-env: &common-env
   LANGFUSE_HOST: http://langfuse:3000
   LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
   LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
-  LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-http://localhost:3100}
+  LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-http://langfuse:3000}
 
 x-celery-base: &celery-base
   env_file: &env-file
@@ -300,7 +300,7 @@ services:
       langfuse-minio:
         condition: service_healthy
     environment:
-      NEXTAUTH_URL: ${LANGFUSE_URL:-http://localhost:3100}
+      NEXTAUTH_URL: ${LANGFUSE_URL:-http://localhost:3110}
       DATABASE_URL: postgres://${LANGFUSE_DB_USER:-langfuse}:${LANGFUSE_DB_PASSWORD:-langfuse}@langfuse-db:5432/${LANGFUSE_DB_NAME:-langfuse}
       LANGFUSE_DATABASE_URL: postgres://${LANGFUSE_DB_USER:-langfuse}:${LANGFUSE_DB_PASSWORD:-langfuse}@langfuse-db:5432/${LANGFUSE_DB_NAME:-langfuse}
       SALT: ${LANGFUSE_SALT:-00000000000000000000000000000000}
@@ -335,7 +335,7 @@ services:
     environment:
       HOSTNAME: 0.0.0.0
       PORT: 3000
-      NEXTAUTH_URL: ${LANGFUSE_URL:-http://localhost:3100}
+      NEXTAUTH_URL: ${LANGFUSE_URL:-http://localhost:3110}
       DATABASE_URL: postgres://${LANGFUSE_DB_USER:-langfuse}:${LANGFUSE_DB_PASSWORD:-langfuse}@langfuse-db:5432/${LANGFUSE_DB_NAME:-langfuse}
       LANGFUSE_DATABASE_URL: postgres://${LANGFUSE_DB_USER:-langfuse}:${LANGFUSE_DB_PASSWORD:-langfuse}@langfuse-db:5432/${LANGFUSE_DB_NAME:-langfuse}
       CLICKHOUSE_URL: http://langfuse-clickhouse:8123
