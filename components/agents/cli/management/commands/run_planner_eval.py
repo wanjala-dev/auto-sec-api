@@ -23,16 +23,16 @@ runs while iterating.
 Plan reference: ``/Users/henrywanjala/.claude/plans/atomic-gathering-fox.md``
 Wave 2.
 """
+
 from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from django.core.management.base import BaseCommand, CommandError
-
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +64,7 @@ def _build_run_prompt_function():
                 workspace_id=EVAL_WORKSPACE_ID,
                 extra_context=context if isinstance(context, dict) else None,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             # Per the harness contract — return None and let
             # ``grade_plan_shape`` record a 0/10 reason rather than
             # bubbling. Logged so a debugger can still find it.
@@ -75,10 +75,19 @@ def _build_run_prompt_function():
 
 
 class Command(BaseCommand):
-    help = (
-        "Run the planner against an eval dataset and write a baseline "
-        "HTML + JSON report under docs/eval-reports/."
-    )
+    help = "Run the planner against an eval dataset and write a baseline HTML + JSON report under docs/eval-reports/."
+
+    # This command defines its own ``--version`` (the PromptRegistry
+    # version to evaluate), which collides with the ``--version`` action
+    # Django's BaseCommand parser adds by default. Suppress the base
+    # one from help AND resolve the argparse conflict so the command's
+    # own flag wins — without this the command raises ArgumentError at
+    # parser construction and is not invocable at all.
+    suppressed_base_arguments = {"--version"}
+
+    def create_parser(self, prog_name, subcommand, **kwargs):
+        kwargs.setdefault("conflict_handler", "resolve")
+        return super().create_parser(prog_name, subcommand, **kwargs)
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -106,10 +115,7 @@ class Command(BaseCommand):
             "--samples",
             type=int,
             default=0,
-            help=(
-                "If > 0, evaluate only the first N cases. Useful for "
-                "cheap sanity runs while iterating on a prompt."
-            ),
+            help=("If > 0, evaluate only the first N cases. Useful for cheap sanity runs while iterating on a prompt."),
         )
         parser.add_argument(
             "--grader",
@@ -147,8 +153,7 @@ class Command(BaseCommand):
             type=str,
             default="baseline",
             help=(
-                "Free-form label embedded in the output filename — "
-                "useful when comparing pre- vs post-prompt-edit runs."
+                "Free-form label embedded in the output filename — useful when comparing pre- vs post-prompt-edit runs."
             ),
         )
         parser.add_argument(
@@ -206,23 +211,16 @@ class Command(BaseCommand):
             dataset_path = Path(dataset_override).expanduser().resolve()
             dataset_slug = dataset_path.stem
             if not dataset_path.exists():
-                raise CommandError(
-                    f"Dataset not found at override path: {dataset_path}"
-                )
+                raise CommandError(f"Dataset not found at override path: {dataset_path}")
         else:
             # __file__ is at components/agents/cli/management/commands/<file>.
             # parents[3] is components/agents/, where the tests/ tree lives.
             dataset_path = (
-                Path(__file__).resolve().parents[3]
-                / "tests"
-                / "prompt_eval"
-                / "datasets"
-                / f"{dataset_slug}.json"
+                Path(__file__).resolve().parents[3] / "tests" / "prompt_eval" / "datasets" / f"{dataset_slug}.json"
             )
             if not dataset_path.exists():
                 raise CommandError(
-                    f"Dataset not found: {dataset_path}. Looked under "
-                    "components/agents/tests/prompt_eval/datasets/."
+                    f"Dataset not found: {dataset_path}. Looked under components/agents/tests/prompt_eval/datasets/."
                 )
 
         if samples > 0:
@@ -242,8 +240,7 @@ class Command(BaseCommand):
         self.stdout.write(
             self.style.SUCCESS(
                 f"Running planner eval — dataset={dataset_slug} "
-                f"grader={grader_model} concurrency={concurrency}"
-                + (f" samples={samples}" if samples else "")
+                f"grader={grader_model} concurrency={concurrency}" + (f" samples={samples}" if samples else "")
             )
         )
 
@@ -253,7 +250,7 @@ class Command(BaseCommand):
             dataset_name=dataset_slug,
         )
 
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
         # Per-version reports keep v1 / v2 runs from overwriting each
         # other when both are kicked off in the same minute.
         version_suffix = f"-{prompt_id.replace('.', '_')}-{version}"
@@ -277,6 +274,7 @@ class Command(BaseCommand):
         # EvaluationReport dataclass doesn't carry these fields (they're
         # CLI knobs, not part of the eval surface).
         import json as _json
+
         try:
             report_data = _json.loads(json_path.read_text())
         except (OSError, _json.JSONDecodeError):
@@ -295,9 +293,7 @@ class Command(BaseCommand):
         self.stdout.write(self.style.MIGRATE_HEADING("Eval summary"))
         self.stdout.write(f"  cases:        {report.case_count}")
         self.stdout.write(f"  avg score:    {report.average_score:.2f} / 10")
-        self.stdout.write(
-            f"  pass rate:    {report.pass_rate_at_seven * 100:.0f}% (≥7/10)"
-        )
+        self.stdout.write(f"  pass rate:    {report.pass_rate_at_seven * 100:.0f}% (≥7/10)")
         self.stdout.write("")
         self.stdout.write(self.style.MIGRATE_HEADING("Score by category"))
         for cat, score in sorted(report.score_by_category.items()):
@@ -328,19 +324,9 @@ class Command(BaseCommand):
             PromptRegistry,
         )
 
-        resolved = (
-            PromptRegistry.active_version(prompt_id)
-            if version == "active" else version
-        )
-        llm_planner.SYSTEM_PROMPT_TEMPLATE = PromptRegistry.get(
-            prompt_id, version=resolved
-        )
-        self.stdout.write(
-            self.style.SUCCESS(
-                f"Pinned {prompt_id}@{resolved} as the planner prompt for "
-                "this eval run."
-            )
-        )
+        resolved = PromptRegistry.active_version(prompt_id) if version == "active" else version
+        llm_planner.SYSTEM_PROMPT_TEMPLATE = PromptRegistry.get(prompt_id, version=resolved)
+        self.stdout.write(self.style.SUCCESS(f"Pinned {prompt_id}@{resolved} as the planner prompt for this eval run."))
 
     @staticmethod
     def _truncate_dataset(source: Path, samples: int) -> Path:

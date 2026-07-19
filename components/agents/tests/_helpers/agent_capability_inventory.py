@@ -196,11 +196,11 @@ CANONICAL_TOOLS: dict[str, set[str]] = {
 #
 # 2026-07 fork retune: entries for the unported wanjala specialists were
 # deleted, and the SOC specialists (triage / log_watch / optimization) got
-# entries. Their prompt backing today is the LIVE agent catalog section that
-# ``_build_agent_catalog()`` injects into the system prompt from each class's
-# ``profile`` (the yaml routing TABLE is still the wanjala v7 text and has no
-# explicit SOC bullets — that prompt retune is tracked as its own change;
-# when it lands, add explicit routing rules for these keywords there).
+# entries. As of planner.system v9 (2026-07-19) the yaml routing table
+# carries explicit SOC bullets for these keywords — the dynamic agent
+# catalog from ``_build_agent_catalog()`` is now reinforcement, not the
+# only backing. Keep this dict and the prompt's <routing_rules> in sync:
+# a new tool domain gets a keyword here AND a routing bullet there.
 ROUTING_EXPECTATIONS: dict[str, str] = {
     # task_agent
     "how many tasks": "task_agent",

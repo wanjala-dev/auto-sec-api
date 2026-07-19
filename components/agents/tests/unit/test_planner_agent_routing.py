@@ -84,18 +84,17 @@ class TestSystemPromptRoutingRules:
 
         # ai_teammate is the orchestrator, not a specialist destination,
         # so don't require it in the routing table. Aliases ("task",
-        # "donation", etc.) also don't need explicit rules.
+        # "triage", etc.) also don't need explicit rules. This is the
+        # auto-sec fleet — the canonical names mirror
+        # tests/_helpers/agent_capability_inventory.py.
         canonical = {
             "task_agent",
             "project_agent",
-            "budget_agent",
-            "financial_agent",
-            "sponsorship_agent",
-            "donation_agent",
-            "fundraising_agent",
             "workspace_agent",
             "user_agent",
-            "blog_agent",
+            "triage_agent",
+            "log_watch_agent",
+            "optimization_agent",
         }
         registered = set(AgentRegistry.list_agents())
         # Only check specialists that are actually registered.
@@ -392,171 +391,196 @@ class TestUserAgentRouting:
         assert resolve_source_domain("user_agent") == "identity"
 
 
-class TestBoundaryDisambiguations:
-    """v5 sharpens three boundary cases the v4 ``because:`` clauses
-    underspecified. Lock the disambiguations in so future edits can't
+class TestSocBoundaryDisambiguations:
+    """planner.system v9 sharpens the SOC pipeline boundaries.
+
+    Three specialists share the log pipeline (triage / log_watch /
+    optimization), and the verbs overlap ("fix", "findings", "logs").
+    These tests pin the disambiguation paragraphs so future edits can't
     silently drop them.
     """
 
-    def test_donor_history_disambiguation_present(self):
+    def test_pending_findings_write_flow_routes_to_triage(self):
         prompt = llm_planner._build_system_prompt()
-        # The disambiguation must tie "donor" → donation_agent and
-        # "teammate" → user_agent so the planner doesn't conflate the
-        # two tables when the user says "Alice's history".
+        # Acting on the board (list-then-triage) is triage_agent's flow.
         assert re.search(
-            r"giving.*?donation_agent|donor.*?donation_agent",
+            r"list_pending_log_findings.*?triage_finding",
+            prompt,
+            re.DOTALL,
+        ), (
+            "v9 must teach the list_pending_log_findings → triage_finding "
+            "write flow on triage_agent so 'process the pending log "
+            "findings' acts on the board instead of just reading it."
+        )
+        assert re.search(
+            r"triage_agent[^*]*?(board|write)",
+            prompt,
+            re.IGNORECASE | re.DOTALL,
+        ), "triage_agent's rule must frame it as the board-write specialist."
+
+    def test_suggest_fix_boundary_present(self):
+        """Ad-hoc fix advice is log_watch; fix-on-a-card is triage."""
+        prompt = llm_planner._build_system_prompt()
+        assert re.search(
+            r"log_watch_agent.*?suggest_fix|suggest_fix.*?log_watch_agent",
+            prompt,
+            re.DOTALL,
+        ), "v9 must bind suggest_fix to log_watch_agent so 'suggest a fix for this error' routes to the ad-hoc advisor."
+        assert re.search(
+            r"(finding card|card|board).*?triage_agent.*?triage_finding",
             prompt,
             re.IGNORECASE | re.DOTALL,
         ), (
-            "v5 must include a 'donor giving history → donation_agent' "
-            "disambiguation so 'Alice's giving history' routes to "
-            "donation_agent, not user_agent."
+            "v9 must route fix-requests that target a pending board card "
+            "to triage_agent (triage_finding comments the fix and moves "
+            "the card) — log_watch_agent cannot write to the card."
         )
 
-    def test_campaign_vs_budget_disambiguation_present(self):
+    def test_error_vs_recurring_pattern_boundary_present(self):
+        """A discrete error is log_watch; a measured recurring pattern
+        (over-scheduled job, health-check noise, volume hotspot) is
+        optimization."""
         prompt = llm_planner._build_system_prompt()
         assert re.search(
-            r"campaign.*fundraising_agent",
+            r"(discrete|specific) error.*?log_watch_agent|log_watch_agent.*?(discrete|traceback)",
+            prompt,
+            re.IGNORECASE | re.DOTALL,
+        ), "v9 must place discrete errors with log_watch_agent."
+        assert re.search(
+            r"(recurring|measured|pattern|noise|over-scheduled).*?optimization_agent"
+            r"|optimization_agent.*?(recurring|over-scheduled|noise|hotspot)",
             prompt,
             re.IGNORECASE | re.DOTALL,
         ), (
-            "v5 must keep the 'campaign goal → fundraising_agent' rule "
-            "so 'what's the goal on campaign Y' does not get routed to "
-            "budget_agent."
+            "v9 must place recurring measured patterns (over-scheduled "
+            "jobs, health-check noise, volume hotspots) with "
+            "optimization_agent."
         )
 
-    def test_project_spend_disambiguation_present(self):
+    def test_draft_pr_gating_on_triage_agent(self):
+        """open_draft_pr belongs to triage_agent, requires an already-
+        triaged finding, and pauses for human approval."""
         prompt = llm_planner._build_system_prompt()
-        # Either project_agent.get_project_spend (the rollup) or
-        # financial_agent.list_transactions (the raw list) must be
-        # disambiguated by scope.
         assert re.search(
-            r"(project_agent\.get_project_spend|get_project_spend|rollup)",
+            r"draft PR.*?triage_agent|triage_agent.*?open_draft_pr",
             prompt,
             re.IGNORECASE | re.DOTALL,
-        ), (
-            "v5 must disambiguate project-spend rollups (project_agent) "
-            "from raw transaction lists (financial_agent) so 'what did "
-            "we spend on project Y' doesn't randomly pick one."
-        )
-
-
-class TestV6BareFindRouting:
-    """v6 closes the bare-find routing gap.
-
-    The 2026-06-09 demo smoke showed "Find Henry Wanjala" routing to
-    ``donation_agent`` because the retrieved_context surfaced Henry as a
-    top donor — but for a teammate who isn't in any donor index, the
-    same query would have produced no answer. v6 introduces explicit
-    rules for bare ``Find <name>`` that use retrieved_context's section
-    to disambiguate, and multi-routes when the chunks don't name the
-    person.
-
-    Paired with the Tier 3 #14 snapshot indexer change that adds a
-    ``members`` section to the embedding so member-shaped queries get
-    a typed chunk to surface.
-    """
-
-    def test_bare_find_routing_paragraph_is_present(self):
-        prompt = llm_planner._build_system_prompt()
-        # Must explicitly mention bare-find handling so the LLM does not
-        # fall through to whichever retrieved chunk it finds first.
+        ), "v9 must route draft-PR goals to triage_agent."
         assert re.search(
-            r"bare-find routing|`Find <name>`|Find/Look up/Who is <name>|bare\s+find",
+            r"(human approval|approval|irreversible)",
             prompt,
             re.IGNORECASE,
         ), (
-            "v6 must include an explicit bare-find routing paragraph so "
-            "`Find Henry Wanjala` doesn't fall through to whichever "
-            "retrieved chunk happens to mention the name."
+            "v9 must carry the human-approval / irreversible-tier "
+            "framing on the draft-PR rule so the planner doesn't teach "
+            "autonomous PR creation."
         )
 
-    def test_bare_find_uses_section_to_disambiguate(self):
-        """The rule must lean on ``section`` (members/top_entities) to
-        route, not just the chunk body."""
+    def test_soc_finding_processing_example_present(self):
+        """A worked SOC-delegation example beats prose (§12.6)."""
+        prompt = llm_planner._build_system_prompt()
+        example = re.search(
+            r"<example name=\"soc_pending_findings_processing\">(.*?)</example>",
+            prompt,
+            re.DOTALL,
+        )
+        assert example is not None, (
+            "v9 must include the soc_pending_findings_processing example "
+            "so the LLM has a concrete finding-processing shape to "
+            "imitate."
+        )
+        assert '"triage_agent"' in example.group(1), (
+            'The SOC finding-processing example must set `agent_type: "triage_agent"`.'
+        )
+
+
+class TestPersonLookupRouting:
+    """Person-shaped lookups route to user_agent.
+
+    The wanjala prompt multi-routed bare ``Find <name>`` across the
+    donor / sponsor / member tables. This fork has exactly one people
+    directory — workspace membership — so v9 collapses the rule to a
+    single user_agent task.
+    """
+
+    def test_person_lookup_rule_is_present(self):
+        prompt = llm_planner._build_system_prompt()
+        assert re.search(
+            r"(Find <name>|who is <name>|look up <name>).*?user_agent",
+            prompt,
+            re.IGNORECASE | re.DOTALL,
+        ), (
+            "v9 must route person-shaped lookups (Find <name> / who is "
+            "<name>) to user_agent — the only people directory in this "
+            "system is workspace membership."
+        )
+
+    def test_members_section_disambiguates_grounding(self):
+        """The grounding block still leans on the typed ``section`` key."""
         prompt = llm_planner._build_system_prompt()
         assert re.search(
             r"section.*?members|members.*?section|members.*?chunk",
             prompt,
             re.IGNORECASE | re.DOTALL,
         ), (
-            "v6 must tell the planner to use the retrieved chunk's "
-            "`section` field to distinguish members from donors when "
-            "routing a bare `Find <name>` query."
+            "The grounding block must tell the planner that a retrieved "
+            "chunk's `section: members` identifies a workspace teammate "
+            "— the typed key beats the chunk body for routing."
         )
 
-    def test_multi_route_is_specified_when_chunks_dont_name_the_person(self):
+
+class TestPromptTargetsAreRegistered:
+    """§5.13 prompt-runtime contract: every agent_type the prompt
+    teaches must have a runtime handler.
+
+    The pre-v9 drift this guards against: the routing table taught
+    wanjala specialists (donation_agent, budget_agent, writing_agent,
+    …) that were never registered in this fork, so the planner could
+    emit an ``agent_type`` the runner cannot resolve. The prompt's
+    routing targets must always be a subset of the live registry plus
+    the ``clarify`` sentinel.
+    """
+
+    @staticmethod
+    def _allowed_targets() -> set[str]:
+        from components.agents.domain.value_objects.plan_schemas import (
+            CLARIFY_AGENT_TYPE,
+        )
+        from components.agents.infrastructure.adapters.langchain.base import (
+            AgentRegistry,
+        )
+
+        return set(AgentRegistry.list_agents()) | {CLARIFY_AGENT_TYPE}
+
+    def test_routing_bullet_targets_are_registered(self):
         prompt = llm_planner._build_system_prompt()
-        assert re.search(
-            r"three parallel tasks|3 parallel tasks|three tasks|multi-route",
-            prompt,
-            re.IGNORECASE,
-        ), (
-            "v6 must instruct the planner to emit multiple tasks for "
-            "bare `Find <name>` when retrieved_context doesn't name the "
-            "person — otherwise a teammate not in any indexed chunk is "
-            "unfindable."
+        bullets = re.findall(r"^\s*\*\s+`([a-z_]+)`", prompt, re.MULTILINE)
+        assert bullets, "No routing bullets found — the prompt structure changed."
+        unknown = sorted(set(bullets) - self._allowed_targets())
+        assert not unknown, (
+            f"Routing bullets teach unregistered agent_types: {unknown}. "
+            "Every specialist the prompt names must be resolvable by the "
+            "runner (registry ∪ {clarify}) — teaching a ghost agent "
+            "reintroduces the wanjala-fleet drift v9 removed."
         )
 
-    def test_qualified_find_skips_multi_route(self):
-        """Explicit qualifiers (find donor X / find member X / find
-        sponsor X / find recipient X) must NOT trigger multi-route."""
+    def test_example_agent_types_are_registered(self):
         prompt = llm_planner._build_system_prompt()
-        assert re.search(
-            r"find donor|find member|find sponsor|find recipient",
-            prompt,
-            re.IGNORECASE,
-        ), (
-            "v6 must mention qualified bare-find shapes so the planner "
-            "knows to skip multi-route when the user has named the "
-            "entity type explicitly."
+        example_types = re.findall(r'"agent_type":\s*"([a-z_]+)"', prompt)
+        assert example_types, "No example agent_types found — the prompt structure changed."
+        unknown = sorted(set(example_types) - self._allowed_targets())
+        assert not unknown, (
+            f"Examples emit unregistered agent_types: {unknown}. The "
+            "few-shot examples are the strongest routing signal — an "
+            "example naming a ghost agent guarantees unresolvable plans."
         )
 
-    def test_find_member_example_routes_to_user_agent(self):
-        prompt = llm_planner._build_system_prompt()
-        example = re.search(
-            r"<example name=\"find_member_routes_to_user_agent\">(.*?)</example>",
-            prompt,
-            re.DOTALL,
-        )
-        assert example is not None, (
-            "v6 must include a worked example that routes "
-            "`Find <member>` to user_agent when retrieved_context has a "
-            "members chunk identifying the person. Few-shot examples "
-            "are the strongest signal to the LLM (§12.6)."
-        )
-        assert '"user_agent"' in example.group(1), (
-            "find_member_routes_to_user_agent example must set "
-            '`agent_type: "user_agent"` so the LLM has a concrete '
-            "shape to imitate."
-        )
 
-    def test_find_bare_name_multi_route_example_emits_three_tasks(self):
-        prompt = llm_planner._build_system_prompt()
-        example = re.search(
-            r"<example name=\"find_bare_name_multi_route\">(.*?)</example>",
-            prompt,
-            re.DOTALL,
-        )
-        assert example is not None, (
-            "v6 must include a worked example showing the 3-task emit "
-            "for bare `Find <name>` when chunks don't name the person."
-        )
-        body = example.group(1)
-        for agent_type in ("user_agent", "donation_agent", "sponsorship_agent"):
-            assert f'"{agent_type}"' in body, (
-                f"find_bare_name_multi_route example must include a "
-                f"task with agent_type {agent_type!r} so all three "
-                "identity tables get queried."
-            )
-
-
-# NOTE (2026-07 fork retune): TestWritingAgentRouting was deleted. Its premise
-# is the wanjala Writing surface (WritingDraft persistence + the writing_agent
-# specialist and its newsletter/letter/draft aliases), none of which were ported
-# into the auto-sec fork — the registry has no writing_agent, so the
-# registration/canonical-name assertions can never pass here. Caveat this
-# leaves open: planner.system.yaml still carries the wanjala v7 routing rules
-# (writing_agent included) — retuning that prompt to the SOC fleet is tracked
-# as its own change and should delete the writing rules rather than resurrect
-# the agent.
+# NOTE (2026-07-19, planner.system v9): the wanjala-era classes
+# TestBoundaryDisambiguations (donor/campaign/project-spend) and
+# TestV6BareFindRouting (bare-find multi-route across donor/sponsor
+# tables) were replaced by TestSocBoundaryDisambiguations and
+# TestPersonLookupRouting when the routing prompt was retuned to the
+# SOC fleet. TestWritingAgentRouting was already deleted in the fork
+# retune (writing_agent was never ported). The v9 prompt carries no
+# wanjala specialists; TestPromptTargetsAreRegistered keeps it that way.

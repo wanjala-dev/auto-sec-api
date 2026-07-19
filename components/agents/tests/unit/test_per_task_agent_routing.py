@@ -13,11 +13,8 @@ sponsor tasks, etc.). Tests below pin every link in the chain so a
 future revert fails loudly here instead of silently giving wrong
 answers in production.
 """
+
 from __future__ import annotations
-
-from unittest.mock import MagicMock
-
-import pytest
 
 
 class TestTaskSpecAgentTypeField:
@@ -90,14 +87,18 @@ class TestPlannerSystemPromptIncludesAgentCatalog:
         )
 
         prompt = _build_system_prompt()
-        # Each registered agent should appear by name. budget_agent +
-        # workspace_agent are the bare-minimum specialists for the
-        # 2026-05-08 incident class to be fixable.
-        assert "budget_agent" in prompt, (
-            "Planner can't pick budget_agent if it doesn't appear in "
-            "the catalog. The 2026-05-08 hallucination came back."
-        )
-        assert "workspace_agent" in prompt
+        # Each registered specialist should appear by name. task_agent
+        # + workspace_agent are the bare-minimum pair for the
+        # 2026-05-08 incident class (task question dispatched to the
+        # tool-less default agent) to be fixable; triage_agent is the
+        # SOC fleet's headline specialist (planner.system v9).
+        for name in ("task_agent", "workspace_agent", "triage_agent"):
+            assert name in prompt, (
+                f"Planner can't pick {name} if it doesn't appear in "
+                "the resolved prompt. The 2026-05-08 hallucination "
+                "class (specialist unreachable → fabricated answer) "
+                "came back."
+            )
         # Guidance about WHY routing matters must stay — a future
         # rewrite that drops the per-task instruction will let the LLM
         # silently regress.
@@ -132,7 +133,7 @@ class TestRunnerDispatchesPerTask:
         # ``base_worker = build_worker_from_agent(agent_type=agent_type, ...)``
         # closed over the chat-level ``agent_type``, the 2026-05-08
         # hallucination class is back.
-        assert "task.agent_type" in source or "getattr(task, \"agent_type\"" in source, (
+        assert "task.agent_type" in source or 'getattr(task, "agent_type"' in source, (
             "Runner must read ``task.agent_type`` to route per task. "
             "Otherwise every task lands on the chat's default agent and "
             "specialist tools are unreachable."
