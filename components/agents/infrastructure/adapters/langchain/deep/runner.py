@@ -4,7 +4,9 @@ Convenience runner for executing a PlanSpec with an existing agent as worker.
 This is a light wrapper that:
 1) Builds an agent-backed worker via `build_worker_from_agent`.
 2) Optionally syncs each TaskSpec into the kanban board (idempotent).
-3) Invokes the LangGraph orchestrator once (no retries/budgeting yet).
+3) Invokes the LangGraph orchestrator once, under an ExecutionBudget with
+   bounded per-task retries for transient worker failures (see
+   orchestrator.build_orchestrator).
 """
 
 from __future__ import annotations
@@ -148,6 +150,7 @@ def execute_plan_once(
     max_iterations: int = 50,
     time_budget_seconds: float = 300.0,
     max_worker_failures: int = 10,
+    max_worker_retries: int = 1,
     max_replans: int = 1,
     use_llm_synthesizer: bool = True,
     deep_run_context: Any | None = None,
@@ -404,6 +407,24 @@ def execute_plan_once(
         time_budget_seconds=time_budget_seconds,
         max_worker_failures=max_worker_failures,
     )
+    # Per-task transient-failure retries: agent_config overrides the caller
+    # default; build_orchestrator clamps to its hard cap (2) either way so
+    # config can never multiply autonomous LLM spend unbounded.
+    if isinstance(agent_config, dict):
+        for retry_key in ("max_worker_retries", "worker_retries"):
+            raw_retries = agent_config.get(retry_key)
+            if raw_retries is None:
+                continue
+            try:
+                max_worker_retries = int(raw_retries)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "deep_run invalid %s=%r in agent_config; keeping %d",
+                    retry_key,
+                    raw_retries,
+                    max_worker_retries,
+                )
+            break
     graph = build_orchestrator(
         planner_fn=planner_fn,
         worker_fn=worker_fn,
@@ -411,6 +432,7 @@ def execute_plan_once(
         budget=execution_budget,
         approval_required=approval_required,
         max_replans=max_replans,
+        max_worker_retries=max_worker_retries,
     )
     # Pass user/workspace into the config so the DB-backed checkpointer
     # can populate DeepRun rows with the correct owner when it writes a
