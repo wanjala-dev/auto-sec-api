@@ -6,18 +6,16 @@ Bridges AI agents with the existing memory infrastructure for conversation persi
 All ORM access uses lazy imports to avoid pulling the full model graph at module
 level, keeping the adapter loadable even if persistence models change.
 """
-import uuid
+
 import logging
-from typing import Optional, List, Dict, Any
+from typing import Any
 
-from langchain.schema import BaseMessage, HumanMessage, AIMessage, SystemMessage
-from langchain.memory import ConversationBufferMemory, ConversationBufferWindowMemory
-
+# LangChain 1.x (2026-07-19): the ConversationBuffer*Memory classes are gone —
+# the builders below return the native SQL-window loaders from
+# memories/conversation_memory.py, and message construction is ORM-side only.
 from .memories.compacting_memory import compacting_memory_builder
-from .memories.histories.sql_history import SqlMessageHistory
-from .memories.sql_memory import build_memory, build_memory_with_system_message
-from .memories.window_memory import window_buffer_memory_builder, window_buffer_memory_builder_with_k
-
+from .memories.sql_memory import build_memory
+from .memories.window_memory import window_buffer_memory_builder_with_k
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +23,7 @@ logger = logging.getLogger(__name__)
 def _get_agent_models():
     """Lazy import Agent and AgentExecution ORM models."""
     from infrastructure.persistence.ai.agents.models import Agent, AgentExecution
+
     return Agent, AgentExecution
 
 
@@ -34,6 +33,7 @@ def _get_conversation_models():
         Conversation,
         ConversationMessage,
     )
+
     return Conversation, ConversationMessage
 
 
@@ -50,7 +50,7 @@ class AgentMemoryService:
         Conversation, _ = _get_conversation_models()
         from infrastructure.persistence.ai.agents.models import AgentType
 
-        conversation_id = self.agent.config.get('conversation_id') if self.agent.config else None
+        conversation_id = self.agent.config.get("conversation_id") if self.agent.config else None
         agent_type_label = None
         try:
             agent_type_obj = AgentType.objects.filter(slug=self.agent.agent_type).first()
@@ -72,17 +72,20 @@ class AgentMemoryService:
                         user_id=self.agent.user.id,
                         title=f"{agent_display} Conversation",
                         metadata={
-                            'agent_id': str(self.agent.agent_id),
-                            'agent_type': self.agent.agent_type,
-                            'workspace_id': str(self.agent.workspace.id) if self.agent.workspace else None
-                        }
+                            "agent_id": str(self.agent.agent_id),
+                            "agent_type": self.agent.agent_type,
+                            "workspace_id": str(self.agent.workspace.id) if self.agent.workspace else None,
+                        },
                     )
-                    logger.info("AgentMemoryService.get_conversation_id: Created missing conversation %s", conversation_id)
+                    logger.info(
+                        "AgentMemoryService.get_conversation_id: Created missing conversation %s", conversation_id
+                    )
                     return conversation_id
                 except Exception as e:
                     logger.warning(
                         "AgentMemoryService.get_conversation_id: Failed to create conversation with UUID %s: %s. Generating new one.",
-                        conversation_id, e,
+                        conversation_id,
+                        e,
                     )
                     conversation_id = None
 
@@ -92,23 +95,25 @@ class AgentMemoryService:
                 user_id=self.agent.user.id,
                 title=f"{agent_display} Conversation",
                 metadata={
-                    'agent_id': str(self.agent.agent_id),
-                    'agent_type': self.agent.agent_type,
-                    'workspace_id': str(self.agent.workspace.id) if self.agent.workspace else None
-                }
+                    "agent_id": str(self.agent.agent_id),
+                    "agent_type": self.agent.agent_type,
+                    "workspace_id": str(self.agent.workspace.id) if self.agent.workspace else None,
+                },
             )
             conversation_id = str(conversation.id)
 
             # Store it in agent config
             self.agent.config = self.agent.config or {}
-            self.agent.config['conversation_id'] = conversation_id
-            self.agent.save(update_fields=['config'])
+            self.agent.config["conversation_id"] = conversation_id
+            self.agent.save(update_fields=["config"])
 
-            logger.info("AgentMemoryService.get_conversation_id: Updated agent config with conversation_id %s", conversation_id)
+            logger.info(
+                "AgentMemoryService.get_conversation_id: Updated agent config with conversation_id %s", conversation_id
+            )
 
         return conversation_id
 
-    def get_memory(self, memory_type: str = 'buffer', window_size: int = 10) -> Any:
+    def get_memory(self, memory_type: str = "buffer", window_size: int = 10) -> Any:
         """
         Get memory instance for this agent
 
@@ -128,11 +133,11 @@ class AgentMemoryService:
         chat_args = ChatArgs(conversation_id)
 
         config = self.agent.config or {}
-        max_messages = config.get('memory_max_messages')
-        max_message_chars = config.get('memory_max_message_chars')
-        max_total_chars = config.get('memory_max_total_chars')
+        max_messages = config.get("memory_max_messages")
+        max_message_chars = config.get("memory_max_message_chars")
+        max_total_chars = config.get("memory_max_total_chars")
 
-        def _coerce_limit(value: Any) -> Optional[int]:
+        def _coerce_limit(value: Any) -> int | None:
             try:
                 limit = int(value)
             except (TypeError, ValueError):
@@ -143,7 +148,7 @@ class AgentMemoryService:
         max_message_chars = _coerce_limit(max_message_chars)
         max_total_chars = _coerce_limit(max_total_chars)
 
-        if memory_type == 'compacting':
+        if memory_type == "compacting":
             if max_messages is None:
                 max_messages = max(window_size * 2, 1)
             if max_message_chars is None:
@@ -154,8 +159,10 @@ class AgentMemoryService:
             compaction_llm = None
             try:
                 from components.agents.infrastructure.adapters.llm_provider_adapter import LLMFactoryAdapter
+
                 compaction_llm = LLMFactoryAdapter().get_llm(
-                    model_name="gpt-4o-mini", temperature=0.0,
+                    model_name="gpt-4o-mini",
+                    temperature=0.0,
                 )
             except Exception:
                 logger.debug("Could not load compaction LLM — compacting memory will use truncation fallback")
@@ -167,7 +174,7 @@ class AgentMemoryService:
                 max_message_chars=max_message_chars,
                 max_total_chars=max_total_chars,
             )
-        elif memory_type == 'window':
+        elif memory_type == "window":
             if max_messages is None:
                 max_messages = max(window_size * 2, 1)
             if max_message_chars is None:
@@ -199,7 +206,7 @@ class AgentMemoryService:
 
     def _ensure_chat_memory_instance(self, memory: Any, conversation_id: str) -> Any:
         """Ensure LangChain memory holds a chat history instance, not a class."""
-        chat_memory = getattr(memory, 'chat_memory', None)
+        chat_memory = getattr(memory, "chat_memory", None)
 
         if isinstance(chat_memory, type):
             try:
@@ -211,7 +218,7 @@ class AgentMemoryService:
                     logger.warning("Unable to coerce chat_memory into an instance: %s", exc)
                     return memory
 
-        if hasattr(memory, 'chat_memory') and hasattr(memory.chat_memory, 'conversation_id'):
+        if hasattr(memory, "chat_memory") and hasattr(memory.chat_memory, "conversation_id"):
             if memory.chat_memory.conversation_id != conversation_id:
                 memory.chat_memory.conversation_id = conversation_id
 
@@ -224,7 +231,7 @@ class AgentMemoryService:
         role: str,
         content: str,
         *,
-        artifacts: Optional[List[Dict[str, Any]]] = None,
+        artifacts: list[dict[str, Any]] | None = None,
     ) -> None:
         """Add a message to the conversation via ORM.
 
@@ -243,9 +250,9 @@ class AgentMemoryService:
         """
         Conversation, ConversationMessage = _get_conversation_models()
         conversation_id = self.get_conversation_id()
-        message_metadata: Dict[str, Any] = {}
+        message_metadata: dict[str, Any] = {}
         if artifacts:
-            message_metadata['artifacts'] = list(artifacts)
+            message_metadata["artifacts"] = list(artifacts)
         ConversationMessage.objects.create(
             conversation_id=conversation_id,
             role=role,
@@ -254,6 +261,7 @@ class AgentMemoryService:
         )
         try:
             from django.utils import timezone
+
             Conversation.objects.filter(id=conversation_id).update(
                 updated_at=timezone.now(),
             )
@@ -262,13 +270,13 @@ class AgentMemoryService:
 
     def add_user_message(self, content: str) -> None:
         """Add user message to agent memory"""
-        self._add_message('human', content)
+        self._add_message("human", content)
 
     def add_agent_message(
         self,
         content: str,
         *,
-        artifacts: Optional[List[Dict[str, Any]]] = None,
+        artifacts: list[dict[str, Any]] | None = None,
     ) -> None:
         """Add agent response to memory.
 
@@ -276,26 +284,30 @@ class AgentMemoryService:
         chat bubble can render download affordances (paperclip icon)
         for PDF reports, generated files, etc.
         """
-        self._add_message('assistant', content, artifacts=artifacts)
+        self._add_message("assistant", content, artifacts=artifacts)
 
     def add_system_message(self, content: str) -> None:
         """Add system message to memory"""
-        self._add_message('system', content)
+        self._add_message("system", content)
 
     def get_conversation_history(
         self,
-        limit: Optional[int] = None,
+        limit: int | None = None,
         offset: int = 0,
         order: str = "asc",
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Get conversation history for this agent with pagination support."""
         _, ConversationMessage = _get_conversation_models()
         conversation_id = self.get_conversation_id()
 
         order_field = "created_at" if str(order).lower() != "desc" else "-created_at"
-        qs = ConversationMessage.objects.filter(
-            conversation_id=conversation_id,
-        ).order_by(order_field).values_list("role", "content", "created_at")
+        qs = (
+            ConversationMessage.objects.filter(
+                conversation_id=conversation_id,
+            )
+            .order_by(order_field)
+            .values_list("role", "content", "created_at")
+        )
 
         try:
             offset_value = max(int(offset), 0)
@@ -327,7 +339,7 @@ class AgentMemoryService:
         conversation_id = self.get_conversation_id()
         ConversationMessage.objects.filter(conversation_id=conversation_id).delete()
 
-    def get_memory_stats(self) -> Dict[str, Any]:
+    def get_memory_stats(self) -> dict[str, Any]:
         """Get memory statistics for this agent"""
         _, ConversationMessage = _get_conversation_models()
         from django.db.models import Count, Max
@@ -337,19 +349,17 @@ class AgentMemoryService:
 
         total_messages = qs.count()
 
-        role_counts = dict(
-            qs.values_list("role").annotate(cnt=Count("id")).values_list("role", "cnt")
-        )
+        role_counts = dict(qs.values_list("role").annotate(cnt=Count("id")).values_list("role", "cnt"))
 
         last_message = qs.aggregate(last=Max("created_at"))["last"]
 
         return {
-            'conversation_id': conversation_id,
-            'total_messages': total_messages,
-            'role_counts': role_counts,
-            'last_message_at': last_message.isoformat() if last_message else None,
-            'agent_id': self.agent_id,
-            'agent_type': self.agent.agent_type,
+            "conversation_id": conversation_id,
+            "total_messages": total_messages,
+            "role_counts": role_counts,
+            "last_message_at": last_message.isoformat() if last_message else None,
+            "agent_id": self.agent_id,
+            "agent_type": self.agent.agent_type,
         }
 
     def record_execution(
@@ -364,12 +374,12 @@ class AgentMemoryService:
         execution_id: int = None,
         status: str = None,
         progress: int = None,
-        state: Dict[str, Any] = None,
+        state: dict[str, Any] = None,
         task_id: str = None,
         add_user_message: bool = True,
         add_agent_message: bool = True,
         update_agent_stats: bool = True,
-        artifacts: Optional[List[Dict[str, Any]]] = None,
+        artifacts: list[dict[str, Any]] | None = None,
     ) -> Any:
         """Record agent execution in both memory and execution log.
 
@@ -415,35 +425,35 @@ class AgentMemoryService:
         if not created_new:
             if execution.query != query:
                 execution.query = query
-                update_fields.append('query')
+                update_fields.append("query")
             if execution.result != result:
                 execution.result = result
-                update_fields.append('result')
+                update_fields.append("result")
             if execution.success != success:
                 execution.success = success
-                update_fields.append('success')
+                update_fields.append("success")
             if execution.error_message != error_message:
                 execution.error_message = error_message
-                update_fields.append('error_message')
+                update_fields.append("error_message")
             if execution_time_ms is not None and execution.execution_time_ms != execution_time_ms:
                 execution.execution_time_ms = execution_time_ms
-                update_fields.append('execution_time_ms')
+                update_fields.append("execution_time_ms")
             if status and execution.status != status:
                 execution.status = status
-                update_fields.append('status')
+                update_fields.append("status")
             if progress is not None and execution.progress != progress:
                 execution.progress = progress
-                update_fields.append('progress')
+                update_fields.append("progress")
             if state is not None and execution.state != state:
                 execution.state = state
-                update_fields.append('state')
+                update_fields.append("state")
             if task_id is not None and execution.task_id != task_id:
                 execution.task_id = task_id
-                update_fields.append('task_id')
+                update_fields.append("task_id")
 
             if update_fields:
-                if 'updated_at' not in update_fields:
-                    update_fields.append('updated_at')
+                if "updated_at" not in update_fields:
+                    update_fields.append("updated_at")
                 execution.save(update_fields=update_fields)
 
         # Update agent stats
@@ -452,9 +462,7 @@ class AgentMemoryService:
             self.agent.last_query = query
             self.agent.last_result = result
             self.agent.last_executed = execution.created_at
-            self.agent.save(update_fields=[
-                'execution_count', 'last_query', 'last_result', 'last_executed'
-            ])
+            self.agent.save(update_fields=["execution_count", "last_query", "last_result", "last_executed"])
 
         return execution
 
