@@ -39,10 +39,12 @@ class TestCheckBudget:
 
     def test_max_tasks_exceeded(self):
         tasks = [{"id": str(i)} for i in range(15)]
-        reason = _check_budget(self._state(
-            completed_task_ids=[str(i) for i in range(10)],
-            pending_tasks=tasks,
-        ))
+        reason = _check_budget(
+            self._state(
+                completed_task_ids=[str(i) for i in range(10)],
+                pending_tasks=tasks,
+            )
+        )
         assert reason is not None
         assert "max_tasks" in reason
 
@@ -52,9 +54,36 @@ class TestCheckBudget:
         assert "time_budget" in reason
 
     def test_max_worker_failures_exceeded(self):
+        # Legacy last-value channel fallback (external writers / old checkpoints).
         reason = _check_budget(self._state(worker_failure_count=3))
         assert reason is not None
         assert "max_worker_failures" in reason
+
+    def test_max_worker_failures_derived_from_failure_records(self):
+        # Canonical path: failures live in run_metadata["worker_failures"]
+        # (reducer-united across concurrent workers); the count is derived.
+        reason = _check_budget(
+            self._state(
+                worker_failure_count=0,
+                run_metadata={"worker_failures": {"t1": {}, "t2": {}, "t3": {}}},
+            )
+        )
+        assert reason is not None
+        assert "max_worker_failures" in reason
+
+    def test_worker_failures_baseline_resets_derived_count(self):
+        # replan_bookkeeping stamps the baseline watermark instead of deleting
+        # records — failures below it must not count against the cap.
+        reason = _check_budget(
+            self._state(
+                worker_failure_count=0,
+                run_metadata={
+                    "worker_failures": {"t1": {}, "t2": {}, "t3": {}},
+                    "worker_failures_baseline": 2,
+                },
+            )
+        )
+        assert reason is None
 
     def test_budget_not_exceeded_at_boundary(self):
         # Exactly at max_iterations - 1 should be fine

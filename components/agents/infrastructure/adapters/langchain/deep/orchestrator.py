@@ -9,8 +9,19 @@ SAFETY:
 - The scheduler enforces an ExecutionBudget on every cycle (max iterations,
   max tasks, wall-clock time, cumulative worker failures).
 - When any budget is exceeded the scheduler routes straight to the synthesizer
-  instead of dispatching more work.
-- Worker exceptions are caught and counted; they do NOT crash the graph.
+  instead of dispatching more work, and the synthesizer reports the exhaustion
+  honestly instead of fabricating success.
+- Worker exceptions are caught and recorded; they do NOT crash the graph.
+  TRANSIENT failures (rate limits, timeouts, connection errors) get a bounded
+  in-node retry (default 1, hard cap 2) that respects the run's time budget;
+  deterministic failures never retry.
+- Failure records live in ``run_metadata["worker_failures"]`` — a dict united
+  across concurrent ``Send`` workers by the ``merge_run_metadata`` reducer.
+  The cumulative failure count is DERIVED from those records (len minus the
+  ``worker_failures_baseline`` watermark stamped at replan), never carried on
+  a last-value int channel. The old ``worker_failure_count`` channel could
+  never exceed 1 (each worker seeded from its empty ``Send`` payload) and two
+  concurrently-failing workers raised ``InvalidUpdateError``.
 """
 
 from __future__ import annotations
@@ -54,6 +65,39 @@ class BudgetExceeded(Exception):
         self.reason = reason
 
 
+# Absolute ceiling on per-task worker retries, regardless of agent_config.
+# Retries multiply real LLM spend on a path that runs autonomously on beat
+# cadence — the cap is a cost-control invariant, not a tunable.
+MAX_WORKER_RETRIES_HARD_CAP = 2
+
+
+def _derived_worker_failure_count(state: PlanState) -> int:
+    """Cumulative worker failures for budget/replan decisions.
+
+    Derived from ``run_metadata["worker_failures"]`` (one record per
+    terminally-failed task, united across concurrent ``Send`` workers by the
+    ``merge_run_metadata`` reducer) minus the ``worker_failures_baseline``
+    watermark that ``replan_bookkeeping`` stamps — so a replan "resets" the
+    count without deleting records (the reducer is additive-only; deletion by
+    omission is unsupported by design).
+
+    Falls back to the legacy ``worker_failure_count`` last-value channel when
+    no records exist, so external writers and old checkpoints keep working.
+    """
+    run_metadata = state.get("run_metadata") or {}
+    failures = run_metadata.get("worker_failures") or {}
+    if failures:
+        try:
+            baseline = int(run_metadata.get("worker_failures_baseline") or 0)
+        except (TypeError, ValueError):
+            baseline = 0
+        return max(0, len(failures) - baseline)
+    try:
+        return int(state.get("worker_failure_count") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _check_budget(state: PlanState) -> str | None:
     """Return a human-readable reason if the budget is exceeded, else None."""
     budget_dict = state.get("budget")
@@ -76,11 +120,79 @@ def _check_budget(state: PlanState) -> str | None:
         elapsed = time.time() - start_time
         return f"time_budget ({budget.time_budget_seconds}s) exceeded — {elapsed:.1f}s elapsed"
 
-    failure_count = state.get("worker_failure_count", 0)
+    failure_count = _derived_worker_failure_count(state)
     if failure_count >= budget.max_worker_failures:
-        return f"max_worker_failures ({budget.max_worker_failures}) reached"
+        return f"max_worker_failures ({budget.max_worker_failures}) reached — {failure_count} failures"
 
     return None
+
+
+# ── Transient-failure classification (worker retry) ───────────────────
+#
+# Conservative by design: only failures that are provider/network-shaped
+# (rate limits, timeouts, connection resets, transient 5xx) retry. A
+# deterministic error — bad input, tool refusal, permission denial, a
+# provider rejecting the request as invalid — will fail identically on
+# every attempt; retrying it just burns LLM spend. When in doubt, do NOT
+# retry.
+
+# Exception class names (checked across the MRO so vendored subclasses of
+# e.g. requests.ConnectionError match without importing every SDK).
+_TRANSIENT_EXC_NAMES: frozenset[str] = frozenset(
+    {
+        "TimeoutError",
+        "ConnectTimeout",
+        "ReadTimeout",
+        "WriteTimeout",
+        "PoolTimeout",
+        "APITimeoutError",
+        "APIConnectionError",
+        "RateLimitError",
+        "ServiceUnavailableError",
+        "InternalServerError",
+        "ConnectionError",
+        "ConnectionResetError",
+        "ConnectionAbortedError",
+        "BrokenPipeError",
+    }
+)
+
+# Message substrings that only appear in transient provider/network errors.
+# Deliberately phrase-level (no bare status-code numerals — "429" matches ids).
+_TRANSIENT_MESSAGE_MARKERS: tuple[str, ...] = (
+    "rate limit",
+    "rate-limit",
+    "rate_limit",
+    "too many requests",
+    "timed out",
+    "timeout",
+    "connection reset",
+    "connection aborted",
+    "connection refused",
+    "connection error",
+    "temporarily unavailable",
+    "service unavailable",
+    "bad gateway",
+    "gateway timeout",
+    "overloaded",
+)
+
+
+def _is_transient_worker_error(exc: BaseException) -> bool:
+    """True only for provider/network-shaped failures worth one more attempt.
+
+    PermissionError is explicitly deterministic — the worker adapter raises it
+    for disallowed agent types and it will never succeed on retry.
+    """
+    if isinstance(exc, PermissionError):
+        return False
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return True
+    for klass in type(exc).__mro__:
+        if klass.__name__ in _TRANSIENT_EXC_NAMES:
+            return True
+    message = str(exc).lower()
+    return any(marker in message for marker in _TRANSIENT_MESSAGE_MARKERS)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
@@ -165,6 +277,22 @@ def _format_honest_failure_answer(goal: str | None, summaries: list[str]) -> str
     return header
 
 
+def _format_budget_exhausted_answer(goal: str | None, reason: str, unfinished_count: int) -> str:
+    """Honest user-visible message for a run stopped by budget exhaustion.
+
+    Mirrors ``_format_honest_failure_answer``: plain wording, no false
+    optimism, no inventing results the run never produced.
+    """
+    goal_line = goal.strip() if isinstance(goal, str) else ""
+    subject = f'the run for "{goal_line}"' if goal_line else "the run"
+    unfinished = f" {unfinished_count} planned task(s) were never executed." if unfinished_count else ""
+    return (
+        f"I couldn't complete that. Execution of {subject} was stopped "
+        f"because it hit a safety limit ({reason}).{unfinished} "
+        "No results were fabricated for the unfinished work."
+    )
+
+
 def llm_synthesizer(state: PlanState) -> dict:
     """LLM-backed final aggregator with goal/acceptance check.
 
@@ -186,6 +314,11 @@ def llm_synthesizer(state: PlanState) -> dict:
     completed = state.get("completed_tasks") or []
     artifacts = state.get("artifacts") or []
     run_metadata = dict(state.get("run_metadata") or {})
+    # Budget honesty: when the scheduler stopped the run early, every
+    # synthesizer path below must surface that fact instead of letting the
+    # LLM narrate a truncated run as a finished one.
+    budget_reason = run_metadata.get("budget_exceeded_reason")
+    unfinished_count = len(state.get("pending_tasks") or [])
 
     summaries: list[str] = []
     clarification_summaries: list[str] = []
@@ -197,6 +330,31 @@ def llm_synthesizer(state: PlanState) -> dict:
                 clarification_summaries.append(str(summary))
 
     if not summaries:
+        if budget_reason:
+            # Nothing completed AND the budget tripped — there is no
+            # material for an answer. Short-circuit with an honest
+            # exhaustion message; calling the LLM here could only
+            # fabricate.
+            run_metadata["goal_met"] = False
+            run_metadata["synthesizer_short_circuited"] = "budget_exceeded"
+            logger.warning(
+                "deep_agent.synthesizer_budget_guard run_id=%s goal=%s reason=%s "
+                "no completed summaries; returning honest budget-exhaustion answer",
+                state.get("run_id"),
+                goal,
+                budget_reason,
+            )
+            return {
+                "final_output": {
+                    "answer": _format_budget_exhausted_answer(goal, budget_reason, unfinished_count),
+                    "completed_tasks": completed,
+                    "artifacts": artifacts,
+                    "run_metadata": run_metadata,
+                    "goal_met": False,
+                    "budget_exceeded": budget_reason,
+                },
+                "run_metadata": run_metadata,
+            }
         return _no_op_synthesizer(state)
 
     # Clarification short-circuit: when the planner emitted a
@@ -250,13 +408,17 @@ def llm_synthesizer(state: PlanState) -> dict:
             goal,
             len(summaries),
         )
+        answer = _format_honest_failure_answer(goal, summaries)
+        if budget_reason:
+            answer = f"{answer}\n\nExecution was also stopped early: {budget_reason}."
         return {
             "final_output": {
-                "answer": _format_honest_failure_answer(goal, summaries),
+                "answer": answer,
                 "completed_tasks": completed,
                 "artifacts": artifacts,
                 "run_metadata": run_metadata,
                 "goal_met": False,
+                "budget_exceeded": budget_reason or None,
             },
             "run_metadata": run_metadata,
         }
@@ -289,6 +451,14 @@ def llm_synthesizer(state: PlanState) -> dict:
                 "for those tasks. State plainly that they couldn't be "
                 "completed and answer only from the tasks that succeeded."
             )
+        if budget_reason:
+            failure_caveat += (
+                f"\n\nIMPORTANT: Execution was stopped early because it hit "
+                f"a safety limit ({budget_reason})."
+                + (f" {unfinished_count} planned task(s) were never executed." if unfinished_count else "")
+                + " State this plainly. Do NOT claim the goal was fully met "
+                "and do NOT invent results for work that never ran."
+            )
 
         prompt = (
             f"Goal: {goal or '(unspecified)'}\n\n"
@@ -314,6 +484,10 @@ def llm_synthesizer(state: PlanState) -> dict:
     lower = text.lower()
     goal_met = "goal_met: yes" in lower
     replan_requested = "replan_requested: yes" in lower
+    if budget_reason:
+        # A run the scheduler cut short cannot honestly claim the goal was
+        # met — planned work was dropped. Override an over-optimistic LLM.
+        goal_met = False
     if replan_requested:
         run_metadata["replan_requested"] = True
     run_metadata["goal_met"] = goal_met
@@ -325,6 +499,7 @@ def llm_synthesizer(state: PlanState) -> dict:
             "artifacts": artifacts,
             "run_metadata": run_metadata,
             "goal_met": goal_met,
+            "budget_exceeded": budget_reason or None,
         },
         "run_metadata": run_metadata,
     }
@@ -395,6 +570,8 @@ def build_orchestrator(
     cancellation_token=None,
     approval_required: bool = False,
     max_replans: int = 1,
+    max_worker_retries: int = 1,
+    retry_backoff_seconds: float = 1.0,
 ) -> StateGraph:
     """
     Compile a LangGraph app with planner, worker fan-out, and synthesizer nodes.
@@ -405,6 +582,12 @@ def build_orchestrator(
         synthesizer_fn: Optional final aggregation; receives full state.
         checkpointer: LangGraph checkpointer (default: in-memory).
         budget: ExecutionBudget caps. If None, uses safe defaults.
+        max_worker_retries: per-task retries for TRANSIENT worker failures
+            (see ``_is_transient_worker_error``). Clamped to
+            ``0..MAX_WORKER_RETRIES_HARD_CAP``; deterministic failures never
+            retry. Retries respect the run's remaining time budget.
+        retry_backoff_seconds: base linear backoff between retry attempts
+            (attempt N sleeps N * base, capped at the remaining time budget).
     """
     if planner_fn is None or worker_fn is None:
         raise ValueError("planner_fn and worker_fn are required.")
@@ -412,6 +595,23 @@ def build_orchestrator(
     effective_budget = budget or ExecutionBudget()
     synth = synthesizer_fn or _no_op_synthesizer
     saver = checkpointer or default_checkpointer()
+    try:
+        effective_max_retries = max(0, min(int(max_worker_retries), MAX_WORKER_RETRIES_HARD_CAP))
+    except (TypeError, ValueError):
+        effective_max_retries = 1
+
+    # Workers receive ONLY their ``Send`` payload ({"task": ...}) as input
+    # state — no start_time, no budget. The retry loop still must respect
+    # the run's wall-clock budget, so the planner records the run start in
+    # this closure-scoped holder (one graph instance per run; a re-invoke
+    # simply re-stamps it at the planner).
+    run_started_at: dict[str, float | None] = {"ts": None}
+
+    def _remaining_time_budget() -> float | None:
+        started = run_started_at.get("ts")
+        if not started:
+            return None
+        return effective_budget.time_budget_seconds - (time.time() - started)
 
     builder = StateGraph(PlanState)
 
@@ -421,13 +621,18 @@ def build_orchestrator(
         for task in pending_tasks:
             if not task.id:
                 task.id = str(uuid.uuid4())
+        now = time.time()
+        # Preserve the ORIGINAL run start across replans — a replanned run
+        # must not get a fresh wall-clock budget.
+        start_time = state.get("start_time") or now
+        run_started_at["ts"] = start_time
         return {
             "plan": plan,
             "pending_tasks": pending_tasks,
             "completed_task_ids": [],
             "iteration_count": 0,
             "worker_failure_count": 0,
-            "start_time": time.time(),
+            "start_time": start_time,
             "budget": effective_budget.model_dump(),
         }
 
@@ -510,28 +715,80 @@ def build_orchestrator(
     def worker_node(state: PlanState) -> PlanState:
         task = state.get("task")
         task_id_str = _task_id(task) if task else ""
+        retries_used = 0
 
-        try:
-            result = worker_fn(state)
-        except Exception as exc:
-            logger.exception(
-                "deep_agent.worker_failed task_id=%s error=%s",
-                task_id_str,
-                exc,
-            )
-            failure_count = (state.get("worker_failure_count") or 0) + 1
-            result = {
-                "completed_task_ids": [task_id_str] if task_id_str else [],
-                "worker_failure_count": failure_count,
-                "run_metadata": {
-                    **(state.get("run_metadata") or {}),
-                    f"worker_error_{task_id_str}": str(exc),
-                },
-            }
-            return result
+        while True:
+            try:
+                result = worker_fn(state)
+                break
+            except Exception as exc:
+                transient = _is_transient_worker_error(exc)
+                retry_blocked_by: str | None = None
+                if transient and retries_used < effective_max_retries:
+                    remaining = _remaining_time_budget()
+                    if remaining is None or remaining > 0:
+                        retries_used += 1
+                        logger.warning(
+                            "deep_agent.worker_retry task_id=%s attempt=%d/%d error_type=%s error=%s",
+                            task_id_str,
+                            retries_used,
+                            effective_max_retries,
+                            type(exc).__name__,
+                            exc,
+                        )
+                        if retry_backoff_seconds > 0:
+                            delay = retry_backoff_seconds * retries_used
+                            if remaining is not None:
+                                delay = min(delay, max(remaining, 0.0))
+                            if delay > 0:
+                                time.sleep(delay)
+                        continue
+                    retry_blocked_by = "time_budget"
+
+                # Terminal failure — record it in run_metadata under the
+                # reducer-united ``worker_failures`` key. Concurrent Send
+                # workers merge instead of colliding (the old last-value
+                # ``worker_failure_count`` int raised InvalidUpdateError
+                # here), and the budget/replan checks derive the count
+                # from these records.
+                logger.exception(
+                    "deep_agent.worker_failed task_id=%s transient=%s retries_used=%d error=%s",
+                    task_id_str,
+                    transient,
+                    retries_used,
+                    exc,
+                )
+                failure_record: dict = {
+                    "task_id": task_id_str or None,
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                    "transient": transient,
+                    "retries": retries_used,
+                    "failed_at": time.time(),
+                }
+                if retry_blocked_by:
+                    failure_record["retry_blocked_by"] = retry_blocked_by
+                failure_key = task_id_str or f"unknown-{uuid.uuid4().hex[:8]}"
+                run_metadata_delta: dict = {"worker_failures": {failure_key: failure_record}}
+                if task_id_str:
+                    # Legacy per-task error key — kept for existing consumers.
+                    run_metadata_delta[f"worker_error_{task_id_str}"] = str(exc)
+                if retries_used:
+                    run_metadata_delta["worker_retries"] = {failure_key: retries_used}
+                return {
+                    "completed_task_ids": [task_id_str] if task_id_str else [],
+                    "run_metadata": run_metadata_delta,
+                }
 
         if task_id_str:
             result.setdefault("completed_task_ids", []).append(task_id_str)
+        if retries_used:
+            # Success after retry — make it visible in run telemetry.
+            run_metadata = dict(result.get("run_metadata") or {})
+            retries_map = dict(run_metadata.get("worker_retries") or {})
+            retries_map[task_id_str or "unknown"] = retries_used
+            run_metadata["worker_retries"] = retries_map
+            result["run_metadata"] = run_metadata
         return result
 
     def synthesizer_node(state: PlanState) -> PlanState:
@@ -564,7 +821,7 @@ def build_orchestrator(
         replans_done = int(run_metadata.get("replans_done", 0))
         if replans_done >= max_replans:
             return "end"
-        failure_count = state.get("worker_failure_count") or 0
+        failure_count = _derived_worker_failure_count(state)
         replan_requested = bool(run_metadata.get("replan_requested"))
         if failure_count > 0 and (failure_count >= 2 or replan_requested):
             return "planner"
@@ -573,6 +830,12 @@ def build_orchestrator(
     def replan_bookkeeping(state: PlanState) -> PlanState:
         run_metadata = dict(state.get("run_metadata") or {})
         run_metadata["replans_done"] = int(run_metadata.get("replans_done", 0)) + 1
+        # Failure-count "reset": the merge reducer is additive-only, so
+        # instead of deleting ``worker_failures`` records we stamp a
+        # baseline watermark. ``_derived_worker_failure_count`` counts only
+        # records above it, so pre-replan failures no longer trip the
+        # budget while the full failure history stays in telemetry.
+        run_metadata["worker_failures_baseline"] = len(run_metadata.get("worker_failures") or {})
         return {"run_metadata": run_metadata, "worker_failure_count": 0}
 
     builder.add_node("planner", planner_node)
