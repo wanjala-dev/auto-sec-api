@@ -35,7 +35,7 @@ import logging
 import re
 from typing import Any
 
-from langchain.schema import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from components.agents.tests.prompt_eval.graders.model._types import (
     AxisScore,
