@@ -158,10 +158,12 @@ class AiFindingRouterDetector(BaseDetector):
     the AIAction path carries ``metadata.agent_type`` (the ``DetectorResult``'s
     target specialist — ``triage_agent`` for log-watch errors today; a future
     ``optimization_agent`` / ``rca_agent`` for other finding kinds). This router
-    groups pending findings by that declared target and hands each group to its
-    specialist through ``context.invoke_agent`` (→ ``AgentService.execute_agent``
-    — the detector cycle is the autonomous orchestrator, skill §3). The
-    specialist then processes its own findings with its own tools.
+    groups pending findings by that declared target and ENQUEUES each group's
+    dispatch (``dispatch_finding_specialist`` on the agent worker → the cycle's
+    entitlement-gated delegator → ``AgentService.execute_agent`` — the detector
+    cycle is still the autonomous orchestrator, skill §3; the router just no
+    longer BLOCKS the cycle on the specialist's LLM latency). The specialist
+    then processes its own findings with its own tools.
 
     Why route by the finding's declared target rather than hard-code one agent:
     it SCALES. Adding a new finding→specialist path is "file findings with
@@ -198,16 +200,13 @@ class AiFindingRouterDetector(BaseDetector):
         from collections import defaultdict
 
         from django.core.cache import cache
-
-        from infrastructure.persistence.project.models import Task
-
-        if context.invoke_agent is None:
-            logger.warning("ai_finding_router no invoke_agent bound; skipping workspace=%s", context.workspace_id)
-            return []
+        from django.db import transaction
 
         from components.agents.infrastructure.adapters.langchain.tools._finding_processing import (
             not_triaged_filter,
         )
+        from components.agents.infrastructure.tasks.agent_tasks import dispatch_finding_specialist
+        from infrastructure.persistence.project.models import Task
 
         # Group pending findings by the specialist they declare. The handled
         # exclusion is pushed into the query (NULL-safe — see not_triaged_filter;
@@ -241,42 +240,41 @@ class AiFindingRouterDetector(BaseDetector):
                 "Use your tools to list them and process each one (propose a fix, comment it, "
                 "and advance the card)."
             )
-            try:
-                # Orchestrator-routed, deterministic named dispatch. The detector
-                # cycle IS the autonomous orchestrator (§3); invoke_agent →
-                # execute_agent is it calling the named sub-agent. The target is
-                # KNOWN (the finding declares it), so we name it directly — the
-                # planner exists to DECIDE routing for ambiguous goals, and when
-                # handed a known delegation it re-routes by keyword and can
-                # fabricate (§5.13). worker_agent_type pins the specialist for
-                # the runner's forced-worker override so even a deep run can't
-                # drift. Un-name the target (route via planner) only when the
-                # correct specialist is genuinely ambiguous.
-                context.invoke_agent(
-                    specialist,
-                    goal,
-                    {
-                        "worker_agent_type": specialist,
-                        "source": "ai_findings.route",
-                        # Verification loop (L2): the specialist self-verifies its
-                        # finding output and re-runs once on a failing grade. This
-                        # is the autonomous path where finding quality IS the
-                        # product, so the critic's cost is worth it.
-                        "max_reflections": 1,
-                    },
+            # Orchestrator-routed, deterministic named dispatch — ENQUEUED, not
+            # inline. The specialist's deep run (advisor + grader LLM calls per
+            # finding) used to execute synchronously here and blew the 30s
+            # per-detector timeout on every real batch; the router's only job is
+            # ROUTING, so it hands the run to the agent worker
+            # (``dispatch_finding_specialist``) and returns instantly. The task
+            # reuses the cycle's entitlement-gated delegator, so orchestrator
+            # routing + workspace entitlements still hold. The target is KNOWN
+            # (the finding declares it) — worker_agent_type pins it for the
+            # runner's forced-worker override so even a deep run can't drift
+            # (§5.13). Dispatched after commit (celery-tasks skill §0) so the
+            # worker never races a finding row the cycle hasn't committed yet.
+            agent_context = {
+                "worker_agent_type": specialist,
+                "source": "ai_findings.route",
+                # Verification loop (L2): the specialist self-verifies its
+                # finding output and re-runs once on a failing grade. This is
+                # the autonomous path where finding quality IS the product.
+                "max_reflections": 1,
+            }
+            performed_by = str((context.extras or {}).get("performed_by") or "") or None
+            transaction.on_commit(
+                # All loop variables bound as defaults — a bare closure would
+                # capture them by reference and every enqueue would fire with
+                # the LAST iteration's specialist/goal.
+                lambda s=specialist, g=goal, ctx=agent_context, p=performed_by: dispatch_finding_specialist.delay(
+                    str(context.workspace_id), s, g, ctx, p
                 )
-                logger.info(
-                    "ai_finding_router routed workspace=%s specialist=%s pending=%s",
-                    context.workspace_id,
-                    specialist,
-                    len(findings),
-                )
-            except Exception:
-                logger.exception(
-                    "ai_finding_router invoke_agent failed workspace=%s specialist=%s",
-                    context.workspace_id,
-                    specialist,
-                )
+            )
+            logger.info(
+                "ai_finding_router enqueued workspace=%s specialist=%s pending=%s",
+                context.workspace_id,
+                specialist,
+                len(findings),
+            )
         return []
 
 
