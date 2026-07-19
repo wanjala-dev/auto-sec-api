@@ -178,7 +178,11 @@ class OpenDraftPrUseCase:
     def _require_actionable_finding(workspace_id: str, task_id: str):
         from infrastructure.persistence.project.models import Task
 
-        task = Task.objects.filter(id=task_id, workspace_id=workspace_id, source_type=_LOG_WATCH_SOURCE).first()
+        try:
+            task = Task.objects.filter(id=task_id, workspace_id=workspace_id, source_type=_LOG_WATCH_SOURCE).first()
+        except (ValueError, TypeError):
+            # Malformed id (Task pks are integers) — same answer as absent.
+            task = None
         if task is None:
             raise DraftPrPreconditionError(
                 "finding_not_found",

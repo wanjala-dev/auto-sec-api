@@ -26,6 +26,7 @@ from dataclasses import dataclass
 # patch advisor can ground against the SAME tokens without a cross-context
 # infrastructure import. This module keeps its public name (`_salient_tokens`)
 # so existing callers/tests are untouched.
+from components.shared_kernel.utils.salient_tokens import salient_tokens
 
 _LOG_WATCH_SOURCE = "ai.log_watch"
 _LOG_OPTIMIZATION_SOURCE = "ai.log_optimization"

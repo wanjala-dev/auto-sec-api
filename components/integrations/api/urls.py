@@ -32,7 +32,10 @@ urlpatterns = [
         name=AwsConnectionLogStreamView.name,
     ),
     path(
-        "workspaces/<uuid:workspace_id>/findings/<uuid:task_id>/open-draft-pr/",
+        # str, not int/uuid: Task pks are integers today, but the use case
+        # validates the id itself and answers a typed finding_not_found —
+        # a malformed id must yield that JSON error, not a bare URL 404.
+        "workspaces/<uuid:workspace_id>/findings/<str:task_id>/open-draft-pr/",
         FindingOpenDraftPrView.as_view(),
         name=FindingOpenDraftPrView.name,
     ),
