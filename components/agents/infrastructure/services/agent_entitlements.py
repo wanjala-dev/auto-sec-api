@@ -60,23 +60,6 @@ def _coerce_agent_list(raw) -> set[str]:
     return items
 
 
-def _sector_allows_agent(workspace, agent_slug: str) -> bool:
-    """Enforce sector-level agent gating using Sector.config."""
-    sector = getattr(workspace, "sector", None)
-    if not sector:
-        return True
-    config = getattr(sector, "config", None)
-    if not isinstance(config, dict):
-        return True
-    allowed = _coerce_agent_list(config.get("allowed_agents") or config.get("enabled_agents"))
-    blocked = _coerce_agent_list(config.get("blocked_agents") or config.get("disabled_agents"))
-    if allowed and agent_slug not in allowed:
-        return False
-    if blocked and agent_slug in blocked:
-        return False
-    return True
-
-
 def ensure_workspace_agent_type(
     workspace_id: str,
     agent_type: AgentType,
@@ -111,12 +94,14 @@ def resolve_agent_entitlement(workspace_id: str, agent_slug: str) -> tuple[bool,
     1. Workspace exists.
     2. Workspace has AI on (``Workspace.ai_teammate_enabled``).
     3. The ``AgentType`` is registered and active.
-    4. The workspace's sector permits this agent
-       (``_sector_allows_agent`` — sector-level allowlist/blocklist).
-    5. There is no explicit ``WorkspaceAgentType`` row with
+    4. There is no explicit ``WorkspaceAgentType`` row with
        ``is_enabled=False`` (explicit per-workspace opt-out).
 
-    The semantics on (5) are deliberately **opt-out**: if no row
+    (The wanjala-era sector-level allow/block gate was removed in the
+    sectors→domains rename: the domains M2M carries no config, so the
+    gate always returned True — dead code reading a dropped field.)
+
+    The semantics on (4) are deliberately **opt-out**: if no row
     exists for this (workspace, agent_type) pair, the agent is
     enabled. Pre-fix this was opt-in (no row = denied), which meant
     every new workspace had to be manually granted every specialist
@@ -146,9 +131,6 @@ def resolve_agent_entitlement(workspace_id: str, agent_slug: str) -> tuple[bool,
         return False, "agent_type_not_found", None
     if not agent_type.is_active:
         return False, "agent_type_inactive", agent_type.slug
-    if not _sector_allows_agent(workspace, agent_type.slug):
-        return False, "sector_blocked", agent_type.slug
-
     entitlement = WorkspaceAgentType.objects.filter(
         workspace_id=workspace_id, agent_type=agent_type
     ).first()

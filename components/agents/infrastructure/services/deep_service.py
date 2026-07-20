@@ -21,40 +21,34 @@ except ImportError:  # pragma: no cover
     Workspace = None
 
 
-def _resolve_sector_pack(workspace_id: str, requested_pack: str | None) -> tuple[str | None, str | None]:
+def _resolve_domains_and_pack(workspace_id: str, requested_pack: str | None) -> tuple[tuple[str, ...], str | None]:
     """
-    Resolve the sector slug and deep-pack slug for a workspace, preferring sector config.
+    Resolve the workspace's security-domain slugs for planner context.
 
-    CONSTRAINTS:
-    - Sector config is the source of truth when present.
-    - Caller-provided deep pack is used only when the sector has no pack defined.
+    The wanjala-era Sector FK (whose config could override the deep pack) was
+    replaced by the domains M2M in the sectors→domains rename. Domains are pure
+    classification (Cloud, Endpoint, …) with no config, so the caller-provided
+    deep pack always stands; the slugs ground the planner in what the
+    workspace actually operates across.
     """
     if not Workspace or not workspace_id:
-        return None, requested_pack
-    workspace = Workspace.objects.filter(id=workspace_id).select_related("sector").first()
+        return (), requested_pack
+    workspace = Workspace.objects.filter(id=workspace_id).prefetch_related("domains").first()
     if not workspace:
-        return None, requested_pack
-    sector = getattr(workspace, "sector", None)
-    if not sector:
-        return None, requested_pack
-    sector_slug = getattr(sector, "slug", None)
-    config = getattr(sector, "config", None)
-    if not isinstance(config, dict):
-        return sector_slug, requested_pack
-    sector_pack = config.get("deep_pack") or config.get("deep_pack_slug") or config.get("deep_pack_id")
-    resolved = str(sector_pack).strip() if sector_pack else None
-    return sector_slug, resolved or requested_pack
+        return (), requested_pack
+    slugs = tuple(str(d.slug) for d in workspace.domains.all() if getattr(d, "slug", None))
+    return slugs, requested_pack
 
 
 def _merge_planner_context(
     extra_context: dict[str, Any] | None,
     *,
-    sector_slug: str | None,
+    domain_slugs: tuple[str, ...],
     deep_pack: str | None,
 ) -> dict[str, Any]:
     context = deepcopy(extra_context or {})
-    if sector_slug:
-        context.setdefault("sector", sector_slug)
+    if domain_slugs:
+        context.setdefault("domains", list(domain_slugs))
     if deep_pack:
         context.setdefault("deep_pack", deep_pack)
     return context
@@ -335,10 +329,10 @@ def plan_and_run_with_llm(
     """
     One-shot: plan with LLM then execute with a single agent type.
     """
-    sector_slug, resolved_pack = _resolve_sector_pack(workspace_id, deep_pack)
+    domain_slugs, resolved_pack = _resolve_domains_and_pack(workspace_id, deep_pack)
     planner_context = _merge_planner_context(
         extra_context,
-        sector_slug=sector_slug,
+        domain_slugs=domain_slugs,
         deep_pack=resolved_pack,
     )
     # ``pdf_id`` lives in ``extra_context`` because PDF-scoped chat is a
@@ -364,7 +358,7 @@ def plan_and_run_with_llm(
         team_id=team_id,
         model_name=model_name,
         extra_context=planner_context,
-        sector_slug=sector_slug,
+        domain_slugs=domain_slugs,
         deep_pack=pack.slug,
     )
     state = pack.executor(

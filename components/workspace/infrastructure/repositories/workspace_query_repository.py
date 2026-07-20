@@ -107,11 +107,10 @@ class WorkspaceQueryRepository:
 
         workspace_qs = Workspace.objects.select_related(
             "workspace_owner",
-            "sector",
             "shared_user",
             "plan",
         ).prefetch_related(
-            "sectors",
+            "domains",
             "followers",
             "operations",
             "workspace_categories",
@@ -134,11 +133,10 @@ class WorkspaceQueryRepository:
 
         return Workspace.objects.select_related(
             "workspace_owner",
-            "sector",
             "shared_user",
             "plan",
         ).prefetch_related(
-            "sectors",
+            "domains",
             "followers",
             "operations",
             "workspace_categories",

@@ -138,8 +138,8 @@ class TestPlanAndRunInjectsRetrievedContext:
 
         with (
             patch(
-                "components.agents.infrastructure.services.deep_service._resolve_sector_pack",
-                return_value=(None, None),
+                "components.agents.infrastructure.services.deep_service._resolve_domains_and_pack",
+                return_value=((), None),
             ),
             patch(
                 "components.agents.infrastructure.services.deep_service.get_deep_pack",
@@ -175,8 +175,8 @@ class TestPlanAndRunInjectsRetrievedContext:
 
         with (
             patch(
-                "components.agents.infrastructure.services.deep_service._resolve_sector_pack",
-                return_value=(None, None),
+                "components.agents.infrastructure.services.deep_service._resolve_domains_and_pack",
+                return_value=((), None),
             ),
             patch(
                 "components.agents.infrastructure.services.deep_service.get_deep_pack",
