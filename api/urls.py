@@ -74,6 +74,7 @@ api_patterns = [
     path("countries/", CountryListView.as_view()),
     path("countries/<str:country>/", CountryByNameView.as_view()),
     path("audit/", include("components.audit.api.urls")),
+    path("search/", include("components.search.api.urls")),
     path("ai/", include("components.agents.api.urls")),
     path("ai/", include("components.knowledge.api.urls")),
     path("announcements/", include(broadcast_urlpatterns)),
