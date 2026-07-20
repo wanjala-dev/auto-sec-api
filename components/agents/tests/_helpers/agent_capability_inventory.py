@@ -182,6 +182,16 @@ CANONICAL_TOOLS: dict[str, set[str]] = {
         "list_pending_optimizations",
         "advise_optimization",
     },
+    "log_analytics_agent": {
+        # Quantitative "chat with the logs" specialist. Aliases:
+        # ``log_analytics``, ``log_metrics``, ``log_stats``, ``log_query``.
+        # Read-only ORM aggregates over hourly LogMetricBucket rows —
+        # counting/trend questions route here, never to RAG.
+        "query_log_metric",
+        "get_metric_trend",
+        "get_top_sources",
+        "list_available_metrics",
+    },
 }
 
 
@@ -255,6 +265,12 @@ ROUTING_EXPECTATIONS: dict[str, str] = {
     # optimization_agent — log noise / cost optimization advisories
     "any pending log optimizations": "optimization_agent",
     "how do we cut log noise": "optimization_agent",
+    # log_analytics_agent — quantitative log questions over deterministic
+    # hourly aggregates (counting/trend questions never hit RAG)
+    "how many ssh attempts this week": "log_analytics_agent",
+    "did we get ddosed this month": "log_analytics_agent",
+    "where did the attacks come from": "log_analytics_agent",
+    "how many 5xx errors this month": "log_analytics_agent",
 }
 
 

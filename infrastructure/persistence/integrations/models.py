@@ -174,6 +174,64 @@ class LogPatternRollup(models.Model):
         return f"{self.kind}:{self.signature} ×{self.total_count}"
 
 
+class LogMetricBucket(models.Model):
+    """Hourly security-metric bucket — the deterministic fact store behind
+    "chat with the logs" (log_analytics_agent) and the posture dashboards.
+
+    Every ingested log window is classified by pure regex (see
+    ``components.integrations.application.log_metrics_service``) into the
+    metric taxonomy below and folded into hourly buckets keyed by
+    ``(connection, metric, service, source, bucket_start)``. Counting and
+    trend questions ("how many SSH attempts this week?", "did we get
+    DDoSed?") are answered by ORM aggregates over these rows — NEVER by RAG
+    and NEVER by an LLM. **No LLM ever writes to this table** (the
+    aggregation-first rule from the posture vision doc §3.2/§4).
+
+    This is deliberately a SEPARATE table from ``LogPatternRollup`` — that
+    model is the optimization advisor's cumulative per-signature memory;
+    this one is a time-series of security metrics. Overloading the rollup
+    would conflate two different question shapes (tuning advice vs.
+    quantitative analytics).
+    """
+
+    class Metric(models.TextChoices):
+        AUTH_FAILURE = "auth_failure", "Authentication failure (failed logins / SSH attempts / invalid user)"
+        HTTP_5XX = "http_5xx", "HTTP 5xx server error responses"
+        HTTP_4XX = "http_4xx", "HTTP 4xx client error responses"
+        SQLI_SIGNATURE = "sqli_signature", "SQL-injection-shaped payload (UNION SELECT, ' OR 1=1, …)"
+        SCANNER = "scanner", "Scanner user agents / probing paths (sqlmap, nikto, /wp-admin, /.env)"
+        APP_ERROR = "app_error", "ERROR-level application log lines"
+        APP_WARNING = "app_warning", "WARNING-level application log lines"
+        TOTAL_VOLUME = "total_volume", "All log lines (lines/day + DDoS volume baseline)"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name="log_metric_buckets")
+    connection = models.ForeignKey(
+        AwsOrganizationConnection, on_delete=models.CASCADE, related_name="log_metric_buckets"
+    )
+    metric = models.CharField(max_length=32, choices=Metric.choices)
+    service = models.CharField(max_length=120, default="")
+    # Source IP/host when derivable from the line (attack-shaped metrics);
+    # "" when not derivable or not meaningful (app_*/total_volume).
+    source = models.CharField(max_length=64, default="")
+    # Hour-truncated UTC timestamp of the bucket.
+    bucket_start = models.DateTimeField()
+    count = models.IntegerField(default=0)
+    sample_message = models.CharField(max_length=500, blank=True, default="")
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["connection", "metric", "service", "source", "bucket_start"],
+                name="uniq_log_metric_bucket",
+            )
+        ]
+        indexes = [models.Index(fields=["workspace", "metric", "bucket_start"])]
+
+    def __str__(self):
+        return f"{self.metric}@{self.bucket_start:%Y-%m-%d %H}h {self.service} x{self.count}"
+
+
 class GitHubConnection(models.Model):
     """Workspace-scoped GitHub access for agent draft-PR remediation.
 
