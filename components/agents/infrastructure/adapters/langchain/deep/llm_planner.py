@@ -322,7 +322,7 @@ def plan_with_llm(
     workspace_id: Optional[str] = None,
     team_id: Optional[str] = None,
     model_name: Optional[str] = None,
-    sector_slug: Optional[str] = None,
+    domain_slugs: Optional[tuple] = None,
     deep_pack: Optional[str] = None,
     extra_context: Optional[Dict[str, Any]] = None,
 ) -> PlanSpec:
@@ -334,8 +334,8 @@ def plan_with_llm(
     from components.knowledge.infrastructure.factories.llms.factory import LLMFactory
 
     context = dict(extra_context or {})
-    if sector_slug:
-        context.setdefault("sector", sector_slug)
+    if domain_slugs:
+        context.setdefault("domains", list(domain_slugs))
     if deep_pack:
         context.setdefault("deep_pack", deep_pack)
 
@@ -416,8 +416,8 @@ def plan_with_llm(
             task.workspace_id = workspace_id
         if team_id and not task.team_id:
             task.team_id = team_id
-    if sector_slug:
-        plan.metadata.setdefault("sector", sector_slug)
+    if domain_slugs:
+        plan.metadata.setdefault("domains", list(domain_slugs))
     if deep_pack:
         plan.metadata.setdefault("deep_pack", deep_pack)
     return plan
@@ -431,7 +431,7 @@ def plan_project_with_llm(
     team_id: Optional[str] = None,
     project_title: Optional[str] = None,
     model_name: Optional[str] = None,
-    sector_slug: Optional[str] = None,
+    domain_slugs: Optional[tuple] = None,
     deep_pack: Optional[str] = None,
     extra_context: Optional[Dict[str, Any]] = None,
 ) -> PlanSpec:
@@ -441,8 +441,8 @@ def plan_project_with_llm(
     from components.knowledge.infrastructure.factories.llms.factory import LLMFactory
 
     context = dict(extra_context or {})
-    if sector_slug:
-        context.setdefault("sector", sector_slug)
+    if domain_slugs:
+        context.setdefault("domains", list(domain_slugs))
     if deep_pack:
         context.setdefault("deep_pack", deep_pack)
 
@@ -554,8 +554,8 @@ def plan_project_with_llm(
         plan.metadata.setdefault("workspace_id", workspace_id)
     if team_id:
         plan.metadata.setdefault("team_id", team_id)
-    if sector_slug:
-        plan.metadata.setdefault("sector", sector_slug)
+    if domain_slugs:
+        plan.metadata.setdefault("domains", list(domain_slugs))
     if deep_pack:
         plan.metadata.setdefault("deep_pack", deep_pack)
     return plan

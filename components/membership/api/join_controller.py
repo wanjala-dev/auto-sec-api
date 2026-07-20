@@ -45,7 +45,7 @@ class WorkspacePublicProfileController(APIView):
                 "name": getattr(ws, "workspace_name", "") or "",
                 "description": getattr(ws, "description", "") or "",
                 "photo_url": getattr(ws, "photo_url", "") or "",
-                "sector": (getattr(ws, "sector", None) and str(ws.sector)) or "",
+                "domains": [d.name for d in ws.domains.all()],
             }
         )
 
