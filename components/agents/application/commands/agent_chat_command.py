@@ -59,6 +59,11 @@ class AgentChatSuccess:
     # by the frontend to attach per-message thumbs-up/thumbs-down
     # feedback via POST /ai/conversations/<conv>/messages/<id>/feedback/.
     message_id: str | None = None
+    # Provenance: the specialist agent types the plan actually routed
+    # tasks to (deduped, clarify excluded). Rendered as chips under the
+    # assistant bubble; also persisted on the message metadata so the
+    # provenance survives a conversation reload.
+    agents: list[str] = field(default_factory=list)
     # RAG chunks that informed this answer. Each entry is a
     # ``{section, section_title, content, score}`` dict — same shape
     # ``deep_service._prefetch_retrieved_context`` produces. Surfaced
