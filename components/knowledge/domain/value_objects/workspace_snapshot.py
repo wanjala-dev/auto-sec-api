@@ -53,7 +53,9 @@ class WorkspaceSnapshotInput:
     workspace_id: str
     workspace_name: str
     workspace_type: str = ""
-    sector_name: str = ""
+    # Security domains the workspace operates across (Cloud, Endpoint, …) —
+    # replaces the wanjala-era single sector FK (sectors→domains rename).
+    domain_names: tuple[str, ...] = ()
     story: str = ""
     vision: str = ""
     mission: str = ""

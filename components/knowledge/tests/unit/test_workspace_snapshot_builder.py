@@ -58,7 +58,7 @@ class TestBuildWorkspaceSnapshot:
     def test_full_input_emits_all_sections(self):
         data = _minimal(
             workspace_type="teamspace",
-            sector_name="Nonprofit",
+            domain_names=("Cloud", "Endpoint"),
             story="We fund literacy programs across East Africa.",
             vision="A literate future.",
             mission="Place books in every rural school.",
