@@ -66,6 +66,9 @@ ALL_CAPS_TECHNICAL_WHITELIST: frozenset[str] = frozenset({
     "PII",
     "OK",
     "TLDR",
+    # Protocol acronym — appears in the log_analytics_agent catalog line
+    # ("HTTP 5xx/4xx"), rendered into planner.system via {agent_catalog}.
+    "HTTP",
     # ``NOT`` is allowed when used as a routing-clarifier between two
     # named agents (e.g. ``task_agent, NOT workspace_agent``). It is
     # only 3 characters so the ``\b[A-Z]{4,}\b`` regex below would not

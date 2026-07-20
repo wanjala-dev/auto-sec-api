@@ -16,7 +16,9 @@ import gzip
 import hashlib
 import json
 import logging
+import re
 from dataclasses import dataclass, field
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +34,11 @@ class LogRecord:
     level: str
     message: str
     raw: str
+    # Event time parsed from the shipped line (Docker json-driver ``time``
+    # field) — feeds the hourly security-metric buckets. ``None`` when the
+    # line carried no parseable timestamp (the aggregator falls back to
+    # ingestion time).
+    ts: datetime | None = None
 
 
 @dataclass
@@ -46,6 +53,23 @@ class DetectionResult:
     tail: list[LogRecord] = field(default_factory=list)
 
 
+# Docker's json-driver timestamps carry nanoseconds; ``fromisoformat`` wants
+# at most microseconds — trim anything beyond 6 fractional digits.
+_ISO_FRACTION_TRIM_RE = re.compile(r"(\.\d{6})\d+")
+
+
+def _parse_record_time(rec: dict) -> datetime | None:
+    """Parse the Docker json-driver ``time`` field (best-effort, never raises)."""
+    raw_time = rec.get("time") or rec.get("timestamp") or ""
+    if not raw_time:
+        return None
+    try:
+        cleaned = _ISO_FRACTION_TRIM_RE.sub(r"\1", str(raw_time).replace("Z", "+00:00"))
+        return datetime.fromisoformat(cleaned)
+    except (ValueError, TypeError):
+        return None
+
+
 def _flatten_record(rec: dict) -> LogRecord:
     """A Docker-json line whose ``log`` field is itself app JSON (web/celery)."""
     service = (rec.get("attrs") or {}).get("com.docker.compose.service", "?")
@@ -58,7 +82,7 @@ def _flatten_record(rec: dict) -> LogRecord:
             message = str(inner.get("message") or inner.get("msg") or inner_raw)
     except (ValueError, TypeError):
         pass
-    return LogRecord(service=service, level=level, message=message[:1000], raw=inner_raw)
+    return LogRecord(service=service, level=level, message=message[:1000], raw=inner_raw, ts=_parse_record_time(rec))
 
 
 def _is_error(r: LogRecord) -> bool:
@@ -155,6 +179,7 @@ def scan_connection(connection, *, max_objects: int = 20, only_new: bool = True)
     result = DetectionResult()
     seen_hashes: set[str] = set()
     seen_keys: set[str] = set()
+    window_records: list[LogRecord] = []
     for lr, key in iter_window_records(connection, max_objects=max_objects, after=after):
         if key not in seen_keys:
             seen_keys.add(key)
@@ -165,11 +190,26 @@ def scan_connection(connection, *, max_objects: int = 20, only_new: bool = True)
         if len(result.tail) > 150:
             result.tail.pop(0)
         result.by_service[lr.service] = result.by_service.get(lr.service, 0) + 1
+        window_records.append(lr)
         if _is_error(lr):
             h = hashlib.sha256(lr.raw.encode()).hexdigest()[:16]
             if h not in seen_hashes:
                 seen_hashes.add(h)
                 result.errors.append(lr)
+
+    # Feed the hourly security-metric buckets from the SAME scanned window —
+    # every ingest run keeps the "chat with the logs" aggregates fresh with no
+    # second S3 read. Failure-safe by design: aggregation is a side-channel,
+    # so ANY error here is logged and swallowed — it must never break error
+    # detection or checkpoint advancement. (The broad except is the documented
+    # log-and-continue exception: ingestion correctness > metrics freshness.)
+    if window_records:
+        try:
+            from components.integrations.application.log_metrics_service import aggregate_security_metrics
+
+            aggregate_security_metrics(connection, window_records)
+        except Exception:
+            logger.exception("log_metrics_aggregation_failed connection_id=%s", connection.id)
 
     if only_new and result.newest_key:
         checkpoint.last_object_key = result.newest_key

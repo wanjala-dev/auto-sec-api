@@ -95,6 +95,7 @@ class TestSystemPromptRoutingRules:
             "triage_agent",
             "log_watch_agent",
             "optimization_agent",
+            "log_analytics_agent",
         }
         registered = set(AgentRegistry.list_agents())
         # Only check specialists that are actually registered.
