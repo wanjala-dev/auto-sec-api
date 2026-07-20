@@ -67,6 +67,7 @@ def _get_detector_modules():
     # wired here; add other detector modules to this list to activate them.
     from components.agents.infrastructure.adapters.actions.detectors import (  # noqa: F401
         logwatch,
+        posture_report,
         run_quality,
     )
     from components.agents.infrastructure.adapters.actions.detectors import (
