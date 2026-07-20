@@ -90,6 +90,32 @@ def _looks_stopped(text: str) -> bool:
     return any(marker in lowered for marker in _STOPPED_MARKERS)
 
 
+def _extract_plan_agent_types(state) -> list[str]:
+    """Deduped specialist agent types the plan routed tasks to.
+
+    Provenance for the assistant message — which agents actually worked
+    on this answer. ``state["plan"]`` may be a PlanSpec or a dict
+    (checkpoint round-trip); tasks likewise. ``clarify`` is the
+    planner's ask-the-user pseudo-worker, not a specialist — skip it.
+    Failure-safe: any unexpected shape yields [] rather than raising.
+    """
+    try:
+        plan = state.get("plan") if isinstance(state, dict) else None
+        tasks = (plan.get("tasks") if isinstance(plan, dict) else getattr(plan, "tasks", None)) or []
+        agents: list[str] = []
+        for task in tasks:
+            agent_type = (
+                task.get("agent_type") if isinstance(task, dict) else getattr(task, "agent_type", "")
+            ) or ""
+            agent_type = str(agent_type).strip()
+            if agent_type and agent_type != "clarify" and agent_type not in agents:
+                agents.append(agent_type)
+        return agents
+    except Exception:  # pylint: disable=broad-except
+        logger.exception("plan agent-type extraction failed; provenance omitted")
+        return []
+
+
 def _extract_final_answer(state: dict) -> str:
     """Pull a human-readable answer out of the deep-run state.
 
@@ -831,7 +857,18 @@ class AgentChatUseCase(CommandHandler[AgentChatCommand]):
         sources = result.state.get("retrieved_sources") or []
         if not isinstance(sources, list):
             sources = []
-        assistant_metadata = {"sources": sources} if sources else None
+        # Provenance stamp — which agents produced this answer, and the
+        # run it came from. Persisted on the message so a reloaded
+        # conversation still shows the chips; ``sources`` only when RAG
+        # grounded the answer.
+        plan_agents = _extract_plan_agent_types(result.state)
+        assistant_metadata = {
+            "agent_type": agent_type,
+            "agents": plan_agents,
+            "plan_id": result.plan_id,
+        }
+        if sources:
+            assistant_metadata["sources"] = sources
 
         message_id = self._persist_assistant_message(
             conversation_id=conv_id,
@@ -859,6 +896,7 @@ class AgentChatUseCase(CommandHandler[AgentChatCommand]):
             workspace_id=ws_id,
             query=command.query,
             agent_type=agent_type,
+            agents=plan_agents,
             sources=sources,
             plan_id=result.plan_id,
             message_id=message_id,

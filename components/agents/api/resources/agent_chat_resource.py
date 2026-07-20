@@ -22,6 +22,8 @@ class AgentChatResource:
     conversation_id: str | None
     source: str
     message_id: str | None
+    # Provenance — specialists the plan routed to (chips under the bubble).
+    agents: list[str] = field(default_factory=list)
     # RAG chunks the planner used. Mirrors
     # ``AgentChatSuccess.sources`` — same shape that
     # ``ConversationMessage.metadata.sources`` carries on persisted
@@ -41,6 +43,7 @@ class AgentChatResource:
             conversation_id=result.conversation_id,
             source=result.source,
             message_id=result.message_id,
+            agents=list(getattr(result, "agents", None) or []),
             sources=list(result.sources or []),
         )
 
