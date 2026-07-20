@@ -159,9 +159,9 @@ needs a first-class red button in the HUD + audit trail, not a DB flag.
 | Phase | Contents | New ingestion needed |
 |---|---|---|
 | **1** | Rollup taxonomy widening → `posture_agent` + `log_analytics_agent` + routing eval cases | None — rides existing log ingest + board/telemetry data |
-| **2** | `CloudPostureSnapshot` nightly task → `cloud_posture_agent` → HUD POSTURE module w/ persona lenses | Read-only IAM audit role per linked account |
-| **3** | `ai_governance_agent` + kill-switch surfacing + daily AI-action rollup | None — governance data exists |
-| **4** | MITRE coverage map → tabletop `threat_sim_agent` → (eventual) BAS | Static mapping first; BAS gated separately |
+| **2** | `ai_governance_agent` + kill-switch surfacing + daily AI-action rollup (promoted: AI-SPM is early+hot, boards want AI-risk reporting, zero new ingestion) | None — governance data exists |
+| **3** | `CloudPostureSnapshot` nightly task → `cloud_posture_agent` → HUD POSTURE module w/ persona lenses | Read-only IAM audit role per linked account (operator dependency) |
+| **4** | MITRE coverage map → tabletop `threat_sim_agent`. Standalone BAS DROPPED (see §8) | Static mapping first |
 
 Each phase is a shippable product on its own — no throwaway stages.
 
@@ -175,3 +175,63 @@ Each phase is a shippable product on its own — no throwaway stages.
   `AgentRunQualityDetector`).
 - SIEM read-IAM for the S3 log feed (operator item, pre-existing).
 - BAS safety model (Phase 4 — deliberately unscoped for now).
+
+
+---
+
+## 8. Validation review (2026-07-20, second research pass)
+
+Henry asked for a thorough re-review before execution. Six research angles;
+verdict: **route validated, three adjustments applied** (already reflected in
+the phases table above).
+
+### Confirmed
+1. **CTEM gap = the opportunity.** Market ~$1.3–2.7B, 11–13% CAGR; 87% of
+   security leaders recognize CTEM's importance but only **16% have
+   operationalized it**. Mid-size orgs can't build the program themselves;
+   our pipeline implements the five stages natively — "CTEM in a box."
+2. **Persona lenses = the documented board pain.** IANS 2026: only 29% of
+   boards rate CISO reporting "very effective"; missing piece is
+   *forward-looking* content (trend trajectory, scenarios, financial
+   exposure). NACD 2026 prescribes a five-category board framework the exec
+   lens should adopt. **47% of boards say AI-driven-risk reporting needs
+   improvement** — feeds the AI-governance agent's case.
+3. **AI-SOC category has real money**: Exaforce $125M Series B (May 2026),
+   Citi Ventures → Prophet. Buyer skepticism about plausible-but-wrong AI
+   output (Security Copilot distrust) validates our grounded-verification /
+   show-the-evidence architecture as the differentiator.
+4. **Chat-with-logs is table stakes**: Datadog Bits, Elastic AI Assistant,
+   Splunk, Grafana all shipped NL telemetry query within ~18 months. Elastic's
+   split (query-generation for data, RAG for knowledge) matches our
+   aggregation-first rule exactly.
+5. **AI-SPM is early and hot**: Wiz/Noma/Orca/PANW shipped; Noma launched
+   agent + MCP access control (Henry's exact ask). Only 29% of orgs feel
+   prepared to secure agentic AI; 6% have an advanced strategy.
+6. **Mid-market wedge confirmed**: 83–90% false-alarm rates, 40% of alerts
+   uninvestigated, MDR "strained by scale, cost, visibility."
+
+### Counter-signals → adjustments
+- **Dashboard fatigue is brutal** ("single pane of glass" critique: teams
+  drown in dashboards that surface risk without driving action; consolidation
+  ≠ clarity). → **Adjustment 1:** POSTURE module is action-linked, not a
+  graph wall — every posture fact drills to the finding/card/draft-PR that
+  remediates it. Persona lenses (separate views) are what the critique
+  prescribes; our Mobilization pipe is the structural antidote.
+- **BAS is weak for our ICP**: SMB adoption ~28%; cost (35%), skill gaps
+  (55%), integration delays (45%), shelfware reputation. → **Adjustment 2:**
+  standalone BAS dropped from the roadmap. Phase 4 = ATT&CK coverage map +
+  tabletop simulation against our own posture snapshots. Payload-executing
+  BAS only with real customer pull (or via partner).
+- **Boards want forward-looking + AI-risk reporting.** → **Adjustment 3:**
+  `ai_governance_agent` promoted to Phase 2 (zero new ingestion, hot
+  category); cloud posture slides to Phase 3 (operator dependency: IAM audit
+  role rollout). Exec lens adopts NACD's five categories + a forward-looking
+  section (backlog aging trajectory, trend deltas).
+
+### Key sources
+Gartner CTEM roadmap + Vectra CTEM adoption stats · Grand View CTEM market ·
+IANS board-reporting research · NACD 2026 Director's Handbook · Citi Ventures
+Prophet investment · UnderDefense AI-SOC mid-market pricing survey · Datadog
+Bits / Elastic AI Assistant docs · Wiz AI-SPM academy · Noma agentic access
+control launch · Mordor BAS market (SMB barriers) · Reclaim Security /
+Tripwire single-pane critiques.
