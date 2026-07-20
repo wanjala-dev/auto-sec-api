@@ -28,7 +28,7 @@ makes it **partially data-aware** — it now embeds rollup counts and
 top-N lists for the load-bearing domains, but never per-row detail.
 The eight embedded sections:
 
-* ``identity`` — workspace name, type, sector, privacy, status, default
+* ``identity`` — workspace name, type, security domains, privacy, status, default
   currency, contact email.
 * ``mission`` — narrative ``story``, ``vision``, ``mission`` text fields.
 * ``classification`` — category, subcategory, and tag **names** (no IDs,
@@ -136,12 +136,12 @@ def _identity_body(data: WorkspaceSnapshotInput) -> str:
 
     # First sentence: what is this workspace?  Uses the type word
     # ("teamspace") on its own rather than "<type> workspace" which
-    # double-words it.  Sector lives in the same sentence so the
-    # cross-encoder sees them adjacent — matches "what kind of
-    # workspace is Zaylan?" type queries.
+    # double-words it.  Security domains live in the same sentence so
+    # the cross-encoder sees them adjacent — matches "what kind of
+    # workspace is Acme SOC?" type queries.
     intro = f"{name} is a {data.workspace_type or 'workspace'}"
-    if data.sector_name:
-        intro += f" operating in the {data.sector_name} sector"
+    if data.domain_names:
+        intro += f" operating across the {', '.join(data.domain_names)} security domains"
     sentences.append(intro + ".")
 
     # Second sentence: status + privacy.  Separate so the cross-

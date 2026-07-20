@@ -58,8 +58,8 @@ class DjangoWorkspaceSnapshotDataAdapter(WorkspaceSnapshotDataPort):
         from infrastructure.persistence.workspaces.models import Workspace
 
         workspace = (
-            Workspace.objects.select_related("sector")
-            .prefetch_related(
+            Workspace.objects.prefetch_related(
+                "domains",
                 "workspace_categories",
                 "workspace_subcategories",
                 "tags",
@@ -71,14 +71,6 @@ class DjangoWorkspaceSnapshotDataAdapter(WorkspaceSnapshotDataPort):
         )
         if workspace is None:
             return None
-
-        sector_name = ""
-        if workspace.sector_id:
-            sector_name = (
-                getattr(workspace.sector, "name", None)
-                or getattr(workspace.sector, "slug", None)
-                or str(workspace.sector_id)
-            )
 
         from infrastructure.persistence.team.models import Team
 
@@ -96,7 +88,7 @@ class DjangoWorkspaceSnapshotDataAdapter(WorkspaceSnapshotDataPort):
             workspace_id=str(workspace.id),
             workspace_name=workspace.workspace_name or "",
             workspace_type=workspace.workspace_type or "",
-            sector_name=sector_name,
+            domain_names=_str_values(workspace.domains.all(), "name"),
             story=workspace.workspace_story or "",
             vision=workspace.vision or "",
             mission=workspace.mission or "",
