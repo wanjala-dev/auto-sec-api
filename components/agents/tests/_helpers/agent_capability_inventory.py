@@ -182,6 +182,19 @@ CANONICAL_TOOLS: dict[str, set[str]] = {
         "list_pending_optimizations",
         "advise_optimization",
     },
+    "posture_agent": {
+        # SOC-ops security posture specialist (vision §3.1). Aliases:
+        # ``posture``, ``security_posture``, ``posture_review``,
+        # ``soc_posture``. READ-only deterministic aggregates over the
+        # fleet's outputs (findings, KPIs vs industry bands, run
+        # telemetry, cost, votes) + the persona-lensed report
+        # (engineer drill-down vs executive NACD framing).
+        "get_findings_posture",
+        "get_response_kpis",
+        "get_fleet_health",
+        "get_forward_outlook",
+        "get_posture_report",
+    },
 }
 
 
@@ -255,6 +268,10 @@ ROUTING_EXPECTATIONS: dict[str, str] = {
     # optimization_agent — log noise / cost optimization advisories
     "any pending log optimizations": "optimization_agent",
     "how do we cut log noise": "optimization_agent",
+    # posture_agent — SOC-ops posture, KPI bands, fleet health, exec lens
+    "what is our security posture": "posture_agent",
+    "give me an executive security summary": "posture_agent",
+    "are we within the response time bands": "posture_agent",
 }
 
 
