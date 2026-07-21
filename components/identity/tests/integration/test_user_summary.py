@@ -486,3 +486,68 @@ def test_user_summary_shared_with_me_empty_for_users_without_adviser_memberships
 
     assert response.status_code == 200
     assert response.data["data"].get("shared_with_me") == []
+
+
+def test_user_summary_ai_quota_and_theme_resolve_without_exceptions(
+    api_client, user_factory, workspace_factory, caplog
+):
+    """Regression for the wanjala-leftover me/summary tracebacks.
+
+    Before the fix, every call with an active workspace logged two
+    ``logger.exception`` tracebacks — ``ModuleNotFoundError`` for the unported
+    ``ai_run_quota_adapter`` and ``brand_resolution_provider`` — and the
+    frontend-consumed ``active_workspace_ai_quota`` field silently degraded to
+    ``None``. Now the quota adapter is ported (real snapshot) and the unported
+    brand kit is an explicit ``theme: None`` contract, so NOTHING in the
+    summary path may log an error.
+    """
+    import logging
+
+    user = user_factory()
+    workspace = workspace_factory(owner=user)
+
+    from infrastructure.persistence.users.models import UserProfile
+
+    UserProfile.objects.update_or_create(user=user, defaults={"active_workspace_id": workspace.id})
+
+    api_client.force_authenticate(user=user)
+    with caplog.at_level(logging.WARNING):
+        response = api_client.get(reverse("user-summary"))
+
+    assert response.status_code == 200
+    context = response.data["data"]["workspace_context"]
+
+    # AI quota snapshot is REAL (consumed by useActiveWorkspaceAIQuota /
+    # useChatSession for the chat-header pill) — not the degraded None.
+    quota = context["active_workspace_ai_quota"]
+    assert quota is not None
+    for key in (
+        "ai_enabled",
+        "daily_message_budget",
+        "daily_messages_used",
+        "daily_messages_remaining",
+        "monthly_token_budget",
+        "monthly_tokens_used",
+        "monthly_tokens_remaining",
+        "monthly_run_budget",
+        "monthly_runs_used",
+        "monthly_runs_remaining",
+    ):
+        assert key in quota
+
+    # The brand kit is not part of this fork: theme is an explicit None and
+    # the frontend falls back to the Octopus default palette/logo.
+    assert context["theme"] is None
+
+    # The leftover tracebacks are gone — no error/exception logs from the
+    # summary path.
+    summary_errors = [
+        record
+        for record in caplog.records
+        if record.levelno >= logging.ERROR
+        and (
+            "AI quota snapshot" in record.getMessage()
+            or "workspace brand" in record.getMessage()
+        )
+    ]
+    assert summary_errors == []
