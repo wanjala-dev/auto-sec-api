@@ -66,7 +66,13 @@ def test_dispatch_publishes_created_envelope_to_recipient_group(
     assert envelope["notification_id"] == str(row.id)
     assert envelope["unread_count"] == 1
     assert envelope["notification"]["verb"] == "shared a resource with you"
-    assert envelope["notification"]["metadata"] == {"kind": "resource_share"}
+    # The dispatch task enriches metadata with the resolved deep link
+    # before row creation — the envelope carries it too. In the SOC fork
+    # every workspace-scoped notification deep-links to the workspace HUD.
+    assert envelope["notification"]["metadata"] == {
+        "kind": "resource_share",
+        "link": f"/ai/v2/{workspace.pk}",
+    }
     assert envelope["workspace_id"] == str(workspace.id)
 
 

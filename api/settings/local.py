@@ -495,6 +495,15 @@ CELERY_BEAT_SCHEDULE = {
         "task": "identity.sweep_user_sessions",
         "schedule": crontab(minute="*/15"),
     },
+    # Weekly push/delivery hygiene: delete PushSubscription rows dead
+    # (expired/revoked) > PUSH_SUBSCRIPTION_PRUNE_AFTER_DAYS, expire active
+    # subscriptions unseen > PUSH_SUBSCRIPTION_STALE_AFTER_DAYS, and prune
+    # terminal NotificationDelivery ledger rows >
+    # NOTIFICATION_DELIVERY_RETENTION_DAYS. Idempotent reconciliation.
+    "notifications_prune_stale_push_subscriptions": {
+        "task": "notifications.prune_stale_push_subscriptions",
+        "schedule": crontab(hour=4, minute=40, day_of_week=0),
+    },
     "workflow_run_due_schedules": {
         "task": "workflow.run_due_schedules",
         "schedule": crontab(minute="*"),

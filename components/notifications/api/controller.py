@@ -94,15 +94,11 @@ class NotificationViewSet(
         from django.utils import timezone
         from django.utils.dateparse import parse_datetime
 
-        created_after = self._parse_datetime(
-            self.request.query_params.get("created_after"), timezone, parse_datetime
-        )
+        created_after = self._parse_datetime(self.request.query_params.get("created_after"), timezone, parse_datetime)
         if created_after:
             queryset = queryset.filter(created_at__gte=created_after)
 
-        created_before = self._parse_datetime(
-            self.request.query_params.get("created_before"), timezone, parse_datetime
-        )
+        created_before = self._parse_datetime(self.request.query_params.get("created_before"), timezone, parse_datetime)
         if created_before:
             queryset = queryset.filter(created_at__lte=created_before)
 
@@ -158,16 +154,10 @@ class NotificationViewSet(
         result = _notifications_service.mark_all_notifications_read(
             MarkAllNotificationsReadCommand(
                 user_id=request.user.id,
-                workspace_id=(
-                    UUID(self._workspace_filter_value())
-                    if self._workspace_filter_value()
-                    else None
-                ),
+                workspace_id=(UUID(self._workspace_filter_value()) if self._workspace_filter_value() else None),
             )
         )
-        return Response(
-            {"updated": result.updated_count}, status=status.HTTP_200_OK
-        )
+        return Response({"updated": result.updated_count}, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=["get"])
     def unread_count(self, request):
@@ -216,15 +206,15 @@ class WorkspaceNotificationPreferenceViewSet(
         from components.notifications.application.providers.notification_cache_provider import (
             get_notification_cache_provider,
         )
-        workspace_id = getattr(preference, 'workspace_id', None)
-        get_notification_cache_provider().invalidate_preference_cache(
-            preference.user_id, workspace_id
-        )
+
+        workspace_id = getattr(preference, "workspace_id", None)
+        get_notification_cache_provider().invalidate_preference_cache(preference.user_id, workspace_id)
 
     def _notify_preference_change(self, preference):
         from components.notifications.application.providers.notification_factory_provider import (
             get_notification_factory_provider,
         )
+
         Notification = get_notifications_models_provider().Notification
 
         workspace = getattr(preference, "workspace", None)
@@ -289,10 +279,85 @@ class AINotificationPreferenceViewSet(
         from components.notifications.application.providers.notification_cache_provider import (
             get_notification_cache_provider,
         )
-        workspace_id = getattr(preference, 'workspace_id', None)
-        get_notification_cache_provider().invalidate_preference_cache(
-            preference.user_id, workspace_id
+
+        workspace_id = getattr(preference, "workspace_id", None)
+        get_notification_cache_provider().invalidate_preference_cache(preference.user_id, workspace_id)
+
+
+# ── Push Subscriptions (T1-S5 device registry) ───────────────────────────
+
+
+class PushSubscriptionController(APIView):
+    """Register / revoke the caller's push devices.
+
+    POST upserts by endpoint hash (re-subscribing the same endpoint updates
+    in place — 200; a new device — 201). DELETE revokes and is idempotent
+    (204 whether or not a row transitioned). Thin controller — validation
+    and upsert semantics live in the use cases; domain
+    ``ValidationError`` maps to 400 via the global exception handler.
+    """
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def post(self, request):
+        from components.notifications.api.requests.push_subscription_requests import (
+            RegisterPushSubscriptionRequest,
         )
+        from components.notifications.api.resources.push_subscription_resources import (
+            PushSubscriptionResource,
+        )
+        from components.notifications.application.providers.push_delivery_provider import (
+            get_push_delivery_provider,
+        )
+
+        body = RegisterPushSubscriptionRequest.from_request(request)
+        outcome = (
+            get_push_delivery_provider()
+            .build_register_push_subscription_use_case()
+            .execute(
+                user_id=request.user.id,
+                endpoint=body.endpoint,
+                keys=body.keys,
+                device_label=body.device_label,
+                user_agent=request.META.get("HTTP_USER_AGENT", ""),
+                platform=body.platform,
+            )
+        )
+        return Response(
+            PushSubscriptionResource.from_outcome(outcome).to_dict(),
+            status=status.HTTP_201_CREATED if outcome.created else status.HTTP_200_OK,
+        )
+
+    def delete(self, request):
+        from components.notifications.api.requests.push_subscription_requests import (
+            RevokePushSubscriptionRequest,
+        )
+        from components.notifications.application.providers.push_delivery_provider import (
+            get_push_delivery_provider,
+        )
+
+        body = RevokePushSubscriptionRequest.from_request(request)
+        get_push_delivery_provider().build_revoke_push_subscription_use_case().execute(
+            user_id=request.user.id,
+            endpoint=body.endpoint or None,
+            endpoint_hash=body.endpoint_hash or None,
+        )
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class VapidPublicKeyController(APIView):
+    """Expose the VAPID application-server public key the browser needs for
+    ``PushManager.subscribe``. Returns ``{"key": ""}`` until ops provisions
+    keys (env-driven, default empty)."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get(self, request):
+        from components.notifications.application.providers.push_delivery_provider import (
+            get_push_delivery_provider,
+        )
+
+        return Response({"key": get_push_delivery_provider().vapid_public_key()})
 
 
 # ── User Notification Preferences ────────────────────────────────────────
@@ -313,13 +378,29 @@ class UserPreferenceView(APIView):
 
     def patch(self, request, uuid=None):
         if not uuid:
-            return Response({"status": "error", "message": "User identifier required."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"status": "error", "message": "User identifier required."}, status=status.HTTP_400_BAD_REQUEST
+            )
         preference = _notifications_service.get_user_preference(uuid)
         serializer = UserPreferenceSerializer(preference, data=request.data, partial=True)
         if serializer.is_valid():
-            serializer.save()
+            saved = serializer.save()
+            # The per-channel delivery gate (channels_for) caches its
+            # decision — flush so flipping push/email booleans takes
+            # effect immediately, not after the TTL.
+            self._invalidate_channel_cache(getattr(saved, "user_id", None))
             return Response({"status": "success", "data": serializer.data})
         return Response({"status": "error", "data": serializer.errors})
+
+    @staticmethod
+    def _invalidate_channel_cache(user_id):
+        if not user_id:
+            return
+        from components.notifications.application.providers.push_delivery_provider import (
+            get_push_delivery_provider,
+        )
+
+        get_push_delivery_provider().invalidate_channel_cache(user_id)
 
     def get(self, request, uuid=None):
         if uuid:

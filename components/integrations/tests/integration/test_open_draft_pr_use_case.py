@@ -403,3 +403,65 @@ class TestAgentToolDelegation:
 
         result = tools.open_draft_pr(agent, str(task.id))
         assert "finding_needs_human" in result
+
+
+@pytest.mark.django_db
+class TestOpenDraftPrNotifiesOwner:
+    def test_draft_pr_opened_notifies_workspace_owner(
+        self, workspace_factory, team_factory, django_capture_on_commit_callbacks
+    ):
+        from infrastructure.persistence.notifications.models import Notification
+
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _triaged_finding(workspace, owner, team, column)
+        _connection(workspace, owner)
+        _capability_agent(workspace, owner)
+        fake = _FakeGitHub()
+
+        with (
+            mock.patch(_REQUESTS_PATH, new=fake),
+            mock.patch(_PROPOSE_PATH, return_value=_PATCH),
+            django_capture_on_commit_callbacks(execute=True),
+        ):
+            result = _use_case().execute(
+                workspace_id=str(workspace.id), task_id=str(task.id), performed_by=str(owner.id)
+            )
+
+        row = Notification.objects.filter(
+            recipient=owner, metadata__kind="soc.draft_pr_opened"
+        ).first()
+        assert row is not None
+        assert row.notification_type == Notification.NotificationType.AI_EVENT
+        assert row.metadata["pr_url"] == result.url
+        assert row.metadata["task_id"] == str(task.id)
+        assert row.metadata["link"] == f"/ai/v2/{workspace.pk}"
+        assert "draft PR" in row.verb
+
+    def test_idempotent_replay_does_not_renotify(
+        self, workspace_factory, team_factory, django_capture_on_commit_callbacks
+    ):
+        from infrastructure.persistence.notifications.models import Notification
+
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _triaged_finding(
+            workspace,
+            owner,
+            team,
+            column,
+            extra_payload={},
+        )
+        task.metadata["payload"]["draft_pr"] = {
+            "url": f"https://github.com/{_REPO}/pull/7",
+            "repo": _REPO,
+            "branch": "autosec/finding-x",
+        }
+        task.save(update_fields=["metadata"])
+        _connection(workspace, owner)
+
+        with django_capture_on_commit_callbacks(execute=True):
+            result = _use_case().execute(
+                workspace_id=str(workspace.id), task_id=str(task.id), performed_by=str(owner.id)
+            )
+
+        assert result.created is False
+        assert Notification.objects.filter(metadata__kind="soc.draft_pr_opened").count() == 0

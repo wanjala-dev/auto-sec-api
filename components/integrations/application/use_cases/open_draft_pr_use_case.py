@@ -129,6 +129,13 @@ class OpenDraftPrUseCase:
         )
 
         self._record_on_finding(task_id, workspace_id, pr, branch, performed_by)
+        self._notify_draft_pr_opened(
+            workspace_id=workspace_id,
+            task=task,
+            performed_by=performed_by,
+            pr_url=pr.url,
+            repo=target_repo,
+        )
         logger.info(
             "open_draft_pr opened task_id=%s workspace_id=%s repo=%s pr=%s performed_by=%s",
             task_id,
@@ -138,6 +145,47 @@ class OpenDraftPrUseCase:
             performed_by,
         )
         return DraftPrResult(url=pr.url, repo=target_repo, branch=branch, created=True)
+
+    @staticmethod
+    def _notify_draft_pr_opened(*, workspace_id, task, performed_by, pr_url, repo) -> None:
+        """HITL alert: a draft PR now awaits human review — tell the owner.
+
+        Goes through the notification dispatcher funnel (reuses
+        ``create_notification`` semantics: preference gating, dedup, deep
+        link, realtime + web-push/email fan-out). Loss-tolerant — the PR
+        itself must never be lost to a notification hiccup.
+        """
+        try:
+            from components.notifications.workers.tasks import dispatch_notification_async
+            from components.shared_kernel.application.transactional import on_commit
+            from infrastructure.persistence.workspaces.models import Workspace
+
+            owner_id = Workspace.objects.filter(id=workspace_id).values_list("workspace_owner_id", flat=True).first()
+            if owner_id is None:
+                return
+
+            kwargs = {
+                "recipient_id": str(owner_id),
+                "actor_id": str(performed_by),
+                "verb": f"opened a draft PR for review: {task.title[:180]}",
+                "notification_type": "ai_event",
+                "workspace_id": str(workspace_id),
+                "target_ref": ["project", "task", str(task.pk)],
+                "allow_self_notify": True,
+                "metadata": {
+                    "kind": "soc.draft_pr_opened",
+                    "task_id": str(task.pk),
+                    "pr_url": pr_url,
+                    "repo": repo,
+                },
+            }
+            on_commit(lambda: dispatch_notification_async.apply_async(kwargs=kwargs))
+        except Exception:
+            logger.exception(
+                "draft_pr_notification_enqueue_failed task_id=%s workspace_id=%s",
+                getattr(task, "pk", None),
+                workspace_id,
+            )
 
     # ── Preconditions ─────────────────────────────────────────────────
 

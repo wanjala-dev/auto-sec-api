@@ -11,21 +11,29 @@ from rest_framework.routers import SimpleRouter
 from components.notifications.api.controller import (
     AINotificationPreferenceViewSet,
     NotificationViewSet,
+    PushSubscriptionController,
     UserPreferenceDetailView,
     UserPreferenceView,
+    VapidPublicKeyController,
     WorkspaceNotificationPreferenceViewSet,
 )
 
-app_name = 'notifications'
+app_name = "notifications"
 
 router = SimpleRouter()
-router.register(r'preferences/workspaces', WorkspaceNotificationPreferenceViewSet, basename='workspace-notification-preference')
-router.register(r'preferences/ai', AINotificationPreferenceViewSet, basename='ai-notification-preference')
-router.register(r'', NotificationViewSet, basename='notification')
+router.register(
+    r"preferences/workspaces", WorkspaceNotificationPreferenceViewSet, basename="workspace-notification-preference"
+)
+router.register(r"preferences/ai", AINotificationPreferenceViewSet, basename="ai-notification-preference")
+router.register(r"", NotificationViewSet, basename="notification")
 
 urlpatterns = [
-    path('', include(router.urls)),
+    # Push device registry (T1-S5) — before the router include so the
+    # catch-all notification detail route can never shadow these paths.
+    path("push/subscriptions/", PushSubscriptionController.as_view(), name="push-subscriptions"),
+    path("push/vapid-public-key/", VapidPublicKeyController.as_view(), name="push-vapid-public-key"),
+    path("", include(router.urls)),
     # User preferences (also accessible at /userpreferences/ via root urlconf)
-    path('userpreferences/', UserPreferenceView.as_view(), name='userpreference-list'),
-    path('userpreferences/<str:uuid>/', UserPreferenceDetailView.as_view(), name='userpreference-detail'),
+    path("userpreferences/", UserPreferenceView.as_view(), name="userpreference-list"),
+    path("userpreferences/<str:uuid>/", UserPreferenceDetailView.as_view(), name="userpreference-detail"),
 ]

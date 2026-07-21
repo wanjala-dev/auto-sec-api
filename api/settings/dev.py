@@ -351,6 +351,15 @@ CELERY_BEAT_SCHEDULE = {
         "task": "identity.sweep_user_sessions",
         "schedule": crontab(hour=4, minute=20),
     },
+    # Weekly push/delivery hygiene: delete PushSubscription rows dead
+    # (expired/revoked) > PUSH_SUBSCRIPTION_PRUNE_AFTER_DAYS, expire active
+    # subscriptions unseen > PUSH_SUBSCRIPTION_STALE_AFTER_DAYS, and prune
+    # terminal NotificationDelivery ledger rows >
+    # NOTIFICATION_DELIVERY_RETENTION_DAYS. Idempotent reconciliation.
+    "notifications_prune_stale_push_subscriptions": {
+        "task": "notifications.prune_stale_push_subscriptions",
+        "schedule": crontab(hour=4, minute=40, day_of_week=0),
+    },
     # Fire due recurring workflow schedules (user-defined daily/weekly/monthly
     # automations). Every minute so a scheduled time is honoured within ~60s;
     # the task is idempotent (advances next_run_at + per-fire idempotency key).

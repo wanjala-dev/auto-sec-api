@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
@@ -231,3 +233,156 @@ class AINotificationPreference(models.Model):
 
     def __str__(self) -> str:  # pragma: no cover - simple representation
         return f"{self.user_id}:{self.workspace_id}:{self.channel} -> {self.is_enabled}"
+
+
+class PushSubscription(models.Model):
+    """Platform-agnostic push device registry (T1-S5 of the notification track).
+
+    One row per (user, device endpoint). ``platform`` distinguishes web push
+    (the first platform) from future native iOS/Android tokens — the same
+    registry serves all three, so native apps later add a platform value,
+    not a parallel table.
+
+    ``endpoint_hash`` (sha256 hex of the endpoint) is the stable identity:
+    push-service endpoint URLs are long and privacy-sensitive, so uniqueness,
+    upsert, and revocation all key on the hash. NO workspace FK by design —
+    a device belongs to a user, not a workspace; workspace scoping happens
+    at notification-creation time, before delivery fan-out.
+    """
+
+    class Platform(models.TextChoices):
+        WEB = "web", "Web"
+        IOS = "ios", "iOS"
+        ANDROID = "android", "Android"
+
+    class Status(models.TextChoices):
+        ACTIVE = "active", "Active"
+        EXPIRED = "expired", "Expired"
+        REVOKED = "revoked", "Revoked"
+
+    # PK
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    # FK / relations
+    user = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name="push_subscriptions",
+    )
+    # Data fields
+    platform = models.CharField(
+        max_length=16,
+        choices=Platform.choices,
+        default=Platform.WEB,
+    )
+    endpoint = models.TextField(
+        help_text="Push-service endpoint URL (web push) or device token URI (native).",
+    )
+    endpoint_hash = models.CharField(
+        max_length=64,
+        unique=True,
+        help_text="sha256 hex of the endpoint — stable identity for upsert/revoke.",
+    )
+    keys = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Per-platform crypto material (web push: p256dh + auth).",
+    )
+    device_label = models.CharField(max_length=255, blank=True)
+    user_agent = models.TextField(blank=True)
+    status = models.CharField(
+        max_length=16,
+        choices=Status.choices,
+        default=Status.ACTIVE,
+    )
+    last_seen_at = models.DateTimeField(null=True, blank=True)
+    # Metadata
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["user", "status"]),
+        ]
+
+    def __str__(self) -> str:  # pragma: no cover - simple representation
+        return f"{self.user_id}:{self.platform}:{self.endpoint_hash[:12]} [{self.status}]"
+
+
+class NotificationDelivery(models.Model):
+    """Per-channel delivery ledger for a notification (T1-S5).
+
+    One row per (notification, channel, subscription) attempt — the unique
+    constraint is the idempotency key so a retried dispatch can never
+    double-record (and later, double-send) the same delivery. ``subscription``
+    is set for push channels and NULL for channels without a device
+    (email, realtime); SET_NULL keeps the ledger row as an audit record
+    even after the device registration is deleted.
+
+    NULL-subscription rows (email) need their own dedup guard (T1-S8): the
+    base constraint follows SQL NULLS-DISTINCT semantics, so two
+    (notification, email, NULL) rows would both insert. The conditional
+    unique constraint on (notification, channel) WHERE subscription IS NULL
+    closes that hole. A conditional constraint is used instead of
+    ``nulls_distinct=False`` deliberately: SQLite (the pytest schema) has no
+    NULLS NOT DISTINCT support and Django silently SKIPS an entire
+    UniqueConstraint carrying ``nulls_distinct`` on backends without it —
+    which would strip ALL DB-level ledger dedup from the test schema.
+    Partial unique indexes are enforced on both Postgres and SQLite.
+    """
+
+    class Channel(models.TextChoices):
+        REALTIME = "realtime", "Realtime"
+        WEB_PUSH = "web_push", "Web Push"
+        EMAIL = "email", "Email"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        SENT = "sent", "Sent"
+        FAILED = "failed", "Failed"
+        SKIPPED = "skipped", "Skipped"
+
+    # FK / relations
+    notification = models.ForeignKey(
+        Notification,
+        on_delete=models.CASCADE,
+        related_name="deliveries",
+    )
+    subscription = models.ForeignKey(
+        PushSubscription,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="deliveries",
+    )
+    # Data fields
+    channel = models.CharField(max_length=16, choices=Channel.choices)
+    status = models.CharField(
+        max_length=16,
+        choices=Status.choices,
+        default=Status.PENDING,
+    )
+    attempts = models.PositiveIntegerField(default=0)
+    last_error = models.TextField(blank=True)
+    # Metadata
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["notification", "channel", "subscription"],
+                name="uniq_notification_channel_subscription",
+            ),
+            models.UniqueConstraint(
+                fields=["notification", "channel"],
+                condition=models.Q(subscription__isnull=True),
+                name="uniq_notification_channel_no_subscription",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["notification", "channel"]),
+            models.Index(fields=["channel", "status"]),
+        ]
+
+    def __str__(self) -> str:  # pragma: no cover - simple representation
+        return f"{self.notification_id}:{self.channel} -> {self.status}"

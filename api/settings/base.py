@@ -323,6 +323,22 @@ REALTIME_EVENTS_ENABLED = True
 # no-ops when False.
 NOTIFICATIONS_REALTIME_ENABLED = os.environ.get("NOTIFICATIONS_REALTIME_ENABLED", "true").lower() == "true"
 
+# Web push (registry + delivery ledger; pywebpush sender). All env-driven,
+# default empty/off — the registry accepts subscriptions and the ledger
+# records pending deliveries either way; WEB_PUSH_ENABLED flips the actual
+# sender on once VAPID keys are provisioned. Missing keys degrade to a
+# truthful "skipped" delivery, never a crash.
+WEB_PUSH_ENABLED = os.environ.get("WEB_PUSH_ENABLED", "false").lower() == "true"
+WEBPUSH_VAPID_PUBLIC_KEY = os.environ.get("WEBPUSH_VAPID_PUBLIC_KEY", "")
+WEBPUSH_VAPID_PRIVATE_KEY = os.environ.get("WEBPUSH_VAPID_PRIVATE_KEY", "")
+WEBPUSH_VAPID_ADMIN_EMAIL = os.environ.get("WEBPUSH_VAPID_ADMIN_EMAIL", "")
+
+# Email notification channel. Same safe-dormant pattern as WEB_PUSH_ENABLED:
+# the dispatch funnel records pending email ledger rows for opted-in users
+# either way; this flag flips the actual sender on. Off by default so no
+# environment sends emails until ops explicitly enables it.
+NOTIF_EMAIL_CHANNEL_ENABLED = os.environ.get("NOTIF_EMAIL_CHANNEL_ENABLED", "false").lower() == "true"
+
 AUTH_USER_MODEL = "users.CustomUser"
 
 # Password validation
@@ -582,3 +598,14 @@ GEOIP_PATH = os.environ.get("GEOIP_PATH", os.path.join(BASE_DIR, "geoip"))
 # SESSION_RETENTION_DAYS; AuthAuditEvent rows after AUTH_AUDIT_RETENTION_DAYS.
 SESSION_RETENTION_DAYS = int(os.environ.get("SESSION_RETENTION_DAYS", "180"))
 AUTH_AUDIT_RETENTION_DAYS = int(os.environ.get("AUTH_AUDIT_RETENTION_DAYS", "365"))
+
+# Push/delivery hygiene windows enforced by the weekly
+# ``notifications.prune_stale_push_subscriptions`` beat task: dead
+# subscriptions (expired/revoked) are deleted after
+# PUSH_SUBSCRIPTION_PRUNE_AFTER_DAYS; active subscriptions not seen for
+# PUSH_SUBSCRIPTION_STALE_AFTER_DAYS are marked expired (then age into
+# the deletion window); terminal NotificationDelivery ledger rows
+# are deleted after NOTIFICATION_DELIVERY_RETENTION_DAYS.
+PUSH_SUBSCRIPTION_PRUNE_AFTER_DAYS = int(os.environ.get("PUSH_SUBSCRIPTION_PRUNE_AFTER_DAYS", "90"))
+PUSH_SUBSCRIPTION_STALE_AFTER_DAYS = int(os.environ.get("PUSH_SUBSCRIPTION_STALE_AFTER_DAYS", "180"))
+NOTIFICATION_DELIVERY_RETENTION_DAYS = int(os.environ.get("NOTIFICATION_DELIVERY_RETENTION_DAYS", "180"))
