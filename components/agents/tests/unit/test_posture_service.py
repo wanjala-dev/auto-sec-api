@@ -391,3 +391,36 @@ class TestComposePostureReport:
 
         with pytest.raises(ValueError):
             compose_posture_report("board_member", *self._aggregates())
+
+
+
+class TestHoursBetweenTimezoneMix:
+    """Naive-vs-aware mixes must never raise — the live-data shape.
+
+    Task.metadata timestamps are naive isoformat strings while DB
+    datetimes are aware; the first live posture chat crashed on the
+    subtraction (2026-07-21).
+    """
+
+    def test_naive_start_aware_end(self):
+        from datetime import UTC, datetime
+
+        from components.agents.application.services.posture_service import _hours_between
+
+        naive = datetime(2026, 7, 20, 10, 0, 0)
+        aware = datetime(2026, 7, 20, 12, 0, 0, tzinfo=UTC)
+        assert _hours_between(naive, aware) == 2.0
+
+    def test_aware_start_naive_end(self):
+        from datetime import UTC, datetime
+
+        from components.agents.application.services.posture_service import _hours_between
+
+        aware = datetime(2026, 7, 20, 10, 0, 0, tzinfo=UTC)
+        naive = datetime(2026, 7, 20, 11, 30, 0)
+        assert _hours_between(aware, naive) == 1.5
+
+    def test_iso_string_inputs(self):
+        from components.agents.application.services.posture_service import _hours_between
+
+        assert _hours_between("2026-07-20T10:00:00", "2026-07-20T10:30:00+00:00") == 0.5

@@ -87,6 +87,13 @@ def _parse_iso(value: Any) -> datetime | None:
 
 
 def _hours_between(start: datetime | None, end: datetime | None) -> float | None:
+    # Normalize BOTH ends through _parse_iso — live rows mix aware DB
+    # datetimes with naive ones (Task.metadata timestamps are written with
+    # datetime.now().isoformat()), and a naive-aware subtraction raises
+    # TypeError. Test fixtures were uniformly aware, which is why this only
+    # surfaced in the live posture-chat verification (2026-07-21).
+    start = _parse_iso(start)
+    end = _parse_iso(end)
     if start is None or end is None:
         return None
     delta = (end - start).total_seconds() / 3600.0
