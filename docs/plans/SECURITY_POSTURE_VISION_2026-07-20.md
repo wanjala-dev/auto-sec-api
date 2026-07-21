@@ -235,3 +235,75 @@ Prophet investment · UnderDefense AI-SOC mid-market pricing survey · Datadog
 Bits / Elastic AI Assistant docs · Wiz AI-SPM academy · Noma agentic access
 control launch · Mordor BAS market (SMB barriers) · Reclaim Security /
 Tripwire single-pane critiques.
+
+---
+
+## 9. Positioning — where auto-sec sits in the SIEM / SOC / SOAR / XDR map (2026-07-21)
+
+Taxonomy refresher: the **SIEM** aggregates/correlates/detects/alerts (the sensory
+system and alarm); the **SOC** is the human function that triages, investigates,
+and responds; **SOAR** is the automation layer between them; **XDR** blends
+detection+response into one integrated product.
+
+### What we've built, mapped honestly
+
+| Layer | What auto-sec has | What it is NOT |
+|---|---|---|
+| **SIEM (a deliberate slice)** | Fluent Bit → S3 → checkpointed scan → aggregate-at-ingest (`LogPatternRollup`, `LogMetricBucket` hourly security metrics). Detection = code-defined detector registry. Raw stays in cheap S3. | A general SIEM: no searchable raw store, no user-authored correlation rules (Sigma), one ingest source today. |
+| **SOC (our strongest layer)** | Triage agent = Tier-1/2 analyst (grounded verification, rubric grading, draft-PR fixes). Router→specialists = escalation paths. Kanban = case management. `needs_human` = human escalation. Plus the near-unique layer: **QA of the AI analysts** — rubric verdicts, human votes, run telemetry, run-quality detector, eval-gated planner prompts. | A staffed 24/7 human SOC (that's the point). |
+| **SOAR (dormant asset)** | Draft-PR remediation = an HITL response playbook. Kill switch = containment. **The ported workflow engine (triggers→conditions→actions→waits) is a SOAR playbook engine sitting unused** — pointing it at security response is a port, not a build. | Connector-rich Torq/Tines competitor. |
+| **XDR** | Nothing — no endpoint/network telemetry. | Don't pretend. Connector territory, later or never. |
+| **AI-SPM + CTEM (outside the classic taxonomy — our differentiation)** | Governance agent + audited kill switch (govern the AI SOC itself); posture agent + KPI bands + dashboard. | — |
+
+### The market signal (research 2026-07-21)
+
+- **The converged platform is winning.** 2026 buyer analyses: the winning model
+  is log management + detection + response + reporting in ONE platform, not
+  fragmented categories; mid-market picks MDR services chiefly because it cannot
+  staff 24/7 coverage (4.8M-person workforce gap).
+- **SIEM ingest pricing is the industry's hated tax.** Panther ≈ $110–170K/yr at
+  50GB/day mid-market; Anvilogic floors ≈ $80K/yr; Rapid7 markets asset-based
+  pricing explicitly as "eliminating ingest anxiety." Our aggregate-first
+  architecture (rollups in Postgres, raw in S3) is a structural cost story.
+- **The funded AI-SOC startups (Prophet, Dropzone, Radiant, 7AI) sit ON TOP of
+  an existing SIEM** — they assume the six-figure SIEM bill is sunk. Radiant
+  bundling "integrated log management as a SIEM-cost counterweight" is the
+  strongest competitor validation of our bundled direction.
+
+### The positioning
+
+**AI SOC-in-a-box for the SIEM-less mid-market** — the MDR alternative as a
+product: slim ingest + detection + AI analysts + case board + posture reporting
++ AI governance, one platform, for orgs whose current SIEM is grep-and-hope and
+whose SOC headcount is zero. Not "a worse Splunk plus a worse Prophet" — the
+converged shape the market is voting for, at a cost structure incumbents can't
+copy without cannibalizing per-GB revenue.
+
+The BYO-SIEM alert-connector lane (Prophet's lane) is a later expansion, not
+the lead — crowded, funded, and it forfeits the cost-structure advantage.
+
+### Gaps between here and that positioning being real
+
+1. **Connector breadth** — CloudWatch, syslog, and one identity source
+   (Okta/GitHub audit logs); identity is the actual mid-market attack surface.
+2. **Chat-authored detections** — NL description → agent proposes a
+   deterministic detector → HITL approve. On-brand alternative to a Sigma
+   editor; keeps the no-LLM-over-the-firehose rule.
+3. **Workflow engine → response playbooks** — agent-proposed, HITL-gated
+   security playbooks (finding → enrich → notify → contain-with-approval).
+4. **Bounded raw search** — Athena/DuckDB over the existing S3 bucket, not a
+   new store.
+5. **Retention/compliance floor** — regulated mid-market buys on 1yr+ log
+   retention (HIPAA/PCI/SOC 2); needs a minimal honest story.
+6. Housekeeping: HUD mock-data cards (CASES %, INTEL FEEDS), multi-tenant
+   scale proof.
+
+### Sequencing (extends the phases above)
+
+Finish in-flight visibility (POSTURE module, web push) → connectors →
+workflow-engine playbooks → chat-authored detections → bounded raw search +
+compliance floor.
+
+Key sources: siemcostcalculator.com (Panther), anvilogic.com/siem-replacement,
+reco.ai traditional-SIEM-vs-AI-native, underdefense.com managed-SIEM-vs-MDR +
+ai-soc-for-mid-market, n-able.com mdr-vs-siem.
