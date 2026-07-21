@@ -35,6 +35,24 @@ def ensure_agents_team(*args, **kwargs):
     return get_agent_permissions_provider().ensure_agents_team(*args, **kwargs)
 
 
+class AiKillSwitchPermission(BasePermission):
+    """Gate for the workspace AI kill switch (``/ai/agents/kill-switch/``).
+
+    Reads (GET — the status chip) require ``view_agents`` (every seeded
+    role carries it); writes (POST — the flip itself) require
+    ``manage_agents``, which only the ``owner`` and ``admin`` system roles
+    hold — the same membership-permission mechanism the integrations
+    endpoints use (``has_workspace_permission``). The workspace is resolved
+    from the request body / query params by the membership permission base.
+    """
+
+    def has_permission(self, request, view):
+        from components.membership.api.permissions import has_workspace_permission
+
+        key = "view_agents" if request.method in SAFE_METHODS else "manage_agents"
+        return has_workspace_permission(key)().has_permission(request, view)
+
+
 class AgentAIPermission(BasePermission):
     """
     AI-specific permission checks.
@@ -83,6 +101,7 @@ class AgentAIPermission(BasePermission):
 
 __all__ = [
     "AgentAIPermission",
+    "AiKillSwitchPermission",
     "ai_can",
     "ensure_ai_grant",
     "ensure_ai_identity",

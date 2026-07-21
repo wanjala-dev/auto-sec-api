@@ -537,6 +537,14 @@ class AIProvider:
     def build_patch_agent_capabilities_use_case() -> PatchAgentCapabilitiesUseCase:
         return PatchAgentCapabilitiesUseCase(port=AIProvider._profile_port())
 
+    @staticmethod
+    def build_set_ai_kill_switch_use_case():
+        from components.agents.application.use_cases.set_ai_kill_switch_use_case import (
+            SetAiKillSwitchUseCase,
+        )
+
+        return SetAiKillSwitchUseCase()
+
     # ── Engagement use cases ──────────────────────────────────────────
 
     @staticmethod

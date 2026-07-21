@@ -6,6 +6,7 @@ patch_agent_profile, patch_agent_settings.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from components.agents.application.ports.agent_profile_port import (
@@ -24,6 +25,8 @@ from components.agents.domain.errors import (
     AgentNotFoundError,
     AgentPermissionError,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class OrmAgentProfileRepository(AgentProfilePort):
@@ -246,9 +249,35 @@ class OrmAgentProfileRepository(AgentProfilePort):
         updates = {key: bool(value) for key, value in (command.data or {}).items()}
 
         merged_config = dict(agent.config or {})
-        capabilities = dict(merged_config.get("capabilities") or {})
+        previous_capabilities = dict(merged_config.get("capabilities") or {})
+        capabilities = dict(previous_capabilities)
         capabilities.update(updates)
         merged_config["capabilities"] = capabilities
         Agent.objects.filter(agent_id=agent.agent_id).update(config=merged_config)
+
+        # Governance slice: capability grants are an AUTHORIZATION surface,
+        # so every change leaves an immutable audit row (who granted what,
+        # when). The audit facade suppresses no-op writes itself. Read-side:
+        # ``ai_governance_service.capability_grants``.
+        actor = getattr(command, "user", None) or getattr(
+            getattr(command, "http_request", None), "user", None
+        )
+        try:
+            from components.audit.application.providers.audit_log_provider import (
+                get_audit_log_provider,
+            )
+
+            get_audit_log_provider().log_field_change(
+                instance=agent,
+                field_name="capabilities",
+                previous_value=previous_capabilities,
+                new_value=capabilities,
+                actor=actor,
+                reason="agent capability toggle via API",
+            )
+        except Exception:
+            logger.exception(
+                "capability grant audit write failed agent_id=%s", agent.agent_id
+            )
 
         return PatchAgentCapabilitiesResult(capabilities=capabilities)

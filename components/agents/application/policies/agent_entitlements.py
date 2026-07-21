@@ -12,4 +12,5 @@ from components.agents.infrastructure.services.agent_entitlements import (  # no
     resolve_agent_entitlement,
     resolve_agent_type,
     workspace_ai_enabled,
+    workspace_ai_paused,
 )

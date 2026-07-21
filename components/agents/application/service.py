@@ -62,13 +62,41 @@ class AgentsService:
 
     @staticmethod
     def _raise_if_ai_killed(workspace_id) -> None:
-        """Raise ``AiUnavailable`` when the emergency kill switch is engaged."""
+        """Raise ``AiUnavailable`` when AI is halted for this workspace.
+
+        Two independent stops compose here:
+
+        1. The emergency operator flag (``feature.ai_kill_switch``).
+        2. The workspace kill switch (``Workspace.ai_teammate_enabled``) —
+           the same value the chat gate, the entitlement gate and the
+           detector fan-out read. Before the governance slice the deep-run
+           entry points (``deep_run_plan`` / ``deep_plan_and_run`` /
+           ``execute_agent``) only checked the flag, so a paused workspace
+           still burned planner/synthesizer LLM calls even though every
+           specialist dispatch inside the run was entitlement-blocked. The
+           run now refuses at the door.
+
+        ``workspace_id`` falsy → skip (workspace-less runs have no
+        workspace switch to consult; the emergency flag also no-ops).
+        """
+        from components.agents.application.policies.agent_entitlements import (
+            workspace_ai_paused,
+        )
         from components.agents.application.policies.ai_kill_switch import is_ai_killed
 
         if is_ai_killed(workspace_id):
             from components.agents.domain.errors import AiUnavailable
 
             raise AiUnavailable(workspace_id=str(workspace_id) if workspace_id else None)
+        if workspace_id and workspace_ai_paused(str(workspace_id)):
+            from components.agents.domain.errors import AiUnavailable
+
+            raise AiUnavailable(
+                workspace_id=str(workspace_id),
+                message=(
+                    "AI is paused for this workspace. A workspace admin can resume it from the kill-switch control."
+                ),
+            )
 
     # ── Commands dispatched through the bus ──────────────────────────
 
@@ -160,6 +188,17 @@ class AgentsService:
         """Toggle allowlisted, risk-gating agent capabilities."""
         use_case = self.provider.build_patch_agent_capabilities_use_case()
         return use_case.execute(command=command)
+
+    def set_ai_kill_switch(self, *, workspace_id: str, enabled: bool, actor: Any, reason: str) -> Any:
+        """Flip the workspace AI kill switch (human-only; audited)."""
+        use_case = self.provider.build_set_ai_kill_switch_use_case()
+        return use_case.execute(workspace_id=workspace_id, enabled=enabled, actor=actor, reason=reason)
+
+    def ai_kill_switch_status(self, *, workspace_id: str) -> Any:
+        """Read the kill-switch status (workspace toggle + emergency flag)."""
+        from components.agents.application.services import ai_governance_service
+
+        return ai_governance_service.kill_switch_status(str(workspace_id))
 
     def follow_agent(self, command) -> Any:
         """Follow an agent."""

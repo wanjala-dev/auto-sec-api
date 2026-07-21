@@ -82,6 +82,6 @@ class AiUnavailable(DomainError):
     client error and not a billing/upgrade nudge.
     """
 
-    def __init__(self, *, workspace_id: str | None = None) -> None:
+    def __init__(self, *, workspace_id: str | None = None, message: str | None = None) -> None:
         self.workspace_id = workspace_id
-        super().__init__("AI is temporarily unavailable. Please try again shortly.")
+        super().__init__(message or "AI is temporarily unavailable. Please try again shortly.")

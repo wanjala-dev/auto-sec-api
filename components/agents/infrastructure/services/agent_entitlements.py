@@ -155,3 +155,25 @@ def get_workspace_entitlement_map(workspace_id: str) -> Dict[str, WorkspaceAgent
 def workspace_ai_enabled(workspace_id: str) -> bool:
     workspace = _get_workspace(workspace_id)
     return bool(workspace and getattr(workspace, "ai_teammate_enabled", False))
+
+
+def workspace_ai_paused(workspace_id: str) -> bool:
+    """True only when the workspace EXISTS and has AI switched off.
+
+    Distinct from ``not workspace_ai_enabled(...)`` on purpose: a missing
+    workspace row is "unknown", not "paused" — callers that gate execution
+    (the deep-run entry points in ``AgentsService``) must not refuse a
+    workspace-less/unknown context that the entitlement gate downstream
+    will judge with full information.
+    """
+    from django.core.exceptions import ValidationError as DjangoValidationError
+
+    try:
+        workspace = _get_workspace(workspace_id)
+    except (DjangoValidationError, ValueError, TypeError):
+        # Malformed / non-UUID id → "unknown", not "paused". The paused
+        # gate must never turn an identifier glitch into an AI halt.
+        return False
+    if workspace is None:
+        return False
+    return not getattr(workspace, "ai_teammate_enabled", False)
