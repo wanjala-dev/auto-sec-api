@@ -516,6 +516,14 @@ CELERY_BEAT_SCHEDULE = {
         "task": "infrastructure.ai.agents.tasks.schedule_ai_teammate_runs",
         "schedule": crontab(minute="*/5"),
     },
+    # Daily AI-action rollup — recomputes yesterday's AiActionDailyRollup
+    # rows (runs, tool calls, tokens, spend). The posture dashboard's
+    # governance charts read these rollup rows instead of live-aggregating
+    # DeepRun/DeepRunLog on the request path.
+    "rollup_ai_action_daily": {
+        "task": "ai.rollup_ai_action_daily",
+        "schedule": crontab(minute=20, hour=0),
+    },
 }
 
 ELASTICSEARCH_DSL = {

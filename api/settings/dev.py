@@ -369,6 +369,14 @@ CELERY_BEAT_SCHEDULE = {
         "task": "sign_off.materialize_pending_signoff_tasks",
         "schedule": crontab(minute="*/15"),
     },
+    # Daily AI-action rollup — recomputes yesterday's AiActionDailyRollup
+    # rows (runs, tool calls, tokens, spend). The posture dashboard's
+    # governance charts read these rollup rows instead of live-aggregating
+    # DeepRun/DeepRunLog on the request path.
+    "rollup_ai_action_daily": {
+        "task": "ai.rollup_ai_action_daily",
+        "schedule": crontab(minute=20, hour=0),
+    },
     "workspace_embeddings_hourly": {
         # Refresh embeddings for AI-enabled workspaces every hour in dev.
         # Only workspaces with ai_teammate_enabled=True are processed.

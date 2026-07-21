@@ -26,6 +26,7 @@ from rest_framework.decorators import action, throttle_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from components.agents.api.permissions import AiKillSwitchPermission, PostureDashboardPermission
 from components.agents.api.resources.agent_chat_resource import (
     AgentChatErrorResource,
     AgentChatResource,
@@ -93,7 +94,6 @@ from components.agents.mappers.rest.conversations_serializers import (
     CreateConversationSerializer,
     CreateMessageSerializer,
 )
-from components.agents.api.permissions import AiKillSwitchPermission
 from components.shared_platform.api.permissions import RequiresFeatureFlag
 from components.shared_platform.application.providers.core_validators_provider import (
     get_core_validators_provider,
@@ -1047,6 +1047,42 @@ class AgentViewSet(viewsets.GenericViewSet):
             return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         except NotFoundError as exc:
             return Response({"error": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+        return Response(data, status=status.HTTP_200_OK)
+
+    @_schema()
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path="posture/dashboard",
+        permission_classes=[IsAuthenticated, PostureDashboardPermission],
+    )
+    def posture_dashboard(self, request):
+        """Posture dashboard (HUD POSTURE module) — chart-ready series + KPI bands.
+
+        GET ?workspace_id=<uuid>&persona=engineer|executive&window_days=<n>
+
+        Read-only, membership-checked like the kill-switch GET
+        (``view_agents``). Thin: parses params, calls ONE service front
+        door, serialises. The response is composed from the existing
+        aggregation services (posture, governance, log metrics) plus the
+        ``AiActionDailyRollup`` read model — no composite score, every
+        block carries a ``link`` drill hint.
+        """
+        from components.shared_kernel.domain.errors import ValidationError
+
+        workspace_id = request.query_params.get("workspace_id")
+        if not workspace_id:
+            return Response({"error": "workspace_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+        persona = request.query_params.get("persona") or "engineer"
+        window_days = _parse_int(request.query_params.get("window_days"), default=7, min_value=1)
+        try:
+            data = agents_service.posture_dashboard(
+                workspace_id=str(workspace_id),
+                persona=str(persona),
+                window_days=window_days,
+            )
+        except ValidationError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(data, status=status.HTTP_200_OK)
 
     @_schema()

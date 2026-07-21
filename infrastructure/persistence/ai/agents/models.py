@@ -3,11 +3,13 @@ Agent Models
 
 Database models for persisting AI agent state and configuration.
 """
+
 import uuid
-from django.db import models
+
 from django.contrib.auth import get_user_model
-from django.utils import timezone
 from django.core.validators import MaxValueValidator, MinValueValidator
+from django.db import models
+from django.utils import timezone
 
 User = get_user_model()
 
@@ -37,7 +39,7 @@ class AgentType(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ['name']
+        ordering = ["name"]
 
     def __str__(self):
         return f"{self.name} ({self.slug})"
@@ -47,9 +49,7 @@ class WorkspaceAgentType(models.Model):
     """Per-workspace enablement of agent types."""
 
     workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name="agent_entitlements")
-    agent_type = models.ForeignKey(
-        AgentType, on_delete=models.CASCADE, related_name="workspace_entitlements"
-    )
+    agent_type = models.ForeignKey(AgentType, on_delete=models.CASCADE, related_name="workspace_entitlements")
     is_enabled = models.BooleanField(default=False)
     updated_by = models.ForeignKey(
         User,
@@ -76,18 +76,18 @@ class WorkspaceAgentType(models.Model):
 
 class Agent(models.Model):
     """Persistent storage for AI agents"""
-    
+
     STATUS_CHOICES = [
-        ('active', 'Active'),
-        ('paused', 'Paused'),
-        ('completed', 'Completed'),
-        ('error', 'Error'),
+        ("active", "Active"),
+        ("paused", "Paused"),
+        ("completed", "Completed"),
+        ("error", "Error"),
     ]
-    
+
     agent_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     agent_type = models.CharField(max_length=100)
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='ai_agents')
-    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name='ai_agents', null=True, blank=True)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="ai_agents")
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name="ai_agents", null=True, blank=True)
     department = models.ForeignKey(
         "team.Team",
         on_delete=models.SET_NULL,
@@ -95,75 +95,75 @@ class Agent(models.Model):
         blank=True,
         related_name="department_agents",
     )
-    
+
     # Agent state
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="active")
     config = models.JSONField(default=dict, blank=True)
-    
+
     # Execution tracking
     last_query = models.TextField(blank=True)
     last_result = models.TextField(blank=True)
     execution_count = models.PositiveIntegerField(default=0)
-    
+
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     last_executed = models.DateTimeField(null=True, blank=True)
-    
+
     class Meta:
-        ordering = ['-created_at']
+        ordering = ["-created_at"]
         permissions = (
             ("ai_manage", "Can manage AI agents (settings, disable, share, customization)"),
             ("ai_execute", "Can execute/pause/resume AI agents"),
             ("ai_engage", "Can engage with AI agents (follow/like/rate/comment)"),
         )
         indexes = [
-            models.Index(fields=['user', 'workspace']),
-            models.Index(fields=['agent_type', 'status']),
-            models.Index(fields=['created_at']),
+            models.Index(fields=["user", "workspace"]),
+            models.Index(fields=["agent_type", "status"]),
+            models.Index(fields=["created_at"]),
         ]
-    
+
     def __str__(self):
         return f"{self.agent_type} - {self.user.username} ({self.status})"
-    
+
     @property
     def user_id_str(self):
         return str(self.user.id)
-    
+
     def to_dict(self):
         """Convert to dictionary format expected by the factory"""
         return {
-            'agent_id': str(self.agent_id),
-            'agent_type': self.agent_type,
-            'user_id': str(self.user.id),
-            'workspace_id': str(self.workspace.id) if self.workspace else None,
-            'department_id': str(self.department_id) if self.department_id else None,
-            'status': self.status,
-            'created_at': self.created_at.isoformat(),
-            'updated_at': self.updated_at.isoformat(),
-            'last_executed': self.last_executed.isoformat() if self.last_executed else None,
-            'execution_count': self.execution_count,
-            'last_query': self.last_query,
-            'last_result': self.last_result,
-            'config': self.config,
+            "agent_id": str(self.agent_id),
+            "agent_type": self.agent_type,
+            "user_id": str(self.user.id),
+            "workspace_id": str(self.workspace.id) if self.workspace else None,
+            "department_id": str(self.department_id) if self.department_id else None,
+            "status": self.status,
+            "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat(),
+            "last_executed": self.last_executed.isoformat() if self.last_executed else None,
+            "execution_count": self.execution_count,
+            "last_query": self.last_query,
+            "last_result": self.last_result,
+            "config": self.config,
         }
 
 
 class AgentExecution(models.Model):
     """Track individual agent executions for history and debugging"""
 
-    STATUS_PENDING = 'pending'
-    STATUS_RUNNING = 'running'
-    STATUS_COMPLETED = 'completed'
-    STATUS_FAILED = 'failed'
+    STATUS_PENDING = "pending"
+    STATUS_RUNNING = "running"
+    STATUS_COMPLETED = "completed"
+    STATUS_FAILED = "failed"
     STATUS_CHOICES = [
-        (STATUS_PENDING, 'Pending'),
-        (STATUS_RUNNING, 'Running'),
-        (STATUS_COMPLETED, 'Completed'),
-        (STATUS_FAILED, 'Failed'),
+        (STATUS_PENDING, "Pending"),
+        (STATUS_RUNNING, "Running"),
+        (STATUS_COMPLETED, "Completed"),
+        (STATUS_FAILED, "Failed"),
     ]
 
-    agent = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='executions')
+    agent = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name="executions")
     query = models.TextField()
     result = models.TextField(blank=True)
     success = models.BooleanField(default=True)
@@ -174,24 +174,20 @@ class AgentExecution(models.Model):
     progress = models.PositiveSmallIntegerField(default=0)
     state = models.JSONField(default=dict, blank=True)
     triggered_by = models.ForeignKey(
-        User,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name='ai_agent_executions'
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name="ai_agent_executions"
     )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ['-created_at']
+        ordering = ["-created_at"]
         indexes = [
-            models.Index(fields=['agent', 'created_at']),
-            models.Index(fields=['status', 'created_at']),
-            models.Index(fields=['success', 'created_at']),
-            models.Index(fields=['task_id']),
-            models.Index(fields=['triggered_by'], name='ai_execution_trigger_idx'),
+            models.Index(fields=["agent", "created_at"]),
+            models.Index(fields=["status", "created_at"]),
+            models.Index(fields=["success", "created_at"]),
+            models.Index(fields=["task_id"]),
+            models.Index(fields=["triggered_by"], name="ai_execution_trigger_idx"),
         ]
 
     def __str__(self):
@@ -214,9 +210,7 @@ class AgentProfile(models.Model):
     summary = models.TextField(blank=True)
     avatar_url = models.URLField(blank=True)
     tags = models.JSONField(default=list, blank=True)
-    visibility = models.CharField(
-        max_length=20, choices=VISIBILITY_CHOICES, default=VISIBILITY_SEED_ONLY
-    )
+    visibility = models.CharField(max_length=20, choices=VISIBILITY_CHOICES, default=VISIBILITY_SEED_ONLY)
     allow_followers = models.BooleanField(default=True)
     allow_ratings = models.BooleanField(default=True)
     allow_comments = models.BooleanField(default=True)
@@ -274,9 +268,7 @@ class AgentRating(models.Model):
 
     agent = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name="ratings")
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="agent_ratings")
-    score = models.PositiveSmallIntegerField(
-        validators=[MinValueValidator(1), MaxValueValidator(5)]
-    )
+    score = models.PositiveSmallIntegerField(validators=[MinValueValidator(1), MaxValueValidator(5)])
     comment = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -411,9 +403,7 @@ class DeepRunLog(models.Model):
     prompt_tokens = models.PositiveIntegerField(null=True, blank=True)
     completion_tokens = models.PositiveIntegerField(null=True, blank=True)
     latency_ms = models.PositiveIntegerField(null=True, blank=True)
-    cost_usd = models.DecimalField(
-        max_digits=10, decimal_places=6, null=True, blank=True
-    )
+    cost_usd = models.DecimalField(max_digits=10, decimal_places=6, null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -427,6 +417,59 @@ class DeepRunLog(models.Model):
 
     def __str__(self):
         return f"{self.event_type} ({self.deep_run_id})"
+
+
+class AiActionDailyRollup(models.Model):
+    """Per-workspace, per-day rollup of AI action telemetry.
+
+    Recomputed (not incremented) by the ``ai.rollup_ai_action_daily``
+    Celery beat task from raw ``DeepRun`` / ``DeepRunLog`` rows, so
+    re-runs are idempotent and late-arriving rows converge on the next
+    pass — same contract as the AI-quality rollups in
+    ``infrastructure.persistence.ai.aggregations.models``.
+
+    This is the read model behind the posture-dashboard governance
+    charts (cost/day, runs/day): the dashboard endpoint reads ONLY these
+    rollup rows for its daily series — never the raw log — per the
+    performance rule that heavy aggregation runs in the background and
+    API reads stay indexed and O(window). It complements (does not
+    replace) ``AIWorkspaceDailyMetric``: that rollup carries the quality
+    lens (feedback, assistant messages); this one carries the action
+    ledger the posture surface renders (tool calls, tokens, spend).
+    """
+
+    workspace = models.ForeignKey(
+        Workspace,
+        on_delete=models.CASCADE,
+        related_name="ai_action_daily_rollups",
+    )
+    date = models.DateField()
+
+    runs_total = models.PositiveIntegerField(default=0)
+    runs_completed = models.PositiveIntegerField(default=0)
+    runs_failed = models.PositiveIntegerField(default=0)
+    tool_calls = models.PositiveIntegerField(default=0)
+    tokens_input = models.PositiveBigIntegerField(default=0)
+    tokens_output = models.PositiveBigIntegerField(default=0)
+    cost_usd = models.DecimalField(max_digits=12, decimal_places=6, default=0)
+
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["workspace", "date"],
+                name="uniq_ws_date_ai_action_rollup",
+            ),
+        ]
+        indexes = [
+            # The dashboard window query: workspace + date range.
+            models.Index(fields=["workspace", "-date"], name="ai_action_rollup_ws_date_idx"),
+        ]
+        ordering = ["-date"]
+
+    def __str__(self):
+        return f"{self.workspace_id} · {self.date} · runs={self.runs_total} · cost={self.cost_usd}"
 
 
 class DeepArtifact(models.Model):

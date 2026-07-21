@@ -7,9 +7,10 @@ ORM-level grant/identity helpers are defined in the infrastructure service
 ``components.agents.infrastructure.services.agent_permissions_service``
 and re-exported here for backward compatibility.
 """
+
 from __future__ import annotations
 
-from rest_framework.permissions import BasePermission, SAFE_METHODS
+from rest_framework.permissions import SAFE_METHODS, BasePermission
 
 # Re-export ORM helpers via the application-layer provider so this
 # controller never imports the infrastructure service directly
@@ -53,6 +54,22 @@ class AiKillSwitchPermission(BasePermission):
         return has_workspace_permission(key)().has_permission(request, view)
 
 
+class PostureDashboardPermission(BasePermission):
+    """Gate for the posture dashboard (``/ai/agents/posture/dashboard/``).
+
+    Read-only surface: every seeded member role carries ``view_agents``,
+    so any active workspace member may read the dashboard — same
+    membership-permission mechanism as the kill-switch GET. Non-members
+    (and anonymous requests) are refused; the workspace is resolved from
+    the query params by the membership permission base.
+    """
+
+    def has_permission(self, request, view):
+        from components.membership.api.permissions import has_workspace_permission
+
+        return has_workspace_permission("view_agents")().has_permission(request, view)
+
+
 class AgentAIPermission(BasePermission):
     """
     AI-specific permission checks.
@@ -64,6 +81,7 @@ class AgentAIPermission(BasePermission):
 
     def has_object_permission(self, request, view, obj):
         from components.agents.application.providers.ai_models_provider import get_ai_models_provider
+
         Agent = get_ai_models_provider().Agent
         from components.workspace.application.facades.workspace_facade import (
             user_is_workspace_member,
@@ -103,7 +121,7 @@ __all__ = [
     "AgentAIPermission",
     "AiKillSwitchPermission",
     "ai_can",
+    "ensure_agents_team",
     "ensure_ai_grant",
     "ensure_ai_identity",
-    "ensure_agents_team",
 ]
