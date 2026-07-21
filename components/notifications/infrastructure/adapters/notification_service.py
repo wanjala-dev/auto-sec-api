@@ -135,12 +135,65 @@ def _pref_cache_key(user_id, workspace_id, notification_type, ai_channel=None):
     return f"notif_pref:{user_id}:{ws}:{nt}:{ch}"
 
 
+def _channels_cache_key(user_id):
+    return f"notif_channels:{user_id}"
+
+
+def invalidate_channel_cache(user_id):
+    """Flush the cached per-channel delivery decision for a user.
+
+    Called from the user-preference endpoints so flipping
+    ``push_notifications`` / ``email_notifications`` takes effect
+    immediately instead of after the TTL.
+    """
+    from django.core.cache import cache
+
+    cache.delete(_channels_cache_key(user_id))
+
+
+def channels_for(user):
+    """Return the delivery channels enabled for ``user`` (T1-S5 gate).
+
+    Reads the revived ``UserPreference.push_notifications`` /
+    ``email_notifications`` booleans and applies
+    :func:`resolve_enabled_channels` — realtime is always on; web_push and
+    email are opt-in. Decisions are cached per user for
+    ``PREFERENCE_CACHE_TTL`` seconds (same pattern as the recipient
+    preference gate above) so broadcast dispatches don't re-query per row.
+    """
+    from django.core.cache import cache
+
+    from components.notifications.domain.policies.delivery_channel_policy import (
+        resolve_enabled_channels,
+    )
+
+    user_id = getattr(user, "pk", None) or getattr(user, "id", None) or user
+    key = _channels_cache_key(user_id)
+    cached = cache.get(key)
+    if cached is not None:
+        return tuple(cached)
+
+    UserPreference = apps.get_model("userpreferences", "UserPreference")
+    pref = UserPreference.objects.filter(user_id=user_id).only("push_notifications", "email_notifications").first()
+    channels = resolve_enabled_channels(
+        push_enabled=bool(pref and pref.push_notifications),
+        email_enabled=bool(pref and pref.email_notifications),
+    )
+    values = [channel.value for channel in channels]
+    cache.set(key, values, PREFERENCE_CACHE_TTL)
+    return tuple(values)
+
+
 def invalidate_preference_cache(user_id, workspace_id=None):
     """Flush cached preference decisions for a user+workspace pair.
 
     Called from preference CRUD endpoints so changes take effect immediately.
+    Also drops the per-channel delivery decision — it derives from the same
+    ``UserPreference`` row.
     """
     from django.core.cache import cache
+
+    cache.delete(_channels_cache_key(user_id))
 
     # Wildcard invalidation isn't supported by all cache backends, so
     # we delete patterns for the known notification types. This is
@@ -232,7 +285,11 @@ class NotificationPreferenceService:
         filtered = list(cached_allowed)
         for user in uncached_users:
             allowed = True
-            if not user_pref_map.get(user.pk, True) or (workspace and not workspace_enabled) or (workspace and not workspace_pref_map.get(user.pk, True)):
+            if (
+                not user_pref_map.get(user.pk, True)
+                or (workspace and not workspace_enabled)
+                or (workspace and not workspace_pref_map.get(user.pk, True))
+            ):
                 allowed = False
             elif notification_type == Notification.NotificationType.AI_EVENT:
                 channel_allowed = ai_prefs.get((user.pk, ai_channel))
@@ -269,6 +326,7 @@ class NotificationDispatcher:
         ai_channel: str | None = None,
         logo_url: str | None = None,
         allow_self_notify: bool = False,
+        link: str | None = None,
     ):
         """Fan a notification out to ``recipients`` through the canonical funnel.
 
@@ -283,6 +341,13 @@ class NotificationDispatcher:
         report ready, security alert, bank-feed lifecycle, import completed).
         Default False preserves the social-action semantic (no "you liked your
         own post" noise).
+
+        ``link`` — optional explicit RELATIVE frontend path for this
+        notification. When omitted, ``dispatch_notification_async`` resolves
+        one via ``link_resolver.resolve_link()`` (after target rehydration)
+        and writes it into ``metadata["link"]`` so the in-app row, the WS
+        envelope, and push payloads all carry the same destination. An
+        explicit ``link`` always wins over the resolver.
         """
         if actor is None or not recipients:
             return
@@ -328,5 +393,6 @@ class NotificationDispatcher:
                 logo_url=logo_url,
                 target_ref=target_ref,
                 allow_self_notify=allow_self_notify,
+                link=link,
             )
             db_transaction.on_commit(lambda kw=kwargs: dispatch_notification_async.apply_async(kwargs=kw))

@@ -29,6 +29,27 @@ class AINotificationChannel(str, Enum):
     REPORT_GENERATED = "report_generated"
 
 
+class DeliveryChannel(str, Enum):
+    """Delivery channels a notification can fan out to after row creation.
+
+    Values align with ``NotificationDelivery.Channel`` TextChoices on the ORM
+    model (this enum is the source of truth).
+    """
+
+    REALTIME = "realtime"
+    WEB_PUSH = "web_push"
+    EMAIL = "email"
+
+
+class PushPlatform(str, Enum):
+    """Platforms a push device can register from. Web is first; native
+    iOS/Android reuse the same registry later."""
+
+    WEB = "web"
+    IOS = "ios"
+    ANDROID = "android"
+
+
 class TimePeriod(str, Enum):
     """Pre-defined time periods for notification filtering."""
 
