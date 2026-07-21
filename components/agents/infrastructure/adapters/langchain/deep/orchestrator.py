@@ -254,17 +254,36 @@ _AGENT_FAILURE_MARKERS: tuple[str, ...] = (
 )
 
 
+# A real AgentExecutor stop string IS (nearly) the whole summary —
+# "Agent stopped due to iteration limit." etc. Anything longer is real
+# content that merely CONTAINS a marker phrase: the posture report's
+# rubric-verdict telemetry legitimately says "Max Iterations Reached: 32",
+# and a bare substring match threw away a perfect 2.3k-char report as a
+# failure (2026-07-21). Bound the contains-check to short summaries.
+_AGENT_FAILURE_MAX_LEN = 240
+
+
 def _is_agent_failure_summary(summary: str) -> bool:
     """True if *summary* matches an AgentExecutor "I gave up" stop string.
 
     These messages should never feed an LLM paraphrase pass — the LLM
     will confidently rewrite them as if the work succeeded. See the
     2026-05-08 chat reliability cascade RCA for the proven case.
+
+    Stop strings are matched as the summary's LEADING text, or by
+    containment only when the summary is short enough to BE a stop
+    string — a long summary that merely mentions a marker phrase
+    (e.g. rubric telemetry reporting "Max Iterations Reached: N")
+    is real content, not a failure.
     """
     if not summary:
         return False
-    lowered = summary.lower()
-    return any(marker in lowered for marker in _AGENT_FAILURE_MARKERS)
+    lowered = summary.lower().strip()
+    if any(lowered.startswith(marker) for marker in _AGENT_FAILURE_MARKERS):
+        return True
+    if len(lowered) <= _AGENT_FAILURE_MAX_LEN:
+        return any(marker in lowered for marker in _AGENT_FAILURE_MARKERS)
+    return False
 
 
 def _is_clarification(entry) -> bool:

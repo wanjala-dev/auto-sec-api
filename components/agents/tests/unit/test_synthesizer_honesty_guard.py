@@ -189,3 +189,42 @@ class TestSynthesizerHonestyGuard:
         prompt_text = "\n".join(getattr(m, "content", "") for m in prompt_call)
         assert "[FAILED — DID NOT PRODUCE DATA]" not in prompt_text
         assert "Do NOT invent results" not in prompt_text
+
+
+
+class TestFailureMarkerFalsePositives:
+    """Long real content that MENTIONS a marker phrase is not a failure.
+
+    The posture report's rubric-verdict telemetry says
+    "Max Iterations Reached: 32" — a bare substring match discarded a
+    healthy 2.3k-char report as an AgentExecutor stop string
+    (2026-07-21 live posture chat).
+    """
+
+    def test_long_report_mentioning_marker_is_not_failure(self):
+        from components.agents.infrastructure.adapters.langchain.deep.orchestrator import (
+            _is_agent_failure_summary,
+        )
+
+        report = (
+            "### Security Posture Report\n" + "healthy line\n" * 80
+            + "Rubric Verdicts: Total Graded: 55, Max Iterations Reached: 32\n"
+            + "more content\n" * 40
+        )
+        assert len(report) > 500
+        assert _is_agent_failure_summary(report) is False
+
+    def test_bare_stop_string_still_caught(self):
+        from components.agents.infrastructure.adapters.langchain.deep.orchestrator import (
+            _is_agent_failure_summary,
+        )
+
+        assert _is_agent_failure_summary("Agent stopped due to iteration limit.") is True
+        assert _is_agent_failure_summary("  Max iterations reached  ") is True
+
+    def test_short_summary_containing_marker_still_caught(self):
+        from components.agents.infrastructure.adapters.langchain.deep.orchestrator import (
+            _is_agent_failure_summary,
+        )
+
+        assert _is_agent_failure_summary("Sorry: could not parse LLM output.") is True
