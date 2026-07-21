@@ -205,6 +205,22 @@ CANONICAL_TOOLS: dict[str, set[str]] = {
         "get_forward_outlook",
         "get_posture_report",
     },
+    "ai_governance_agent": {
+        # AI-SPM governance specialist (vision §3.4). Aliases:
+        # ``ai_governance``, ``governance``, ``ai_audit``, ``ai_activity``.
+        # READ-only deterministic aggregates over the fleet's own
+        # governance data: runs + tool calls by risk tier and dispatch
+        # source, capability grants + their audit history, the HITL
+        # draft-PR ledger, the credential surface (no secrets), and the
+        # kill-switch state. The kill switch itself is deliberately NOT
+        # a tool — flipping it is human-only via the gated endpoint.
+        "get_ai_activity",
+        "get_capability_grants",
+        "get_hitl_ledger",
+        "get_credential_inventory",
+        "get_kill_switch_status",
+        "get_governance_report",
+    },
 }
 
 
@@ -288,6 +304,12 @@ ROUTING_EXPECTATIONS: dict[str, str] = {
     "what is our security posture": "posture_agent",
     "give me an executive security summary": "posture_agent",
     "are we within the response time bands": "posture_agent",
+    # ai_governance_agent — the AI's own activity, permissions, HITL
+    # ledger, credentials, kill-switch state (AI-SPM)
+    "what has the AI been doing this week": "ai_governance_agent",
+    "which permissions does the AI have": "ai_governance_agent",
+    "which tools did the AI use and at what risk tier": "ai_governance_agent",
+    "can we stop the AI right now": "ai_governance_agent",
 }
 
 

@@ -93,6 +93,7 @@ from components.agents.mappers.rest.conversations_serializers import (
     CreateConversationSerializer,
     CreateMessageSerializer,
 )
+from components.agents.api.permissions import AiKillSwitchPermission
 from components.shared_platform.api.permissions import RequiresFeatureFlag
 from components.shared_platform.application.providers.core_validators_provider import (
     get_core_validators_provider,
@@ -1000,6 +1001,53 @@ class AgentViewSet(viewsets.GenericViewSet):
         except (AgentNotFoundError, AgentPermissionError, AgentEngagementError) as exc:
             return _engagement_error_response(exc)
         return Response({"capabilities": result.capabilities}, status=status.HTTP_200_OK)
+
+    @_schema(request_body=True)
+    @action(
+        detail=False,
+        methods=["get", "post"],
+        url_path="kill-switch",
+        permission_classes=[IsAuthenticated, AiKillSwitchPermission],
+    )
+    def kill_switch(self, request):
+        """Workspace AI kill switch (vision §3.4) — human-only, audited.
+
+        GET  ?workspace_id=<uuid>              → current kill-switch status.
+        POST {workspace_id, enabled, reason}   → flip Workspace.ai_teammate_enabled,
+        write an audit entry (actor + reason + timestamp), return the new status.
+
+        Owner/admin-gated for the flip (``manage_agents``); any member role
+        may read the status (``view_agents``). Deliberately NOT an agent
+        tool — the AI can report on the switch but never touch it.
+        """
+        from components.shared_kernel.domain.errors import NotFoundError, ValidationError
+
+        if request.method == "GET":
+            workspace_id = request.query_params.get("workspace_id")
+            if not workspace_id:
+                return Response({"error": "workspace_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+            data = agents_service.ai_kill_switch_status(workspace_id=str(workspace_id))
+            return Response(data, status=status.HTTP_200_OK)
+
+        workspace_id = request.data.get("workspace_id")
+        enabled = request.data.get("enabled")
+        reason = request.data.get("reason")
+        if not workspace_id:
+            return Response({"error": "workspace_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+        if not isinstance(enabled, bool):
+            return Response({"error": "enabled must be true or false"}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            data = agents_service.set_ai_kill_switch(
+                workspace_id=str(workspace_id),
+                enabled=enabled,
+                actor=request.user,
+                reason=str(reason or ""),
+            )
+        except ValidationError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except NotFoundError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+        return Response(data, status=status.HTTP_200_OK)
 
     @_schema()
     @action(detail=True, methods=["get"], url_path="memory")
