@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import base64
 import logging
-from uuid import UUID
 
 logger = logging.getLogger(__name__)
 
@@ -65,43 +64,16 @@ def resolve_brand_colors(workspace_id: str | None) -> dict[str, str]:
     is the DARK-mode brand primary (legible on the dark receipt canvas);
     ``primary_light`` is the LIGHT-mode primary (for light artifacts).
 
-    A brand-colour lookup MUST NEVER break artifact rendering — a receipt is a
-    money document that has to generate regardless. So an unthemed workspace, a
-    bad id, or any resolution error falls back to the Octopus accent (which is
-    what the artifacts hard-coded before), logged but not raised.
+    The wanjala brand kit (``WorkspaceTheme`` + ``BrandResolutionService``) was
+    NOT ported into this fork — no workspace can carry a brand, so every
+    artifact renders with the Octopus accent. The old best-effort resolver read
+    logged an ImportError traceback on every branded-PDF render; returning the
+    fallback deterministically keeps the contract (and this function as the
+    single seam) without attempting an import that cannot succeed. If a brand
+    kit is ever ported, restore the
+    ``get_brand_resolution_provider().port().resolve(...)`` read here.
     """
-    if not workspace_id:
-        return dict(_FALLBACK_BRAND)
-    try:
-        from components.workspace.application.providers.brand_resolution_provider import (
-            get_brand_resolution_provider,
-        )
-        from components.workspace.domain.value_objects.semantic_token_set import (
-            BrandOutputShape,
-        )
-
-        resolved = get_brand_resolution_provider().port().resolve(UUID(str(workspace_id)), BrandOutputShape.HEX)
-        primary_light = resolved["light"].get("primary") or _FALLBACK_BRAND["primary_light"]
-        fonts = resolved.get("fonts") or {}
-        return {
-            "primary": resolved["dark"].get("primary") or _FALLBACK_BRAND["primary"],
-            "primary_light": primary_light,
-            "primary_soft": _soft_tint(primary_light),
-            "primary_deep": _deep_shade(primary_light),
-            "secondary": resolved["light"].get("secondary") or _FALLBACK_BRAND["secondary"],
-            # Email/PDF can't load webfonts reliably — the fallback stack IS the guarantee.
-            "font_heading_stack": (fonts.get("heading") or {}).get("stack")
-            or _FALLBACK_BRAND["font_heading_stack"],
-            "font_body_stack": (fonts.get("body") or {}).get("stack")
-            or _FALLBACK_BRAND["font_body_stack"],
-        }
-    except Exception:
-        # Decorative colour lookup on a money-critical artifact: fall back to
-        # the platform accent rather than fail the render. Broad catch is
-        # deliberate — DB error, bad UUID, or missing theme all degrade the
-        # same safe way.
-        logger.exception("resolve_brand_colors failed; using fallback workspace_id=%s", workspace_id)
-        return dict(_FALLBACK_BRAND)
+    return dict(_FALLBACK_BRAND)
 
 
 # Default brand mark — the Octopus logo used on the floating chat button

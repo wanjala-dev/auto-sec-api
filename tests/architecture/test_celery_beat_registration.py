@@ -86,3 +86,26 @@ def test_every_beat_task_is_registered():
         "autodiscovered; or (class B) make the beat 'task' string match the "
         "@shared_task(name=...) value. See the celery-tasks skill §13."
     )
+
+
+# Wanjala-fork leftovers that used to fire from beat (or the persisted
+# celerybeat-schedule shelve) with no registered task behind them. The
+# recommendations projection sweep crashed with an ImportError on every fire
+# until its beat entry was pruned; this pins the removal so the entry (and the
+# task) can never quietly return without the backing context being ported too.
+_REMOVED_WANJALA_TASKS = (
+    "recommendations.refresh_recommendable_items",
+)
+
+
+def test_removed_wanjala_leftover_tasks_stay_gone():
+    registered = _registered_task_names()
+    for name in _REMOVED_WANJALA_TASKS:
+        assert name not in registered, (
+            f"'{name}' is registered again — the wanjala surface behind it was "
+            "removed from this fork; port the whole context or drop the task."
+        )
+        for settings_name in _SETTINGS:
+            assert name not in _beat_task_names(settings_name), (
+                f"{settings_name}.py schedules removed wanjala task '{name}'"
+            )

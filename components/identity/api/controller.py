@@ -260,47 +260,14 @@ def _build_user_summary_payload(user, request):
             )
             workspace_context["active_workspace_ai_quota"] = None
 
-    # Snapshot the resolved brand palette for the active workspace so the app
-    # can apply per-workspace CSS variables on first paint without a follow-up
-    # request. Cross-context read via the workspace context's published
-    # brand-resolution port — instantiated at the controller boundary to keep
-    # the identity application layer free of workspace-context imports.
-    # Failure-safe: any error leaves ``theme`` as ``None`` and the frontend
-    # falls back to the Octopus default palette.
-    if user_summary.workspace_context.active_workspace_id:
-        try:
-            from components.workspace.application.providers.brand_resolution_provider import (
-                get_brand_resolution_provider,
-            )
-
-            # Port defaults to the CSS-channel shape the frontend applies to
-            # ``:root`` — no need to import the workspace domain enum here.
-            workspace_context["theme"] = (
-                get_brand_resolution_provider().port().resolve(user_summary.workspace_context.active_workspace_id)
-            )
-            # Read-only voice tone for member-facing UI ("brand voice applied"
-            # hints in AI drafting). Deliberately NOT on the resolver payload —
-            # that shape is shared with the anonymous public/brand endpoint,
-            # and voice never goes public. Guidelines stay admin-only.
-            try:
-                from components.workspace.application.providers.workspace_theme_provider import (
-                    WorkspaceThemeProvider,
-                )
-
-                voice = WorkspaceThemeProvider.build_brand_voice_use_case().execute(
-                    user_summary.workspace_context.active_workspace_id
-                )
-                workspace_context["theme"]["voice_tone"] = voice.get("tone") or ""
-            except Exception:
-                workspace_context["theme"]["voice_tone"] = ""
-        except Exception:
-            import logging
-
-            logging.getLogger(__name__).exception(
-                "Failed to resolve workspace brand for me/summary user=%s",
-                user.id,
-            )
-            workspace_context["theme"] = None
+    # Per-workspace branding (WorkspaceTheme brand kit + BrandResolutionService)
+    # was NOT ported into this fork — there is no theme model, repository,
+    # provider, or write endpoint here, so no workspace can ever carry a brand.
+    # ``theme`` stays on the contract as an explicit ``None``: the frontend
+    # (``applyWorkspaceTheme`` / ``useActiveWorkspaceBrand`` /
+    # ``useWorkspaceAIProfile``) documents ``null`` as "fall back to the
+    # Octopus default palette / logo / empty voice tone".
+    workspace_context["theme"] = None
 
     # 2. Serialize ORM objects for DRF response (these stay in the controller
     #    because they require request context for hyperlinked serializers)

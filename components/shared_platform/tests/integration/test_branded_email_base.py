@@ -1,10 +1,10 @@
 """The transactional email templates extend the shared branded base and adopt
-the workspace brand colour.
+the brand colour handed to the send context.
 
-Each of the three templates now ``{% extends "email/base.html" %}``; the CTA
+Each of the three templates ``{% extends "email/base.html" %}``; the CTA
 button uses ``{{ brand_primary }}`` instead of the old hardcoded Octopus green
-(#10b981). When a workspace is themed and its brand is resolved into the send
-context, the rendered HTML carries that brand and the old green is gone.
+(#10b981). The wanjala workspace brand kit was not ported into this fork, so
+``resolve_brand_colors`` always yields the Octopus fallback — pinned below.
 """
 
 from __future__ import annotations
@@ -14,12 +14,6 @@ from django.template.loader import render_to_string
 
 from components.shared_platform.infrastructure.services.pdf_brand_assets import (
     resolve_brand_colors,
-)
-from components.workspace.application.commands.update_workspace_theme_command import (
-    UpdateWorkspaceThemeCommand,
-)
-from components.workspace.application.providers.workspace_theme_provider import (
-    WorkspaceThemeProvider,
 )
 
 pytestmark = [pytest.mark.django_db]
@@ -87,17 +81,13 @@ class TestBrandedEmailBase:
         assert _BRAND in html
         assert _OLD_GREEN not in html
 
-    def test_themed_workspace_resolves_valid_light_brand(self, workspace_factory):
-        # The adapter's brand-injection path uses ``primary_light`` for the
-        # (light-themed) email accent. A themed workspace resolves to a valid
-        # hex that is NOT the Octopus fallback.
+    def test_resolve_brand_colors_yields_octopus_fallback(self, workspace_factory):
+        # The wanjala brand kit is not ported into this fork — every
+        # workspace deterministically resolves to the Octopus fallback,
+        # with no import attempt and no logged traceback.
         workspace = workspace_factory()
-        WorkspaceThemeProvider.build_update_use_case().execute(
-            UpdateWorkspaceThemeCommand(workspace_id=workspace.id, brand_seed=_BRAND, mode="light")
-        )
 
-        light = resolve_brand_colors(workspace.id)["primary_light"]
+        colors = resolve_brand_colors(str(workspace.id))
 
-        assert light.startswith("#")
-        assert len(light) == 7  # "#RRGGBB"
-        assert light != _FALLBACK_LIGHT
+        assert colors["primary_light"] == _FALLBACK_LIGHT
+        assert colors == resolve_brand_colors(None)

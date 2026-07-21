@@ -1,36 +1,22 @@
-"""Brand-voice adapter — reads the canonical voice from the workspace
-context's brand kit (``WorkspaceTheme``) via its published provider.
+"""Brand-voice adapter — the content ``BrandVoicePort`` implementation.
 
-Same seam pattern as ``pdf_brand_assets.resolve_brand_colors``: a lazy
-cross-context call at the infrastructure layer, degraded to blank on any
-failure — voice is decoration and must never fail a newsletter draft.
+The wanjala brand kit (``WorkspaceTheme`` + ``WorkspaceThemeProvider``) was NOT
+ported into this fork: the workspace context here has no theme model,
+repository, provider, or write surface, so no workspace can ever carry a brand
+voice. Same seam pattern as ``pdf_brand_assets.resolve_brand_colors`` — return
+the empty voice deterministically instead of attempting an import that cannot
+succeed (the old best-effort read logged an ImportError traceback on every
+newsletter draft). If a brand kit is ever ported, restore the
+``WorkspaceThemeProvider.build_brand_voice_use_case()`` read here.
 """
 
 from __future__ import annotations
-
-import logging
-
-logger = logging.getLogger(__name__)
 
 _EMPTY = {"tone": "", "guidelines": ""}
 
 
 class WorkspaceBrandVoiceAdapter:
-    """Implements the content ``BrandVoicePort`` against the workspace context."""
+    """Implements the content ``BrandVoicePort``; voiceless in this fork."""
 
     def get(self, workspace_id: str) -> dict:
-        if not workspace_id:
-            return dict(_EMPTY)
-        try:
-            from components.workspace.application.providers.workspace_theme_provider import (
-                WorkspaceThemeProvider,
-            )
-
-            voice = WorkspaceThemeProvider.build_brand_voice_use_case().execute(workspace_id)
-            return {
-                "tone": str(voice.get("tone") or ""),
-                "guidelines": str(voice.get("guidelines") or ""),
-            }
-        except Exception:  # noqa: BLE001 — voice steering is best-effort
-            logger.exception("newsletter_brand_voice.load_failed workspace_id=%s", workspace_id)
-            return dict(_EMPTY)
+        return dict(_EMPTY)
