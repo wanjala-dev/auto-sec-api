@@ -3,7 +3,7 @@
     "name": "planner_soc_v1",
     "description": "SOC-fleet eval set for the planner system prompt (auto-sec fork). Authored 2026-07-19 alongside the planner.system v9 retune. Each case targets a routing failure mode specific to this fleet: SOC goals falling through to wanjala specialists that are not registered here, triage/log_watch/optimization boundary confusion, vague goals that must clarify, and multi-domain splits. Run the same cases against any prompt version for a comparable score (run_planner_eval --dataset planner_soc_v1 --version <v>).",
     "schema_version": 1,
-    "case_count": 17
+    "case_count": 19
   },
   "cases": [
     {
