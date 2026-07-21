@@ -200,6 +200,12 @@ class AgentsService:
 
         return ai_governance_service.kill_switch_status(str(workspace_id))
 
+    def posture_dashboard(self, *, workspace_id: str, persona: str, window_days: int) -> Any:
+        """Compose the chart-ready posture dashboard (HUD POSTURE module)."""
+        from components.agents.application.services import posture_dashboard_service
+
+        return posture_dashboard_service.dashboard(str(workspace_id), persona=persona, window_days=window_days)
+
     def follow_agent(self, command) -> Any:
         """Follow an agent."""
         use_case = self.provider.build_follow_agent_use_case()

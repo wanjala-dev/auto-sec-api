@@ -30,6 +30,7 @@ app.autodiscover_tasks()
 # runs at api/__init__ time, before the Django app registry is ready. It is
 # registered lazily in AgentsCLIConfig.ready() instead (same pattern as the
 # workflow tasks).
+import components.agents.infrastructure.tasks.ai_action_rollup_tasks
 import components.agents.infrastructure.tasks.ai_quality_rollup_tasks
 import components.agents.infrastructure.tasks.eval_tasks
 import components.identity.workers.tasks
