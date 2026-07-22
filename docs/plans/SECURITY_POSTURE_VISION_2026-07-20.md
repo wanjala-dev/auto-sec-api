@@ -108,11 +108,45 @@ planner routes: counts/trends → this agent; narrative/docs → RAG. Tools:
 - `classify_trend(metric, window)` → spike | sustained | quiet (hourly buckets)
 - `top_sources(metric, window)` — source-IP/agent rollups
 
-### 3.3 `cloud_posture_agent` — CSPM/CIEM (Phase 2)
+### 3.3 `cloud_posture_agent` — CSPM/CIEM, **Prowler-as-engine** (Phase 3)
 The security-engineer view: roles with root/`*` access mapped, SCP coverage
-per account, access-key age, MFA-on-root, wildcard-policy inventory. Reads
-**nightly snapshots** (never live-scans mid-chat) via the existing STS
-adapter + a read-only audit role rolled out to linked accounts.
+per account, access-key age, MFA-on-root, wildcard-policy inventory, and the
+broader cloud-config surface. Reads **nightly snapshots** (never live-scans
+mid-chat) via the existing STS adapter + a read-only audit role rolled out to
+linked accounts.
+
+**Decision (2026-07-22): do NOT hand-roll the cloud-config scanner — embed
+[Prowler](https://github.com/prowler-cloud/prowler) (open-source, Apache-2.0)
+as the detection engine.** This is the `no-reinventing-the-wheel` rule applied
+at the tool tier, and it flips Phase 3 from "write IAM/SCP check libraries for
+years" to "wrap best-in-class OSS."
+
+- **Why it fits**: Prowler is **Python** (Boto3 / Azure SDK / GCP client), so
+  it runs in a Celery worker or a dedicated container and assumes-role into
+  linked accounts *exactly* the way `StsOrgAdapter` + `AwsAccountLink` already
+  do — the plumbing is plumbing we already built. Hundreds of maintained checks
+  with **compliance frameworks baked in** (CIS, **SOC 2, PCI-DSS, HIPAA**, NIST
+  800/CSF, FedRAMP, ENS). JSON/OCSF output.
+- **The engine/SOC split (same architecture as our log story)**: Prowler is the
+  "SIEM-equivalent for cloud config" — it emits raw findings; **our AI layer is
+  the value-add on top.** Nightly Prowler scan → JSON → mapped into our existing
+  `Task` finding contract (`source_type="ai.cloud_posture"`, severity mapped,
+  deduped, aggregate-don't-dump) → the **triage agent grounds/verifies/
+  prioritizes**, the **posture agent** rolls it into the CTEM narrative, the
+  **board tracks remediation**. Prowler is NOT a competitor to what we built —
+  it's the cloud detection engine our analysts were missing. Our moat stays the
+  AI triage / verification / posture / governance layer, never the scanner.
+- **Discipline**: nightly per-account (already the §3.3 rule), map Prowler
+  severities to ours, feed only *actionable* findings to the board (hundreds of
+  checks × N accounts is a firehose — same aggregate-first rule as logs).
+- **Multi-cloud future-proofing (free)**: Prowler also covers Azure / GCP / K8s
+  / GitHub / M365 — one integration future-proofs multi-cloud without per-cloud
+  scanners of our own.
+- **Embed the OSS CLI/SDK (Apache-2.0), NOT Prowler Cloud** (their SaaS). Clean
+  to vendor.
+- **Unchanged operator dependency**: the read-only IAM audit role rollout to
+  linked accounts (Henry's infra call) — that role now feeds a far richer
+  scanner. Phase 3 still waits on that green light.
 
 ### 3.4 `ai_governance_agent` — AI-SPM (Phase 3)
 Dogfoods our own governance: which agent used which tool at which risk tier,
@@ -137,8 +171,10 @@ needs a first-class red button in the HUD + audit trail, not a DB flag.
    class, HTTP status classes (5xx), attack signatures (SQLi patterns, scanner
    UAs), source-IP rollups, app errors/warnings by service. Hourly buckets are
    what make spike-vs-sustained/DDoS answerable deterministically.
-2. **Nightly `CloudPostureSnapshot`** per `AwsAccountLink` (read-only IAM/SCP
-   facts as rows).
+2. **Nightly Prowler scan → `CloudPostureSnapshot`** per `AwsAccountLink`:
+   Prowler runs under the read-only audit role, its JSON is mapped to snapshot
+   rows + `ai.cloud_posture` findings (severity-mapped, deduped). We do NOT
+   author IAM/SCP checks ourselves — see §3.3.
 3. **Daily AI-action rollup** for governance charts.
 4. **Static MITRE technique mapping table** on detectors/findings (no LLM).
 
@@ -160,7 +196,7 @@ needs a first-class red button in the HUD + audit trail, not a DB flag.
 |---|---|---|
 | **1** | Rollup taxonomy widening → `posture_agent` + `log_analytics_agent` + routing eval cases | None — rides existing log ingest + board/telemetry data |
 | **2** | `ai_governance_agent` + kill-switch surfacing + daily AI-action rollup (promoted: AI-SPM is early+hot, boards want AI-risk reporting, zero new ingestion) | None — governance data exists |
-| **3** | `CloudPostureSnapshot` nightly task → `cloud_posture_agent` → HUD POSTURE module w/ persona lenses | Read-only IAM audit role per linked account (operator dependency) |
+| **3** | **Prowler-as-engine** nightly scan → `CloudPostureSnapshot` + `ai.cloud_posture` findings → `cloud_posture_agent` → engineer lens on the POSTURE module (+ compliance framework coverage: SOC 2 / PCI / HIPAA) | Read-only IAM audit role per linked account (operator dependency) + Prowler OSS vendored |
 | **4** | MITRE coverage map → tabletop `threat_sim_agent`. Standalone BAS DROPPED (see §8) | Static mapping first |
 
 Each phase is a shippable product on its own — no throwaway stages.
@@ -294,7 +330,11 @@ the lead — crowded, funded, and it forfeits the cost-structure advantage.
 4. **Bounded raw search** — Athena/DuckDB over the existing S3 bucket, not a
    new store.
 5. **Retention/compliance floor** — regulated mid-market buys on 1yr+ log
-   retention (HIPAA/PCI/SOC 2); needs a minimal honest story.
+   retention + framework attestation (HIPAA/PCI/SOC 2). **Prowler (§3.3) closes
+   the config-compliance half for free** (its checks are framework-mapped); the
+   remaining half is the **log-retention** story (raw in S3 already satisfies
+   the retention bytes — needs the retention-policy + attestation surface, not
+   new storage).
 6. Housekeeping: HUD mock-data cards (CASES %, INTEL FEEDS), multi-tenant
    scale proof.
 
