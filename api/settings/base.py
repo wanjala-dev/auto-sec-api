@@ -100,6 +100,9 @@ INSTALLED_APPS = [
     "infrastructure.persistence.domains",
     # Security report templates — the report-writing kind of the Template Kernel.
     "infrastructure.persistence.security_templates",
+    # Client-deliverable branded reports (pentest first) assembled from board
+    # findings — the ``report`` bounded context's persistence.
+    "infrastructure.persistence.report",
     # SaaS billing — subscription tiers/pricing. The org payment/billing ledger
     # models (PaymentMethod/Plan/Event/Order/…) live under the `workspaces` app
     # (imported via workspaces/models.py), NOT as separate apps.
