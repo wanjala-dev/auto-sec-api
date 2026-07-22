@@ -8,7 +8,7 @@ never confused with the vendor identity.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from components.report.domain.entities.assembled_report import AssembledReport

@@ -40,6 +40,7 @@ import components.notifications.workers.tasks
 import components.payments.workers.tasks
 import components.project.infrastructure.tasks.at_risk_detector_tasks
 import components.recycle_bin.workers.tasks
+import components.report.workers.tasks
 import components.shared_platform.infrastructure.tasks.document_import_tasks
 import components.shared_platform.workers.tasks
 import components.sign_off.workers.tasks
