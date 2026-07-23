@@ -6,12 +6,10 @@ domain). No business logic here — pure translation.
 
 from __future__ import annotations
 
-from components.provenance.domain.entities.graph import (
-    ActorEntity,
-    GrantEntity,
-    ProvenanceEventEntity,
-    ResourceEntity,
-)
+from components.provenance.domain.entities.actor_entity import ActorEntity
+from components.provenance.domain.entities.grant_entity import GrantEntity
+from components.provenance.domain.entities.provenance_event_entity import ProvenanceEventEntity
+from components.provenance.domain.entities.resource_entity import ResourceEntity
 from components.provenance.domain.value_objects.enums import (
     ActorType,
     PermissionLevel,
