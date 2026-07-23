@@ -33,6 +33,13 @@ _LOG_SERVICES_URL = "/?panel=documents"
 
 _AI_SOURCE_PREFIX = "ai."
 
+# Indicative CVSS 3.1 base score per severity band — the midpoint of each band's
+# CVSS range (Critical 9.0-10 → 9.5, High 7-8.9 → 8.0, Medium 4-6.9 → 5.5, Low
+# 0.1-3.9 → 2.5). Same mapping the report deliverable uses: we run no scanner
+# that emits a vector, so this is an INDICATIVE band score, not vector-derived.
+# Surfaced on finding suggest items so the omnibox can render a score badge.
+_INDICATIVE_CVSS = {"critical": 9.5, "high": 8.0, "medium": 5.5, "low": 2.5}
+
 
 class PostgresSuggestRepository(SearchIndexPort):
     """Suggest lookups over the shared persistence layer."""
@@ -62,15 +69,22 @@ class PostgresSuggestRepository(SearchIndexPort):
             .order_by("-created_at")
             .values("id", "title", "source_type", "metadata")[:limit]
         )
-        return [
-            {
-                "id": str(row["id"]),
-                "title": row["title"],
-                "subtitle": self._finding_subtitle(row),
-                "url": _FINDINGS_URL,
-            }
-            for row in rows
-        ]
+        items = []
+        for row in rows:
+            band = self._finding_severity_band(row)
+            items.append(
+                {
+                    "id": str(row["id"]),
+                    "title": row["title"],
+                    "subtitle": self._finding_subtitle(row),
+                    "url": _FINDINGS_URL,
+                    # Severity band + indicative score so the omnibox renders a
+                    # coloured score badge (empty band / null score when unknown).
+                    "severity": band,
+                    "score": _INDICATIVE_CVSS.get(band),
+                }
+            )
+        return items
 
     def suggest_tasks(self, *, workspace_ids: Sequence[str], q: str, limit: int) -> list[dict]:
         from infrastructure.persistence.project.models import Task
@@ -229,6 +243,14 @@ class PostgresSuggestRepository(SearchIndexPort):
             }
             for service in services
         ]
+
+    @staticmethod
+    def _finding_severity_band(row: dict) -> str:
+        """Normalised severity band (critical/high/medium/low) or "" if unknown."""
+        metadata = row.get("metadata") or {}
+        payload = metadata.get("payload") or {}
+        band = str(metadata.get("severity") or payload.get("severity") or "").strip().lower()
+        return band if band in _INDICATIVE_CVSS else ""
 
     @staticmethod
     def _finding_subtitle(row: dict) -> str:
