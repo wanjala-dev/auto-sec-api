@@ -44,6 +44,15 @@ class ReportKindSpec:
     section_order: tuple[str, ...]
     source_type_prefixes: tuple[str, ...]
     narrative_sections: tuple[str, ...] = field(default=("executive_summary", "overall_assessment"))
+    # Curation policy (see components/report/domain/services/finding_curation.py):
+    #  - full_detail_bands: severity bands that ALWAYS get a full §4 technical
+    #    write-up, however many there are — a report must never bury a high.
+    #  - max_technical_findings: cap on §4 sections; lower-severity findings fill
+    #    the remaining slots, and the rest are listed in the §3 matrix only.
+    # This is what makes a report read like a curated deliverable rather than a
+    # verbatim dump of every board card.
+    full_detail_bands: tuple[str, ...] = field(default=("critical", "high"))
+    max_technical_findings: int = 25
     # Default document confidentiality footer — the deliverable is client-
     # privileged. Concrete client/vendor names are interpolated by the builder.
     confidentiality: str = (

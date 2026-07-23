@@ -156,8 +156,13 @@ def _evidence_block(finding: Mapping[str, Any], payload: Mapping[str, Any]) -> E
     return EvidenceBlock(lines=tuple(lines), caption=caption)
 
 
-def build_technical_finding(finding: Mapping[str, Any], *, fid: str) -> TechnicalFinding:
-    """Map one finding dict into its full §4 technical section."""
+def build_technical_finding(finding: Mapping[str, Any], *, fid: str, occurrences: int = 1) -> TechnicalFinding:
+    """Map one finding dict into its full §4 technical section.
+
+    ``occurrences`` is how many raw findings this representative stands for after
+    dedup (see :mod:`finding_curation`); it is carried through so the deliverable
+    can state the true observed volume.
+    """
     meta = finding.get("metadata") or {}
     payload = meta.get("payload") or {}
     severity = Severity(normalize_band(meta.get("severity")))
@@ -172,6 +177,7 @@ def build_technical_finding(finding: Mapping[str, Any], *, fid: str) -> Technica
         remediation=_remediation(payload),
         evidence=_evidence_block(finding, payload),
         finding_id=str(finding.get("id") or ""),
+        occurrences=max(1, int(occurrences)),
     )
 
 
@@ -182,6 +188,7 @@ def build_matrix_row(technical: TechnicalFinding) -> MatrixRow:
         category=technical.category,
         title=technical.title,
         severity=technical.severity,
+        occurrences=technical.occurrences,
     )
 
 
