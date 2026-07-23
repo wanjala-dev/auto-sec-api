@@ -77,3 +77,14 @@ class ReportProvider:
         )
 
         return ReportAssemblerService(cls.finding_source())
+
+    @classmethod
+    def build_narrate_supplied_findings_use_case(cls):
+        """Cross-context entry point for narrating grounded prose over
+        caller-supplied findings (used by ``report_agent``) — keeps other
+        contexts out of the report domain entities."""
+        from components.report.application.use_cases.narrate_supplied_findings_use_case import (
+            NarrateSuppliedFindingsUseCase,
+        )
+
+        return NarrateSuppliedFindingsUseCase(narrative=cls.narrative())

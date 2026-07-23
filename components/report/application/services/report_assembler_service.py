@@ -70,7 +70,7 @@ class ReportAssemblerService:
         )
         matrix = tuple(fsb.build_matrix_row(tech) for tech in technicals)
         histogram = fsb.build_histogram(technicals)
-        grounding = _build_grounding_texts(ordered, technicals)
+        grounding = build_grounding_texts(ordered, technicals)
 
         logger.info(
             "report.assembled workspace_id=%s kind=%s findings=%d histogram=%s",
@@ -90,7 +90,7 @@ class ReportAssemblerService:
         )
 
 
-def _build_grounding_texts(
+def build_grounding_texts(
     ordered: Sequence[Mapping[str, Any]],
     technicals: Sequence[Any],
 ) -> tuple[str, ...]:

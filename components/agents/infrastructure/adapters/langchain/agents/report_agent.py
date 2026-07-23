@@ -161,76 +161,26 @@ class ReportAgent(WorkspaceContextMixin, BaseAgent):
         risk=ToolRisk.READ,
     )
     def narrate_report_sections(self, input_str: str = "") -> str:
+        # Cross-context APPLICATION import only (allowed) — the use case owns
+        # the report domain entities + assembler; this adapter never touches
+        # another context's domain layer.
         from components.report.application.providers.report_provider import ReportProvider
-        from components.report.domain.entities.assembled_report_entity import AssembledReport
-        from components.report.domain.services import finding_section_builder as fsb
 
         data = _parse_json(input_str)
         raw_findings = data.get("findings")
         if not isinstance(raw_findings, list) or not raw_findings:
             return "Provide a `findings` list to narrate over — the scribe never invents findings."
 
-        # Shape the supplied findings into the assembler's finding dicts so the
-        # SAME deterministic section builder + grounding corpus back the prose.
-        shaped = []
-        for f in raw_findings:
-            if not isinstance(f, dict):
-                continue
-            shaped.append(
-                {
-                    "id": str(f.get("id") or ""),
-                    "title": str(f.get("title") or "Untitled finding"),
-                    "description": str(f.get("description") or ""),
-                    "source_type": "ai.supplied",
-                    "status": "todo",
-                    "created_at": None,
-                    "metadata": {
-                        "severity": str(f.get("severity") or "low"),
-                        "action_type": str(f.get("category") or ""),
-                        "ai_headline": str(f.get("title") or ""),
-                        "ai_narrative": str(f.get("description") or ""),
-                        "payload": {
-                            "service": str(f.get("affected_asset") or ""),
-                            "signal": str(f.get("description") or ""),
-                        },
-                    },
-                }
-            )
-        if not shaped:
-            return "No valid findings were supplied to narrate over."
-
-        ordered = sorted(shaped, key=fsb.sort_key)
-        technicals = tuple(fsb.build_technical_finding(f, fid=f"F-{i:02d}") for i, f in enumerate(ordered, start=1))
-        histogram = fsb.build_histogram(technicals)
-        matrix = tuple(fsb.build_matrix_row(t) for t in technicals)
-        # Reuse the assembler's grounding builder via a minimal assembled entity.
-        from components.report.application.services.report_assembler_service import (
-            _build_grounding_texts,
-        )
-
-        grounding = _build_grounding_texts(ordered, technicals)
-        assembled = AssembledReport(
-            kind="pentest",
-            histogram=histogram,
-            matrix=matrix,
-            technical_findings=technicals,
-            grounding_texts=grounding,
-        )
-
-        narrative = ReportProvider.narrative().write(
-            assembled=assembled,
+        use_case = ReportProvider.build_narrate_supplied_findings_use_case()
+        result = use_case.execute(
+            findings=raw_findings,
             workspace_name=self._workspace_name(),
             engagement_title=str(data.get("engagement_title") or ""),
             scope_summary=str(data.get("scope_summary") or ""),
         )
-        return json.dumps(
-            {
-                "executive_summary": narrative.executive_summary,
-                "overall_assessment": narrative.overall_assessment,
-                "faithful": narrative.faithful,
-                "unsupported_figures": list(narrative.unsupported_numbers),
-            }
-        )
+        if result.get("error") == "no_valid_findings":
+            return "No valid findings were supplied to narrate over."
+        return json.dumps(result)
 
     # ── system prompt: scribe-not-assessor discipline ────────────────────
 
