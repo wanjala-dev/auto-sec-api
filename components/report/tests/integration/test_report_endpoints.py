@@ -82,6 +82,38 @@ class TestKinds:
         assert "pentest" in ids
 
 
+class TestReportInFilesLibrary:
+    """A generated report PDF shows up in the unified Files library (/documents/)."""
+
+    def test_generated_report_appears_as_document(self, owner_client, workspace):
+        report = _seed_report(workspace, status="generated", pdf_key="k.pdf")
+        resp = owner_client.get(f"/documents/?workspace={_ws(workspace)}")
+        assert resp.status_code == 200
+        rows = resp.json()
+        report_rows = [r for r in rows if r.get("source") == "report"]
+        assert len(report_rows) == 1
+        row = report_rows[0]
+        assert row["id"] == f"report-{report.id}"
+        assert row["report_id"] == str(report.id)
+        assert row["filename"] == "Seeded Report.pdf"
+        assert row["file_type"] == "pdf"
+        # file_url points at the inline download so the library blob-fetch works.
+        assert f"/report/{report.id}/download/" in row["file_url"]
+        assert "inline=1" in row["file_url"]
+
+    def test_draft_report_without_pdf_is_not_a_document(self, owner_client, workspace):
+        _seed_report(workspace, status="draft", pdf_key="")
+        resp = owner_client.get(f"/documents/?workspace={_ws(workspace)}")
+        assert resp.status_code == 200
+        assert [r for r in resp.json() if r.get("source") == "report"] == []
+
+    def test_source_filter_excludes_reports(self, owner_client, workspace):
+        _seed_report(workspace, status="approved", pdf_key="k.pdf")
+        resp = owner_client.get(f"/documents/?workspace={_ws(workspace)}&source=manual_upload")
+        assert resp.status_code == 200
+        assert [r for r in resp.json() if r.get("source") == "report"] == []
+
+
 class TestGenerate:
     def test_generate_returns_202(self, owner_client, workspace, monkeypatch):
         dispatched = {}
