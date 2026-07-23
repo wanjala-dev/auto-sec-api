@@ -164,3 +164,27 @@ class TestDownloadGate:
         resp = owner_client.get(f"/report/{report.id}/download/?workspace={_ws(workspace)}")
         assert resp.status_code == 302
         assert resp["Location"] == "https://minio.local/signed"
+
+    def test_inline_preview_allowed_for_generated_draft(self, owner_client, workspace, monkeypatch):
+        # A GENERATED (not-yet-approved) report can be previewed inline so a
+        # reviewer reads the draft before signing off.
+        report = _seed_report(workspace, status="generated", pdf_key=f"{_ws(workspace)}/{{}}.pdf")
+        captured = {}
+
+        def _fake_presign(self, *, key, filename=None):
+            captured["filename"] = filename
+            return "https://minio.local/signed-inline"
+
+        monkeypatch.setattr(
+            "components.report.infrastructure.services.report_pdf_storage_service.ReportPdfStorageService.presigned_url",
+            _fake_presign,
+        )
+        resp = owner_client.get(f"/report/{report.id}/download/?workspace={_ws(workspace)}&inline=1")
+        assert resp.status_code == 302
+        assert resp["Location"] == "https://minio.local/signed-inline"
+        assert captured["filename"] is None  # inline preview carries no attachment filename
+
+    def test_inline_preview_blocked_before_generated(self, owner_client, workspace):
+        report = _seed_report(workspace, status="draft")
+        resp = owner_client.get(f"/report/{report.id}/download/?workspace={_ws(workspace)}&inline=1")
+        assert resp.status_code == 409

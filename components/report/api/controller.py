@@ -143,10 +143,15 @@ class ReportApproveController(APIView):
 
 
 class ReportDownloadController(APIView):
-    """GET /report/<id>/download/ — streams the PDF once approved.
+    """GET /report/<id>/download/ — 302 to a presigned URL for the stored PDF.
 
-    Blocks with 409 until the report is approved (the gate is enforced here, not
-    just advertised). Redirects to a presigned URL for the stored PDF."""
+    Disposition/gate policy:
+      * ``?inline=1`` → PREVIEW. Served once the PDF exists (``generated`` OR
+        ``approved``) so a reviewer can read the DRAFT in-app before signing
+        off. No attachment disposition (the client renders it inline).
+      * default → the deliverable DOWNLOAD, gated to ``approved`` (enforced
+        here, not just advertised), with an ``attachment`` filename.
+    """
 
     name = "report-download"
     permission_classes = (IsAuthenticated, HasWorkspaceMembership)
@@ -158,18 +163,29 @@ class ReportDownloadController(APIView):
         report = ReportProvider.repository().get(report_id=report_id, workspace_id=workspace_id)
         if report is None:
             return Response({"detail": "Report not found."}, status=status.HTTP_404_NOT_FOUND)
-        if report["status"] != "approved":
+
+        inline = str(request.query_params.get("inline", "")).lower() in ("1", "true", "yes")
+        if inline:
+            if report["status"] not in ("generated", "approved"):
+                return Response(
+                    {"detail": "The report PDF is not ready to preview yet."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+        elif report["status"] != "approved":
             return Response(
                 {"detail": "This report must be approved before it can be downloaded."},
                 status=status.HTTP_409_CONFLICT,
             )
+
         if not report.get("pdf_key"):
             return Response(
                 {"detail": "The report PDF is not available yet."},
                 status=status.HTTP_409_CONFLICT,
             )
         storage = ReportProvider.storage()
-        filename = f"{report['title'].replace(' ', '_')}.pdf"
+        # Attachment filename only for the deliverable download; the preview
+        # fetch reads the bytes as a blob and renders inline, so no filename.
+        filename = None if inline else f"{report['title'].replace(' ', '_')}.pdf"
         url = storage.presigned_url(key=report["pdf_key"], filename=filename)
         if not url:
             return Response(
