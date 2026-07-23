@@ -93,12 +93,31 @@ class TestSectionShapes:
         sections = response.data["sections"]
         assert [f["title"] for f in sections["findings"]] == ["Suspicious login burst"]
         finding = sections["findings"][0]
-        assert set(finding.keys()) == {"id", "title", "subtitle", "url"}
+        assert set(finding.keys()) == {"id", "title", "subtitle", "url", "severity", "score"}
         assert finding["subtitle"] == "high · error"
         assert finding["url"] == "/?panel=kanban"
+        # Severity band + indicative CVSS surfaced for the omnibox score badge.
+        assert finding["severity"] == "high"
+        assert finding["score"] == 8.0
         task = sections["tasks"][0]
         assert task["title"] == "Rotate suspicious credentials"
         assert task["subtitle"] == "Triage"
+
+    def test_finding_without_severity_has_blank_band_and_null_score(
+        self, api_client, workspace_factory, team_factory, user_factory
+    ):
+        user = user_factory()
+        workspace = workspace_factory(owner=user)
+        team = team_factory(workspace=workspace)
+        _add_member(workspace, user, role=WorkspaceMembership.Role.OWNER)
+        _make_task(workspace, team, user, "Quiet anomaly signal", source_type="ai.log_watch", metadata={})
+        api_client.force_authenticate(user=user)
+
+        response = api_client.get(SUGGEST_URL, {"q": "quiet anomaly"})
+
+        finding = response.data["sections"]["findings"][0]
+        assert finding["severity"] == ""
+        assert finding["score"] is None
 
     def test_agents_conversations_members_and_log_services(self, api_client, workspace_factory, user_factory):
         user = _named_user(user_factory, "Ada", "Analyst")

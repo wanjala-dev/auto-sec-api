@@ -10,6 +10,10 @@ contract the HUD search renders:
 
     {"id": str, "title": str, "subtitle": str, "url": str}
 
+Finding items additionally carry ``severity`` (band: critical/high/medium/low,
+or "") and ``score`` (indicative CVSS float, or None) so the omnibox can render
+a severity score badge.
+
 ``url`` is the FRONTEND route the client navigates to on click (the
 auto-sec frontend is a single-screen HUD, so routes are ``/`` plus
 ``?panel=…`` deep-links).
