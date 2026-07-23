@@ -201,7 +201,18 @@ class TestWorkflowConstants:
 
     def test_node_types_contains_all_expected_nodes(self):
         """NODE_TYPES should contain all expected node types."""
-        expected_types = ["start", "end", "message", "data_request", "decision", "task", "ai", "assign", "wait", "webhook"]
+        expected_types = [
+            "start",
+            "end",
+            "message",
+            "data_request",
+            "decision",
+            "task",
+            "ai",
+            "assign",
+            "wait",
+            "webhook",
+        ]
 
         for expected_type in expected_types:
             assert expected_type in NODE_TYPES
@@ -268,7 +279,7 @@ class TestWorkflowConstants:
 
     def test_all_catalog_goal_ids_are_strings(self):
         """All goal IDs in catalog should be valid goal type strings."""
-        valid_goal_types = {"campaign", "sponsorship", "event", "task", "project", "agents"}
+        valid_goal_types = {"campaign", "sponsorship", "event", "task", "project", "agents", "security"}
 
         for trigger in TRIGGER_CATALOG:
             for goal_id in trigger.goal_ids:
@@ -357,7 +368,7 @@ class TestTriggerDefinitionIntegration:
 
     def test_trigger_goal_ids_match_known_goal_types(self):
         """All trigger goal IDs should be valid goal types."""
-        valid_goals = {"campaign", "event", "sponsorship", "task", "project", "agents"}
+        valid_goals = {"campaign", "event", "sponsorship", "task", "project", "agents", "security"}
 
         for trigger in TRIGGER_CATALOG:
             for goal_id in trigger.goal_ids:
