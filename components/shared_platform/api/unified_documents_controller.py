@@ -180,6 +180,21 @@ class UnifiedDocumentListView(APIView):
         serializer = UnifiedDocumentSerializer(files, many=True, context=context)
         rows = list(serializer.data)
 
+        # Fold in generated report PDFs as documents (a report with a rendered
+        # PDF is a file in this workspace too). Guarded like the other cross-
+        # context blocks so a report-context hiccup never breaks the library.
+        # Honours the source filter: only include when unfiltered or "report"
+        # is one of the requested sources.
+        if not source_filter or "report" in source_filter.split(","):
+            try:
+                from components.report.application.providers.report_documents_provider import (
+                    get_report_documents_reader,
+                )
+
+                rows.extend(get_report_documents_reader().list_documents(workspace_id, request=request))
+            except Exception:
+                logger.exception("unified_documents report fold-in failed workspace_id=%s", workspace_id)
+
         # Sort merged list by ``created`` desc so uploads interleave
         # chronologically. Falls back to empty string when ``created``
         # is missing (shouldn't happen but we're defensive).
