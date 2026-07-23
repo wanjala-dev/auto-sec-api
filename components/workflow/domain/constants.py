@@ -48,6 +48,14 @@ SOURCE_TYPES = (
     # for the receipt-accountability ``wait_until`` — it correlates by the
     # transaction id, so the waiting run wakes Yes when the receipt arrives.
     "receipt",
+    # ``finding`` — a security finding on the SOC board. A finding is an
+    # ``ai.*`` Kanban Task filed by a detector/specialist. The ``finding_*``
+    # triggers fire when one lands (see specialist_persistence_service), so a
+    # workflow can run a playbook on an alert: notify, open a ticket, run the AI
+    # triage agent, webhook to a SOAR. The run targets the finding (task id);
+    # the payload carries severity / service / detector so condition + action
+    # nodes can branch and act on it.
+    "finding",
 )
 
 TARGET_TYPES = ("contact", "group")
@@ -275,6 +283,31 @@ TRIGGER_CATALOG = [
         source_type="receipt",
         label="Receipt attached",
         goal_ids=("campaign",),
+    ),
+    # ── Security finding / alert triggers ────────────────────
+    # Emitted by components/agents specialist_persistence_service when a
+    # detector/specialist files a finding on the SOC board. ``finding_raised``
+    # fires for every finding; the severity-scoped triggers fire additionally
+    # when the band matches, so a playbook can bind straight to "critical
+    # finding" without a condition node. The run targets the finding (task id);
+    # the payload carries severity / service / detector / impact_score.
+    TriggerDefinition(
+        id="finding_raised",
+        source_type="finding",
+        label="Security finding raised",
+        goal_ids=("security",),
+    ),
+    TriggerDefinition(
+        id="finding_critical",
+        source_type="finding",
+        label="Critical finding raised",
+        goal_ids=("security",),
+    ),
+    TriggerDefinition(
+        id="finding_high",
+        source_type="finding",
+        label="High-severity finding raised",
+        goal_ids=("security",),
     ),
 ]
 

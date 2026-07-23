@@ -192,4 +192,75 @@ def persist_finding_as_task(
         create_task = ProjectProvider.build_create_task_use_case()
         result = create_task.execute(command=command)
 
+    # A filed finding is a workflow trigger: emit ``finding_raised`` (every
+    # finding) plus a severity-scoped trigger so a playbook can bind straight to
+    # "critical/high finding". Emitted AFTER the create commits; the dispatcher
+    # itself enqueues processing on commit. Best-effort — a workflow-dispatch
+    # hiccup must never fail the finding write.
+    _emit_finding_triggers(
+        workspace_id=str(workspace.id),
+        task_id=str(result.task_id),
+        severity=metadata["severity"],
+        source_type=source_type,
+        action_type=action_type,
+        detector_key=detector_key,
+        headline=truncated_title,
+        impact_score=score,
+        payload_data=payload_data or {},
+    )
+
     return result.task_id
+
+
+def _emit_finding_triggers(
+    *,
+    workspace_id: str,
+    task_id: str,
+    severity: str,
+    source_type: str,
+    action_type: str,
+    detector_key: str,
+    headline: str,
+    impact_score: int,
+    payload_data: dict[str, Any],
+) -> None:
+    """Emit the ``finding_*`` workflow triggers for a freshly-filed finding."""
+    try:
+        from components.workflow.application.providers.workflow_dispatcher_provider import (
+            get_workflow_dispatcher_provider,
+        )
+
+        emit_workflow_event = get_workflow_dispatcher_provider().emit_workflow_event
+        payload = {
+            "task_id": task_id,
+            "severity": severity,
+            "service": str((payload_data or {}).get("service") or "").strip(),
+            "action_type": action_type,
+            "detector": detector_key,
+            "headline": headline,
+            "impact_score": impact_score,
+            "source_type": source_type,
+        }
+        # Every finding fires ``finding_raised``; critical/high additionally fire
+        # their severity-scoped trigger. source_id = the finding's task id so a
+        # binding can scope to one finding, and the run targets it.
+        trigger_types = ["finding_raised"]
+        if severity == "critical":
+            trigger_types.append("finding_critical")
+        elif severity == "high":
+            trigger_types.append("finding_high")
+        for trigger_type in trigger_types:
+            emit_workflow_event(
+                workspace_id=workspace_id,
+                source_type="finding",
+                trigger_type=trigger_type,
+                source_id=task_id,
+                payload=payload,
+                idempotency_key=f"{task_id}:{trigger_type}",
+            )
+    except Exception:
+        logger.exception(
+            "finding_workflow_emit_failed workspace_id=%s task_id=%s",
+            workspace_id,
+            task_id,
+        )
