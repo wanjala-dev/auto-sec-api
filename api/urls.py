@@ -81,6 +81,7 @@ api_patterns = [
     path("sign-off/", include("components.sign_off.api.urls")),
     path("recycle-bin/", include("components.recycle_bin.api.urls")),
     path("templates/", include("components.templates.api.urls")),
+    path("report/", include("components.report.api.urls")),
 ]
 
 common_patterns = (

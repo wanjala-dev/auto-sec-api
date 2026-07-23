@@ -3,7 +3,7 @@
   "name": "planner_soc_v1",
   "description": "SOC-fleet eval set for the planner system prompt (auto-sec fork). Authored 2026-07-19 alongside the planner.system v9 retune. Each case targets a routing failure mode specific to this fleet: SOC goals falling through to wanjala specialists that are not registered here, triage/log_watch/optimization boundary confusion, vague goals that must clarify, and multi-domain splits. Run the same cases against any prompt version for a comparable score (run_planner_eval --dataset planner_soc_v1 --version <v>).",
   "schema_version": 1,
-  "case_count": 21
+  "case_count": 24
  },
  "cases": [
   {
@@ -191,6 +191,30 @@
    "goal": "which permissions does the AI have?",
    "expected_agent_type": "ai_governance_agent",
    "criteria": "Plan routes to ai_governance_agent. The task description conveys the grant/credential surface (get_capability_grants and/or get_credential_inventory — capabilities like open_draft_pr, power flags, repo allowlists). Plan does not route to user_agent or workspace_agent and does not emit a clarify task."
+  },
+  {
+   "id": "soc-routing-generate-pentest-report",
+   "category": "routing-sensitive",
+   "scenario": "The headline report-deliverable ask: the operator wants a client-ready branded PDF compiled from the board's findings. That is report_agent's whole reason to exist (assemble → grounded narrative → branded PDF → approve → download). It is NOT an in-chat posture summary (posture_agent) and NOT a board write (triage_agent).",
+   "goal": "generate a pentest report",
+   "expected_agent_type": "report_agent",
+   "criteria": "Plan routes to report_agent. The task description names generate_pentest_report (or compiling the board findings into a branded/client-deliverable PDF report) and does not assess or write to the board. Routing to posture_agent, triage_agent, or workspace_agent is wrong."
+  },
+  {
+   "id": "soc-routing-write-security-report",
+   "category": "routing-sensitive",
+   "scenario": "A phrasing variant — 'write the security report' means the client deliverable, not a chat posture summary. report_agent owns the branded PDF; posture_agent owns the in-chat posture answer.",
+   "goal": "write the security report to hand to the client",
+   "expected_agent_type": "report_agent",
+   "criteria": "Plan routes to report_agent and the task description conveys producing a client-deliverable branded report PDF from the board findings (generate_pentest_report). Plan does not route to posture_agent and does not emit a clarify task."
+  },
+  {
+   "id": "soc-boundary-posture-check-in-not-report",
+   "category": "routing-sensitive",
+   "scenario": "The tripwire mirror: an in-chat posture check-in stays with posture_agent even though report_agent now exists. 'What is our security posture' wants a chat answer, not a downloadable PDF deliverable.",
+   "goal": "what is our security posture right now?",
+   "expected_agent_type": "posture_agent",
+   "criteria": "Plan routes to posture_agent (get_posture_report / findings posture + KPIs + fleet health). It does NOT route to report_agent — no client-deliverable PDF was requested, only an in-chat posture check-in."
   }
  ]
 }

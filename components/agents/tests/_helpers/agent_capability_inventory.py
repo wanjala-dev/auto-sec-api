@@ -221,6 +221,17 @@ CANONICAL_TOOLS: dict[str, set[str]] = {
         "get_kill_switch_status",
         "get_governance_report",
     },
+    "report_agent": {
+        # Client-deliverable report scribe. Aliases: ``report``,
+        # ``reporting``, ``pentest_report``, ``security_report``. Compiles
+        # findings already on the board into a workspace-branded PDF
+        # (pentest first) via the report bounded context — it NEVER
+        # assesses or writes to the board. generate_pentest_report is a
+        # reversible write (draft → owner/admin approve → download);
+        # narrate_report_sections is read-only grounded prose.
+        "generate_pentest_report",
+        "narrate_report_sections",
+    },
 }
 
 
@@ -310,6 +321,10 @@ ROUTING_EXPECTATIONS: dict[str, str] = {
     "which permissions does the AI have": "ai_governance_agent",
     "which tools did the AI use and at what risk tier": "ai_governance_agent",
     "can we stop the AI right now": "ai_governance_agent",
+    # report_agent — client-deliverable branded reports from board findings
+    "generate a pentest report": "report_agent",
+    "write the security report": "report_agent",
+    "produce a client-ready penetration test report": "report_agent",
 }
 
 
