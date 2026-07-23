@@ -148,3 +148,13 @@ This spike is **gated behind, and best built on, Phase A (Prowler)** — Option 
 output. Practical order: land Phase A (Prowler CSPM) → spike the graph on its output → decide CloudQuery
 promotion → Phase C engines (Trivy/Checkov) correlate onto the proven graph. See the Prowler plan:
 `CLOUD_POSTURE_PROWLER_INTEGRATION_PLAN.md`.
+
+## 11. Later — graph visualization (HUD), reuse don't rebuild
+
+The spike is headless (queries + a tool); the graph *HUD* comes after. **Do not hand-roll a graph canvas.**
+The frontend (literacyseed / `auto-sec-frontend`) already ships a **workflow builder canvas** (the
+`components/workflow` builder — canvas, nodes, edges/leaves, node palette, pan/zoom) that renders a
+node-edge graph today. Borrow those reusable node/edge primitives for the asset-graph / attack-path HUD and
+restyle them to the V2 SOC HUD, rather than standing up a second graph-rendering stack (per `dry-reuse.md`
+and the frontend component-catalog rule). Invoke `/frontend-reuse` before building any graph UI. This is a
+pointer for the visualization phase — the spike itself needs no UI.
