@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import abc
 
-from components.report.domain.entities.assembled_report import AssembledReport, ReportNarrative
+from components.report.domain.entities.assembled_report_entity import AssembledReport, ReportNarrative
 
 
 class ReportNarrativePort(abc.ABC):

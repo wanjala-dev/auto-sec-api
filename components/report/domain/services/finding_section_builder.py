@@ -36,7 +36,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from components.report.domain.entities.assembled_report import (
+from components.report.domain.entities.assembled_report_entity import (
     EvidenceBlock,
     MatrixRow,
     SeverityHistogram,

@@ -32,7 +32,7 @@ from components.report.application.services.report_assembler_service import (
     AssembleScope,
     ReportAssemblerService,
 )
-from components.report.domain.entities.assembled_report import AssembledReport
+from components.report.domain.entities.assembled_report_entity import AssembledReport
 from components.report.mappers.db.assembled_report_mapper import assembled_to_dict
 
 logger = logging.getLogger(__name__)

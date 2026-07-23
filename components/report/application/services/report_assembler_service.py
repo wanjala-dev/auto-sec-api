@@ -28,7 +28,7 @@ from datetime import datetime
 from typing import Any
 
 from components.report.application.ports.finding_source_port import FindingSourcePort
-from components.report.domain.entities.assembled_report import AssembledReport
+from components.report.domain.entities.assembled_report_entity import AssembledReport
 from components.report.domain.report_kind import get_report_kind
 from components.report.domain.services import finding_section_builder as fsb
 

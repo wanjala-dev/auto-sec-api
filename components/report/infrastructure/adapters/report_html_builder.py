@@ -11,7 +11,7 @@ from typing import Any
 
 from django.template.loader import render_to_string
 
-from components.report.domain.entities.assembled_report import AssembledReport
+from components.report.domain.entities.assembled_report_entity import AssembledReport
 from components.report.domain.report_kind import get_report_kind
 from components.report.mappers.rest.report_context_mapper import build_render_context
 

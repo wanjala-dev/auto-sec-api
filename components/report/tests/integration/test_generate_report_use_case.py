@@ -18,7 +18,7 @@ from components.report.application.use_cases.generate_report_use_case import (
     GenerateReportCommand,
     GenerateReportUseCase,
 )
-from components.report.domain.entities.assembled_report import ReportNarrative
+from components.report.domain.entities.assembled_report_entity import ReportNarrative
 from components.report.infrastructure.repositories.report_repository import OrmReportRepository
 
 pytestmark = pytest.mark.django_db

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from components.report.domain.entities.assembled_report import (
+from components.report.domain.entities.assembled_report_entity import (
     AssembledReport,
     EvidenceBlock,
     MatrixRow,

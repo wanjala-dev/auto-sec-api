@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 
 from components.report.application.ports.report_narrative_port import ReportNarrativePort
-from components.report.domain.entities.assembled_report import AssembledReport, ReportNarrative
+from components.report.domain.entities.assembled_report_entity import AssembledReport, ReportNarrative
 
 logger = logging.getLogger(__name__)
 

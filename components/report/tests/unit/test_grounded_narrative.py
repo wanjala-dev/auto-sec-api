@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 
 from components.agents.domain.services.faithfulness_verifier import FaithfulnessVerifier
-from components.report.domain.entities.assembled_report import (
+from components.report.domain.entities.assembled_report_entity import (
     AssembledReport,
     EvidenceBlock,
     MatrixRow,

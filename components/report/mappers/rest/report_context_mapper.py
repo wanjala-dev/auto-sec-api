@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from components.report.domain.entities.assembled_report import AssembledReport
+from components.report.domain.entities.assembled_report_entity import AssembledReport
 from components.report.domain.report_kind import get_report_kind
 from components.report.domain.value_objects.severity import SEVERITY_ORDER, band_color, band_meaning
 
