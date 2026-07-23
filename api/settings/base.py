@@ -115,6 +115,7 @@ INSTALLED_APPS = [
     "infrastructure.persistence.social",
     "infrastructure.persistence.content",
     "infrastructure.persistence.integrations",
+    "infrastructure.persistence.provenance",
     "infrastructure.persistence.ai",
     "infrastructure.persistence.recycle_bin",
     # ai submodules
