@@ -19,33 +19,19 @@ import logging
 from datetime import datetime
 from uuid import UUID
 
+from components.provenance.infrastructure.services._projection import (
+    SOURCE_INTERNAL as _SOURCE,
+)
+from components.provenance.infrastructure.services._projection import (
+    upsert_human_actor,
+)
 from infrastructure.persistence.audit.models import EntityAuditLog
 from infrastructure.persistence.provenance.models import (
-    ProvenanceActor,
     ProvenanceEvent,
     ProvenanceResource,
 )
 
 logger = logging.getLogger(__name__)
-
-_SOURCE = "internal"
-
-
-def _upsert_actor(workspace_id: UUID, user, cache: dict) -> tuple[ProvenanceActor, bool]:
-    if user.id in cache:
-        return cache[user.id], False
-    actor, created = ProvenanceActor.objects.get_or_create(
-        workspace_id=workspace_id,
-        source_system=_SOURCE,
-        external_ref=str(user.id),
-        defaults={
-            "actor_type": "human",
-            "display_name": (user.get_username() or "")[:255],
-            "user": user,
-        },
-    )
-    cache[user.id] = actor
-    return actor, created
 
 
 def _upsert_resource(workspace_id: UUID, content_type, object_id: str, cache: dict) -> tuple[ProvenanceResource, bool]:
@@ -85,7 +71,7 @@ def backfill_from_audit_log(
 
     for row in rows.iterator(chunk_size=batch_size):
         counts["scanned"] += 1
-        actor, actor_created = _upsert_actor(workspace_id, row.actor, actor_cache)
+        actor, actor_created = upsert_human_actor(workspace_id, row.actor, actor_cache)
         resource, resource_created = _upsert_resource(workspace_id, row.content_type, row.object_id, resource_cache)
         counts["actors"] += int(actor_created)
         counts["resources"] += int(resource_created)
