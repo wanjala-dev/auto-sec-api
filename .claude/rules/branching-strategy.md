@@ -51,6 +51,15 @@ git worktree remove ../worktrees/<short-name>   # after the PR merges
 - **Start clean.** A fresh worktree off `main` begins at `origin/main`'s tip with a clean
   `git status`. If it isn't clean at creation, you branched off the wrong ref — fix it
   before working, don't build on a dirty base.
+- **Code worktrees go at the EXTERNAL path; the `EnterWorktree` harness tool is docs-only.**
+  Any worktree that touches code the running stack imports MUST live at
+  `/Users/henrywanjala/Desktop/auto-sec/worktrees/<name>`, created with `git worktree add`
+  — NOT via Claude Code's `EnterWorktree` tool, which forces the in-repo
+  `.claude/worktrees/<name>` location that the bind-mount rule above forbids for code
+  (the container sees inside the repo, not outside it). `.claude/worktrees/` is tolerable
+  ONLY for markdown / docs-only changes the container never imports. When in doubt, use the
+  external path. (Frontend `auto-sec-frontend` follows the same rule against its own
+  sibling `worktrees/` dir.)
 
 ## Commits & PRs
 
