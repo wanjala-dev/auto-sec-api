@@ -21,11 +21,12 @@ main                    ← the trunk. Every feature merges straight back here.
 
 ## Worktrees — ALWAYS (HARD RULE)
 
-**Every body of work happens in its own `git worktree`, never on a branch checked
-out in the primary clone.** Multiple sessions (and background agents) work these
-repos concurrently; a branch checked out in the primary clone gets clobbered by
-whichever session touches it next, and the primary clone is bind-mounted into the
-running Docker stack — editing it live IS editing the running app.
+**Every body of work happens in its own fresh, single-concern `git worktree`, never on
+a branch checked out in the primary clone, and never reused across unrelated tasks.**
+Multiple sessions (and background agents) work these repos concurrently; a branch checked
+out in the primary clone gets clobbered by whichever session touches it next, and the
+primary clone is bind-mounted into the running Docker stack — editing it live IS editing
+the running app.
 
 ```bash
 cd /Users/henrywanjala/Desktop/auto-sec/auto-sec-api
@@ -41,6 +42,24 @@ git worktree remove ../worktrees/<short-name>   # after the PR merges
 - Background agents MUST verify their worktree before editing
   (`git rev-parse --show-toplevel` must NOT be the primary clone) — a 2026-07-19
   incident corrupted the running stack when an agent's isolation silently failed.
+- **One concern → one fresh worktree. Never reuse.** Each distinct body of work gets its
+  OWN worktree, branched fresh off `main`. Do NOT reuse an existing worktree (or its
+  branch) for an unrelated task — not even within a single session, and not "just for a
+  quick doc." Reusing mixes concerns into one branch/PR (breaking the single-concern-PR
+  rule below) and races whatever another session left in that tree. Picking up a new task =
+  `git worktree add` a new one; never `cd` into a worktree that was cut for something else.
+- **Start clean.** A fresh worktree off `main` begins at `origin/main`'s tip with a clean
+  `git status`. If it isn't clean at creation, you branched off the wrong ref — fix it
+  before working, don't build on a dirty base.
+- **Code worktrees go at the EXTERNAL path; the `EnterWorktree` harness tool is docs-only.**
+  Any worktree that touches code the running stack imports MUST live at
+  `/Users/henrywanjala/Desktop/auto-sec/worktrees/<name>`, created with `git worktree add`
+  — NOT via Claude Code's `EnterWorktree` tool, which forces the in-repo
+  `.claude/worktrees/<name>` location that the bind-mount rule above forbids for code
+  (the container sees inside the repo, not outside it). `.claude/worktrees/` is tolerable
+  ONLY for markdown / docs-only changes the container never imports. When in doubt, use the
+  external path. (Frontend `auto-sec-frontend` follows the same rule against its own
+  sibling `worktrees/` dir.)
 
 ## Commits & PRs
 
