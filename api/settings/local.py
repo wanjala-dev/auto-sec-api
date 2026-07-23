@@ -15,7 +15,7 @@ from .base import *  # noqa: F403
 # Docker network at ``minio:9000``. Django/Celery use the internal
 # hostname for uploads; the presigned URL the browser follows must use
 # the host-reachable one so the signature + actual request URL match.
-REPORT_PDF_S3_PUBLIC_ENDPOINT = os.environ.get("REPORT_PDF_S3_PUBLIC_ENDPOINT", "http://localhost:9100")
+REPORT_PDF_S3_PUBLIC_ENDPOINT = os.environ.get("REPORT_PDF_S3_PUBLIC_ENDPOINT", "http://localhost:9110")
 
 
 # Build paths inside the project like this: os.path.join(BASE_DIR, ...)

@@ -49,8 +49,32 @@ class ReportPdfStorageService:
 
     def put_pdf(self, *, key: str, body: bytes) -> None:
         client = _client(public=False)
+        self._ensure_bucket(client)
         client.put_object(Bucket=_bucket(), Key=key, Body=body, ContentType="application/pdf")
         logger.info("report.pdf_stored key=%s bytes=%s", key, len(body))
+
+    @staticmethod
+    def _ensure_bucket(client) -> None:
+        """Create the reports bucket if it is missing.
+
+        A fresh MinIO / a new AWS environment has no reports bucket yet, so
+        the first generation would fail with NoSuchBucket. Creating on demand
+        (idempotent — BucketAlreadyOwnedByYou is swallowed) keeps first-run
+        report generation working without a separate provisioning step.
+        """
+        from botocore.exceptions import ClientError
+
+        bucket = _bucket()
+        try:
+            client.head_bucket(Bucket=bucket)
+        except ClientError:
+            try:
+                client.create_bucket(Bucket=bucket)
+                logger.info("report.bucket_created bucket=%s", bucket)
+            except ClientError as exc:
+                code = exc.response.get("Error", {}).get("Code", "")
+                if code not in ("BucketAlreadyOwnedByYou", "BucketAlreadyExists"):
+                    raise
 
     def presigned_url(self, *, key: str, filename: str | None = None) -> str | None:
         client = _client(public=True)
