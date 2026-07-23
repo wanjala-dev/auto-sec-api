@@ -347,3 +347,69 @@ compliance floor.
 Key sources: siemcostcalculator.com (Panther), anvilogic.com/siem-replacement,
 reco.ai traditional-SIEM-vs-AI-native, underdefense.com managed-SIEM-vs-MDR +
 ai-soc-for-mid-market, n-able.com mdr-vs-siem.
+
+---
+
+## 10. The CNAPP lens (2026-07-23)
+
+Henry asked whether autosec can become a **CNAPP** (Cloud-Native Application
+Protection Platform). The answer reframes this vision, it doesn't replace it:
+**autosec's CNAPP is the convergence of pillars already planned here — no new
+roadmap, no new bounded context beyond the two already designed.**
+
+### What "CNAPP" maps to in our existing plan
+
+| CNAPP pillar | Where it already lives | Status |
+|---|---|---|
+| CDR (runtime detection) | CloudTrail ingest + detector registry | shipped / POC |
+| CSPM + CIEM (cloud config posture) | §3.3 `cloud_posture_agent`, **Prowler-as-engine**, nightly `CloudPostureSnapshot` | Phase 3, gated on the read-only IAM audit-role rollout |
+| Attack-path / asset graph ("toxic combinations") | `PROVENANCE_ACCESS_GRAPH_2026-07-17.md` — Actor→Resource→Grant→ProvenanceEvent, BloodHound-style | designed; **Slice 0 unblocked** (internal-only, zero new creds) |
+| AI-SPM | §3.4 `ai_governance_agent` | Phase 2 (partly shipped) |
+| Agentic triage → **validation → branded report** | triage agent + rubric/grounded verification + templates kernel | shipped — the differentiator |
+
+### The synthesis (the piece neither doc drew explicitly)
+
+The crown jewel is **wiring Prowler cloud-posture findings *into* the provenance/
+access graph.** Prowler tells us *a role carries `*` admin and an S3 bucket is
+public*; the provenance graph tells us *which actor holds that grant and whether
+anything ever exercised it*. Correlating the two **is** attack-path / toxic-
+combination analysis — the thing Wiz sells as its Security Graph — expressed over
+machinery we already have. A confirmed path becomes a triage-board finding, gets
+**validated** (grounded verification / tabletop `threat_sim_agent`, §3.5), and
+falls out as a client-ready posture+pentest report through the templates kernel.
+*Validated* posture + auto-report is an artifact neither Wiz nor the AI-SOC pack
+(Dropzone/Prophet) produces.
+
+### Competitive framing (mid-market, confirmed ICP)
+
+- **Do not out-scan Wiz/Orca/Prisma.** Their moat is years of policy content +
+  agentless snapshot infra. We wrap **Prowler** (already decided, §3.3) and put
+  the value in the AI correlation/validation/report layer.
+- **The real free-tier threat is Prowler App itself** (Apache-2.0, ships its own
+  attack-path via Cartography+Neo4j). Our paid wedge over "run Prowler yourself"
+  is **autonomy** — triage that kills the 70–90% noise, validated attack paths,
+  and the report — for orgs whose SOC headcount is zero. This reinforces §9's
+  "AI SOC-in-a-box for the SIEM-less mid-market" positioning.
+
+### Decision: stay Postgres-first — drop Neo4j / Cartography
+
+An initial CNAPP sketch proposed adopting **Cartography + Neo4j** for the asset
+graph. **Rejected**, for two standing reasons already in our plans:
+1. It contradicts the deliberate **Postgres-first cost-structure moat** (§9) and
+   the provenance doc's explicit "prefer Postgres, add a graph store only if
+   traversal depth demands it."
+2. Cartography would be a **redundant second inventory engine** next to Prowler
+   (our chosen cloud-config scanner) — reinventing plumbing we already have.
+
+The provenance/access graph stays **Postgres (adjacency + recursive CTE)**. The
+CNAPP attack-path use case is precisely the scenario that *might* later justify a
+dedicated graph store — re-evaluate then, against real traversal depth, not now.
+
+### Sequencing delta
+
+No change to the phase table. The CNAPP framing simply makes the **provenance
+graph a first-class MVP pillar** (it was a separate "third pillar" doc) and names
+the **Prowler-findings → graph** correlation as the Phase-3 payoff. Immediate
+buildable step: **`PROVENANCE_ACCESS_GRAPH` Slice 0** (internal-only graph from
+`EntityAuditLog` + `ai/actions` + identity sessions) — unblocked today; cloud
+posture (Phase 3) still waits on the operator IAM audit-role rollout.

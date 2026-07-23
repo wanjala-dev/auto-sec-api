@@ -46,13 +46,21 @@ DEFAULT_FLAGS = [
         "chosen persona/role on a target workspace for 30 minutes. Per-user enable "
         "rule expected; never globally enabled.",
     ),
+    (
+        "feature.provenance_graph",
+        False,
+        "Provenance & access graph (who — human / service account / AI agent / "
+        "vendor — can touch what, and what they actually touched). Off in prod "
+        "until GA; per-workspace opt-in. Read-only observation, never mutates a "
+        "vendor's permissions. See docs/plans/PROVENANCE_ACCESS_GRAPH_2026-07-17.md.",
+    ),
 ]
 
 
 # Flags that should be globally disabled in production (DEBUG=False).
 # Dev/local (DEBUG=True) leaves them at their default_enabled value.
 # Add product feature-gate keys here as they are introduced.
-PROD_DISABLED_FLAGS = ()
+PROD_DISABLED_FLAGS = ("feature.provenance_graph",)
 
 
 # Flags that, while globally disabled in production, are kept enabled for a
