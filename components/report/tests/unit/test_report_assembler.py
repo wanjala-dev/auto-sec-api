@@ -105,17 +105,28 @@ def _assemble(findings: list[Mapping[str, Any]], **scope_kwargs):
 
 class TestHistogram:
     def test_counts_per_band(self):
+        # Distinct signals so the two highs are genuinely different issues and
+        # do not collapse under dedup (which keys on severity+service+signal).
         findings = [
-            _finding(fid_hint="1", severity="high", title="High A"),
-            _finding(fid_hint="2", severity="high", title="High B"),
-            _finding(fid_hint="3", severity="medium", title="Medium A"),
-            _finding(fid_hint="4", severity="low", title="Low A"),
-            _finding(fid_hint="5", severity="critical", title="Crit A"),
+            _finding(fid_hint="1", severity="high", title="High A", signal="auth 5xx spike"),
+            _finding(fid_hint="2", severity="high", title="High B", signal="db connection refused"),
+            _finding(fid_hint="3", severity="medium", title="Medium A", signal="slow query"),
+            _finding(fid_hint="4", severity="low", title="Low A", signal="deprecation warning"),
+            _finding(fid_hint="5", severity="critical", title="Crit A", signal="rce attempt"),
         ]
         report, _ = _assemble(findings)
         assert report.histogram.counts == {"critical": 1, "high": 2, "medium": 1, "low": 1}
         assert report.histogram.total == 5
         assert report.histogram.highest_band == "critical"
+
+    def test_identical_findings_collapse_with_occurrence_count(self):
+        # 320 findings that differ only by task id (same severity/service/signal)
+        # collapse to one distinct issue observed 320 times.
+        findings = [_finding(fid_hint=str(i), severity="high", title=f"celery task {i}") for i in range(320)]
+        report, _ = _assemble(findings)
+        assert report.histogram.total == 1
+        assert report.matrix[0].occurrences == 320
+        assert report.raw_finding_count == 320
 
     def test_unknown_severity_normalises_to_low(self):
         findings = [_finding(fid_hint="1", severity="bogus", title="Weird")]
@@ -186,7 +197,7 @@ class TestNoFindingsHonesty:
         assert report.matrix == ()
         assert report.technical_findings == ()
         # Grounding still carries the honest zero counts.
-        assert any("Total findings: 0" in t for t in report.grounding_texts)
+        assert any("Distinct findings: 0" in t for t in report.grounding_texts)
 
 
 class TestGroundingCorpus:

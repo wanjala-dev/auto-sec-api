@@ -58,6 +58,9 @@ def build_render_context(
             "severity": row.severity.label,
             "severity_color": row.severity.color,
             "cvss": f"{row.cvss:.1f}",
+            "occurrences": row.occurrences,
+            # "×320" chip when a row stands for a collapsed cluster; "" when unique.
+            "occurrence_label": f"×{row.occurrences}" if row.occurrences > 1 else "",
         }
         for row in assembled.matrix
     ]
@@ -71,6 +74,8 @@ def build_render_context(
             "severity_color": tech.severity.color,
             "cvss": f"{tech.cvss:.1f}",
             "affected_asset": tech.affected_asset,
+            "occurrences": tech.occurrences,
+            "occurrence_label": f"Observed {tech.occurrences} times" if tech.occurrences > 1 else "",
             "description_paragraphs": [p for p in tech.description.split("\n\n") if p.strip()],
             "remediation": list(tech.remediation),
             "evidence_lines": list(tech.evidence.lines),
@@ -112,7 +117,23 @@ def build_render_context(
         "narrative_faithful": (narrative.faithful if narrative else True),
         "narrative_unsupported": list(narrative.unsupported_numbers) if narrative else [],
         # ── Findings ──
-        "finding_total": assembled.histogram.total,
+        # finding_total is the DISTINCT-issue count (post-dedup) — what the report
+        # is really about. raw_finding_total is the pre-dedup observed volume.
+        "finding_total": assembled.distinct_finding_count,
+        "raw_finding_total": assembled.raw_finding_count,
+        "deferred_count": assembled.deferred_count,
+        "detailed_count": len(technical),
+        # Shown under §4 when lower-severity findings are matrix-only, so the
+        # reader knows the technical section is curated, not truncated silently.
+        "deferred_note": (
+            f"{assembled.deferred_count} additional lower-severity finding"
+            f"{'s' if assembled.deferred_count != 1 else ''} "
+            f"{'are' if assembled.deferred_count != 1 else 'is'} listed in the Findings Matrix (§3); "
+            f"full technical detail is provided for the {len(technical)} most significant "
+            f"finding{'s' if len(technical) != 1 else ''}."
+        )
+        if assembled.deferred_count
+        else "",
         "highest_band": (assembled.histogram.highest_band or "none").capitalize(),
         "histogram": histogram,
         "matrix": matrix,
