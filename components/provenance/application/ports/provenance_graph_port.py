@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from uuid import UUID
 
-from components.provenance.application.queries.graph_queries import (
+from components.provenance.application.queries.provenance_graph_query import (
     AccessReviewRow,
     HallTree,
     LeastPrivilegeGap,

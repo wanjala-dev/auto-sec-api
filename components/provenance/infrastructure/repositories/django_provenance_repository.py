@@ -18,7 +18,7 @@ from django.db.models import Count, Max
 from django.utils import timezone
 
 from components.provenance.application.ports.provenance_graph_port import ProvenanceGraphPort
-from components.provenance.application.queries.graph_queries import (
+from components.provenance.application.queries.provenance_graph_query import (
     AccessReviewRow,
     HallTree,
     HallTreeNode,

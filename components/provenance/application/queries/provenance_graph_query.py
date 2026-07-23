@@ -10,12 +10,10 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import UUID
 
-from components.provenance.domain.entities.graph import (
-    ActorEntity,
-    GrantEntity,
-    ProvenanceEventEntity,
-    ResourceEntity,
-)
+from components.provenance.domain.entities.actor_entity import ActorEntity
+from components.provenance.domain.entities.grant_entity import GrantEntity
+from components.provenance.domain.entities.provenance_event_entity import ProvenanceEventEntity
+from components.provenance.domain.entities.resource_entity import ResourceEntity
 
 
 @dataclass(frozen=True)
