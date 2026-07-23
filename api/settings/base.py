@@ -136,6 +136,7 @@ INSTALLED_APPS = [
     "components.shared_platform.cli",
     "components.workspace.cli",
     "components.integrations.cli",
+    "components.provenance.cli",
     "components.project.cli",
     "components.identity.cli",
     "components.knowledge.cli",
