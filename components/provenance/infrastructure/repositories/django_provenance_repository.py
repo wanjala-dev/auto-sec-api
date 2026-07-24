@@ -20,6 +20,8 @@ from django.utils import timezone
 from components.provenance.application.ports.provenance_graph_port import ProvenanceGraphPort
 from components.provenance.application.queries.provenance_graph_query import (
     AccessReviewRow,
+    ActivityEdge,
+    GraphOverview,
     HallTree,
     HallTreeNode,
     LeastPrivilegeGap,
@@ -44,6 +46,49 @@ _RECENT_EVENT_LIMIT = 100
 
 
 class DjangoProvenanceRepository(ProvenanceGraphPort):
+    def graph_overview(self, *, workspace_id: UUID, node_limit: int = 500, edge_limit: int = 1000) -> GraphOverview:
+        # Fetch one past the cap so we can flag truncation honestly.
+        actors = list(
+            ProvenanceActor.objects.filter(workspace_id=workspace_id).order_by("-last_seen_at")[: node_limit + 1]
+        )
+        resources = list(
+            ProvenanceResource.objects.filter(workspace_id=workspace_id).order_by("-last_seen_at")[: node_limit + 1]
+        )
+        grants = list(
+            AccessGrant.objects.filter(workspace_id=workspace_id, revoked_at__isnull=True)
+            .select_related("actor", "resource")
+            .order_by("-granted_at")[: edge_limit + 1]
+        )
+        activity = list(
+            ProvenanceEvent.objects.filter(workspace_id=workspace_id)
+            .values("actor_id", "resource_id")
+            .annotate(count=Count("id"), last=Max("occurred_at"))
+            .order_by("-last")[: edge_limit + 1]
+        )
+
+        truncated = (
+            len(actors) > node_limit
+            or len(resources) > node_limit
+            or len(grants) > edge_limit
+            or len(activity) > edge_limit
+        )
+
+        return GraphOverview(
+            actors=tuple(to_actor_entity(a) for a in actors[:node_limit]),
+            resources=tuple(to_resource_entity(r) for r in resources[:node_limit]),
+            grants=tuple(to_grant_entity(g) for g in grants[:edge_limit]),
+            activity=tuple(
+                ActivityEdge(
+                    actor_id=row["actor_id"],
+                    resource_id=row["resource_id"],
+                    event_count=row["count"],
+                    last_event_at=row["last"],
+                )
+                for row in activity[:edge_limit]
+            ),
+            truncated=truncated,
+        )
+
     def vendor_blast_radius(self, *, workspace_id: UUID, actor_id: UUID) -> VendorBlastRadius | None:
         actor = (
             ProvenanceActor.objects.select_related("workspace").filter(id=actor_id, workspace_id=workspace_id).first()

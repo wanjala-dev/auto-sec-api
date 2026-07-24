@@ -2,12 +2,18 @@ from django.urls import path
 
 from components.provenance.api.controller import (
     AccessReviewView,
+    GraphOverviewView,
     HallTreeView,
     LeastPrivilegeView,
     VendorBlastRadiusView,
 )
 
 urlpatterns = [
+    path(
+        "workspaces/<uuid:workspace_id>/graph/",
+        GraphOverviewView.as_view(),
+        name=GraphOverviewView.name,
+    ),
     path(
         "workspaces/<uuid:workspace_id>/actors/<uuid:actor_id>/blast-radius/",
         VendorBlastRadiusView.as_view(),

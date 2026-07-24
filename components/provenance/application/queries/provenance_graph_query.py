@@ -61,3 +61,29 @@ class LeastPrivilegeGap:
     resource: ResourceEntity
     unused_days: int
     workspace_id: UUID
+
+
+@dataclass(frozen=True)
+class ActivityEdge:
+    """An actor→resource edge summarising observed events (the *actual*)."""
+
+    actor_id: UUID
+    resource_id: UUID
+    event_count: int
+    last_event_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class GraphOverview:
+    """Bounded whole-workspace snapshot the HUD renders on open.
+
+    Nodes = actors + resources. Edges = grants (potential) + activity (actual).
+    ``truncated`` flags that a node/edge cap was hit so the UI can say so rather
+    than imply the graph is complete.
+    """
+
+    actors: tuple[ActorEntity, ...]
+    resources: tuple[ResourceEntity, ...]
+    grants: tuple[GrantEntity, ...]
+    activity: tuple[ActivityEdge, ...]
+    truncated: bool = False

@@ -80,6 +80,26 @@ def test_blast_radius_endpoint_returns_graph(workspace_factory):
     assert data["grants"][0]["is_admin"] is True
 
 
+def test_graph_overview_endpoint_returns_nodes_and_edges(workspace_factory):
+    ws = workspace_factory()
+    _enable_flag()
+    actor, resource = _seed_graph(ws)
+
+    url = reverse("provenance-graph-overview", kwargs={"workspace_id": str(ws.id)})
+    resp = _client(ws).get(url)
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert any(a["external_ref"] == "arn:role/x" for a in data["actors"])
+    assert any(r["external_ref"] == "s3://b" for r in data["resources"])
+    assert len(data["grants"]) == 1
+    assert data["grants"][0]["actor_id"] == str(actor.id)
+    assert data["grants"][0]["resource_id"] == str(resource.id)
+    assert len(data["activity"]) == 1
+    assert data["activity"][0]["event_count"] == 1
+    assert data["truncated"] is False
+
+
 def test_access_review_endpoint_returns_rows(workspace_factory):
     ws = workspace_factory()
     _enable_flag()
@@ -137,13 +157,20 @@ def test_all_views_are_feature_gated_and_membership_scoped():
     """
     from components.provenance.api.controller import (
         AccessReviewView,
+        GraphOverviewView,
         HallTreeView,
         LeastPrivilegeView,
         VendorBlastRadiusView,
     )
     from components.shared_platform.api.permissions import HasWorkspaceMembership, RequiresFeatureFlag
 
-    for view in (VendorBlastRadiusView, AccessReviewView, HallTreeView, LeastPrivilegeView):
+    for view in (
+        GraphOverviewView,
+        VendorBlastRadiusView,
+        AccessReviewView,
+        HallTreeView,
+        LeastPrivilegeView,
+    ):
         assert view.feature_flag_key == _FLAG
         assert RequiresFeatureFlag in view.permission_classes
         assert HasWorkspaceMembership in view.permission_classes

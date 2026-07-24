@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 from components.provenance.application.queries.provenance_graph_query import (
     AccessReviewRow,
+    GraphOverview,
     HallTree,
     HallTreeNode,
     LeastPrivilegeGap,
@@ -55,6 +56,35 @@ def _event_dict(event) -> dict:
         "occurred_at": event.occurred_at.isoformat(),
         "source_system": str(event.source_system),
     }
+
+
+@dataclass(frozen=True)
+class GraphOverviewResource:
+    result: GraphOverview
+
+    @classmethod
+    def from_result(cls, result: GraphOverview) -> GraphOverviewResource:
+        return cls(result=result)
+
+    def to_dict(self) -> dict:
+        r = self.result
+        return {
+            "actors": [_actor_dict(a) for a in r.actors],
+            "resources": [_resource_dict(x) for x in r.resources],
+            "grants": [
+                {**_grant_dict(g), "actor_id": str(g.actor_id), "resource_id": str(g.resource_id)} for g in r.grants
+            ],
+            "activity": [
+                {
+                    "actor_id": str(e.actor_id),
+                    "resource_id": str(e.resource_id),
+                    "event_count": e.event_count,
+                    "last_event_at": e.last_event_at.isoformat() if e.last_event_at else None,
+                }
+                for e in r.activity
+            ],
+            "truncated": r.truncated,
+        }
 
 
 @dataclass(frozen=True)

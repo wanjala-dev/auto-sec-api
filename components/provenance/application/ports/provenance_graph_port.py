@@ -14,6 +14,7 @@ from uuid import UUID
 
 from components.provenance.application.queries.provenance_graph_query import (
     AccessReviewRow,
+    GraphOverview,
     HallTree,
     LeastPrivilegeGap,
     VendorBlastRadius,
@@ -21,6 +22,10 @@ from components.provenance.application.queries.provenance_graph_query import (
 
 
 class ProvenanceGraphPort(ABC):
+    @abstractmethod
+    def graph_overview(self, *, workspace_id: UUID, node_limit: int = 500, edge_limit: int = 1000) -> GraphOverview:
+        """Bounded whole-workspace snapshot: actors + resources + grants + activity."""
+
     @abstractmethod
     def vendor_blast_radius(self, *, workspace_id: UUID, actor_id: UUID) -> VendorBlastRadius | None:
         """All grants (potential) + recent events (actual) for one actor. None if the actor is unknown."""

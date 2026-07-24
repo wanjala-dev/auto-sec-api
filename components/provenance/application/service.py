@@ -12,6 +12,7 @@ from uuid import UUID
 from components.provenance.application.ports.provenance_graph_port import ProvenanceGraphPort
 from components.provenance.application.queries.provenance_graph_query import (
     AccessReviewRow,
+    GraphOverview,
     HallTree,
     LeastPrivilegeGap,
     VendorBlastRadius,
@@ -21,6 +22,9 @@ from components.provenance.application.queries.provenance_graph_query import (
 class ProvenanceService:
     def __init__(self, graph: ProvenanceGraphPort):
         self._graph = graph
+
+    def graph_overview(self, *, workspace_id: UUID, node_limit: int = 500, edge_limit: int = 1000) -> GraphOverview:
+        return self._graph.graph_overview(workspace_id=workspace_id, node_limit=node_limit, edge_limit=edge_limit)
 
     def vendor_blast_radius(self, *, workspace_id: UUID, actor_id: UUID) -> VendorBlastRadius | None:
         return self._graph.vendor_blast_radius(workspace_id=workspace_id, actor_id=actor_id)
