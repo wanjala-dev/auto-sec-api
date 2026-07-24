@@ -68,6 +68,7 @@ def _get_detector_modules():
     from components.agents.infrastructure.adapters.actions.detectors import (  # noqa: F401
         logwatch,
         posture_report,
+        provenance,
         run_quality,
     )
     from components.agents.infrastructure.adapters.actions.detectors import (
