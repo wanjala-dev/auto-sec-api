@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import uuid
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -100,15 +100,17 @@ def test_run_prowler_scan_for_account_assumes_runs_and_ingests(workspace_factory
     )
 
     target = "components.cloud_posture.infrastructure.tasks.cloud_posture_tasks"
+    creds_port = MagicMock()
+    creds_port.assume_role.return_value = _CREDS
     with (
-        patch(f"{target}.assume_account_credentials", return_value=_CREDS) as m_assume,
+        patch(f"{target}.get_aws_credentials_port", return_value=creds_port),
         patch(f"{target}.run_prowler", return_value=_RECORDS) as m_run,
     ):
         result = run_prowler_scan_for_account(str(conn.id), "123456789012")
 
     assert result["success"] is True
     assert result["failed"] == 1
-    m_assume.assert_called_once()
+    creds_port.assume_role.assert_called_once()
     m_run.assert_called_once()
     scan = CloudPostureScan.objects.get(id=result["scan_id"])
     assert scan.workspace_id == ws.id
