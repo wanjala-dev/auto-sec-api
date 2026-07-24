@@ -10,6 +10,9 @@ from datetime import datetime
 
 from django.core.management.base import BaseCommand, CommandError
 
+from components.provenance.infrastructure.services.ai_backfill_service import (
+    backfill_from_ai_findings,
+)
 from components.provenance.infrastructure.services.audit_backfill_service import (
     backfill_from_audit_log,
 )
@@ -36,12 +39,15 @@ class Command(BaseCommand):
 
         audit = backfill_from_audit_log(workspace_id=workspace_id, since=since)
         identity = backfill_from_memberships(workspace_id=workspace_id)
+        ai = backfill_from_ai_findings(workspace_id=workspace_id)
         self.stdout.write(
             self.style.SUCCESS(
                 "provenance backfill complete "
                 f"audit(scanned={audit['scanned']} actors={audit['actors']} "
                 f"resources={audit['resources']} events={audit['events']}) "
                 f"identity(scanned={identity['scanned']} actors={identity['actors']} "
-                f"resources={identity['resources']} grants={identity['grants']})"
+                f"resources={identity['resources']} grants={identity['grants']}) "
+                f"ai(scanned={ai['scanned']} actors={ai['actors']} "
+                f"resources={ai['resources']} events={ai['events']})"
             )
         )
