@@ -49,11 +49,10 @@
     "PreToolUse": [
       {
         "matcher": "Bash",
-        "if": "Bash(git push *)",
         "hooks": [
           {
             "type": "command",
-            "command": "BRANCH=$(git branch --show-current) && if [ \"$BRANCH\" = \"main\" ] || [ \"$BRANCH\" = \"master\" ]; then echo 'BLOCKED: Do not push directly to main/master. Use a PR.' >&2; exit 2; fi"
+            "command": "CMD=$(echo \"$TOOL_INPUT\" | jq -r '.command // empty'); if echo \"$CMD\" | grep -qE 'git[[:space:]]+push'; then BRANCH=$(git branch --show-current); if [ \"$BRANCH\" = \"main\" ] || [ \"$BRANCH\" = \"master\" ]; then echo 'BLOCKED: Do not push directly to main/master. Use a PR.' >&2; exit 2; fi; fi; true"
           }
         ]
       }
