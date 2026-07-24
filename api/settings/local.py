@@ -427,6 +427,9 @@ CELERY_QUEUE_DEFAULT = "default"
 CELERY_QUEUE_OTHER = "other"
 CELERY_QUEUE_AI_TEAMMATE = "ai_teammate"
 CELERY_QUEUE_WORKSPACE_AGGREGATIONS = "workspace_aggregations"
+# Dedicated queue for the Prowler CSPM scans — served only by the isolated
+# cloud-posture worker (the one image that carries Prowler).
+CELERY_QUEUE_CLOUD_POSTURE = "cloud_posture"
 
 CELERY_BROKER_URL = env("CELERY_BROKER", default="redis://127.0.0.1:6379/0")
 CELERY_RESULT_BACKEND = env("CELERY_BACKEND", default="redis://127.0.0.1:6379/0")
@@ -448,9 +451,18 @@ CELERY_QUEUES = (
         routing_key=CELERY_QUEUE_WORKSPACE_AGGREGATIONS,
     ),
     Queue(CELERY_QUEUE_AI_TEAMMATE, Exchange(CELERY_QUEUE_AI_TEAMMATE), routing_key=CELERY_QUEUE_AI_TEAMMATE),
+    Queue(
+        CELERY_QUEUE_CLOUD_POSTURE,
+        Exchange(CELERY_QUEUE_CLOUD_POSTURE),
+        routing_key=CELERY_QUEUE_CLOUD_POSTURE,
+    ),
 )
 
 CELERY_ROUTES = {
+    "cloud_posture.*": {
+        "queue": CELERY_QUEUE_CLOUD_POSTURE,
+        "routing_key": CELERY_QUEUE_CLOUD_POSTURE,
+    },
     "infrastructure.workspaces.aggregations.tasks.*": {
         "queue": CELERY_QUEUE_WORKSPACE_AGGREGATIONS,
         "routing_key": CELERY_QUEUE_WORKSPACE_AGGREGATIONS,

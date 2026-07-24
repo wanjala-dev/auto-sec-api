@@ -118,6 +118,18 @@ services:
     env_file:
       - ../../.env
 
+  celery_cloud_posture_worker:
+    build:
+      context: ../..
+      dockerfile: docker/django/Dockerfile.cloud_posture
+      args:
+        BASE_IMAGE: *backend-image
+    image: auto-sec-backend-cloud-posture:dev
+    volumes:
+      - ../..:/app
+    env_file:
+      - ../../.env
+
   # ── Dev-only services ──────────────────────────────────────────────────
 
   flower:

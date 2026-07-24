@@ -1,0 +1,19 @@
+# Dedicated cloud-posture Celery worker: the app image + Prowler (the CSPM
+# engine) installed in an ISOLATED venv so its dep tree never touches the
+# worker's Django environment (the isolation the Prowler docs recommend). This
+# mirrors Prowler App's own architecture — a dedicated Celery scan worker.
+#
+# Build depends on the base app image; pass it via BASE_IMAGE (built by `web`).
+ARG BASE_IMAGE=auto-sec-backend:dev
+FROM ${BASE_IMAGE}
+
+# Pin the exact Prowler version (never a floating tag — supply-chain hygiene).
+ARG PROWLER_VERSION=5.36.0
+
+USER root
+RUN python -m venv /opt/prowler/venv \
+ && /opt/prowler/venv/bin/pip install --no-cache-dir "prowler==${PROWLER_VERSION}" \
+ && /opt/prowler/venv/bin/prowler --version
+
+# run_prowler() reads this to invoke the isolated Prowler binary.
+ENV PROWLER_BIN=/opt/prowler/venv/bin/prowler

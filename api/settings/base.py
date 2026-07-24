@@ -615,3 +615,8 @@ AUTH_AUDIT_RETENTION_DAYS = int(os.environ.get("AUTH_AUDIT_RETENTION_DAYS", "365
 PUSH_SUBSCRIPTION_PRUNE_AFTER_DAYS = int(os.environ.get("PUSH_SUBSCRIPTION_PRUNE_AFTER_DAYS", "90"))
 PUSH_SUBSCRIPTION_STALE_AFTER_DAYS = int(os.environ.get("PUSH_SUBSCRIPTION_STALE_AFTER_DAYS", "180"))
 NOTIFICATION_DELIVERY_RETENTION_DAYS = int(os.environ.get("NOTIFICATION_DELIVERY_RETENTION_DAYS", "180"))
+
+# Cloud posture (CSPM) — path to the Prowler CLI. The dedicated cloud-posture
+# worker image sets this to its isolated venv (/opt/prowler/venv/bin/prowler);
+# elsewhere it stays "prowler" (only that worker runs scans).
+PROWLER_BIN = os.environ.get("PROWLER_BIN", "prowler")

@@ -65,7 +65,8 @@ RUN ln -sf /scripts/entrypoint.sh /entrypoint \
     && ln -sf /scripts/celery/start-aggregations.sh /start-celeryworker-aggregations \
     && ln -sf /scripts/celery/start-worker-unified.sh /start-celeryworker-unified \
     && ln -sf /scripts/celery/start-beat.sh /start-celerybeat \
-    && ln -sf /scripts/celery/start-flower.sh /start-flower
+    && ln -sf /scripts/celery/start-flower.sh /start-flower \
+    && ln -sf /scripts/celery/start-cloud-posture.sh /start-celeryworker-cloud-posture
 
 ENTRYPOINT ["/entrypoint"]
 
@@ -99,7 +100,8 @@ RUN ln -sf /scripts/entrypoint.sh /entrypoint \
     && ln -sf /scripts/celery/start-ai-teammate.sh /start-celeryworker-ai-teammate \
     && ln -sf /scripts/celery/start-aggregations.sh /start-celeryworker-aggregations \
     && ln -sf /scripts/celery/start-worker-unified.sh /start-celeryworker-unified \
-    && ln -sf /scripts/celery/start-beat.sh /start-celerybeat
+    && ln -sf /scripts/celery/start-beat.sh /start-celerybeat \
+    && ln -sf /scripts/celery/start-cloud-posture.sh /start-celeryworker-cloud-posture
 
 EXPOSE 8000
 
