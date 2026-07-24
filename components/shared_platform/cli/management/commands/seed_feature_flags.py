@@ -54,13 +54,21 @@ DEFAULT_FLAGS = [
         "until GA; per-workspace opt-in. Read-only observation, never mutates a "
         "vendor's permissions. See docs/plans/PROVENANCE_ACCESS_GRAPH_2026-07-17.md.",
     ),
+    (
+        "feature.cloud_posture",
+        False,
+        "Cloud posture (CSPM) — Prowler-as-engine per-account scans → posture "
+        "snapshots + findings. Off in prod until GA; per-workspace opt-in. The live "
+        "assume-role scan is gated on the read-only IAM audit-role rollout. See "
+        "docs/plans/SECURITY_POSTURE_VISION_2026-07-20.md §3.3.",
+    ),
 ]
 
 
 # Flags that should be globally disabled in production (DEBUG=False).
 # Dev/local (DEBUG=True) leaves them at their default_enabled value.
 # Add product feature-gate keys here as they are introduced.
-PROD_DISABLED_FLAGS = ("feature.provenance_graph",)
+PROD_DISABLED_FLAGS = ("feature.provenance_graph", "feature.cloud_posture")
 
 
 # Flags that, while globally disabled in production, are kept enabled for a

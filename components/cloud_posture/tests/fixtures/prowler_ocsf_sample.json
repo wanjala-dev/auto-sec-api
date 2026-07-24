@@ -1,0 +1,68 @@
+[
+  {
+    "metadata": { "event_code": "s3_bucket_public_access", "product": { "name": "Prowler" } },
+    "severity": "High",
+    "status_code": "FAIL",
+    "status_detail": "S3 Bucket mybucket is publicly accessible.",
+    "finding_info": {
+      "uid": "prowler-aws-s3_bucket_public_access-123456789012-us-east-1-mybucket",
+      "title": "Ensure S3 Buckets are not publicly accessible",
+      "desc": "Public S3 buckets can expose sensitive data to the internet."
+    },
+    "resources": [
+      {
+        "uid": "arn:aws:s3:::mybucket",
+        "name": "mybucket",
+        "type": "AwsS3Bucket",
+        "region": "us-east-1",
+        "group": { "name": "s3" }
+      }
+    ],
+    "cloud": { "provider": "aws", "account": { "uid": "123456789012" }, "region": "us-east-1" },
+    "remediation": { "desc": "Block public access on the bucket and review its policy." },
+    "unmapped": { "check_id": "s3_bucket_public_access", "compliance": { "CIS-2.0": ["2.1.5"] } }
+  },
+  {
+    "metadata": { "event_code": "iam_root_mfa_enabled", "product": { "name": "Prowler" } },
+    "severity": "Critical",
+    "status_code": "FAIL",
+    "status_detail": "Root account does not have MFA enabled.",
+    "finding_info": {
+      "uid": "prowler-aws-iam_root_mfa_enabled-123456789012",
+      "title": "Ensure MFA is enabled for the root account",
+      "desc": "The root account without MFA is a critical exposure."
+    },
+    "resources": [
+      {
+        "uid": "arn:aws:iam::123456789012:root",
+        "name": "root",
+        "type": "AwsIamUser",
+        "region": "us-east-1",
+        "group": { "name": "iam" }
+      }
+    ],
+    "cloud": { "provider": "aws", "account": { "uid": "123456789012" }, "region": "us-east-1" },
+    "remediation": { "desc": "Enable a hardware or virtual MFA device on the root account." },
+    "unmapped": { "compliance": { "CIS-2.0": ["1.5"] } }
+  },
+  {
+    "metadata": { "event_code": "ec2_ebs_default_encryption", "product": { "name": "Prowler" } },
+    "severity": "Medium",
+    "status_code": "PASS",
+    "finding_info": {
+      "uid": "prowler-aws-ec2_ebs_default_encryption-123456789012-us-east-1",
+      "title": "Ensure EBS default encryption is enabled",
+      "desc": "EBS default encryption protects data at rest."
+    },
+    "resources": [
+      {
+        "uid": "arn:aws:ec2:us-east-1:123456789012:volume/default",
+        "name": "ebs-default",
+        "type": "AwsEc2Volume",
+        "region": "us-east-1",
+        "group": { "name": "ec2" }
+      }
+    ],
+    "cloud": { "provider": "aws", "account": { "uid": "123456789012" }, "region": "us-east-1" }
+  }
+]
