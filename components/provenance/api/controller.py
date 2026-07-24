@@ -19,6 +19,7 @@ from components.provenance.api.requests.graph_requests import (
 from components.provenance.api.resources.graph_resources import (
     AccessReviewResource,
     BlastRadiusResource,
+    GraphOverviewResource,
     HallTreeResource,
     LeastPrivilegeResource,
 )
@@ -31,6 +32,14 @@ _FLAG = "feature.provenance_graph"
 class _BaseProvenanceView(APIView):
     permission_classes = (permissions.IsAuthenticated, HasWorkspaceMembership, RequiresFeatureFlag)
     feature_flag_key = _FLAG
+
+
+class GraphOverviewView(_BaseProvenanceView):
+    name = "provenance-graph-overview"
+
+    def get(self, request, workspace_id):
+        result = get_provenance_service().graph_overview(workspace_id=workspace_id)
+        return Response({"success": True, "data": GraphOverviewResource.from_result(result).to_dict()})
 
 
 class VendorBlastRadiusView(_BaseProvenanceView):
