@@ -105,6 +105,35 @@ still need trimming; fix the fixture, never baseline a real violation).
   one because autosec is a product that will bill customers as it scales. Treat payment-path changes
   with care; verify against the Stripe MCP where connected.
 
+## Git & worktrees — ALWAYS work in a worktree (HARD RULE)
+
+autosec is **TRUNK-BASED**: the primary clones (`auto-sec-api`, `auto-sec-frontend`) sit on
+`main`. A PreToolUse guard hook runs `git branch --show-current` before **every** Bash command and
+**blocks it when the shell's cwd is on `main`/`master`** — and it blocks *everything* (`docker`,
+`gh`, `pytest`, even `cd`), not just pushes. If the shell's working directory drifts onto a
+main-branch clone, ALL Bash is wedged until that clone is checked out to a non-main branch or the
+session restarts (you can't `cd` out — `cd` is itself Bash and gets blocked first).
+
+**So, without exception:**
+
+1. **Do ALL work in a git worktree on a feature branch off `origin/main`** — never in a primary
+   clone:
+   ```bash
+   git -C /Users/henrywanjala/Desktop/auto-sec/auto-sec-api fetch origin
+   git -C /Users/henrywanjala/Desktop/auto-sec/auto-sec-api worktree add \
+     /Users/henrywanjala/Desktop/auto-sec/worktrees/<name> -b feat/<name> origin/main
+   ```
+   Then `cd` into the worktree and run everything from there. The worktree is on a feature branch, so
+   Bash never trips the guard.
+2. **Never `cd` into a primary clone.** If you must touch one (start its dev server, read a file via
+   shell), wrap the `cd` in a **subshell** so the cwd never persists — `( cd <clone> && npm start ) &`
+   — or use `git -C <path>` / absolute paths. Prefer the Read tool for reading files (no cwd effect).
+3. **Ship from the worktree:** commit + `gh pr create --base main`, `gh pr merge --squash
+   --delete-branch`, then `git worktree remove <path>`. Sync the primary clone with
+   `git -C <clone> checkout main && git -C <clone> pull` (from a safe cwd, e.g. via `git -C`).
+
+Never `Co-Authored-By: Claude` on autosec commits. See `.claude/rules/branching-strategy.md`.
+
 ## Directory layout
 
 - `components/` — bounded contexts (business logic; the list above).
