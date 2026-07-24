@@ -237,6 +237,13 @@ services:
     <<: *celery-base
     command: /start-celerybeat
 
+  # Dedicated worker for the Prowler CSPM scans — its own image carries Prowler
+  # in an isolated venv (see docker/django/Dockerfile.cloud_posture). Consumes
+  # the cloud_posture queue only.
+  celery_cloud_posture_worker:
+    <<: *celery-base
+    command: /start-celeryworker-cloud-posture
+
   # ── Langfuse observability stack ───────────────────────────────────────
 
   langfuse-db:

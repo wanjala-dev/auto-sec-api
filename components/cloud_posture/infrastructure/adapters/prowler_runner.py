@@ -18,6 +18,9 @@ import logging
 import os
 import subprocess
 import tempfile
+from pathlib import Path
+
+from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
@@ -51,14 +54,17 @@ def run_prowler(
     credentials: dict,
     account_id: str,
     regions: list[str] | None = None,
-    prowler_bin: str = "prowler",
+    prowler_bin: str | None = None,
     timeout: int = _DEFAULT_TIMEOUT,
 ) -> list[dict]:
     """Run Prowler with the assumed creds and return parsed OCSF finding records.
 
-    Returns ``[]`` if Prowler produced no output file (e.g. a run error) — the
-    caller records an empty scan rather than crashing the beat cycle.
+    ``prowler_bin`` defaults to the ``PROWLER_BIN`` setting (the dedicated
+    cloud-posture worker points it at its isolated venv). Returns ``[]`` if
+    Prowler produced no OCSF output (e.g. a run error) — the caller records an
+    empty scan rather than crashing the beat cycle.
     """
+    binary = prowler_bin or getattr(settings, "PROWLER_BIN", "prowler")
     env = {
         **os.environ,
         "AWS_ACCESS_KEY_ID": credentials["AccessKeyId"],
@@ -66,16 +72,15 @@ def run_prowler(
         "AWS_SESSION_TOKEN": credentials["SessionToken"],
     }
     with tempfile.TemporaryDirectory() as out_dir:
-        filename = f"prowler-{account_id}"
         cmd = [
-            prowler_bin,
+            binary,
             "aws",
             "--output-formats",
             "json-ocsf",
             "--output-directory",
             out_dir,
             "--output-filename",
-            filename,
+            f"prowler-{account_id}",
             # Prowler exits 3 when findings are present — not an execution error.
             "--ignore-exit-code-3",
         ]
@@ -84,10 +89,11 @@ def run_prowler(
 
         subprocess.run(cmd, env=env, timeout=timeout, check=False, capture_output=True)
 
-        path = os.path.join(out_dir, f"{filename}.ocsf.json")
-        if not os.path.exists(path):
-            logger.warning("prowler produced no output account=%s", account_id)
+        # Prowler appends a `.ocsf.json` suffix; glob so we match its exact naming
+        # regardless of version (robust to the filename convention).
+        matches = sorted(Path(out_dir).glob("*.ocsf.json"))
+        if not matches:
+            logger.warning("prowler produced no OCSF output account=%s", account_id)
             return []
-        with open(path) as handle:
-            data = json.load(handle)
+        data = json.loads(matches[0].read_text())
     return data if isinstance(data, list) else []
