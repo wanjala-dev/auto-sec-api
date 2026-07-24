@@ -22,16 +22,16 @@ from components.provenance.application.queries.provenance_graph_query import (
 
 class ProvenanceGraphPort(ABC):
     @abstractmethod
-    def vendor_blast_radius(self, *, workspace_id: UUID, actor_id: UUID) -> VendorBlastRadius:
-        """All grants (potential) + recent events (actual) for one actor."""
+    def vendor_blast_radius(self, *, workspace_id: UUID, actor_id: UUID) -> VendorBlastRadius | None:
+        """All grants (potential) + recent events (actual) for one actor. None if the actor is unknown."""
 
     @abstractmethod
     def access_review(self, *, workspace_id: UUID, resource_id: UUID) -> list[AccessReviewRow]:
         """Every actor with a grant on a resource, for the access-review table."""
 
     @abstractmethod
-    def hall_tree(self, *, workspace_id: UUID, actor_id: UUID, since: datetime, max_depth: int = 3) -> HallTree:
-        """The provenance drill-down: what an actor touched over a window."""
+    def hall_tree(self, *, workspace_id: UUID, actor_id: UUID, since: datetime, max_depth: int = 3) -> HallTree | None:
+        """The provenance drill-down: what an actor touched over a window. None if the actor is unknown."""
 
     @abstractmethod
     def least_privilege_gaps(self, *, workspace_id: UUID, unused_days: int = 30) -> list[LeastPrivilegeGap]:

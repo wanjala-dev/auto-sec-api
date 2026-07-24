@@ -70,6 +70,7 @@ api_patterns = [
     path("social/", include("components.social.api.urls")),
     path("content/", include("components.content.api.urls")),
     path("integrations/", include("components.integrations.api.urls")),
+    path("provenance/", include("components.provenance.api.urls")),
     re_path(r"^countries/ctry/(\w{0,50})", CountryDetails.as_view()),
     path("countries/", CountryListView.as_view()),
     path("countries/<str:country>/", CountryByNameView.as_view()),

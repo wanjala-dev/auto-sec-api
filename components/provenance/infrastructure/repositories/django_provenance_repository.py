@@ -44,8 +44,12 @@ _RECENT_EVENT_LIMIT = 100
 
 
 class DjangoProvenanceRepository(ProvenanceGraphPort):
-    def vendor_blast_radius(self, *, workspace_id: UUID, actor_id: UUID) -> VendorBlastRadius:
-        actor = ProvenanceActor.objects.select_related("workspace").get(id=actor_id, workspace_id=workspace_id)
+    def vendor_blast_radius(self, *, workspace_id: UUID, actor_id: UUID) -> VendorBlastRadius | None:
+        actor = (
+            ProvenanceActor.objects.select_related("workspace").filter(id=actor_id, workspace_id=workspace_id).first()
+        )
+        if actor is None:
+            return None
         grants = list(
             AccessGrant.objects.filter(
                 workspace_id=workspace_id, actor_id=actor_id, revoked_at__isnull=True
@@ -86,8 +90,10 @@ class DjangoProvenanceRepository(ProvenanceGraphPort):
             for g in grants
         ]
 
-    def hall_tree(self, *, workspace_id: UUID, actor_id: UUID, since: datetime, max_depth: int = 3) -> HallTree:
-        actor = ProvenanceActor.objects.get(id=actor_id, workspace_id=workspace_id)
+    def hall_tree(self, *, workspace_id: UUID, actor_id: UUID, since: datetime, max_depth: int = 3) -> HallTree | None:
+        actor = ProvenanceActor.objects.filter(id=actor_id, workspace_id=workspace_id).first()
+        if actor is None:
+            return None
         touched = list(
             ProvenanceEvent.objects.filter(workspace_id=workspace_id, actor_id=actor_id, occurred_at__gte=since)
             .values("resource_id")
