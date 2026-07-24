@@ -41,6 +41,14 @@ class GenerateOnboardingTemplateUseCase:
                         }
                     ],
                 },
+                # AWS-managed read-only policies powering the Prowler CSPM scan
+                # (Phase 3). Well-understood, defensible least-privilege — no
+                # hand-rolled describe lists. Keep in lockstep with the Terraform
+                # generator below (never widen one without the other).
+                "ManagedPolicyArns": [
+                    "arn:aws:iam::aws:policy/SecurityAudit",
+                    "arn:aws:iam::aws:policy/job-function/ViewOnlyAccess",
+                ],
                 "Policies": [
                     {
                         "PolicyName": "AutoSecAuditReadOnly",
@@ -193,6 +201,18 @@ resource "aws_iam_role_policy" "autosec_audit_read" {{
       }}
     ]
   }})
+}}
+
+# AWS-managed read-only policies powering the Prowler CSPM scan (Phase 3).
+# Kept in lockstep with the CloudFormation generator (never widen one alone).
+resource "aws_iam_role_policy_attachment" "autosec_security_audit" {{
+  role       = aws_iam_role.autosec_audit.name
+  policy_arn = "arn:aws:iam::aws:policy/SecurityAudit"
+}}
+
+resource "aws_iam_role_policy_attachment" "autosec_view_only" {{
+  role       = aws_iam_role.autosec_audit.name
+  policy_arn = "arn:aws:iam::aws:policy/job-function/ViewOnlyAccess"
 }}
 
 output "autosec_role_arn" {{

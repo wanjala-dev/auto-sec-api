@@ -367,6 +367,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "workflow.run_due_schedules",
         "schedule": crontab(minute="*"),
     },
+    "schedule_cloud_posture_scans": {
+        "task": "cloud_posture.schedule_prowler_runs",
+        "schedule": crontab(hour=2, minute=0),
+    },
     "ai_teammate_schedule": {
         "task": "infrastructure.ai.agents.tasks.schedule_ai_teammate_runs",
         "schedule": timedelta(hours=1),
