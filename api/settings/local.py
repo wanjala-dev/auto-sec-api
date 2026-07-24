@@ -521,6 +521,12 @@ CELERY_BEAT_SCHEDULE = {
     # → evidence findings via the AIAction path, LogTriageRouterDetector →
     # triage agent). This is what makes the SOC log-watch → triage pipeline
     # run autonomously every 5 minutes.
+    # Nightly Prowler CSPM scan — fans out per verified account of opted-in orgs
+    # (feature.cloud_posture). Dark until opt-in; the task self-gates on the flag.
+    "schedule_cloud_posture_scans": {
+        "task": "cloud_posture.schedule_prowler_runs",
+        "schedule": crontab(hour=2, minute=0),
+    },
     "schedule_ai_teammate_runs": {
         "task": "infrastructure.ai.agents.tasks.schedule_ai_teammate_runs",
         "schedule": crontab(minute="*/5"),

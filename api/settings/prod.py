@@ -333,6 +333,11 @@ CELERY_BEAT_SCHEDULE = {
         "task": "ai.rollup_ai_action_daily",
         "schedule": crontab(minute=20, hour=0),
     },
+    # Nightly Prowler CSPM scan — dark until opt-in (feature.cloud_posture).
+    "schedule_cloud_posture_scans": {
+        "task": "cloud_posture.schedule_prowler_runs",
+        "schedule": crontab(hour=2, minute=0),
+    },
 }
 
 CELERY_QUEUE_DEFAULT = os.environ.get("CELERY_QUEUE_DEFAULT", "default")
