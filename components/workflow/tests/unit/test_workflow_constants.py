@@ -183,9 +183,10 @@ class TestWorkflowConstants:
     def test_source_types_not_empty(self):
         """SOURCE_TYPES should contain valid source types."""
         assert len(SOURCE_TYPES) > 0
-        assert "directory" in SOURCE_TYPES
         assert "task" in SOURCE_TYPES
-        assert "event" in SOURCE_TYPES
+        assert "project" in SOURCE_TYPES
+        assert "document" in SOURCE_TYPES
+        assert "finding" in SOURCE_TYPES
 
     def test_source_types_are_strings(self):
         """All SOURCE_TYPES should be strings."""
@@ -285,30 +286,13 @@ class TestWorkflowConstants:
             for goal_id in trigger.goal_ids:
                 assert goal_id in valid_goal_types
 
-    def test_trigger_catalog_contact_added_trigger(self):
-        """Should have contact_added trigger in catalog."""
-        contact_added = next((t for t in TRIGGER_CATALOG if t.id == "contact_added"), None)
-
-        assert contact_added is not None
-        assert contact_added.source_type == "directory"
-        assert "campaign" in contact_added.goal_ids
-
     def test_trigger_catalog_task_completed_trigger(self):
         """Should have task_completed trigger in catalog."""
         task_completed = next((t for t in TRIGGER_CATALOG if t.id == "task_completed"), None)
 
         assert task_completed is not None
         assert task_completed.source_type == "task"
-        assert "campaign" in task_completed.goal_ids
-        assert "sponsorship" in task_completed.goal_ids
-
-    def test_trigger_catalog_donation_received_trigger(self):
-        """Should have donation_received trigger in catalog."""
-        donation = next((t for t in TRIGGER_CATALOG if t.id == "donation_received"), None)
-
-        assert donation is not None
-        assert donation.source_type == "sponsorship"
-        assert "sponsorship" in donation.goal_ids
+        assert "security" in task_completed.goal_ids
 
     def test_all_catalog_triggers_have_default_compatible_nodes(self):
         """All catalog triggers should have 'start' as compatible node type."""
@@ -358,9 +342,10 @@ class TestWorkflowConstants:
         """All source types should have at least one trigger in catalog."""
         catalog_source_types = {t.source_type for t in TRIGGER_CATALOG}
 
-        assert "directory" in catalog_source_types
         assert "task" in catalog_source_types
-        assert "event" in catalog_source_types
+        assert "project" in catalog_source_types
+        assert "document" in catalog_source_types
+        assert "finding" in catalog_source_types
 
 
 class TestTriggerDefinitionIntegration:
@@ -383,8 +368,8 @@ class TestTriggerDefinitionIntegration:
         """Should be able to create custom trigger definitions."""
         custom = TriggerDefinition(
             id="custom_event",
-            source_type="directory",
-            label="Custom directory event",
+            source_type="finding",
+            label="Custom finding event",
             goal_ids=("campaign",),
             compatible_node_types=("start", "task"),
         )

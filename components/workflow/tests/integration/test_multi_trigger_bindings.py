@@ -53,25 +53,25 @@ def _make_workflow(workspace, trigger_types):
 class TestPublishSyncsBindings:
     def test_one_binding_per_trigger(self, workspace_factory):
         ws = workspace_factory()
-        wf = _make_workflow(ws, ["contact_added", "donation_received"])
+        wf = _make_workflow(ws, ["finding_raised", "task_created"])
 
         WorkflowService().publish_workflow(wf)
 
         bindings = WorkflowBinding.objects.filter(workflow_id=wf.id, is_active=True)
         triggers = {b.trigger_type for b in bindings}
-        assert triggers == {"contact_added", "donation_received"}
+        assert triggers == {"finding_raised", "task_created"}
         # source_type is resolved from the trigger catalog
         by_trigger = {b.trigger_type: b.source_type for b in bindings}
-        assert by_trigger["contact_added"] == "directory"
-        assert by_trigger["donation_received"] == "sponsorship"
+        assert by_trigger["finding_raised"] == "finding"
+        assert by_trigger["task_created"] == "task"
 
     def test_removing_a_trigger_deactivates_its_binding(self, workspace_factory):
         ws = workspace_factory()
-        wf = _make_workflow(ws, ["contact_added", "donation_received"])
+        wf = _make_workflow(ws, ["finding_raised", "task_created"])
         WorkflowService().publish_workflow(wf)
 
         # Re-publish with one trigger removed.
-        wf.graph = _graph(["contact_added"])
+        wf.graph = _graph(["finding_raised"])
         wf.save(update_fields=["graph"])
         WorkflowService().publish_workflow(wf)
 
@@ -79,31 +79,31 @@ class TestPublishSyncsBindings:
             b.trigger_type
             for b in WorkflowBinding.objects.filter(workflow_id=wf.id, is_active=True)
         }
-        assert active == {"contact_added"}
+        assert active == {"finding_raised"}
         # the removed trigger's binding still exists but is inactive (no dupes)
         donation = WorkflowBinding.objects.filter(
-            workflow_id=wf.id, trigger_type="donation_received"
+            workflow_id=wf.id, trigger_type="task_created"
         )
         assert donation.count() == 1
         assert donation.first().is_active is False
 
     def test_republish_is_idempotent(self, workspace_factory):
         ws = workspace_factory()
-        wf = _make_workflow(ws, ["contact_added"])
+        wf = _make_workflow(ws, ["finding_raised"])
         WorkflowService().publish_workflow(wf)
         WorkflowService().publish_workflow(wf)
         assert WorkflowBinding.objects.filter(
-            workflow_id=wf.id, trigger_type="contact_added"
+            workflow_id=wf.id, trigger_type="finding_raised"
         ).count() == 1
 
     def test_manual_source_scoped_binding_untouched(self, workspace_factory):
         ws = workspace_factory()
-        wf = _make_workflow(ws, ["contact_added"])
+        wf = _make_workflow(ws, ["finding_raised"])
         manual = WorkflowBinding.objects.create(
             workflow_id=wf.id,
-            source_type="campaign",
-            trigger_type="campaign_opened",
-            source_id="some-campaign-id",
+            source_type="finding",
+            trigger_type="finding_high",
+            source_id="some-finding-id",
             is_active=True,
         )
         WorkflowService().publish_workflow(wf)
@@ -119,15 +119,15 @@ class TestStartNodeTriggerExtraction:
                     "id": "start",
                     "type": "start",
                     "config": {
-                        "triggerTypes": ["contact_added"],
-                        "triggerType": "donation_received",
+                        "triggerTypes": ["finding_raised"],
+                        "triggerType": "task_created",
                     },
                 }
             ]
         }
         pairs = WorkflowService._start_node_triggers(graph)
         triggers = {t for _, t in pairs}
-        assert triggers == {"contact_added", "donation_received"}
+        assert triggers == {"finding_raised", "task_created"}
 
     def test_unknown_trigger_skipped(self):
         graph = {"nodes": [{"id": "start", "type": "start",

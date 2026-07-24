@@ -42,10 +42,11 @@ seeding failed.
 No Django/ORM imports — this is application layer; persistence is reached only
 through ``WorkflowService``.
 """
+
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -53,17 +54,15 @@ logger = logging.getLogger(__name__)
 # its activation policy. Add a starter by appending an entry (the template must
 # be seeded by ``seed_workflow_templates``). Order is provisioning order.
 #
-# Only ``activate=True`` starters fire on day one — keep that list to safe,
-# internal automations. Donor/contact-facing starters ship ``activate=False``
-# so an admin opts them in (they have a real, contact-targeted emitter, so they
-# WILL fire once turned on — see the trigger-completeness rule).
-#   - receipt-accountability (transaction_recorded): internal owner nudge → ON.
-#   - donation-thanks (donation_received): donor thank-you email → OFF.
-#   - sponsor (contact_added): new-contact welcome email → OFF.
-STARTER_TEMPLATES: List[Dict[str, Any]] = [
-    {"template_id": "receipt-accountability", "activate": True},
-    {"template_id": "donation-thanks", "activate": False},
-    {"template_id": "sponsor", "activate": False},
+# Only ``activate=True`` starters fire on day one. The critical-finding alert is
+# a safe, high-value internal automation (notify + AI-triage a critical finding)
+# so it ships ON; the broader finding→SOAR forward ships OFF because it needs a
+# webhook URL the admin supplies before it does anything.
+#   - critical-finding-alert (finding_critical): notify + AI triage → ON.
+#   - finding-soar-webhook (finding_raised): forward to SOAR → OFF (needs a URL).
+STARTER_TEMPLATES: list[dict[str, Any]] = [
+    {"template_id": "critical-finding-alert", "activate": True},
+    {"template_id": "finding-soar-webhook", "activate": False},
 ]
 
 # Goal stored on the cloned workflow. "general" is the unconstrained goal
@@ -75,20 +74,20 @@ _STARTER_WORKFLOW_GOAL = "general"
 class SeedWorkspaceStarterWorkflowsUseCase:
     """Provision the starter system workflows for a workspace (idempotent)."""
 
-    def __init__(self, service: Optional[Any] = None) -> None:
+    def __init__(self, service: Any | None = None) -> None:
         if service is None:
             from components.workflow.application.service import WorkflowService
 
             service = WorkflowService()
         self._service = service
 
-    def execute(self, workspace_id: Any) -> List[Any]:
+    def execute(self, workspace_id: Any) -> list[Any]:
         """Provision each starter template into *workspace_id*.
 
         Returns the ids of the workflows created on this run (skipped /
         already-present templates are not included). Never raises.
         """
-        created: List[Any] = []
+        created: list[Any] = []
         for starter in STARTER_TEMPLATES:
             template_id = starter["template_id"]
             activate = bool(starter.get("activate", False))
@@ -106,9 +105,7 @@ class SeedWorkspaceStarterWorkflowsUseCase:
                 )
         return created
 
-    def _provision_one(
-        self, workspace_id: Any, template_id: str, activate: bool
-    ) -> Optional[Any]:
+    def _provision_one(self, workspace_id: Any, template_id: str, activate: bool) -> Any | None:
         template = self._service.get_template_by_id(template_id)
         if template is None:
             # Fresh DB / templates not seeded yet — bootstrap can re-run later.
@@ -159,8 +156,7 @@ class SeedWorkspaceStarterWorkflowsUseCase:
             self._assert_bindings_inactive(workspace_id, workflow, template_id)
 
         logger.info(
-            "starter_workflow_provisioned workspace_id=%s template_id=%s "
-            "workflow_id=%s activate=%s",
+            "starter_workflow_provisioned workspace_id=%s template_id=%s workflow_id=%s activate=%s",
             workspace_id,
             template_id,
             workflow.id,
@@ -168,9 +164,7 @@ class SeedWorkspaceStarterWorkflowsUseCase:
         )
         return workflow
 
-    def _assert_bindings_inactive(
-        self, workspace_id: Any, workflow: Any, template_id: str
-    ) -> None:
+    def _assert_bindings_inactive(self, workspace_id: Any, workflow: Any, template_id: str) -> None:
         """Verify an ``activate=False`` starter's bindings ended up inactive.
 
         A defensive check (logged, not raised — best-effort) that the park
@@ -181,8 +175,7 @@ class SeedWorkspaceStarterWorkflowsUseCase:
         active = [b for b in bindings if getattr(b, "is_active", False)]
         if active:
             logger.warning(
-                "starter_workflow_binding_still_active workspace_id=%s "
-                "template_id=%s workflow_id=%s active_count=%s",
+                "starter_workflow_binding_still_active workspace_id=%s template_id=%s workflow_id=%s active_count=%s",
                 workspace_id,
                 template_id,
                 workflow.id,
