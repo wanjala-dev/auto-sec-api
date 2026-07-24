@@ -30,7 +30,7 @@ def _graph():
     return {
         "nodes": [
             {"id": "start", "type": "start", "label": "Start",
-             "config": {"triggerTypes": ["donation_received"]}},
+             "config": {"triggerTypes": ["finding_raised"]}},
             {"id": "msg", "type": "message", "label": "Notify",
              "config": {"channel": "in_app", "body": "thanks"}},
             {"id": "end", "type": "end", "label": "End", "config": {}},
@@ -54,9 +54,9 @@ def _publish(workspace):
 def _event(workspace, *, source_id, target_id="contact-1"):
     return WorkflowEvent.objects.create(
         workspace_id=str(workspace.id),
-        source_type="sponsorship",
+        source_type="finding",
         source_id=source_id,
-        trigger_type="donation_received",
+        trigger_type="finding_raised",
         payload={"target_type": "contact", "target_id": target_id, "amount": "25.00"},
     )
 
@@ -67,7 +67,7 @@ class TestNullSourceBindingFires:
         _publish(ws)
         # sanity: publish made exactly one NULL-source binding
         binding = WorkflowBinding.objects.get(
-            workflow__workspace_id=ws.id, trigger_type="donation_received"
+            workflow__workspace_id=ws.id, trigger_type="finding_raised"
         )
         assert binding.source_id is None
 

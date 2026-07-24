@@ -31,7 +31,7 @@ from infrastructure.persistence.workspaces.workflows.models import (
 
 pytestmark = pytest.mark.django_db
 
-RECEIPT_TEMPLATE_ID = "receipt-accountability"
+RECEIPT_TEMPLATE_ID = "critical-finding-alert"
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 
 
@@ -78,8 +78,8 @@ class TestActivationPolicy:
             workflow=workflow, source_id__isnull=True
         )
         assert binding.is_active is True
-        assert binding.source_type == "budget"
-        assert binding.trigger_type == "transaction_recorded"
+        assert binding.source_type == "finding"
+        assert binding.trigger_type == "finding_critical"
 
     @pytest.mark.parametrize(
         "template_id",
@@ -145,7 +145,7 @@ class TestIdempotency:
 
         # Admin turns ON a donor-facing starter (donation-thanks) ...
         thanks_wf = Workflow.objects.get(
-            workspace=workspace, template_id="donation-thanks", is_deleted=False
+            workspace=workspace, template_id="finding-soar-webhook", is_deleted=False
         )
         WorkflowBinding.objects.filter(
             workflow=thanks_wf, source_id__isnull=True

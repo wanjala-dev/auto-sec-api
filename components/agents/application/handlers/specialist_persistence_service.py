@@ -241,15 +241,10 @@ def _emit_finding_triggers(
             "impact_score": impact_score,
             "source_type": source_type,
         }
-        # Every finding fires ``finding_raised``; critical/high additionally fire
-        # their severity-scoped trigger. source_id = the finding's task id so a
-        # binding can scope to one finding, and the run targets it.
-        trigger_types = ["finding_raised"]
-        if severity == "critical":
-            trigger_types.append("finding_critical")
-        elif severity == "high":
-            trigger_types.append("finding_high")
-        for trigger_type in trigger_types:
+
+        def _emit(trigger_type: str) -> None:
+            # source_id = the finding's task id so a binding can scope to one
+            # finding, and the run targets it.
             emit_workflow_event(
                 workspace_id=workspace_id,
                 source_type="finding",
@@ -258,6 +253,15 @@ def _emit_finding_triggers(
                 payload=payload,
                 idempotency_key=f"{task_id}:{trigger_type}",
             )
+
+        # Every finding fires ``finding_raised``; critical/high additionally fire
+        # their severity-scoped trigger (explicit literals so the emit-site
+        # completeness check finds each trigger_type).
+        _emit(trigger_type="finding_raised")
+        if severity == "critical":
+            _emit(trigger_type="finding_critical")
+        elif severity == "high":
+            _emit(trigger_type="finding_high")
     except Exception:
         logger.exception(
             "finding_workflow_emit_failed workspace_id=%s task_id=%s",

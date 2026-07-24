@@ -40,9 +40,6 @@ def get_recycle_bin_service() -> RecycleBinService:
     from components.workflow.application.providers.workflow_soft_delete_provider import (
         get_workflow_soft_delete_provider,
     )
-    from components.workspace.application.providers.brand_asset_provider import (
-        get_brand_asset_provider,
-    )
 
     provider = SoftDeleteProvider()
     # Org login-activity hides (T2-S4): the trashable entity is the
@@ -52,7 +49,6 @@ def get_recycle_bin_service() -> RecycleBinService:
     provider.register(get_project_soft_delete_provider().adapter())
     provider.register(get_project_soft_delete_provider().task_adapter())
     provider.register(get_project_soft_delete_provider().column_adapter())
-    provider.register(get_brand_asset_provider().soft_delete_adapter())
 
     # Production audit adapter writes every trash/restore/purge into
     # the shared EntityAuditLog table, so the existing
