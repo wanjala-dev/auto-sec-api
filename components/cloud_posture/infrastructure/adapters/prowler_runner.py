@@ -1,14 +1,12 @@
 """Run Prowler against a customer account and return OCSF records.
 
-Two seams, both isolated so the orchestration task can be tested without AWS or
-a Prowler install:
-
-* ``assume_account_credentials`` — assume the read-only audit role IN the target
-  member account (the StackSet deploys the role to every account) with the
-  confused-deputy ``ExternalId``. Mirrors the integrations assume-role posture.
-* ``run_prowler`` — invoke the Prowler CLI (Apache-2.0) with the assumed creds,
-  emit OCSF JSON, and read it back. The live run needs Prowler installed + the
-  operator's IAM audit-role rollout; tests mock this function.
+``run_prowler`` invokes the Prowler CLI (Apache-2.0) with already-assumed,
+short-lived credentials — this module no longer assumes roles itself; the
+orchestration task vends credentials through the single integrations
+credential port (the AWS token-vending seam). It emits OCSF JSON and reads it
+back. Isolated so the task can be tested without AWS or a Prowler install
+(tests mock this function). The live run needs Prowler installed + the
+operator's IAM audit-role rollout.
 """
 
 from __future__ import annotations
@@ -25,28 +23,6 @@ from django.conf import settings
 logger = logging.getLogger(__name__)
 
 _DEFAULT_TIMEOUT = 1800
-
-
-def assume_account_credentials(
-    *,
-    account_id: str,
-    role_name: str,
-    external_id: str,
-    session_name: str = "autosec-prowler",
-    duration_seconds: int = 3600,
-) -> dict:
-    """Assume ``arn:aws:iam::<account_id>:role/<role_name>``; return STS creds."""
-    import boto3
-
-    role_arn = f"arn:aws:iam::{account_id}:role/{role_name}"
-    creds = boto3.client("sts").assume_role(
-        RoleArn=role_arn,
-        RoleSessionName=session_name,
-        ExternalId=external_id,
-        DurationSeconds=duration_seconds,
-    )["Credentials"]
-    logger.info("cloud_posture_role_assumed account=%s role=%s", account_id, role_name)
-    return creds
 
 
 def run_prowler(

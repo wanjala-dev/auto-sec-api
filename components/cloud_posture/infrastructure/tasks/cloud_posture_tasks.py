@@ -2,11 +2,13 @@
 
 ``schedule_prowler_runs`` (beat) fans out one ``run_prowler_scan_for_account``
 per verified account of every CONNECTED connection whose workspace has opted in
-(``feature.cloud_posture``). Each child assumes the account's read-only role,
-runs Prowler, and ingests the OCSF result as a ``CloudPostureScan``.
+(``feature.cloud_posture``). Each child assumes the account's read-only role
+via the integrations credential-vending port (the single AWS token-vending
+seam — never a scan-local assume-role), runs Prowler, and ingests the OCSF
+result as a ``CloudPostureScan``.
 
 The live path needs the operator IAM audit-role rollout + a Prowler install; the
-two seams (``assume_account_credentials`` / ``run_prowler``) are mocked in tests.
+two seams (``get_aws_credentials_port`` / ``run_prowler``) are mocked in tests.
 """
 
 from __future__ import annotations
@@ -16,12 +18,12 @@ from typing import Any
 
 from celery import shared_task
 
-from components.cloud_posture.infrastructure.adapters.prowler_runner import (
-    assume_account_credentials,
-    run_prowler,
-)
+from components.cloud_posture.infrastructure.adapters.prowler_runner import run_prowler
 from components.cloud_posture.infrastructure.services.prowler_ingest_service import (
     ingest_prowler_scan,
+)
+from components.integrations.application.providers.aws_credentials_provider import (
+    get_aws_credentials_port,
 )
 
 logger = logging.getLogger(__name__)
@@ -38,10 +40,11 @@ def run_prowler_scan_for_account(connection_id: str, account_id: str) -> dict[st
         return {"success": False, "error": "connection_not_found"}
 
     try:
-        credentials = assume_account_credentials(
+        credentials = get_aws_credentials_port().assume_role(
             account_id=account_id,
             role_name=connection.role_name,
             external_id=connection.external_id,
+            session_name="autosec-prowler",
         )
         records = run_prowler(credentials=credentials, account_id=account_id, regions=list(connection.regions or []))
     except Exception:

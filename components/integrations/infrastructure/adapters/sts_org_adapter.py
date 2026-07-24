@@ -30,15 +30,21 @@ class StsOrgAdapter(OrgVerificationPort):
     ) -> dict:
         import boto3
 
-        role_arn = f"arn:aws:iam::{management_account_id}:role/{role_name}"
-        sts = boto3.client("sts")
-        assumed = sts.assume_role(
-            RoleArn=role_arn,
-            RoleSessionName="autosec-verify",
-            ExternalId=external_id,
-            DurationSeconds=900,
-        )["Credentials"]
-        logger.info("aws_role_assumed account=%s role=%s", management_account_id, role_name)
+        from components.integrations.application.providers.aws_credentials_provider import (
+            get_aws_credentials_port,
+        )
+
+        # Live dry-run assume (uncached) through the single credential-vending
+        # seam — verification must prove the role works right now, not reuse a
+        # warm session.
+        assumed = get_aws_credentials_port().assume_role(
+            account_id=management_account_id,
+            role_name=role_name,
+            external_id=external_id,
+            session_name="autosec-verify",
+            duration_seconds=900,
+            use_cache=False,
+        )
 
         result: dict = {"organization_id": "", "accounts": []}
         if not discover:
