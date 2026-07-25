@@ -82,7 +82,17 @@ def enqueue_scan_for_connection(*, workspace_id, connection_id) -> int | None:
     return enqueue_connection_scans(connection)
 
 
-@shared_task(name="cloud_posture.run_prowler_scan_for_account", soft_time_limit=1800, time_limit=1860)
+@shared_task(
+    name="cloud_posture.run_prowler_scan_for_account",
+    # Pin to the dedicated queue: this task shells out to Prowler, which is ONLY
+    # installed in the cloud-posture worker's isolated venv. The global route
+    # table is inert (settings use the dead `CELERY_ROUTES` name, not
+    # `CELERY_TASK_ROUTES`), so without this the task falls to the default queue
+    # and dies with `FileNotFoundError: 'prowler'`. Queue name == CELERY_QUEUE_CLOUD_POSTURE.
+    queue="cloud_posture",
+    soft_time_limit=1800,
+    time_limit=1860,
+)
 def run_prowler_scan_for_account(connection_id: str, account_id: str) -> dict[str, Any]:
     """Assume the account role, run Prowler, ingest the result; (re)verify the link."""
     from infrastructure.persistence.integrations.models import AwsAccountLink, AwsOrganizationConnection
