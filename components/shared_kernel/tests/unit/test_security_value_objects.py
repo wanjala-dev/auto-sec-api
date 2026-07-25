@@ -116,3 +116,25 @@ class TestAssetUrn:
         assert urn.provider == "aws"
         with pytest.raises(ValueError):
             AssetUrn.from_aws_arn("not-an-arn")
+
+    def test_canonical_uses_arn_verbatim(self):
+        # An ARN is already globally unique — kept as-is so a finding and a graph
+        # node that both name it correlate on the identical value.
+        urn = AssetUrn.canonical("aws", "arn:aws:s3:::my-bucket")
+        assert urn.value == "arn:aws:s3:::my-bucket"
+
+    def test_canonical_uses_existing_urn_verbatim(self):
+        assert AssetUrn.canonical("gcp", "urn:gcp:storage:b").value == "urn:gcp:storage:b"
+
+    def test_canonical_namespaces_opaque_refs(self):
+        # A non-globally-unique ref is namespaced so two systems' opaque ids never
+        # collide.
+        assert AssetUrn.canonical("okta", "00u123").value == "urn:okta:00u123"
+        assert AssetUrn.canonical("INTERNAL", "workspace-42").value == "urn:internal:workspace-42"
+
+    def test_canonical_defaults_unknown_source(self):
+        assert AssetUrn.canonical("", "ref-9").value == "urn:unknown:ref-9"
+
+    def test_canonical_rejects_empty_ref(self):
+        with pytest.raises(ValueError):
+            AssetUrn.canonical("aws", "   ")
