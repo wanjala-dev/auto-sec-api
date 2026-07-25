@@ -62,6 +62,38 @@ def get_posture_summary(*, workspace_id) -> dict:
     }
 
 
+def list_findings(*, workspace_id, severity: str | None = None, account_id: str | None = None, limit: int = 100) -> list[dict]:
+    """Open findings for the drill-down — filter by severity and/or account.
+
+    Newest first, capped at ``limit`` (the card shows a focused list, not a dump).
+    """
+    from infrastructure.persistence.cloud_posture.models import CloudPostureFinding
+
+    qs = CloudPostureFinding.objects.filter(workspace_id=workspace_id)
+    if severity:
+        qs = qs.filter(severity=severity)
+    if account_id:
+        qs = qs.filter(account_id=account_id)
+    rows = qs.order_by("-created_at")[: max(1, min(limit, 500))]
+    return [
+        {
+            "id": str(f.id),
+            "check_id": f.check_id,
+            "title": f.title,
+            "severity": f.severity,
+            "status": f.status,
+            "account_id": f.account_id,
+            "region": f.region,
+            "service": f.service,
+            "resource_name": f.resource_name,
+            "resource_uid": f.resource_uid,
+            "description": f.description,
+            "remediation": f.remediation,
+        }
+        for f in rows
+    ]
+
+
 def is_workspace_member(*, user, workspace_id) -> bool:
     if getattr(user, "is_staff", False) or getattr(user, "is_superuser", False):
         return True
