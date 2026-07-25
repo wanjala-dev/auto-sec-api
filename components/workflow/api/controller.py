@@ -2,20 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
-
 from django.utils import timezone
-
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound
 from rest_framework.response import Response
-from rest_framework.views import APIView
 from rest_framework.throttling import AnonRateThrottle, ScopedRateThrottle, UserRateThrottle
+from rest_framework.views import APIView
 
 from components.shared_platform.api.permissions import RequiresFeatureFlag
 from components.workspace.api.permissions import IsOrgOwnerOrMember, IsWorkspaceAdmin
-
 
 # End-user workflow UI (templates, workflows, bindings, runs, triggers) is
 # gated behind feature.workflows_ui per the GTM scope freeze. The workflow
@@ -24,12 +20,17 @@ from components.workspace.api.permissions import IsOrgOwnerOrMember, IsWorkspace
 # docs/plans/GTM_SCOPE_FREEZE_CHECKLIST.md entry 4.
 _WORKFLOWS_UI_FLAG_KEY = "feature.workflows_ui"
 from components.workspace.application.providers.workspaces_models_provider import get_workspaces_models_provider
+
 _wsp_workflows = get_workspaces_models_provider()
 Workflow = _wsp_workflows.Workflow
 WorkflowBinding = _wsp_workflows.WorkflowBinding
 WorkflowRun = _wsp_workflows.WorkflowRun
-from components.workflow.domain.constants import TRIGGER_CATALOG
 from components.workflow.api.errors import WorkflowExceptionHandlerMixin
+from components.workflow.application.providers.workflow_tasks_provider import (
+    get_workflow_tasks_provider,
+)
+from components.workflow.application.service import WorkflowService
+from components.workflow.domain.constants import TRIGGER_CATALOG
 from components.workflow.mappers.rest.workflow_serializers import (
     WorkflowBindingSerializer,
     WorkflowEnrollmentSerializer,
@@ -37,16 +38,11 @@ from components.workflow.mappers.rest.workflow_serializers import (
     WorkflowRunCreateSerializer,
     WorkflowRunSerializer,
     WorkflowScheduleSerializer,
+    WorkflowSerializer,
     WorkflowStepEventSerializer,
     WorkflowSummarySerializer,
     WorkflowTemplateSerializer,
-    WorkflowSerializer,
 )
-from components.workflow.application.providers.workflow_tasks_provider import (
-    get_workflow_tasks_provider,
-)
-from components.workflow.application.service import WorkflowService
-
 
 WORKSPACE_KEYS = ("workspace_id", "workspace", "workspaceId", "workspace_pk")
 
@@ -62,7 +58,7 @@ def get_service() -> WorkflowService:
     return _service
 
 
-def resolve_workspace_id(request) -> Optional[str]:
+def resolve_workspace_id(request) -> str | None:
     """Resolve a workspace id from request data, query params, or user profile."""
 
     parser_context = getattr(request, "parser_context", None) or {}
@@ -115,9 +111,7 @@ class WorkflowTemplateViewSet(WorkflowExceptionHandlerMixin, viewsets.ModelViewS
     def get_queryset(self):
         scope = self.request.query_params.get("scope")
         workspace_id = resolve_workspace_id(self.request)
-        return self.service.get_templates(
-            scope=scope, workspace_id=workspace_id, user=self.request.user
-        )
+        return self.service.get_templates(scope=scope, workspace_id=workspace_id, user=self.request.user)
 
     def get_permissions(self):
         if self.action in {"create", "partial_update", "destroy"}:
@@ -142,9 +136,7 @@ class WorkflowTemplateViewSet(WorkflowExceptionHandlerMixin, viewsets.ModelViewS
                 {"detail": "System templates can only be edited by staff."},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        serializer = WorkflowTemplateSerializer(
-            instance, data=request.data, partial=True, context={"request": request}
-        )
+        serializer = WorkflowTemplateSerializer(instance, data=request.data, partial=True, context={"request": request})
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(WorkflowTemplateSerializer(instance).data)
@@ -191,10 +183,12 @@ class WorkflowViewSet(WorkflowExceptionHandlerMixin, viewsets.ModelViewSet):
             return [permissions.IsAuthenticated(), IsWorkspaceAdmin()]
         # Schedule writes (create / update / delete) require an admin; reads
         # (GET list) are open to org members like the other read endpoints.
-        if (
-            self.action in {"schedules", "schedule_detail"}
-            and self.request.method.lower() in {"post", "patch", "put", "delete"}
-        ):
+        if self.action in {"schedules", "schedule_detail"} and self.request.method.lower() in {
+            "post",
+            "patch",
+            "put",
+            "delete",
+        }:
             return [permissions.IsAuthenticated(), IsWorkspaceAdmin()]
         return [permissions.IsAuthenticated(), IsOrgOwnerOrMember()]
 
@@ -204,11 +198,7 @@ class WorkflowViewSet(WorkflowExceptionHandlerMixin, viewsets.ModelViewSet):
         goal = self.request.query_params.get("goal")
         template_id = self.request.query_params.get("template_id")
         scheduled_param = self.request.query_params.get("scheduled")
-        scheduled = (
-            str(scheduled_param).lower() in ("1", "true", "yes")
-            if scheduled_param is not None
-            else None
-        )
+        scheduled = str(scheduled_param).lower() in ("1", "true", "yes") if scheduled_param is not None else None
 
         queryset = self.service.get_workflows(
             workspace_id=workspace_id,
@@ -252,6 +242,31 @@ class WorkflowViewSet(WorkflowExceptionHandlerMixin, viewsets.ModelViewSet):
         if serializer.is_valid():
             return Response({"valid": True, "errors": []})
         return Response({"valid": False, "errors": serializer.errors.get("graph", serializer.errors)}, status=400)
+
+    @action(detail=False, methods=["post"], url_path="draft-with-ai")
+    def draft_with_ai(self, request):
+        """AI Assist (Slice 1): natural-language prompt -> a validated workflow
+        graph the builder can load. Drafts only — persists nothing, fires
+        nothing; the analyst reviews, edits, and publishes.
+        """
+        from components.workflow.application.providers.workflow_draft_provider import (
+            WorkflowDraftProvider,
+        )
+
+        prompt = (request.data.get("prompt") or "").strip()
+        if not prompt:
+            return Response({"detail": "prompt is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        use_case = WorkflowDraftProvider.build_draft_use_case()
+        if not use_case.is_available():
+            return Response(
+                {"detail": "AI workflow assist is not configured for this environment yet."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        workspace_id = resolve_workspace_id(request)
+        result = use_case.execute(prompt=prompt, workspace_id=str(workspace_id or ""))
+        return Response(result)
 
     @action(detail=True, methods=["post"], url_path="publish")
     def publish(self, request, id=None):
@@ -415,13 +430,9 @@ class WorkflowViewSet(WorkflowExceptionHandlerMixin, viewsets.ModelViewSet):
             self.service.delete_schedule(schedule_id)
             return Response(status=status.HTTP_204_NO_CONTENT)
 
-        serializer = WorkflowScheduleSerializer(
-            schedule, data=request.data, partial=True
-        )
+        serializer = WorkflowScheduleSerializer(schedule, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
-        updated = self.service.update_schedule(
-            schedule, timezone.now(), **serializer.validated_data
-        )
+        updated = self.service.update_schedule(schedule, timezone.now(), **serializer.validated_data)
         return Response(WorkflowScheduleSerializer(updated).data)
 
 
@@ -510,9 +521,7 @@ class WorkflowRunViewSet(viewsets.ReadOnlyModelViewSet):
         # Resume at the failed node (retry_run points current_node_id there);
         # only fall back to a full restart if there's no resume point.
         if run.current_node_id:
-            get_workflow_tasks_provider().enqueue_run_step(
-                str(run.id), run.current_node_id
-            )
+            get_workflow_tasks_provider().enqueue_run_step(str(run.id), run.current_node_id)
         else:
             get_workflow_tasks_provider().enqueue_run_start(str(run.id))
         return Response(WorkflowRunSerializer(run).data)
