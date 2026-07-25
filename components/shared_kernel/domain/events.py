@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 
@@ -10,7 +10,7 @@ class DomainEvent:
     """Base type for immutable domain facts."""
 
     event_id: UUID = field(default_factory=uuid4)
-    occurred_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    occurred_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     correlation_id: str | None = None
     causation_id: str | None = None
 
@@ -75,3 +75,96 @@ class SignOffDecisionRecorded(DomainEvent):
     note: str = ""
     actor_id: str | None = None
     workspace_id: str | None = None
+
+
+# ── CNAPP finding spine (ADR 0004) ───────────────────────────────────
+#
+# The event backbone of the hub-and-spoke finding model. Scanners emit
+# ``FindingObserved``; the ``findings`` context (the owner) persists and emits
+# ``FindingRaised`` / ``FindingResolved``; the security-graph correlation job emits
+# ``AttackPathDetected``. All fields are JSON-safe primitives so the events
+# round-trip through ``CeleryEventPublisher`` — severity/status/asset-URN travel as
+# their string forms (``Severity.value`` etc.), not the shared value objects. The
+# rich types (``components.shared_kernel.domain.security``) are used inside a
+# context's domain; the strings are the wire format.
+#
+# These are contracts only in Phase 1 — no component consumes them yet. They live in
+# the shared kernel so emitter and subscriber never import each other (Graça's
+# "Decoupling the components": the event lives in the kernel, both depend on it).
+
+
+@dataclass(frozen=True, kw_only=True)
+class FindingObserved(DomainEvent):
+    """A scanner observed a normalized finding for an asset.
+
+    Emitted by a scanning component; the ``findings`` context's handler persists it
+    (owner-persists — a component never writes data it does not own). ``fingerprint``
+    is the stable dedup key within ``(workspace_id, source)`` so a nightly re-scan
+    updates ``last_seen`` on the existing finding instead of creating a duplicate.
+    """
+
+    workspace_id: UUID
+    source: str  # the pillar/scanner, e.g. "cloud_posture.prowler"
+    fingerprint: str  # stable dedup key within (workspace_id, source)
+    asset_urn: str  # AssetUrn.value — the cross-pillar correlation key
+    severity: str  # Severity.value
+    title: str
+    description: str = ""
+    remediation: str = ""
+    compliance: dict = field(default_factory=dict)  # framework tags (JSON-safe)
+    attributes: dict = field(default_factory=dict)  # pillar-specific extras (JSON-safe)
+
+
+@dataclass(frozen=True, kw_only=True)
+class FindingRaised(DomainEvent):
+    """The ``findings`` context persisted a new or re-observed open finding.
+
+    The cross-context signal the lenses react to — agents (triage/posture), the
+    workflow SOAR engine (mirrors its ``finding_raised`` / ``finding_critical``
+    triggers), report, and the board (which keeps a local copy of the finding).
+    ``is_new`` distinguishes a first observation from a re-observation of an already
+    open finding, so consumers can avoid re-alerting on steady-state noise.
+    """
+
+    workspace_id: UUID
+    finding_id: UUID
+    fingerprint: str
+    asset_urn: str
+    severity: str  # Severity.value
+    status: str  # FindingStatus.value
+    source: str
+    title: str
+    is_new: bool
+
+
+@dataclass(frozen=True, kw_only=True)
+class FindingResolved(DomainEvent):
+    """A finding transitioned to a terminal state (resolved or suppressed).
+
+    ``reason`` is a coarse token — e.g. ``"no_longer_observed"`` / ``"remediated"`` /
+    ``"suppressed"`` — so consumers can close a board card or stop a workflow.
+    """
+
+    workspace_id: UUID
+    finding_id: UUID
+    fingerprint: str
+    reason: str = ""
+
+
+@dataclass(frozen=True, kw_only=True)
+class AttackPathDetected(DomainEvent):
+    """The security-graph correlation job found a toxic combination.
+
+    A path across findings + entitlement edges + exposure that reaches a sensitive
+    asset — the CNAPP crown-jewel signal. Computed by the Phase-6 background job
+    (ADR 0004 §6), surfaced as a high-signal finding/board card. ``asset_urns`` is
+    the node chain; ``finding_ids`` are the contributing findings, as strings so the
+    lists stay JSON-safe on the wire.
+    """
+
+    workspace_id: UUID
+    path_id: UUID
+    severity: str  # Severity.value
+    title: str
+    asset_urns: list[str] = field(default_factory=list)
+    finding_ids: list[str] = field(default_factory=list)
