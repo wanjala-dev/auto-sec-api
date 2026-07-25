@@ -191,18 +191,8 @@ class WorkflowAgent(WorkspaceContextMixin, BaseAgent):
             logger.exception("workflow_agent.resolve_user_failed user_id=%s", user_id)
             return None
 
-    def _build_system_message(self) -> str:
-        base = super()._build_system_message()
-        return base + (
-            "\n\nWorkflow drafting rules:\n"
-            "- You draft automation playbooks; you never publish one or fire an action. "
-            "Save the draft and tell the user to open the Workflow Builder to review and "
-            "publish. because: a workflow that fires on real alerts is the operator's call, "
-            "not the assistant's.\n"
-            "- Draft over the real catalog: finding triggers (finding_raised / finding_critical "
-            "/ finding_high), messages (in-app / Slack / email), the AI triage agent, severity "
-            "conditions, SOAR webhooks, and waits. Ground the draft in what the user asked for.\n"
-            "- When the request names an alert or finding, treat it as the trigger and build the "
-            "steps from the actions the user described.\n"
-            "- To create a workflow use draft_workflow with the user's description."
-        )
+    # The specialist drafting discipline lives in the registry at
+    # ``prompts/data/workflow_agent.system.yaml`` and is auto-appended by
+    # ``BaseAgent._build_system_message`` via the ``<agent_slug>.system``
+    # convention — so it is versioned, hygiene-tested, and rollback-able, with no
+    # ``_build_system_message`` override here.

@@ -127,3 +127,26 @@ class WorkflowAgentTests(AgentTestCase):
         with patch(_DRAFT_PROVIDER, return_value=_FakeUseCase(available=False)):
             out = agent.draft_workflow("build a triage playbook")
         assert "not configured" in out.lower()
+
+    def test_system_message_appends_versioned_registry_prompt(self):
+        """The base convention auto-appends ``workflow_agent.system`` — the agent
+        carries no hardcoded ``_build_system_message`` override.
+
+        Guards the ``<agent_slug>.system`` convention: the drafting discipline
+        reaches the LLM from the registry (versioned, hygiene-tested, rollback-able),
+        not from a per-agent string that would drift.
+        """
+        from components.agents.infrastructure.prompts.registry import PromptRegistry
+
+        agent = self.make_agent(WorkflowAgent)
+        system_message = agent._build_system_message()
+
+        # The registered specialist prompt is present verbatim in the assembled
+        # message (base role/profile first, specialist addendum appended).
+        registered = PromptRegistry.get("workflow_agent.system")
+        assert registered in system_message
+        assert "<workflow_drafting_rules>" in system_message
+        # It is appended, not prepended — the base role blurb still leads.
+        assert system_message.index("You are the") < system_message.index("<workflow_drafting_rules>")
+        # The agent opts in purely via the registry — no override on the class.
+        assert "_build_system_message" not in vars(WorkflowAgent)

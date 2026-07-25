@@ -26,6 +26,7 @@ by:
 Plan reference: ``/Users/henrywanjala/.claude/plans/atomic-gathering-fox.md``
 Wave 1, step 1F.
 """
+
 from __future__ import annotations
 
 import re
@@ -36,53 +37,61 @@ __all__ = [
     "FALLBACK_PHRASES",
     "all_caps_offenders",
     "anti_pattern_offenders",
-    "fallback_phrase_offenders",
-    "routing_rules_missing_because",
     "expects_json",
+    "fallback_phrase_offenders",
     "has_json_example_block",
+    "routing_rules_missing_because",
 ]
 
 
 # Technical tokens that legitimately appear in ALL-CAPS in a prompt.
 # Anything in this set is allowed to stay capitalised; everything else
 # is flagged as an urgency marker by ``all_caps_offenders``.
-ALL_CAPS_TECHNICAL_WHITELIST: frozenset[str] = frozenset({
-    "JSON",
-    "USD",
-    "UTC",
-    "URL",
-    "URI",
-    "API",
-    "RAG",
-    "CSV",
-    "LLM",
-    "ID",
-    "UUID",
-    "PR",
-    "SLA",
-    "UI",
-    "UX",
-    "ISO",
-    "PII",
-    "OK",
-    "TLDR",
-    # Protocol acronym — appears in the log_analytics_agent catalog line
-    # ("HTTP 5xx/4xx"), rendered into planner.system via {agent_catalog}.
-    "HTTP",
-    # ``NOT`` is allowed when used as a routing-clarifier between two
-    # named agents (e.g. ``task_agent, NOT workspace_agent``). It is
-    # only 3 characters so the ``\b[A-Z]{4,}\b`` regex below would not
-    # catch it anyway; listing it here documents the intent.
-    "NOT",
-    # Single-character markers used in examples.
-    "X",
-    "Y",
-    "Z",
-    "A",
-    "B",
-    "C",
-    "D",
-})
+ALL_CAPS_TECHNICAL_WHITELIST: frozenset[str] = frozenset(
+    {
+        "JSON",
+        "USD",
+        "UTC",
+        "URL",
+        "URI",
+        "API",
+        "RAG",
+        "CSV",
+        "LLM",
+        "ID",
+        "UUID",
+        "PR",
+        "SLA",
+        "UI",
+        "UX",
+        "ISO",
+        "PII",
+        "OK",
+        "TLDR",
+        # Protocol acronym — appears in the log_analytics_agent catalog line
+        # ("HTTP 5xx/4xx"), rendered into planner.system via {agent_catalog}.
+        "HTTP",
+        # Security-operations domain acronyms — first-class vocabulary for the
+        # SOC specialist prompts (e.g. the workflow_agent's drafting rules name
+        # SOC / SOAR). They are technical tokens, not urgency markers.
+        "SOC",
+        "SOAR",
+        "SIEM",
+        # ``NOT`` is allowed when used as a routing-clarifier between two
+        # named agents (e.g. ``task_agent, NOT workspace_agent``). It is
+        # only 3 characters so the ``\b[A-Z]{4,}\b`` regex below would not
+        # catch it anyway; listing it here documents the intent.
+        "NOT",
+        # Single-character markers used in examples.
+        "X",
+        "Y",
+        "Z",
+        "A",
+        "B",
+        "C",
+        "D",
+    }
+)
 
 
 # Phrases the curriculum identifies as anti-patterns. These are
@@ -113,11 +122,7 @@ def all_caps_offenders(prompt: str) -> list[str]:
 
     Empty list means the prompt passes the rule.
     """
-    return [
-        word
-        for word in _ALL_CAPS_WORD_RE.findall(prompt)
-        if word not in ALL_CAPS_TECHNICAL_WHITELIST
-    ]
+    return [word for word in _ALL_CAPS_WORD_RE.findall(prompt) if word not in ALL_CAPS_TECHNICAL_WHITELIST]
 
 
 def anti_pattern_offenders(prompt: str) -> list[str]:
@@ -161,9 +166,7 @@ def routing_rules_missing_because(prompt: str) -> list[str]:
         if "_agent" not in stripped:
             continue
         if "because:" not in stripped.lower():
-            missing.append(
-                stripped[:80] + ("…" if len(stripped) > 80 else "")
-            )
+            missing.append(stripped[:80] + ("…" if len(stripped) > 80 else ""))
     return missing
 
 
@@ -174,9 +177,7 @@ def expects_json(prompt: str) -> bool:
     cue (``only JSON``, ``respond with``, ``output format``).
     """
     lowered = prompt.lower()
-    return "json" in lowered and any(
-        cue in lowered for cue in ("only json", "respond with", "output format")
-    )
+    return "json" in lowered and any(cue in lowered for cue in ("only json", "respond with", "output format"))
 
 
 def has_json_example_block(prompt: str) -> bool:
