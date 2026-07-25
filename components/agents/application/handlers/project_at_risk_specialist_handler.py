@@ -18,6 +18,7 @@ one bad finding doesn't void the rest. Exceptions are logged with the
 project id; nothing re-raises (the originating detector run already
 returned).
 """
+
 from __future__ import annotations
 
 import logging
@@ -25,10 +26,10 @@ import logging
 from components.agents.application.handlers.specialist_persistence_service import (
     persist_finding_as_task,
 )
-from components.agents.application.subscription_registry_service import subscribes_to
 from components.project.domain.events.project_at_risk_findings_detected_event import (
     ProjectAtRiskFindingsDetected,
 )
+from components.shared_kernel.application.subscription_registry import subscribes_to
 
 logger = logging.getLogger(__name__)
 
@@ -47,27 +48,28 @@ def handle_project_at_risk_findings_detected(
     ``apps.py.ready()`` doesn't drag the ORM into every worker
     bootstrap.
     """
-    from infrastructure.persistence.workspaces.models import Workspace
-
     from components.agents.application.facades.ai_teammate_facade import (
         ensure_agents_board,
     )
     from components.agents.infrastructure.services.agents_board_service import (
         SUGGESTED,
     )
+    from infrastructure.persistence.workspaces.models import Workspace
 
     workspace = Workspace.objects.filter(id=event.workspace_id).first()
     if workspace is None:
         logger.warning(
             "project_at_risk_workspace_missing workspace_id=%s period=%s",
-            event.workspace_id, event.period,
+            event.workspace_id,
+            event.period,
         )
         return
 
     if not event.findings:
         logger.info(
             "project_at_risk_no_findings workspace_id=%s period=%s",
-            event.workspace_id, event.period,
+            event.workspace_id,
+            event.period,
         )
         return
 
@@ -85,10 +87,7 @@ def handle_project_at_risk_findings_detected(
         overdue_count = int(finding.get("overdue_task_count") or 0)
         team_title = finding.get("team_title") or ""
         team_label = f" ({team_title})" if team_title else ""
-        title = (
-            f"{project_title} has {overdue_count} "
-            f"overdue task{'s' if overdue_count != 1 else ''}"
-        )
+        title = f"{project_title} has {overdue_count} overdue task{'s' if overdue_count != 1 else ''}"
         summary = (
             f"Project {project_title}{team_label} has {overdue_count} "
             "tasks past their due date and still open. Review with the "
@@ -126,21 +125,27 @@ def handle_project_at_risk_findings_detected(
                 continue
             persisted += 1
             logger.info(
-                "project_at_risk_finding_persisted workspace_id=%s "
-                "period=%s project_id=%s overdue=%d task_id=%s",
-                workspace.id, event.period, project_id,
-                overdue_count, task_id,
+                "project_at_risk_finding_persisted workspace_id=%s period=%s project_id=%s overdue=%d task_id=%s",
+                workspace.id,
+                event.period,
+                project_id,
+                overdue_count,
+                task_id,
             )
         except Exception:
             failed += 1
             logger.exception(
-                "project_at_risk_finding_persist_failed workspace_id=%s "
-                "period=%s project_id=%s",
-                workspace.id, event.period, project_id,
+                "project_at_risk_finding_persist_failed workspace_id=%s period=%s project_id=%s",
+                workspace.id,
+                event.period,
+                project_id,
             )
 
     logger.info(
-        "project_at_risk_findings_handled workspace_id=%s period=%s "
-        "persisted=%d skipped=%d failed=%d",
-        workspace.id, event.period, persisted, skipped, failed,
+        "project_at_risk_findings_handled workspace_id=%s period=%s persisted=%d skipped=%d failed=%d",
+        workspace.id,
+        event.period,
+        persisted,
+        skipped,
+        failed,
     )
