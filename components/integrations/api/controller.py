@@ -253,11 +253,23 @@ class AwsConnectionLogStreamView(APIView):
             try:
                 result = scan_connection(conn, max_objects=4, only_new=False)
             except Exception as exc:
-                logger.exception("logstream_scan_failed connection_id=%s", connection_id)
-                return Response(
-                    {"success": False, "error": str(exc)[:300]},
-                    status=status.HTTP_502_BAD_GATEWAY,
-                )
+                # A polling HUD card must never 502-spam. A connection with no
+                # shipped-log source (no CloudTrail bucket → empty bucket name)
+                # or a transient read failure degrades to an EMPTY stream the
+                # card renders quietly — not an error toast every ~30s. Real
+                # ingestion errors are owned/surfaced by the detect loop.
+                logger.warning("logstream_unavailable connection_id=%s reason=%s", connection_id, str(exc)[:200])
+                payload = {
+                    "records": [],
+                    "by_service": {},
+                    "records_parsed": 0,
+                    "errors": 0,
+                    "error_records": [],
+                    "newest_key": "",
+                    "status": "unavailable",
+                }
+                cache.set(cache_key, payload, 60)
+                return Response({"success": True, "data": payload})
             payload = {
                 "records": [
                     {"service": r.service, "level": r.level, "message": r.message[:220]} for r in result.tail[-80:]
@@ -271,6 +283,7 @@ class AwsConnectionLogStreamView(APIView):
                     {"service": e.service, "level": e.level, "message": e.message[:300]} for e in result.errors[-20:]
                 ],
                 "newest_key": result.newest_key,
+                "status": "ok",
             }
             cache.set(cache_key, payload, 60)
         return Response({"success": True, "data": payload})
