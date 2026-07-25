@@ -42,12 +42,23 @@ class NarrateSuppliedFindingsUseCase:
 
         ordered = sorted(shaped, key=fsb.sort_key)
         technicals = tuple(fsb.build_technical_finding(f, fid=f"F-{i:02d}") for i, f in enumerate(ordered, start=1))
+        histogram = fsb.build_histogram(technicals)
         assembled = AssembledReport(
             kind="pentest",
-            histogram=fsb.build_histogram(technicals),
+            histogram=histogram,
             matrix=tuple(fsb.build_matrix_row(t) for t in technicals),
             technical_findings=technicals,
-            grounding_texts=build_grounding_texts(ordered, technicals),
+            # The supplied path features every finding — no curation cap, nothing
+            # deferred, and no de-duplication — so raw == distinct == the count.
+            # (``build_grounding_texts`` is keyword-only; the assembler is the
+            # other caller.)
+            grounding_texts=build_grounding_texts(
+                histogram=histogram,
+                featured=technicals,
+                distinct_count=len(technicals),
+                raw_count=len(technicals),
+                deferred_count=0,
+            ),
         )
         narrative = self._narrative.write(
             assembled=assembled,
