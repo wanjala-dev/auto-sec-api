@@ -7,9 +7,10 @@
 > **Method.** Torq claims are grounded in its public KB (kb.torq.io), developer docs
 > (developers.torq.io), and torq.io product/blog/product-update pages, mined July 2026.
 > autosec claims are read from this repo's code (paths cited inline), not benchmarked at
-> scale. Produced by a multi-agent research + codebase-mapping workflow; see
-> `docs/plans/ioc-enrichment-node-and-threat-intel.md` for the item-#3 build spec that
-> falls out of §5/§7.
+> scale — and were **re-audited claim-by-claim against the code** in a second pass; the
+> corrections are logged in **§9**. Produced by a multi-agent research + codebase-mapping
+> workflow; see `docs/plans/ioc-enrichment-node-and-threat-intel.md` for the item-#3 build
+> spec that falls out of §5/§7.
 
 > **Confidence-of-claims note (applies throughout).** Every Torq performance/ROI/scale
 > number here (~90–95% Tier-1 closed, ~5x throughput, ~90% investigation reduction,
@@ -22,13 +23,16 @@
 ## 1. TL;DR
 
 - **Torq is a mature, shipped SOAR/AI-SOC product; autosec's SOC arm is an
-  architecturally-correct skeleton with one narrow autonomous lane actually working.**
+  architecturally-correct skeleton with two autonomous auto-fix lanes actually working.**
   Torq: an agentic tier ("Socrates") over a deterministic visual-workflow engine, **150+**
   publicly-enumerable integrations (they claim 300–400), 4,000+ steps, native case
   management, and native MCP. autosec: a real cross-account-AWS-role → deterministic-detect
-  → LangGraph-triage → grounded-suggestion loop for **exactly one** finding kind (log-watch
-  errors over **self-shipped Docker container logs in S3**, *not* CloudTrail), plus a CSPM
-  pillar and a scaffolded second lane.
+  → LangGraph-triage → grounded-suggestion loop for **two** finding kinds (log-watch **errors**
+  → `triage_agent` and log-watch **optimizations** → `optimization_agent`, both over
+  **self-shipped Docker container logs in S3**, *not* CloudTrail), plus **~5 more detectors
+  that surface findings to the board deterministically but aren't auto-routed to a fix
+  specialist** (cloud_posture/CSPM, provenance, run_quality, posture_report, + a
+  perceived-error scan — several feature-flagged dark).
 - **Our structurally different — and defensible — bet: a unified CNAPP data spine
   (normalized Finding SSOT + canonical Asset-URN graph) with the AI-SOC/SOAR as a *consumer*
   of the spine. Torq has no spine — it orchestrates over *other tools'* alerts and natively
@@ -42,10 +46,15 @@
   own evidence** — no external enrichment yet, so "root-cause context" today is a grounded
   guess from one message, not a corroborated investigation.
 - **On *product surface* Torq wins decisively and it isn't close:** no-code visual builder,
-  large connector catalog, native MCP (Host + Server), native case management, RBAC/audit
-  maturity, MSSP-scale multi-tenancy, and a working IOC-enrichment/threat-intel catalog.
-  autosec has ~1 outbound webhook, 3–4 integration surfaces, **no MCP surface at all**, and
-  the whole workflow UI is feature-flagged off.
+  large connector catalog, **security-native** MCP (agents call vendor MCP tools; workflows
+  exposed as MCP tools), native case management, RBAC/audit maturity, MSSP-scale
+  multi-tenancy, and a working IOC-enrichment/threat-intel catalog. autosec has ~2 real
+  integration surfaces (AWS source + GitHub-PR sink), model-only Slack/webhook sinks, and the
+  whole workflow UI feature-flagged off. **(Correction from an earlier draft: autosec is NOT
+  MCP-absent — it ships a generic `/mcp/` JSON-RPC server exposing its REST API as MCP tools,
+  with a money-write denylist, PLUS an MCP client adapter for agents. But it's fork-carryover
+  aimed at generic REST, not at security tooling — an asset to repurpose, not a gap to build.
+  See §4/§5.)**
 - **Two load-bearing bugs mean our security path likely doesn't fire today** (confirmed from
   code — see §6): (a) `dispatch_event` drops finding events that lack a `target_id`, and the
   real emitter builds a payload without one → the seeded security playbooks never start;
@@ -122,12 +131,19 @@ Honest about *shipped* vs *designed*, these are real:
   least-privilege managed policies, CloudFormation **and** Terraform generation, a
   service-managed StackSet with AutoDeployment so future member accounts self-enroll;
   role-assumption only, customer keys never stored) — deeper than a generic SOAR's "take an
-  API key," but it's *one* deep connector, not breadth. **Note:** the connector reads
-  self-shipped Docker json-driver logs from S3 — there is **no** SQS consumer, no CloudTrail
-  parsing, and the "5 MITRE detections" are not built.
-- **Reliability primitives that make "batch but correct" honest:** outbox→Celery dispatch,
-  `select_for_update` idempotency, dispatch-after-commit, cache leases, `IngestCheckpoint`
-  cursors — versus Torq's elastic-but-vendor-unbenchmarked throughput.
+  API key," but it's *one* deep connector, not breadth. **Two honest caveats:** (1) the
+  connector reads self-shipped Docker json-driver logs from S3 — there is **no** SQS consumer,
+  no CloudTrail parsing (those tokens exist only in the *generated* IAM-policy JSON, not in
+  runtime code), and the "5 MITRE detections" are not built; (2) "production-grade" describes
+  the generated CFN/Terraform artifacts + the single-account assume-role read path — the
+  org-wide multi-account ingestion loop is coded (`list_accounts` pagination) but not
+  battle-tested the way the single-connection read is.
+- **Reliability primitives that make "batch but correct" honest:** `select_for_update`
+  idempotency, **dispatch-after-commit** (`transaction.on_commit(...).delay()`), cache-lease
+  de-dup of specialist dispatch, and `IngestCheckpoint` cursors — versus Torq's
+  elastic-but-vendor-unbenchmarked throughput. *(Correction: an earlier draft said
+  "outbox→Celery" — the finding pipeline uses on-commit Celery dispatch, not a transactional
+  outbox; the outbox pattern lives in the `workflow`/`content` contexts, not here.)*
 
 ---
 
@@ -138,16 +154,22 @@ No spin — this is most of the product surface a buyer evaluates:
 - **No-code maturity.** A real visual Builder with autocomplete, tree-mode context
   navigation, and example-output preview. autosec's engine is clean but the *entire end-user
   UI is gated behind `feature.workflows_ui`* — customers can't build or see workflows yet.
-- **Integration breadth + MCP.** 300–400 *claimed* integrations (**150+** enumerable) across
-  ~22 security categories, an open step model (HTTP-mode, cURL-paste, **Docker container
-  steps**, inline Python/JS/PowerShell/Bash), and **native dual-role MCP (Host + Server)**.
-  autosec has ~3–4 surfaces total (AWS audit-role, GitHub PAT, Slack sink [model-only, zero
-  delivery code], webhook sink [model-only]), **no MCP surface**, and **no connector-registry
-  abstraction** — each source/sink is a bespoke Django model.
+- **Integration breadth + *security-native* MCP.** 300–400 *claimed* integrations (**150+**
+  enumerable) across ~22 security categories, an open step model (HTTP-mode, cURL-paste,
+  **Docker container steps**, inline Python/JS/PowerShell/Bash), and **native dual-role MCP
+  (Host + Server) wired to security tooling**. autosec has ~2 real surfaces (AWS audit-role
+  source, GitHub-PAT draft-PR sink), model-only Slack + webhook sinks (a single `SinkConnector`
+  Django model with zero delivery code), and **no connector-registry abstraction** — each
+  source/sink is a bespoke model+port+adapter. *(Nuance, corrected from an earlier draft:
+  autosec DOES have MCP — a generic `/mcp/` JSON-RPC server that exposes its REST API as MCP
+  tools (with a money-write denylist) plus an `McpToolAccessAdapter` client for agents. It's
+  fork-carryover (`wanjala-api-mcp`) pointed at the generic REST surface, not at security
+  tools — so Torq's edge here is "MCP aimed at the SOC," not "MCP at all.")*
 - **Proven autonomous triage at scale (vendor-cited).** Carvana (100% of Tier-1 + 41 runbooks
   in a month), Valvoline (~7 analyst hrs/day) — *vendor-cited, not neutral benchmarks*.
-  autosec's autonomy is real but confined to one finding kind, batch/scheduled (next-tick,
-  not event-driven), parallelism 4, no high-volume load testing.
+  autosec's autonomy is real but confined to **two finding kinds** (log-watch error +
+  optimization), batch/scheduled (5-min cron, not event-driven), parallelism 4, 30s
+  per-detector budget, no high-volume load testing.
 - **Case management** — *ahead on the object, but we are closer than "no model" implies (see
   §4.1).* Torq has a first-class **OCSF-compliant Case object** (typed schema, MITRE ATT&CK
   mapping, SLA timers, AI summary, immutable typed timeline, observable graph). autosec has
@@ -169,8 +191,10 @@ No spin — this is most of the product surface a buyer evaluates:
   board/audit/sign-off substrate but is single-tenant-per-workspace batch cadence, with no
   MTTR reporting.
 - **Real "response."** Native action library (quarantine email, block domain/URL, reset
-  creds, isolate endpoint). **autosec has exactly one real remediation action — open a
-  *draft* GitHub PR — which is itself IRREVERSIBLE and therefore denied to autonomous runs.**
+  creds, isolate endpoint). **autosec has exactly one *external/irreversible* remediation
+  action — open a *draft* GitHub PR — which is denied to autonomous runs by the autonomy cap.**
+  Specialists *do* perform reversible **internal** board writes (comment the card, move the
+  column, assign, record/triage the finding), but nothing acts on the customer's environment.
   So our "response" is propose-and-comment; humans remediate.
 
 ### 4.1 Case management — how close are we, really?
@@ -219,12 +243,16 @@ workflow/workspace/table variables (4 MB / 50 MB caps); error handling is **per-
 return values. Engine ceilings: 50k sequential steps (10k parallel, 1k Until-Break).
 
 **autosec's model** (`components/workflow/`) is architecturally comparable on *engine
-primitives* and in some ways cleaner. We **have**: `start/end`, `condition` (2-way predicate
-DSL over dotted-path fields), `switch` (N-way first-match), `wait`/`wait_until` (event-or-
-timeout, row-locked), `decision`/`data_request` (HITL pause), `ai` (run a triage agent
-inline), `publish_event`, `webhook` (with a real SSRF guard), plus validate/template/
-AI-draft/schedule surfaces. The `condition`/`switch`/`wait_until` decisioning is genuinely
-autonomous and server-side.
+primitives* and in some ways cleaner. It has **18 node types** (`domain/constants.py`), more
+than an earlier draft credited. We **have**: `start/end`; the autonomous branch/flow nodes
+`condition` (2-way predicate DSL over dotted-path fields), `switch` (N-way first-match),
+`wait`/`wait_until` (event-or-timeout, row-locked); the HITL-pause nodes `decision`/
+`data_request`; and **nine executable action nodes** — `message`, `task`, `ai` (run a triage
+agent inline), `assign`, `add_tag`, `remove_tag`, `update_field`, `webhook` (real SSRF guard,
+though not DNS-rebind-pinned), `publish_event`. The `condition`/`switch`/`wait_until`
+decisioning is genuinely autonomous and server-side. **The catch is not *count* but *shape*:
+the whole action arm is CRM-shaped (tag a contact, update a UserProfile field, email a
+contact) — none of it acts on a security asset (see the table).**
 
 **Concrete building blocks we lack vs Torq's phishing playbook:**
 
@@ -237,8 +265,8 @@ autonomous and server-side.
 | **Operator/`Exit` + nested-workflow return values** | **Partial** | No nested/child-workflow operator, no `Exit`-style return; `publish_event` supports exactly one hard-coded event type. |
 | **Status/containment response actions** (block IP, isolate host, disable key, quarantine, ticket) | **None** | Action catalog is CRM-shaped (tag a contact, update a UserProfile field, email a contact). |
 | **SOC transports** (Slack/Teams/PagerDuty) | **None** | `sms` is an explicit no-op; email goes to a resolved "contact" address, not a SOC channel. Slack sink is model-only. |
-| **Native MCP (Host + Server)** | **None** | No MCP surface — can't expose autosec's tools to, or consume, MCP servers. |
-| **Per-step retry/backoff config** | **Whole-run only** | Retry resumes at the failed node but there is no per-node retry/backoff policy. |
+| **Security-native MCP (Host + Server)** | **Generic, not SOC-aimed** | autosec *has* an MCP server (`/mcp/` exposes its REST API as tools, money-writes denylisted) + an MCP client (`McpToolAccessAdapter`) — but fork-carryover pointed at generic REST, not at IOC-enrichment/EDR/TI tools. The gap is *aiming* MCP at the SOC, not building it. |
+| **Per-node retry/backoff config** | **Run-level, node-resumed** | Retry re-runs the failed node (upstream steps stay `completed`, no re-fire) but there is no author-configurable per-node retry/backoff policy (only broker-level Celery `max_retries=3`). |
 | **Finding/asset as a run target** | **Broken** | `run.target` resolves to a CRM contact; action nodes no-op on a security run (see §6). |
 
 See `docs/plans/ioc-enrichment-node-and-threat-intel.md` for the build spec that closes the
@@ -322,7 +350,7 @@ CNAPP hub-and-spoke shape.**
 | 1 | **Fix the finding-dispatch drop + make finding/asset a first-class run target.** Stop dropping no-`target_id` finding events; resolve a finding/asset target in the run context; add an end-to-end test using the *real* `_emit_finding_triggers` payload. | The headline security path is scaffolded-not-working. Everything else in workflows is moot until a finding actually starts and drives a run. | `dispatcher.py::dispatch_event`; `node_actions.py` (target resolution); new integration test; producer `specialist_persistence_service.py::_emit_finding_triggers` | reuse-seam |
 | 2 | **Wire the Finding SSOT: emit `FindingObserved` from detectors, subscribe `FindingRaised`.** Route Prowler + logwatch through `RecordObservedFindingUseCase` (strangler alongside legacy tables); bind the handler to the bus; add one subscriber. | Turns the CNAPP spine from island into source of truth (ADR-0004 Phase 3b). Unblocks dedup/correlation/attack-path. The hub the whole spoke-out thesis depends on. | `components/findings/`; event bus `SubscriptionRegistry`; producers in `components/agents/.../detectors/` + `components/cloud_posture/` | reuse-seam |
 | 3 | **Add an IOC-enrichment node type + a small, real threat-intel connector set (VirusTotal, AbuseIPDB, GreyNoise, OTX).** One new `enrich` node backed by an enrichment **port**; connectors as adapters behind it. | The single biggest *workflow-content* gap vs Torq's phishing playbook, AND the fix that lifts the deep-agent's grounding beyond one error message. Small deep catalog beats chasing 300 integrations. | New node in `components/workflow/domain/constants.py` + executor in `node_actions.py`; connectors under `components/integrations/` behind an enrichment port. See `docs/plans/ioc-enrichment-node-and-threat-intel.md`. | new |
-| 4 | **Introduce a connector-registry abstraction (source + sink + enrichment) — and decide whether it speaks MCP.** Generic connector interface + catalog + secret-envelope reuse; evaluate exposing/consuming MCP rather than bespoke adapters. | Directly attacks the defining gap (§4) and the total MCP absence. Without it, every integration is a hand-rolled model+adapter+controller (anti-DRY). Makes items 3, 5, 10 cheap. | `components/integrations/` (new registry/port + provider; MCP stance); reuse `secret_envelope.py` | new |
+| 4 | **Introduce a connector-registry abstraction (source + sink + enrichment) — and point our EXISTING MCP surface at security tooling.** Generic connector interface + catalog + secret-envelope reuse. MCP is *not* a greenfield build: we already have a `/mcp/` server + `McpToolAccessAdapter` client (fork-carryover) — the work is aiming the client at security MCP servers (EDR/TI) and exposing security tools, not building MCP. | Directly attacks the defining gap (§4). Without a registry, every integration is a hand-rolled model+adapter+controller (anti-DRY). Makes items 3, 5, 10 cheap. | `components/integrations/` (new registry/port + provider); `infrastructure/api/mcp/` + `components/agents/.../tool_access/mcp_adapter.py` (repoint MCP); reuse `secret_envelope.py` | new+reuse |
 | 5 | **Ship a first real reversible SOC-response action + a real Slack sink delivery path.** Wire the model-only Slack sink to actual delivery; add one reversible containment action (e.g. block-IP/tag-asset) as a risk-tiered tool. | Moves us from propose-and-comment toward *act*. Reusing the risk-tier + autonomy-cap governance keeps irreversible actions human-gated. | `components/integrations/` (Slack delivery); `node_actions.py` + `components/agents/.../tools/` (action, tagged via `application/policies/tool_risk.py`) | reuse-seam |
 | 6 | **Add a `loop`/`collect` node + workflow variables (set/get).** Enables fan-out enrichment over an IOC list and multi-step state — Torq's Loop+Collect+set-variable trio. | Prerequisite for any non-trivial IOC playbook; the enrichment node (item 3) is far weaker without iteration. Pure-domain extension of the graph model. | `components/workflow/domain/constants.py`, `domain/value_objects/workflow_graph.py`, `domain/validators.py`, `node_actions.py` | reuse-seam |
 | 7 | **Add finding correlation / alert-grouping (incident) on the existing Kanban substrate — start with `AssetUrn`-keyed grouping.** Group related findings by asset/fingerprint into an incident; reuse `Task.project`/`ProjectMilestone` (or a thin `Incident` entity) as the container, promote severity/MITRE out of `Task.metadata` into typed fields, and generalize `metadata.provenance.events[]` into a case-scoped typed timeline with workflow-execution links. Groundwork for `AttackPathDetected`. | Torq's Case object is a top gap **but we're ~70% of the substrate there** (§4.1) — the missing piece is correlation over the SSOT (a graph query by `AssetUrn`), not a greenfield ticket system. Also our honest answer to alert fatigue. Advances ADR-0004 Phases 5/6. Sequenced after item #2 (needs normalized finding + asset identity to group on). | `components/findings/` (correlation domain service + read model) consuming shared-kernel `AssetUrn` + `AttackPathDetected`; container/timeline on `infrastructure/persistence/project/` (`Task`/`Project`/`TaskComment`) | reuse-seam |
@@ -332,12 +360,41 @@ CNAPP hub-and-spoke shape.**
 
 **Framing for the founder:** don't out-integration Torq — that's their moat and a years-long
 slog. Win where the *architecture* and the *GTM model* already bet differently: fix the two
-correctness bugs so our one real autonomous lane demonstrably works end-to-end, wire the
+correctness bugs so our two real autonomous lanes demonstrably work end-to-end, wire the
 Finding SSOT so the CNAPP spine is real, build a *small deep* enrich+respond catalog on
 existing seams, and aim it at the self-serve/SMB segment Torq's ~$450K/quarters-procurement
 model structurally can't serve. That yields a working, honest "detect → correlate →
 grounded-triage → enrich → act (human-gated)" loop on a unified CNAPP data model — a story
 Torq structurally cannot tell, because it has no spine of its own.
+
+---
+
+## 9. Code re-audit log (what the first draft got wrong, verified against the code)
+
+The autosec side of this doc was re-verified claim-by-claim against the codebase (6 parallel
+code-reading passes). Corrections applied above:
+
+| Claim (first draft) | Verdict | Correction |
+|---|---|---|
+| "Exactly one autonomous lane / one finding kind" | **Overstated** | **Two** auto-fix lanes (`logwatch.error→triage_agent`, `logwatch.optimization→optimization_agent`, gated by `ROUTABLE_SOURCE_TYPES`), + ~5 evidence-only detectors (cloud_posture/CSPM, provenance, run_quality, posture_report, perceived-error scan), several flag-gated dark. |
+| "No MCP surface at all" | **Wrong** | autosec ships a `/mcp/` JSON-RPC server (REST-as-tools, money-write denylist) **and** an `McpToolAccessAdapter` client. Fork-carryover aimed at generic REST, not the SOC — repurpose, don't build. |
+| "Reliability: outbox→Celery dispatch" | **Wrong for this pipeline** | The finding pipeline uses `transaction.on_commit(...).delay()` dispatch-after-commit, not a transactional outbox (outbox lives in `workflow`/`content`). Other 4 primitives confirmed. |
+| "Node catalog = 11 types" | **Undercount** | **18** node types; the first draft dropped the 6-node CRM action arm (`message/task/assign/add_tag/remove_tag/update_field`). Reinforces "action catalog is CRM-shaped." |
+| "Retry is whole-run only" | **Imprecise** | Retry is *node-resumed* (failed node re-runs, upstream stays `completed`); still no per-node backoff policy. |
+| "One remediation action (draft PR)" | **Confirmed, nuanced** | Exactly one *external/irreversible* action (`open_draft_pr`, denied to autonomous runs). Specialists also do reversible **internal** board writes (comment/move/assign/record). |
+| "Case management — no model, independent Kanban cards" | **Overstated** (fixed in §4.1) | Case *object* absent, but ~70% of the substrate exists on the Kanban `Task`; the work is correlation + typed fields + a case timeline, not greenfield. |
+
+**Confirmed accurate (held up under code review):** the two workflow dispatch bugs (§6);
+Finding SSOT is a write-path-only island (no producer of `FindingObserved`, handler unbound,
+Prowler writes legacy `CloudPostureFinding` only, no `findings/api/`, `AttackPathDetected`
+dead contract); no SQS consumer / no CloudTrail parsing / S3 Docker-log ingest only; zero
+MITRE anywhere; batch 5-min cron / parallelism 4 / 30s detector budget; the budget /
+risk-tier / kill-switch / autonomy-cap governance; `verify_suggestion` zero-LLM grounding +
+synthesizer honesty guard; the LangGraph orchestrator (planner/replan-once/transient-retry/
+reducer cost); the shared `_finding_processing` choreography; no connector-registry
+abstraction; Slack/webhook sinks are model-only; `sms` is a no-op; `feature.workflows_ui`
+OFF-by-default. **Net: the thesis held; the details had a handful of overstatements — the
+biggest being the MCP claim and the one-vs-two-lane / node-count undercounts.**
 
 ---
 
