@@ -98,3 +98,25 @@ def test_event_requires_action_and_origin_id():
             origin="audit_log",
             origin_id="x",
         )
+
+
+def test_resource_asset_urn_property_is_canonical():
+    from components.shared_kernel.domain.security import AssetUrn
+
+    aws = ResourceEntity(
+        id=uuid4(),
+        workspace_id=uuid4(),
+        resource_type="bucket",
+        source_system=SourceSystem.AWS,
+        external_ref="arn:aws:s3:::b",
+    )
+    assert aws.asset_urn == AssetUrn("arn:aws:s3:::b")
+
+    internal = ResourceEntity(
+        id=uuid4(),
+        workspace_id=uuid4(),
+        resource_type="workspace",
+        source_system=SourceSystem.INTERNAL,
+        external_ref="ws-1",
+    )
+    assert internal.asset_urn == AssetUrn("urn:internal:ws-1")

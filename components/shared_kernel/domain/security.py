@@ -205,3 +205,22 @@ class AssetUrn:
         if not cleaned.startswith("arn:aws:"):
             raise ValueError(f"Not an AWS ARN: {arn!r}")
         return cls(cleaned)
+
+    @classmethod
+    def canonical(cls, source_system: str, external_ref: str) -> AssetUrn:
+        """Build the canonical URN from a source system + its stable external ref.
+
+        This is the one place asset identity is constructed, so the security graph
+        and every scanner agree on what "the same asset" means. An ``external_ref``
+        that is already globally unique (an ARN, or an existing ``urn:``) is used
+        verbatim; anything else is namespaced as ``urn:<source_system>:<external_ref>``
+        so two systems' opaque ids never collide.
+        """
+        ref = (external_ref or "").strip()
+        if not ref:
+            raise ValueError("external_ref cannot be empty")
+        lowered = ref.lower()
+        if lowered.startswith("arn:") or lowered.startswith("urn:"):
+            return cls(ref)
+        src = (source_system or "").strip().lower() or "unknown"
+        return cls(f"urn:{src}:{ref}")

@@ -133,6 +133,12 @@ class ProvenanceResource(models.Model):
     external_ref = models.CharField(max_length=512)
     display_name = models.CharField(max_length=255, blank=True, default="")
 
+    # Canonical cross-pillar identity (ADR 0004 D2). Derived from
+    # (source_system, external_ref) via AssetUrn.canonical() and stamped by the
+    # pre_save signal bridge, so a Prowler finding's resource and this graph node
+    # correlate by the SAME value — no cross-component FK. Indexed for that lookup.
+    asset_urn = models.CharField(max_length=512, blank=True, default="")
+
     first_seen_at = models.DateTimeField(auto_now_add=True)
     last_seen_at = models.DateTimeField(auto_now=True)
 
@@ -146,6 +152,7 @@ class ProvenanceResource(models.Model):
         indexes = [
             models.Index(fields=["workspace", "resource_type"], name="prov_res_ws_type_idx"),
             models.Index(fields=["workspace", "source_system"], name="prov_res_ws_src_idx"),
+            models.Index(fields=["workspace", "asset_urn"], name="prov_res_ws_urn_idx"),
         ]
 
     def __str__(self) -> str:
