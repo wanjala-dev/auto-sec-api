@@ -123,6 +123,46 @@ class AwsConnectionVerifyView(APIView):
         return Response({"success": True, "data": AwsConnectionResource.from_model(conn).to_dict()})
 
 
+class AwsConnectionScanView(APIView):
+    """POST → enqueue an async CSPM (Prowler) scan for the connection's accounts.
+
+    A scan is long-running, so this fans the work out onto the cloud-posture
+    Celery queue and returns 202 immediately — Prowler never runs in the request
+    path. It reuses the exact task the nightly scheduler dispatches; this is just
+    the on-demand "Scan now" trigger.
+    """
+
+    permission_classes = (permissions.IsAuthenticated, CanManageIntegrations)
+    name = "integrations-aws-scan"
+
+    def post(self, request, workspace_id, connection_id):
+        conn = get_aws_connection_service().get_connection(workspace_id, connection_id)
+        if conn is None:
+            return Response({"success": False, "error": "Connection not found."}, status=404)
+
+        from components.shared_platform.application.providers.feature_flags_provider import (
+            get_feature_flags_provider,
+        )
+
+        if not get_feature_flags_provider().is_feature_enabled(
+            "feature.cloud_posture", workspace_id=str(workspace_id)
+        ):
+            return Response(
+                {"success": False, "error": "cloud_posture_not_enabled"},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        from components.cloud_posture.application.providers.scan_provider import (
+            enqueue_connection_scan,
+        )
+
+        enqueued = enqueue_connection_scan(workspace_id=str(workspace_id), connection_id=str(connection_id))
+        return Response(
+            {"success": True, "data": {"status": "scanning", "enqueued": enqueued or 0}},
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+
 class FindingOpenDraftPrView(APIView):
     """POST /integrations/workspaces/<ws>/findings/<task_id>/open-draft-pr/
 

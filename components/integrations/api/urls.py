@@ -5,6 +5,7 @@ from django.urls import path
 from components.integrations.api.controller import (
     AwsConnectionListCreateView,
     AwsConnectionLogStreamView,
+    AwsConnectionScanView,
     AwsConnectionTemplateView,
     AwsConnectionVerifyView,
     FindingOpenDraftPrView,
@@ -25,6 +26,11 @@ urlpatterns = [
         "workspaces/<uuid:workspace_id>/aws/<uuid:connection_id>/verify/",
         AwsConnectionVerifyView.as_view(),
         name=AwsConnectionVerifyView.name,
+    ),
+    path(
+        "workspaces/<uuid:workspace_id>/aws/<uuid:connection_id>/scan/",
+        AwsConnectionScanView.as_view(),
+        name=AwsConnectionScanView.name,
     ),
     path(
         "workspaces/<uuid:workspace_id>/aws/<uuid:connection_id>/logstream/",
