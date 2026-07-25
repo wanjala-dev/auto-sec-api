@@ -48,21 +48,20 @@ from components.agents.tests.prompt_eval.graders.model import (
 # ---------------------------------------------------------------------------
 
 PROMPTS_UNDER_TEST: dict[str, str] = {
-    # The planner template is resolved at runtime so the registered
-    # agent catalog is substituted in. Using the resolved version
-    # lets the test see what the LLM actually sees.
+    # Auto-discover EVERY prompt in the registry so a new specialist prompt
+    # (the ``<agent_slug>.system`` convention) is hygiene-tested the moment its
+    # YAML lands — the coverage set is derived from the single source of truth,
+    # never a hand-maintained list that drifts (the DEFAULT_AGENT_TYPES trap the
+    # agents skill warns about). Covers estimator.* + every ``<slug>.system``.
+    **{pid: PromptRegistry.get(pid) for pid in PromptRegistry.all_prompt_ids()},
+    # The planner prompts are then overridden with their RUNTIME-substituted form
+    # so the test sees exactly what the LLM sees (the agent catalog filled in),
+    # not the raw ``{agent_catalog}`` template.
     "planner.system": llm_planner._build_system_prompt(),
     "planner.project": llm_planner.PROJECT_SYSTEM_PROMPT,
     "planner.task": llm_planner.TASK_SYSTEM_PROMPT,
-    # The estimator's runtime module (``tools/project_estimator.py``)
-    # was not ported into the auto-sec fork, but its prompts still
-    # live in the registry YAMLs — the registry is the single source
-    # of truth, so hygiene coverage reads it directly.
-    "estimator.system": PromptRegistry.get("estimator.system"),
-    "estimator.repair": PromptRegistry.get("estimator.repair"),
-    # The LLM-as-judge prompt itself follows the same rules. If we
-    # let the judge slip on hygiene, every model-grader score becomes
-    # untrustworthy.
+    # The LLM-as-judge prompt itself follows the same rules. If we let the judge
+    # slip on hygiene, every model-grader score becomes untrustworthy.
     "grader.planner_judge": GRADER_SYSTEM_PROMPT,
 }
 

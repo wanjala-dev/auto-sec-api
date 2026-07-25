@@ -232,6 +232,16 @@ CANONICAL_TOOLS: dict[str, set[str]] = {
         "generate_pentest_report",
         "narrate_report_sections",
     },
+    "workflow_agent": {
+        # SOC automation-playbook drafter. Aliases: ``workflow``,
+        # ``workflows``, ``playbook``, ``playbooks``, ``automation``. Turns a
+        # natural-language "when X happens do Y" into a workflow graph over the
+        # real node + trigger catalog, validates it against the publish gate,
+        # and saves it as a DRAFT via the workflow bounded context — it never
+        # publishes or fires anything. draft_workflow is a reversible write
+        # (draft → operator reviews + publishes in the Workflow Builder).
+        "draft_workflow",
+    },
 }
 
 

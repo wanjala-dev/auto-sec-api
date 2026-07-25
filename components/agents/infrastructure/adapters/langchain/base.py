@@ -1456,10 +1456,50 @@ class BaseAgent(ABC):
             "tasks in this workspace\") — don't deflect."
         )
 
-        return (
+        base = (
             f"You are the {profile_name} working for workspace {self.workspace_id}."
             f"{summary_section}{capabilities_section}{custom_block}{guidelines}"
         )
+        # Layered assembly (base -> specialist suffix), mirroring LangChain's
+        # base->suffix system-prompt composition: append the agent's versioned
+        # specialist prompt from the registry, if it has one.
+        return base + self._registry_system_suffix()
+
+    def _registry_system_suffix(self) -> str:
+        """The specialist system-prompt addendum from the PromptRegistry, or "".
+
+        Convention: a specialist versions its extra system instructions in
+        ``prompts/data/<agent_slug>.system.yaml`` instead of hardcoding them in an
+        overridden ``_build_system_message``. The base message auto-appends that
+        registered prompt here, so opting in is one YAML file and zero agent code —
+        one canonical, versioned source per agent (no hardcoded-string drift), and
+        it is hygiene-tested + rollback-able (active-pointer flip) like the
+        orchestration prompts.
+
+        Guarded: a missing prompt (or any registry error) degrades to the base
+        message. A specialist never fails to build its system message because a
+        prompt file is absent or malformed — the convention cannot warp a run.
+
+        An agent that needs a *dynamic* (per-request) prompt still overrides
+        ``_build_system_message`` directly; the registry convention is the static
+        default, not a cage.
+        """
+        slug = getattr(self, "_canonical_agent_name", None)
+        if not slug:
+            return ""
+        prompt_id = f"{slug}.system"
+        try:
+            from components.agents.infrastructure.prompts.registry import PromptRegistry
+
+            if prompt_id in PromptRegistry.all_prompt_ids():
+                return "\n\n" + PromptRegistry.get(prompt_id)
+        except Exception:
+            logger.warning(
+                "registry system-prompt suffix lookup failed prompt_id=%s",
+                prompt_id,
+                exc_info=True,
+            )
+        return ""
 
     # NOTE (LangChain 1.x migration, 2026-07-18): ``_create_chat_prompt_template``
     # and the legacy ReAct ``_create_prompt_template`` were DELETED. ``create_agent``
