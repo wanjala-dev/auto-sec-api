@@ -46,28 +46,34 @@ class StsOrgAdapter(OrgVerificationPort):
             use_cache=False,
         )
 
+        # The management account is always scannable once the role assumes — a
+        # single-account (non-org) customer IS this one account, and org-wide
+        # discovery lists it too. Seed it so a connected connection never has
+        # zero scannable accounts (which the scan scheduler would silently skip).
+        discovered: dict[str, str] = {management_account_id: ""}
         result: dict = {"organization_id": "", "accounts": []}
-        if not discover:
-            return result
 
-        org = boto3.client(
-            "organizations",
-            aws_access_key_id=assumed["AccessKeyId"],
-            aws_secret_access_key=assumed["SecretAccessKey"],
-            aws_session_token=assumed["SessionToken"],
-        )
-        try:
-            desc = org.describe_organization()["Organization"]
-            result["organization_id"] = desc.get("Id", "")
-            paginator = org.get_paginator("list_accounts")
-            for page in paginator.paginate():
-                for acct in page.get("Accounts", []):
-                    if acct.get("Status") == "ACTIVE":
-                        result["accounts"].append({"id": acct["Id"], "name": acct.get("Name", "")})
-        except org.exceptions.AccessDeniedException:
-            # Single-account (non-org) customer — role works, no org to walk.
-            logger.info(
-                "aws_org_discovery_denied account=%s (treating as single-account)",
-                management_account_id,
+        if discover:
+            org = boto3.client(
+                "organizations",
+                aws_access_key_id=assumed["AccessKeyId"],
+                aws_secret_access_key=assumed["SecretAccessKey"],
+                aws_session_token=assumed["SessionToken"],
             )
+            try:
+                desc = org.describe_organization()["Organization"]
+                result["organization_id"] = desc.get("Id", "")
+                paginator = org.get_paginator("list_accounts")
+                for page in paginator.paginate():
+                    for acct in page.get("Accounts", []):
+                        if acct.get("Status") == "ACTIVE":
+                            discovered[acct["Id"]] = acct.get("Name", "")
+            except org.exceptions.AccessDeniedException:
+                # Single-account (non-org) customer — role works, no org to walk.
+                logger.info(
+                    "aws_org_discovery_denied account=%s (treating as single-account)",
+                    management_account_id,
+                )
+
+        result["accounts"] = [{"id": aid, "name": name} for aid, name in discovered.items()]
         return result

@@ -1,0 +1,34 @@
+# =============================================================================
+# Dev-only override — keyless local AWS identity for the cloud-posture worker
+#
+# Gives the CSPM scan worker a SHORT-LIVED, keyless AWS base identity for local
+# runs against REAL AWS. Mounts ~/.aws read-only so boto3's default credential
+# chain resolves a named SSO profile (run `aws sso login --profile <profile>`
+# first). The worker then assumes each customer's AutoSecAuditRole exactly as it
+# will in production — the only difference is HOW the base identity is delivered.
+#
+# This is NOT a shortcut and NOT for deployed environments: in prod the base
+# identity is workload identity (ECS task role / EC2 instance profile / EKS
+# IRSA) — no mount, no profile, no keys. This override only bridges the fact
+# that a laptop has no instance metadata. Nothing long-lived or secret is baked
+# into image or config; the SSO token is ephemeral and lives only in the mount.
+#
+# Usage (from auto-sec-api/, after `aws sso login --profile octo-tf-admin`):
+#   docker compose --env-file .env \
+#     -f docker/compose/docker-compose.yml \
+#     -f docker/compose/docker-compose.local.yml \
+#     -f docker/compose/docker-compose.aws-sso.yml \
+#     up -d --force-recreate celery_cloud_posture_worker
+# =============================================================================
+
+services:
+  celery_cloud_posture_worker:
+    environment:
+      # The platform's local base identity — a scoped SSO profile. Override via
+      # AUTOSEC_SCAN_AWS_PROFILE in .env; defaults to the demo Terraform admin.
+      AWS_PROFILE: ${AUTOSEC_SCAN_AWS_PROFILE:-octo-tf-admin}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_DEFAULT_REGION: ${AWS_REGION:-us-east-1}
+    volumes:
+      # Read-only: boto3 reads the SSO profile + ephemeral token cache from here.
+      - ${HOME}/.aws:/root/.aws:ro
