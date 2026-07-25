@@ -5,6 +5,7 @@ from django.urls import include, path, re_path
 from drf_spectacular.views import SpectacularRedocView, SpectacularSwaggerView
 
 from components.notifications.api.controller import UserPreferenceDetailView, UserPreferenceView
+from components.shared_platform.api.jobs_urls import jobs_urlpatterns
 from components.shared_platform.api.urls import (
     broadcast_urlpatterns,
     core_urlpatterns,
@@ -62,6 +63,7 @@ api_patterns = [
     path("userpreferences/<str:uuid>/", UserPreferenceDetailView.as_view()),
     path("notifications/", include("components.notifications.api.urls")),
     path("feature-flags/", include(core_urlpatterns)),
+    path("jobs/", include(jobs_urlpatterns)),
     path("workspaces/", include("components.workspace.api.urls")),
     path("team/", include("components.team.api.urls")),
     path("membership/", include("components.membership.api.urls")),
