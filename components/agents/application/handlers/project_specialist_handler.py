@@ -21,6 +21,7 @@ Failure isolation: errors log with ``project_id`` and don't re-raise —
 the project itself was already persisted; other ProjectCreated
 subscribers run independently.
 """
+
 from __future__ import annotations
 
 import logging
@@ -28,11 +29,11 @@ import logging
 from components.agents.application.handlers.specialist_persistence_service import (
     persist_finding_as_task,
 )
-from components.agents.application.subscription_registry_service import (
-    subscribes_to,
-)
 from components.project.domain.events.project_created_event import (
     ProjectCreated,
+)
+from components.shared_kernel.application.subscription_registry import (
+    subscribes_to,
 )
 
 logger = logging.getLogger(__name__)
@@ -50,14 +51,13 @@ def handle_project_created(event: ProjectCreated) -> None:
     ``bind_all`` call in ``apps.py.ready()`` doesn't drag the ORM into
     every worker bootstrap.
     """
-    from infrastructure.persistence.workspaces.models import Workspace
-
     from components.agents.application.facades.ai_teammate_facade import (
         ensure_agents_board,
     )
     from components.agents.infrastructure.services.agents_board_service import (
         SUGGESTED,
     )
+    from infrastructure.persistence.workspaces.models import Workspace
 
     if event.workspace_id is None:
         logger.info(
@@ -69,9 +69,9 @@ def handle_project_created(event: ProjectCreated) -> None:
     workspace = Workspace.objects.filter(id=event.workspace_id).first()
     if workspace is None:
         logger.warning(
-            "project_specialist_workspace_missing project_id=%s "
-            "workspace_id=%s",
-            event.project_id, event.workspace_id,
+            "project_specialist_workspace_missing project_id=%s workspace_id=%s",
+            event.project_id,
+            event.workspace_id,
         )
         return
 
@@ -93,9 +93,7 @@ def handle_project_created(event: ProjectCreated) -> None:
     finding_context = {
         "project_id": project_id_str,
         "team_id": str(event.team_id) if event.team_id is not None else None,
-        "created_by_id": (
-            str(event.created_by_id) if event.created_by_id is not None else None
-        ),
+        "created_by_id": (str(event.created_by_id) if event.created_by_id is not None else None),
         "project_title": title_label,
         "detector_key": DETECTOR_KEY,
     }
@@ -125,17 +123,19 @@ def handle_project_created(event: ProjectCreated) -> None:
         if task_id is None:
             logger.info(
                 "project_specialist_replay_noop workspace_id=%s project_id=%s",
-                workspace.id, project_id_str,
+                workspace.id,
+                project_id_str,
             )
             return
         logger.info(
-            "project_specialist_task_persisted workspace_id=%s "
-            "project_id=%s task_id=%s",
-            workspace.id, project_id_str, task_id,
+            "project_specialist_task_persisted workspace_id=%s project_id=%s task_id=%s",
+            workspace.id,
+            project_id_str,
+            task_id,
         )
     except Exception:
         logger.exception(
-            "project_specialist_task_persist_failed workspace_id=%s "
-            "project_id=%s",
-            workspace.id, project_id_str,
+            "project_specialist_task_persist_failed workspace_id=%s project_id=%s",
+            workspace.id,
+            project_id_str,
         )

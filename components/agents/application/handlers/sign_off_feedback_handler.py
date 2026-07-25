@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 
-from components.agents.application.subscription_registry_service import (
+from components.shared_kernel.application.subscription_registry import (
     subscribes_to,
 )
 from components.shared_kernel.domain.events import SignOffDecisionRecorded

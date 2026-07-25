@@ -2,8 +2,8 @@ from django.apps import AppConfig
 
 
 class AiConfig(AppConfig):
-    default_auto_field = 'django.db.models.BigAutoField'
-    name = 'infrastructure.persistence.ai'
+    default_auto_field = "django.db.models.BigAutoField"
+    name = "infrastructure.persistence.ai"
 
     def ready(self):
         # ── Knowledge-context signal handlers (Workspace index rebuild)
@@ -15,26 +15,29 @@ class AiConfig(AppConfig):
 
         WorkspaceIndexSignalProvider().register_signal_handlers()
 
-        # ── Phase 3 of the Agents-as-Teammates migration (Action List
-        # P1 #14) — domain-event subscriptions are declared with
-        # ``@subscribes_to(EventClass)`` directly on the handler function.
-        # ``SubscriptionRegistry.bind_all`` auto-discovers every handler
-        # module under ``components/agents/application/handlers/`` and
-        # registers each subscription with the event publisher in one
-        # call.
+        # ── Domain-event subscriptions are declared with
+        # ``@subscribes_to(EventClass)`` directly on handler functions in each
+        # context's ``application/handlers`` package. This app is the composition
+        # root for event wiring: it owns the list of handler packages and binds
+        # every collected subscription to the publisher in one call. The registry
+        # itself lives in the shared kernel, so a context that adds handlers only
+        # declares the decorator and gets its package listed here — it never
+        # couples to another context.
         #
-        # Adding a new specialist no longer requires editing this file —
-        # drop a new ``*_handler.py`` next to the existing ones and the
-        # registry picks it up at the next process boot. This is the
-        # piece that unblocks items 20-24 (the 5 specialist agents).
-        from components.agents.application.subscription_registry_service import (
+        # Adding a handler to a listed context requires no edit here — drop a new
+        # ``*_handler.py`` and the registry picks it up at the next boot. Adding a
+        # NEW context's first handler package is the only edit this file needs.
+        from components.shared_kernel.application.subscription_registry import (
             SubscriptionRegistry,
         )
         from components.shared_kernel.infrastructure.adapters.celery_event_publisher import (
             CeleryEventPublisher,
         )
 
-        SubscriptionRegistry.bind_all(CeleryEventPublisher())
+        SubscriptionRegistry.bind_all(
+            CeleryEventPublisher(),
+            packages=("components.agents.application.handlers",),
+        )
 
         # ── Phase 7.1 — publish DeepRunLog rows to the realtime event
         # layer so the frontend can render agent-run progress live instead

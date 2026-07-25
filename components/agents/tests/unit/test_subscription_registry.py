@@ -12,6 +12,7 @@ test, and assertions filter ``entries()`` to the local ``_FakeEventA``
 / ``_FakeEventB`` event classes so production entries sitting
 alongside don't matter.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -19,12 +20,11 @@ from typing import Any
 
 import pytest
 
-from components.agents.application.subscription_registry_service import (
+from components.shared_kernel.application.subscription_registry import (
     SubscriptionRegistry,
     subscribes_to,
 )
 from components.shared_kernel.domain.events import DomainEvent
-
 
 # ── Test event classes ─────────────────────────────────────────────────
 
@@ -68,9 +68,7 @@ def _isolated_registry():
 def _fake_entries() -> list[tuple[type[DomainEvent], Any]]:
     """Filter the registry to the test fakes only."""
     fakes = {_FakeEventA, _FakeEventB}
-    return [
-        (et, h) for et, h in SubscriptionRegistry.entries() if et in fakes
-    ]
+    return [(et, h) for et, h in SubscriptionRegistry.entries() if et in fakes]
 
 
 class TestSubscribesToDecorator:
@@ -168,9 +166,7 @@ class TestClearForTests:
             return None
 
         # Confirm the test handler was registered before clearing.
-        assert any(
-            et is _FakeEventA for et, _ in SubscriptionRegistry.entries()
-        )
+        assert any(et is _FakeEventA for et, _ in SubscriptionRegistry.entries())
 
         SubscriptionRegistry.clear()
         assert SubscriptionRegistry.entries() == []
