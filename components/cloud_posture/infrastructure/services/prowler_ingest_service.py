@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 from uuid import UUID
 
+from django.db import transaction
 from django.utils import timezone
 
 from components.cloud_posture.domain.entities.posture_finding_entity import NormalizedPostureFinding
@@ -85,8 +86,18 @@ def ingest_prowler_scan(
     records: list[dict],
     connection_id: UUID | None = None,
     engine_version: str = "",
+    event_publisher=None,
 ):
-    """Persist one Prowler run as a scan + its actionable findings. Returns the scan."""
+    """Persist one Prowler run as a scan + its actionable findings. Returns the scan.
+
+    Also **dual-writes** each actionable finding into the ``findings`` SSOT by emitting
+    a ``FindingObserved`` shared-kernel event per finding (ADR 0004 Phase 3b). The
+    existing ``CloudPostureScan``/``CloudPostureFinding`` path is unchanged — the events
+    fill the new store in the background (on transaction commit) so it can be verified at
+    parity before anything cuts over. cloud_posture stays decoupled: it publishes a
+    shared-kernel event and never imports the ``findings`` context. ``event_publisher``
+    is injectable for tests (defaults to the Celery publisher).
+    """
     from infrastructure.persistence.cloud_posture.models import CloudPostureFinding, CloudPostureScan
 
     findings = parse_prowler_ocsf(records)
@@ -108,6 +119,7 @@ def ingest_prowler_scan(
     )
 
     created = 0
+    observed_events = []
     for finding in findings:
         if not finding.is_actionable:
             continue
@@ -132,13 +144,75 @@ def ingest_prowler_scan(
             },
         )
         created += int(was_created)
+        observed_events.append(_build_finding_observed(workspace_id, finding, occurred_at=now))
+
+    _publish_finding_observed(observed_events, event_publisher)
 
     logger.info(
-        "prowler_ingest workspace_id=%s account=%s checks=%s failed=%s findings_created=%s",
+        "prowler_ingest workspace_id=%s account=%s checks=%s failed=%s findings_created=%s observed_emitted=%s",
         workspace_id,
         account_id,
         len(findings),
         failed,
         created,
+        len(observed_events),
     )
     return scan
+
+
+def _build_finding_observed(workspace_id: UUID, finding: NormalizedPostureFinding, *, occurred_at):
+    """Map a normalized Prowler finding to a ``FindingObserved`` shared-kernel event.
+
+    ``fingerprint`` is stable across scans for the same misconfiguration on the same
+    resource, so the findings SSOT dedups nightly re-scans. ``asset_urn`` is the
+    resource ARN (canonicalised); account-level checks with no resource fall back to a
+    per-account URN so the required identity is never empty.
+    """
+    from components.shared_kernel.domain.events import FindingObserved
+    from components.shared_kernel.domain.security import AssetUrn, Severity
+
+    resource_ref = finding.resource_uid or f"account/{finding.account_id or 'unknown'}"
+    return FindingObserved(
+        workspace_id=workspace_id,
+        source="cloud_posture.prowler",
+        fingerprint=f"{finding.check_id}|{finding.account_id}|{finding.resource_uid}",
+        asset_urn=AssetUrn.canonical("aws", resource_ref).value,
+        severity=Severity.from_name(str(finding.severity)).value,
+        title=finding.title or finding.check_id,
+        description=finding.description,
+        remediation=finding.remediation,
+        compliance=dict(finding.compliance),
+        attributes={
+            "check_id": finding.check_id,
+            "account_id": finding.account_id,
+            "region": finding.region,
+            "service": finding.service,
+            "resource_type": finding.resource_type,
+            "resource_name": finding.resource_name,
+            "resource_uid": finding.resource_uid,
+            "finding_uid": finding.finding_uid,
+            "check_status": str(finding.status),
+        },
+    )
+
+
+def _publish_finding_observed(events: list, event_publisher) -> None:
+    """Publish the observed-finding events after the scan's rows commit.
+
+    ``on_commit`` guards against publishing into an outer transaction that later rolls
+    back (which would leave orphan findings). No-op when there is nothing to emit.
+    """
+    if not events:
+        return
+
+    def _emit(publisher=event_publisher) -> None:
+        if publisher is None:
+            from components.shared_kernel.infrastructure.adapters.celery_event_publisher import (
+                CeleryEventPublisher,
+            )
+
+            publisher = CeleryEventPublisher()
+        for event in events:
+            publisher.publish(event)
+
+    transaction.on_commit(_emit)
