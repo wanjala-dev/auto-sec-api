@@ -132,7 +132,29 @@ def run_prowler_scan_for_account(connection_id: str, account_id: str) -> dict[st
             session_name="autosec-prowler",
         )
         update_job(job_id=job_id, progress=15, phase="scanning", detail=f"Running Prowler on {account_id}")
-        records = run_prowler(credentials=credentials, account_id=account_id, regions=list(connection.regions or []))
+
+        # Prowler's per-check progress (0–100) maps into the scanning band
+        # (15→90). Only push when the mapped integer advances — the reporter
+        # write + WS publish stay coarse (~1 update/percent), not per-check.
+        last_reported = {"pct": 15}
+
+        def _on_progress(prowler_pct: float) -> None:
+            mapped = 15 + int(max(0.0, min(100.0, prowler_pct)) * 0.75)
+            if mapped > last_reported["pct"]:
+                last_reported["pct"] = mapped
+                update_job(
+                    job_id=job_id,
+                    progress=mapped,
+                    phase="scanning",
+                    detail=f"Scanning {account_id} — {int(prowler_pct)}%",
+                )
+
+        records = run_prowler(
+            credentials=credentials,
+            account_id=account_id,
+            regions=list(connection.regions or []),
+            progress_callback=_on_progress,
+        )
         update_job(job_id=job_id, progress=90, phase="ingesting", detail="Persisting findings")
     except Exception:
         logger.exception("cloud_posture_scan failed connection=%s account=%s", connection_id, account_id)

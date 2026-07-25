@@ -1,14 +1,15 @@
 """Unit tests for the Prowler runner adapter (no AWS, no real Prowler).
 
-Mocks the subprocess so we verify the command construction, credential env, and
-the OCSF glob/parse without invoking Prowler.
+Mocks ``subprocess.Popen`` so we verify the SDK-runner command, that streamed
+progress lines reach the callback, and that the OCSF file is parsed — without
+invoking Prowler.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -28,33 +29,56 @@ _FAKE_OCSF = [
     }
 ]
 
-_RUN = "components.cloud_posture.infrastructure.adapters.prowler_runner.subprocess.run"
+_POPEN = "components.cloud_posture.infrastructure.adapters.prowler_runner.subprocess.Popen"
 
 
-def _write_ocsf(cmd, **kwargs):
-    out_dir = cmd[cmd.index("--output-directory") + 1]
-    name = cmd[cmd.index("--output-filename") + 1]
-    Path(out_dir, f"{name}.ocsf.json").write_text(json.dumps(_FAKE_OCSF))
-    return MagicMock(returncode=0)
+class _FakeProc:
+    def __init__(self, lines, write_ocsf_to=None):
+        self.stdout = iter(lines)
+        if write_ocsf_to is not None:
+            Path(write_ocsf_to).write_text(json.dumps(_FAKE_OCSF))
+
+    def wait(self, timeout=None):
+        return 0
 
 
-def test_run_prowler_builds_command_and_parses_ocsf():
-    with patch(_RUN, side_effect=_write_ocsf) as mock_run:
+def test_run_prowler_streams_progress_and_parses_ocsf():
+    seen: list[float] = []
+    lines = [
+        json.dumps({"t": "progress", "pct": 10.0}) + "\n",
+        json.dumps({"t": "progress", "pct": 55.0}) + "\n",
+        json.dumps({"t": "done", "count": 1}) + "\n",
+    ]
+
+    captured = {}
+
+    def _popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["env"] = kwargs.get("env", {})
+        return _FakeProc(lines, write_ocsf_to=cmd[-1])  # last arg = OCSF out file
+
+    with patch(_POPEN, side_effect=_popen):
         records = run_prowler(
-            credentials=_CREDS, account_id="123456789012", regions=["us-east-1"], prowler_bin="prowler"
+            credentials=_CREDS,
+            account_id="123456789012",
+            regions=["us-east-1"],
+            progress_callback=seen.append,
         )
 
     assert records == _FAKE_OCSF
-    cmd = mock_run.call_args.args[0]
-    assert cmd[0] == "prowler"
-    assert "json-ocsf" in cmd
-    assert "--ignore-exit-code-3" in cmd
-    assert "us-east-1" in cmd
+    assert seen == [10.0, 55.0]  # progress lines forwarded; "done" is not progress
+    cmd = captured["cmd"]
+    assert cmd[1].endswith("prowler_sdk_runner.py")
+    assert cmd[2] == "123456789012"
+    assert cmd[3] == "us-east-1"
     # Assumed-role temp creds are passed via env (never a long-lived key).
-    assert mock_run.call_args.kwargs["env"]["AWS_SESSION_TOKEN"] == "token"
+    assert captured["env"]["AWS_SESSION_TOKEN"] == "token"
 
 
-def test_run_prowler_returns_empty_when_no_output():
-    with patch(_RUN, return_value=MagicMock(returncode=1)):
-        records = run_prowler(credentials=_CREDS, account_id="123456789012", prowler_bin="prowler")
+def test_run_prowler_returns_empty_when_no_ocsf():
+    lines = [json.dumps({"t": "error", "message": "boom"}) + "\n"]
+
+    with patch(_POPEN, side_effect=lambda cmd, **kw: _FakeProc(lines)):  # no OCSF written
+        records = run_prowler(credentials=_CREDS, account_id="123456789012")
+
     assert records == []

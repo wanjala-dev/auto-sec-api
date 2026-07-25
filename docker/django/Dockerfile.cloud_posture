@@ -15,5 +15,7 @@ RUN python -m venv /opt/prowler/venv \
  && /opt/prowler/venv/bin/pip install --no-cache-dir "prowler==${PROWLER_VERSION}" \
  && /opt/prowler/venv/bin/prowler --version
 
-# run_prowler() reads this to invoke the isolated Prowler binary.
-ENV PROWLER_BIN=/opt/prowler/venv/bin/prowler
+# run_prowler() reads these to invoke the isolated Prowler venv — PROWLER_BIN
+# (legacy/CLI) and the venv Python that runs the SDK progress runner script.
+ENV PROWLER_BIN=/opt/prowler/venv/bin/prowler \
+    PROWLER_VENV_PYTHON=/opt/prowler/venv/bin/python
