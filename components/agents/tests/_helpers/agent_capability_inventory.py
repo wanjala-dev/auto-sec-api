@@ -335,6 +335,10 @@ ROUTING_EXPECTATIONS: dict[str, str] = {
     "generate a pentest report": "report_agent",
     "write the security report": "report_agent",
     "produce a client-ready penetration test report": "report_agent",
+    # workflow_agent — draft a SOC automation playbook from a chat request
+    "create a workflow for this alert": "workflow_agent",
+    "build a playbook for critical findings": "workflow_agent",
+    "draft an automation to notify the team on high severity findings": "workflow_agent",
 }
 
 
