@@ -36,7 +36,10 @@ class AiConfig(AppConfig):
 
         SubscriptionRegistry.bind_all(
             CeleryEventPublisher(),
-            packages=("components.agents.application.handlers",),
+            packages=(
+                "components.agents.application.handlers",
+                "components.findings.application.handlers",
+            ),
         )
 
         # ── Phase 7.1 — publish DeepRunLog rows to the realtime event

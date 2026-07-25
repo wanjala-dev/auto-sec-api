@@ -1,14 +1,10 @@
 """Handler: persist a scanner's ``FindingObserved`` into the Finding SSOT.
 
-The findings context owns this — a scanner emits ``FindingObserved`` and this handler
-(behind the owner) records it (dedup + lifecycle) and emits ``FindingRaised``.
-
-Phase 3a defines it as a plain function, exercised directly by tests. It is NOT yet
-bound to the event bus: the ``SubscriptionRegistry`` auto-discovery currently walks
-only ``components.agents.application.handlers`` (see that module), and nothing emits
-``FindingObserved`` until the cloud_posture producer lands. Phase 3b wires both — the
-``@subscribes_to`` registration (once discovery is generalized) and the producer —
-together, since binding a subscriber before there is a producer is dead wiring.
+The findings context owns this — a scanner emits ``FindingObserved`` (the shared-kernel
+event) and this handler (behind the owner) records it (dedup + lifecycle) and emits
+``FindingRaised``. Bound to the bus via ``@subscribes_to`` (the registry lives in the
+shared kernel, so findings does not couple to any other context); the composition root
+(``infrastructure/persistence/ai/apps.py``) lists this handler package for discovery.
 """
 
 from __future__ import annotations
@@ -16,10 +12,12 @@ from __future__ import annotations
 from components.findings.application.commands.record_observed_finding_command import (
     RecordObservedFindingCommand,
 )
+from components.shared_kernel.application.subscription_registry import subscribes_to
 from components.shared_kernel.domain.events import FindingObserved
 from components.shared_kernel.domain.security import Severity
 
 
+@subscribes_to(FindingObserved)
 def handle_finding_observed(event: FindingObserved) -> None:
     from components.findings.application.providers.finding_provider import FindingProvider
 
