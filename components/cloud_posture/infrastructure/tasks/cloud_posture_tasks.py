@@ -97,10 +97,32 @@ def run_prowler_scan_for_account(connection_id: str, account_id: str) -> dict[st
     """Assume the account role, run Prowler, ingest the result; (re)verify the link."""
     from infrastructure.persistence.integrations.models import AwsAccountLink, AwsOrganizationConnection
 
+    # Lazy import: the shared_platform services package __init__ eagerly pulls
+    # in ORM models, so a module-level import here would run at Celery-app load
+    # (before the app registry is ready). Import inside the task, as the model
+    # imports in this file already do.
+    from components.shared_platform.infrastructure.services.job_progress import (
+        complete_job,
+        fail_job,
+        start_job,
+        update_job,
+    )
+
     connection = AwsOrganizationConnection.objects.filter(id=connection_id).first()
     if connection is None:
         logger.warning("cloud_posture_scan connection_not_found id=%s", connection_id)
         return {"success": False, "error": "connection_not_found"}
+
+    # Surface this long run to the user via the generic background-job reporter —
+    # the HUD renders its live progress ring off these phase transitions. (The
+    # smooth per-check % lands when the runner moves to the Prowler SDK.)
+    job_id = start_job(
+        workspace_id=connection.workspace_id,
+        job_type="cloud_posture_scan",
+        title=f"CSPM scan · {account_id}",
+        phase="assuming_role",
+        detail="Assuming the account audit role",
+    )
 
     try:
         credentials = get_aws_credentials_port().assume_role(
@@ -109,10 +131,13 @@ def run_prowler_scan_for_account(connection_id: str, account_id: str) -> dict[st
             external_id=connection.external_id,
             session_name="autosec-prowler",
         )
+        update_job(job_id=job_id, progress=15, phase="scanning", detail=f"Running Prowler on {account_id}")
         records = run_prowler(credentials=credentials, account_id=account_id, regions=list(connection.regions or []))
+        update_job(job_id=job_id, progress=90, phase="ingesting", detail="Persisting findings")
     except Exception:
         logger.exception("cloud_posture_scan failed connection=%s account=%s", connection_id, account_id)
         _set_link_status(connection_id, account_id, AwsAccountLink.Status.FAILED)
+        fail_job(job_id=job_id, error="scan_failed")
         return {"success": False, "error": "scan_failed"}
 
     scan = ingest_prowler_scan(
@@ -124,6 +149,11 @@ def run_prowler_scan_for_account(connection_id: str, account_id: str) -> dict[st
     )
     # The scan proved the role in this account — promote the link to VERIFIED.
     _set_link_status(connection_id, account_id, AwsAccountLink.Status.VERIFIED)
+    complete_job(
+        job_id=job_id,
+        resource_id=str(scan.id),
+        detail=f"{scan.failed_count} findings across {scan.total_checks} checks",
+    )
     logger.info(
         "cloud_posture_scan ingested connection=%s account=%s checks=%s failed=%s",
         connection_id,

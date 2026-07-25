@@ -176,3 +176,39 @@ class TestScanNowEndpoint:
         api_client.force_authenticate(user_factory())
         resp = api_client.post(self._url(ws, conn))
         assert resp.status_code == 403
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+class TestScanReportsBackgroundJob:
+    """The scan surfaces as a generic BackgroundJob the HUD renders progress from."""
+
+    def test_success_reports_completed_job(self, workspace_factory):
+        from infrastructure.persistence.core.models import BackgroundJob
+
+        conn = _conn(workspace_factory())
+        _link(conn, "863183417583", AwsAccountLink.Status.DISCOVERED)
+        port = MagicMock()
+        port.assume_role.return_value = _CREDS
+        with (
+            patch(f"{_TASK}.get_aws_credentials_port", return_value=port),
+            patch(f"{_TASK}.run_prowler", return_value=_RECORDS),
+        ):
+            run_prowler_scan_for_account(str(conn.id), "863183417583")
+
+        job = BackgroundJob.objects.filter(job_type="cloud_posture_scan").latest("created_at")
+        assert job.status == BackgroundJob.Status.COMPLETED
+        assert job.progress == 100
+
+    def test_failure_reports_failed_job(self, workspace_factory):
+        from infrastructure.persistence.core.models import BackgroundJob
+
+        conn = _conn(workspace_factory())
+        _link(conn, "863183417583", AwsAccountLink.Status.DISCOVERED)
+        port = MagicMock()
+        port.assume_role.side_effect = RuntimeError("assume denied")
+        with patch(f"{_TASK}.get_aws_credentials_port", return_value=port):
+            run_prowler_scan_for_account(str(conn.id), "863183417583")
+
+        job = BackgroundJob.objects.filter(job_type="cloud_posture_scan").latest("created_at")
+        assert job.status == BackgroundJob.Status.FAILED
