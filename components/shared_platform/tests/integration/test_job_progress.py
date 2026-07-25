@@ -72,3 +72,30 @@ def test_updates_to_missing_job_are_safe():
     update_job(job_id=str(uuid.uuid4()), progress=50)
     complete_job(job_id=str(uuid.uuid4()))
     fail_job(job_id=str(uuid.uuid4()), error="x")
+
+
+class TestJobsReadApi:
+    def test_active_jobs_lists_running_for_member(self, api_client, workspace_factory, user_factory):
+        from infrastructure.persistence.workspaces.models import WorkspaceMembership
+
+        ws = workspace_factory()
+        member = user_factory()
+        WorkspaceMembership.objects.create(workspace=ws, user=member, role="member", status="active")
+        job_id = start_job(workspace_id=ws.id, job_type="cloud_posture_scan", title="CSPM scan · 123")
+        update_job(job_id=job_id, progress=40, phase="scanning")
+        complete_and_hidden = start_job(workspace_id=ws.id, job_type="cloud_posture_scan")
+        complete_job(job_id=complete_and_hidden)  # completed → excluded from active
+
+        api_client.force_authenticate(member)
+        resp = api_client.get(f"/api/v1/jobs/workspaces/{ws.id}/active/?type=cloud_posture_scan")
+
+        assert resp.status_code == 200, resp.data
+        assert len(resp.data["data"]) == 1
+        assert resp.data["data"][0]["progress"] == 40
+        assert resp.data["data"][0]["phase"] == "scanning"
+
+    def test_non_member_forbidden(self, api_client, workspace_factory, user_factory):
+        ws = workspace_factory()
+        api_client.force_authenticate(user_factory())
+        resp = api_client.get(f"/api/v1/jobs/workspaces/{ws.id}/active/")
+        assert resp.status_code == 403
