@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -195,3 +197,71 @@ class DemoAccount(models.Model):
 
     def __str__(self) -> str:
         return f"DemoAccount({self.persona} workspace={self.workspace_id} status={self.status})"
+
+
+class BackgroundJob(models.Model):
+    """A user-visible, long-running async operation with live progress.
+
+    The canonical store for ANY long task we want to surface to a user — CSPM
+    scans today, OSINT / recon / enumeration runs and report generation next.
+    One row per run. Tasks drive it through the ``job_progress`` reporter
+    (``components/shared_platform/infrastructure/services/job_progress.py``),
+    which persists lifecycle + progress HERE and pushes a realtime event over
+    the shared resource stream under a single ``resource_type`` (``RESOURCE_TYPE``
+    below), so ONE generic frontend renders every job type with no per-feature
+    UI work. Domain result models (e.g. ``CloudPostureScan``) stay separate —
+    this only tracks the run's lifecycle + progress.
+    """
+
+    # Every job publishes under this one realtime resource_type; the concrete
+    # kind of work is the ``job_type`` field. One socket subscription, N jobs.
+    RESOURCE_TYPE = "background_job"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        RUNNING = "running", "Running"
+        COMPLETED = "completed", "Completed"
+        FAILED = "failed", "Failed"
+        CANCELLED = "cancelled", "Cancelled"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    workspace = models.ForeignKey(
+        "workspaces.Workspace",
+        related_name="background_jobs",
+        on_delete=models.CASCADE,
+    )
+
+    job_type = models.CharField(max_length=64)  # "cloud_posture_scan", "osint_recon", ...
+    # Optional soft link to the domain object this run produced (scan id, report id).
+    resource_id = models.CharField(max_length=64, blank=True, default="")
+    title = models.CharField(max_length=200, blank=True, default="")
+
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    phase = models.CharField(max_length=64, blank=True, default="")
+    detail = models.CharField(max_length=255, blank=True, default="")
+
+    progress = models.PositiveSmallIntegerField(default=0)  # 0–100
+    total = models.PositiveIntegerField(null=True, blank=True)  # optional denominator (e.g. checks)
+    completed = models.PositiveIntegerField(default=0)  # optional numerator
+
+    error = models.TextField(blank=True, default="")
+    payload = models.JSONField(default=dict, blank=True)
+
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+        indexes = [
+            models.Index(fields=["workspace", "status", "-created_at"], name="bgjob_ws_status_idx"),
+            models.Index(fields=["workspace", "job_type", "-created_at"], name="bgjob_ws_type_idx"),
+        ]
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.status in {self.Status.COMPLETED, self.Status.FAILED, self.Status.CANCELLED}
+
+    def __str__(self) -> str:
+        return f"BackgroundJob<{self.job_type} {self.status} {self.progress}%>"
