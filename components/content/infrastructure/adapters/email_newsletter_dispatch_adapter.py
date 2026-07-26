@@ -156,11 +156,11 @@ def _append_open_pixel(html: str, token: str) -> str:
     the public open endpoint, keyed by their dispatch record's token.
     Absolute URL via the Sites framework (the Site domain IS the API
     host in prod)."""
-    from components.shared_platform.infrastructure.services.core_utils import (
-        build_absolute_media_url,
+    from components.shared_platform.application.providers.core_utils_provider import (
+        get_core_utils_provider,
     )
 
-    pixel_url = build_absolute_media_url(f"/api/v1/content/t/o/{token}/")
+    pixel_url = get_core_utils_provider().build_absolute_media_url(f"/api/v1/content/t/o/{token}/")
     return (
         html + f'<img src="{escape(pixel_url, quote=True)}" width="1" height="1" '
         'alt="" style="display:block;border:0;" />'

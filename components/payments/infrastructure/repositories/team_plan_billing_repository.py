@@ -184,11 +184,11 @@ def _bump_feature_flags_for_plan_change() -> None:
     fail a billing write that already committed.
     """
     try:
-        from components.shared_platform.infrastructure.services.feature_flags import (
-            bump_feature_flags_version,
+        from components.shared_platform.application.providers.feature_flags_provider import (
+            get_feature_flags_provider,
         )
 
-        bump_feature_flags_version()
+        get_feature_flags_provider().bump_feature_flags_version()
     except Exception:  # noqa: BLE001 — cache invalidation is best-effort
         logger.exception("feature_flag cache bump failed after plan change")
 
