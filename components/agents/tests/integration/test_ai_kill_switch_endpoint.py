@@ -211,9 +211,17 @@ class TestKillSwitchEnforcement:
 
         paused = workspace_factory(ai_teammate_enabled=False)
         active = workspace_factory(ai_teammate_enabled=True)
+        # Workspace ``post_save`` (SyncWorkspaceAiTeammateUseCase) already provisions a
+        # profile for an ai_teammate_enabled workspace, so a bare ``.create`` here would
+        # collide (UNIQUE workspace_id). ``update_or_create`` is idempotent: it forces the
+        # "active profile on BOTH workspaces" this test needs — the point being that the
+        # PAUSED workspace has an active profile yet is still skipped, because the fanout
+        # gate is the workspace flag (``iter_enabled_seeds`` filters ai_teammate_enabled),
+        # not the profile.
         for workspace in (paused, active):
-            AITeammateProfile.objects.create(
-                workspace=workspace, user=workspace.workspace_owner, is_enabled=True, status="active"
+            AITeammateProfile.objects.update_or_create(
+                workspace=workspace,
+                defaults={"user": workspace.workspace_owner, "is_enabled": True, "status": "active"},
             )
 
         scheduled_ids = {str(p.workspace_id) for p in get_ai_action_service().iter_enabled_seeds()}
