@@ -333,6 +333,16 @@ def run_detector_cycle(
                 )
                 continue
 
+            # Dual-write logwatch findings into the Finding SSOT (ADR 0004). Additive
+            # and best-effort: a no-op for non-logwatch detectors, and it never breaks
+            # the cycle. Emitted for every observation (incl. board-dedup replays where
+            # task_id is None) so the SSOT updates last_seen; publish is on-commit.
+            from components.agents.infrastructure.adapters.actions.detectors.finding_observed_bridge import (
+                emit_finding_observed_for_detector_result,
+            )
+
+            emit_finding_observed_for_detector_result(workspace.id, result)
+
             if task_id is None:
                 # Idempotent replay — already have a task for this finding.
                 continue

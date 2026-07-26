@@ -1,0 +1,109 @@
+"""Bridge a logwatch DetectorResult into the Finding SSOT (ADR 0004 — dual-write).
+
+Slice 1 of the logwatch → SSOT migration. When the detector cycle files a logwatch
+finding on the board (the legacy path, unchanged), this ALSO emits a shared-kernel
+``FindingObserved`` so the **primary log pillar** populates the Finding SSOT — the
+mirror of how ``cloud_posture`` emits from ``prowler_ingest_service`` (#92).
+
+Additive and non-breaking:
+- The board Task, the ``finding_*`` workflow triggers, and specialist routing all
+  still come from the legacy cycle path (``persist_finding_as_task``).
+- ``FindingRaised`` emitted off this SSOT write **no-ops on the board** for logwatch
+  (it is not in ``finding_raised_board_handler._SOURCE_BOARD``), so there is no
+  duplicate card. The board cutover (board-from-SSOT + detector stand-down behind a
+  cutover flag) is a later slice, mirroring cloud_posture #98.
+
+Owner-persists (C2): this only *emits* the event; the ``findings`` context persists
+it. No import of the findings context here. Publishing is deferred to
+``transaction.on_commit`` so a rolled-back cycle never leaves an orphan SSOT finding.
+"""
+
+from __future__ import annotations
+
+import logging
+from uuid import UUID
+
+logger = logging.getLogger(__name__)
+
+# Detector slugs whose findings dual-write into the SSOT. ``cloud_posture`` is
+# deliberately NOT here — it emits ``FindingObserved`` from ``prowler_ingest_service``;
+# emitting again from the cycle would double-write. Adding a slug here is how another
+# detector-based pillar joins the SSOT.
+LOGWATCH_SSOT_SOURCES = frozenset({"logwatch.error", "logwatch.optimization"})
+
+
+def emit_finding_observed_for_detector_result(workspace_id, result, *, publisher=None) -> None:
+    """Emit ``FindingObserved`` for a logwatch DetectorResult (best-effort, on commit).
+
+    No-op for any non-logwatch detector (gate on ``detector_slug``). Never raises — an
+    SSOT emission hiccup must not break the detector cycle; the board write already
+    happened and is the source of truth until the board cutover slice.
+    """
+    slug = (getattr(result, "detector_slug", "") or "").strip()
+    if slug not in LOGWATCH_SSOT_SOURCES:
+        return
+    try:
+        event = _build_finding_observed(workspace_id, result)
+    except Exception:
+        logger.exception("logwatch_finding_observed_build_failed workspace_id=%s slug=%s", workspace_id, slug)
+        return
+    _publish_on_commit(event, publisher)
+
+
+def _build_finding_observed(workspace_id, result):
+    # ``_derive_severity`` is the canonical impact_score → band mapper; reuse it so the
+    # SSOT finding's severity is identical to the board Task's (parity), never a second
+    # threshold table.
+    from components.agents.application.handlers.specialist_persistence_service import (
+        _derive_severity,
+    )
+    from components.shared_kernel.domain.events import FindingObserved
+    from components.shared_kernel.domain.security import AssetUrn
+
+    payload = result.payload or {}
+    fingerprint = str(payload.get("lookup_key") or payload.get("fingerprint") or "").strip()
+    if not fingerprint:
+        raise ValueError("logwatch finding carries no fingerprint/lookup_key")
+
+    service = (str(payload.get("service") or "").strip()) or "unknown"
+    impact_score = int((result.metadata or {}).get("impact_score", 0))
+    severity = _derive_severity(impact_score)
+
+    # A log/service asset has no ARN. Namespace it as ``urn:log:<workspace>/<service>``
+    # so it is a stable, cross-pillar-correlatable identity — a cloud finding on the
+    # same host can later carry the matching URN and the two correlate by value (C4).
+    ws = workspace_id if isinstance(workspace_id, UUID) else UUID(str(workspace_id))
+    asset_urn = AssetUrn.canonical("log", f"{ws}/{service}").value
+
+    return FindingObserved(
+        workspace_id=ws,
+        source=result.detector_slug,
+        fingerprint=fingerprint,
+        asset_urn=asset_urn,
+        severity=severity,
+        title=result.title,
+        description=(result.summary or "")[:2000],
+        remediation="",  # logwatch leaves remediation to the triage/optimization agent
+        attributes={
+            "service": service,
+            "signal": str(payload.get("signal") or ""),
+            "action_type": result.action_type,
+            "detector_slug": result.detector_slug,
+            "blast_radius": (result.context or {}).get("blast_radius") or payload.get("blast_radius") or {},
+        },
+    )
+
+
+def _publish_on_commit(event, publisher) -> None:
+    from django.db import transaction
+
+    def _emit(pub=publisher):
+        if pub is None:
+            from components.shared_kernel.infrastructure.adapters.celery_event_publisher import (
+                CeleryEventPublisher,
+            )
+
+            pub = CeleryEventPublisher()
+        pub.publish(event)
+
+    transaction.on_commit(_emit)
