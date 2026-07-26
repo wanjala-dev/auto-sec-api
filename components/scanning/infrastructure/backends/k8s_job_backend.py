@@ -161,7 +161,14 @@ class K8sJobBackend(ScanExecutionBackend):
             return "", 1
         pod = pods.items[0]
         try:
-            logs = core.read_namespaced_pod_log(pod.metadata.name, _NAMESPACE, container="scanner")
+            # _preload_content=False → get the RAW log bytes. With the default (True) the
+            # client sees valid-JSON log content, deserializes it to a Python object and
+            # str()s it back — corrupting the scanner's JSON into single-quote dict-repr that
+            # json.loads then rejects (every scan silently returns 0 findings). Read raw.
+            resp = core.read_namespaced_pod_log(
+                pod.metadata.name, _NAMESPACE, container="scanner", _preload_content=False
+            )
+            logs = resp.data.decode("utf-8")
         except Exception:
             logger.exception("scan_job log read failed name=%s", name)
             logs = ""
