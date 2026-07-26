@@ -34,6 +34,12 @@ class _FakeStore(FindingStorePort):
     def find_by_identity(self, workspace_id: UUID, source: str, fingerprint: str):
         return self.by_identity.get((workspace_id, source, fingerprint))
 
+    def find_by_id(self, workspace_id: UUID, finding_id: UUID):
+        return next(
+            (f for f in self.by_identity.values() if f.workspace_id == workspace_id and f.id == finding_id),
+            None,
+        )
+
     def upsert(self, finding: FindingEntity) -> None:
         self.by_identity[(finding.workspace_id, finding.source, finding.fingerprint)] = finding
 

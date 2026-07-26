@@ -14,5 +14,9 @@ class FindingStorePort(ABC):
         """Return the finding for the dedup identity (workspace, source, fingerprint), or None."""
 
     @abstractmethod
+    def find_by_id(self, workspace_id: UUID, finding_id: UUID) -> FindingEntity | None:
+        """Return the finding by its id (workspace-scoped), or None. Read side."""
+
+    @abstractmethod
     def upsert(self, finding: FindingEntity) -> None:
         """Insert or update the finding, keyed by its (workspace, source, fingerprint) identity."""
