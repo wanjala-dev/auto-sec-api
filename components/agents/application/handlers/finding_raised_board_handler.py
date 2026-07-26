@@ -155,6 +155,55 @@ def _build_cloud_exposure_card(finding, event, mapping) -> dict:
     }
 
 
+def _build_container_security_card(finding, event, mapping) -> dict:
+    """Build the SOC-board card for a Trivy container-image vulnerability finding.
+
+    Operator-reading material like cloud_posture (``agent_type`` = ``ai_teammate``): this
+    slice surfaces the CVE on the board from the SSOT; routing it to a CVE-triage
+    specialist (an "upgrade the package" advisor) is the next slice.
+    """
+    attrs = finding.attributes or {}
+    severity = finding.severity.value
+    vuln_id = attrs.get("vulnerability_id", "")
+    pkg = attrs.get("pkg_name", "")
+    installed = attrs.get("installed_version", "")
+    fixed = attrs.get("fixed_version", "")
+    lookup_key = finding.fingerprint
+    label = f"{vuln_id or finding.title} in {pkg}" if pkg else (finding.title or vuln_id)
+    title = f"{severity.title()}: {label}"[:255]
+    summary = (f"{pkg} {installed} — {vuln_id}. {finding.remediation}." if pkg else finding.description).strip()
+    payload = {
+        "lookup_key": lookup_key,
+        "signal": finding.title,
+        "confidence": "high",
+        "severity": severity,
+        "vulnerability_id": vuln_id,
+        "pkg_name": pkg,
+        "installed_version": installed,
+        "fixed_version": fixed,
+        "primary_url": attrs.get("primary_url", ""),
+        "target": attrs.get("target", ""),
+        "remediation": finding.remediation,
+        "evidence": [f"{vuln_id}: {pkg} {installed}" + (f" (fixed in {fixed})" if fixed else " (no fix available)")],
+        "finding_id": str(finding.id),
+    }
+    return {
+        "title": title,
+        "summary": (summary or finding.description)[:2000],
+        "source_type": mapping["source_type"],
+        "agent_type": "ai_teammate",  # operator-reading; triage routing is the next slice
+        "detector_key": mapping["detector_key"],
+        "payload": payload,
+        "context": {
+            "kind": "container_security",
+            "workspace_id": str(event.workspace_id),
+            "finding_id": str(finding.id),
+        },
+        "impact_score": _IMPACT.get(severity, 40),
+        "lookup_key": lookup_key,
+    }
+
+
 # Per finding-source board config: the legacy labels + card builder, plus the cutover
 # flag (None = graduated, always surfaces). Extend as more pillars surface findings.
 _SOURCE_BOARD = {
@@ -169,6 +218,12 @@ _SOURCE_BOARD = {
         "detector_key": "ai_findings.cloud_exposure",
         "flag": None,  # born SSOT-native (graduated) — no legacy dual-write / cutover
         "build": _build_cloud_exposure_card,
+    },
+    "container_security.trivy": {
+        "source_type": "ai.container_security",
+        "detector_key": "ai_findings.container_security",
+        "flag": None,  # graduated (operator-reading; CVE triage routing is the next slice)
+        "build": _build_container_security_card,
     },
     "logwatch.error": {
         "source_type": "ai.log_watch",
