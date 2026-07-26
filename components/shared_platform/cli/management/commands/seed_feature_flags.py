@@ -71,6 +71,15 @@ DEFAULT_FLAGS = [
         "board instead. Default OFF — the flagship log lane is only flipped once "
         "dual-write parity is observed. Mirrors the cloud_posture cutover (#98/#101).",
     ),
+    (
+        "feature.cloud_asset_graph",
+        False,
+        "Cloud asset graph (ADR 0004 / CNAPP): the code-to-cloud resource graph "
+        "(CloudAsset + typed edges) the attack-path correlation runs over. Off until "
+        "GA; per-workspace opt-in. Substrate-agnostic — Prowler-derived inventory now, "
+        "CloudQuery-backfillable later with no schema change. See "
+        "docs/plans/CLOUD_ASSET_GRAPH_SPIKE.md.",
+    ),
 ]
 
 

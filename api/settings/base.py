@@ -118,6 +118,7 @@ INSTALLED_APPS = [
     "infrastructure.persistence.provenance",
     "infrastructure.persistence.cloud_posture",
     "infrastructure.persistence.findings",
+    "infrastructure.persistence.cloud_graph",
     "infrastructure.persistence.ai",
     "infrastructure.persistence.recycle_bin",
     # ai submodules
