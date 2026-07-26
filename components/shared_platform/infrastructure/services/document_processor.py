@@ -156,10 +156,10 @@ class DocumentProcessor:
 
         try:
             if ext in (".pdf",):
-                from components.knowledge.infrastructure.adapters.pdf_embeddings import (
-                    create_embeddings_for_pdf,
+                from components.knowledge.application.providers.document_index_provider import (
+                    get_document_index_provider,
                 )
-                result = create_embeddings_for_pdf(
+                result = get_document_index_provider().embed_pdf(
                     pdf_id=doc_id,
                     pdf_path=tmp.name,
                     user_id=user_id,
@@ -171,10 +171,10 @@ class DocumentProcessor:
                     "errors": [result.get("error")] if not result.get("success") else [],
                 }
             elif ext in (".docx", ".doc"):
-                from components.knowledge.infrastructure.adapters.document_embeddings import (
-                    create_embeddings_for_document,
+                from components.knowledge.application.providers.document_index_provider import (
+                    get_document_index_provider,
                 )
-                result = create_embeddings_for_document(
+                result = get_document_index_provider().embed_document(
                     file_id=doc_id,
                     file_path=tmp.name,
                     user_id=user_id,
@@ -206,16 +206,11 @@ class DocumentProcessor:
                     for chunk in chunks
                 ]
 
-                from components.knowledge.infrastructure.factories.embeddings.factory import (
-                    EmbeddingsFactory,
+                from components.knowledge.application.providers.document_index_provider import (
+                    get_document_index_provider,
                 )
-                from components.knowledge.infrastructure.factories.vector_stores.factory import (
-                    VectorStoreFactory,
-                )
-                # No provider= kwarg: factory reads settings.VECTOR_STORE_PROVIDER.
-                vs = VectorStoreFactory.create_vector_store(
-                    embeddings_instance=EmbeddingsFactory.create_embeddings(provider="openai"),
-                )
+                # Backend resolved from settings.VECTOR_STORE_PROVIDER inside knowledge.
+                vs = get_document_index_provider().build_vector_store(embeddings_provider="openai")
                 vs.add_documents(docs)
                 return {"success": True, "chunks": len(docs)}
         except Exception as exc:
@@ -255,12 +250,12 @@ class DocumentProcessor:
         # ── Fast path: direct ES query when ES is the active backend ─
         if provider == "elasticsearch":
             try:
-                from components.knowledge.infrastructure.factories.vector_stores.elasticsearch import (
-                    create_elasticsearch_client,
+                from components.knowledge.application.providers.document_index_provider import (
+                    get_document_index_provider,
                 )
                 import os as _os
 
-                es = create_elasticsearch_client()
+                es = get_document_index_provider().elasticsearch_client()
                 index_name = _os.environ.get(
                     "ELASTICSEARCH_INDEX_NAME", "ai_documents"
                 )
@@ -300,16 +295,11 @@ class DocumentProcessor:
 
         # ── Similarity search via the configured backend ─────────────
         try:
-            from components.knowledge.infrastructure.factories.embeddings.factory import (
-                EmbeddingsFactory,
-            )
-            from components.knowledge.infrastructure.factories.vector_stores.factory import (
-                VectorStoreFactory,
+            from components.knowledge.application.providers.document_index_provider import (
+                get_document_index_provider,
             )
 
-            vs = VectorStoreFactory.create_vector_store(
-                embeddings_instance=EmbeddingsFactory.create_embeddings(provider="openai"),
-            )
+            vs = get_document_index_provider().build_vector_store(embeddings_provider="openai")
 
             # Filter format differs per backend:
             # - ES expects {"bool": {"must": [{"term": {...}}, ...]}}
@@ -354,10 +344,12 @@ class DocumentProcessor:
     ) -> tuple[list[dict] | None, str, list[str]]:
         """Send context to LLM with the extraction prompt."""
         try:
-            from components.knowledge.infrastructure.factories.llms.factory import LLMFactory
+            from components.knowledge.application.providers.langchain_llm_factory_provider import (
+                get_langchain_llm_factory_provider,
+            )
 
             resolved = provider or ("openai" if os.environ.get("OPENAI_API_KEY") else "azure")
-            llm = LLMFactory.create_llm(
+            llm = get_langchain_llm_factory_provider().create_llm(
                 provider=resolved, model_name=model,
                 temperature=0.1, max_tokens=max_tokens,
             )

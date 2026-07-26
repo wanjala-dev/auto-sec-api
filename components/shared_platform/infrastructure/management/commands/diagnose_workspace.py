@@ -3,7 +3,9 @@ Django management command to diagnose workspace content and embeddings
 """
 from django.core.management.base import BaseCommand
 from infrastructure.persistence.uploads.models import File
-from components.knowledge.infrastructure.factories.vector_stores.elasticsearch import create_elasticsearch_client, get_index_stats
+from components.knowledge.application.providers.document_index_provider import (
+    get_document_index_provider,
+)
 import os
 
 class Command(BaseCommand):
@@ -43,11 +45,11 @@ class Command(BaseCommand):
         # Step 2: Check Elasticsearch connection and index
         self.stdout.write("🔍 Step 2: Checking Elasticsearch...")
         try:
-            es_client = create_elasticsearch_client()
+            es_client = get_document_index_provider().elasticsearch_client()
             self.stdout.write(self.style.SUCCESS("✅ Elasticsearch connection successful"))
             
             # Check index stats
-            index_stats = get_index_stats('ai_documents')
+            index_stats = get_document_index_provider().index_stats('ai_documents')
             if index_stats['index_exists']:
                 self.stdout.write(self.style.SUCCESS(f"✅ Index exists with {index_stats['document_count']} documents"))
             else:

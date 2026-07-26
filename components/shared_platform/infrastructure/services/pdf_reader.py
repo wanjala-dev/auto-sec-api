@@ -96,7 +96,9 @@ def extract_tables_with_llm(
         return []
 
     try:
-        from components.knowledge.infrastructure.factories.llms.factory import LLMFactory
+        from components.knowledge.application.providers.langchain_llm_factory_provider import (
+            get_langchain_llm_factory_provider,
+        )
     except ImportError:
         logger.warning("LLMFactory not available — cannot parse PDF tables")
         return []
@@ -109,7 +111,7 @@ def extract_tables_with_llm(
     )
 
     try:
-        llm = LLMFactory.create_llm(
+        llm = get_langchain_llm_factory_provider().create_llm(
             provider=resolved_provider,
             model_name=model_name,
             temperature=0.1,
