@@ -18,3 +18,22 @@ class CloudGraphProvider:
         )
 
         return DjangoCloudGraphRepository()
+
+    @staticmethod
+    def build_asset_inventory():
+        """The ingestion adapter (spike §5). Prowler/SSOT-derived today; a CloudQuery
+        adapter can replace it here without touching the use case."""
+        from components.cloud_graph.infrastructure.adapters.finding_derived_inventory_adapter import (
+            FindingDerivedInventoryAdapter,
+        )
+
+        return FindingDerivedInventoryAdapter()
+
+    @staticmethod
+    def build_sync_cloud_assets_use_case():
+        """The use case the ``cloud_graph.sync`` detector drives."""
+        from components.cloud_graph.application.use_cases.sync_cloud_assets_use_case import (
+            SyncCloudAssetsUseCase,
+        )
+
+        return SyncCloudAssetsUseCase(inventory=CloudGraphProvider.build_asset_inventory())
