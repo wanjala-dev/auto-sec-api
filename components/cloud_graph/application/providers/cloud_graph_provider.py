@@ -30,6 +30,15 @@ class CloudGraphProvider:
         return FindingDerivedInventoryAdapter()
 
     @staticmethod
+    def build_get_asset_graph_use_case():
+        """The read use case the HUD's Asset Graph panel drives (nodes + edges)."""
+        from components.cloud_graph.application.use_cases.get_asset_graph_use_case import (
+            GetAssetGraphUseCase,
+        )
+
+        return GetAssetGraphUseCase(store=CloudGraphProvider.build_cloud_asset_store())
+
+    @staticmethod
     def build_sync_cloud_assets_use_case():
         """The use case the ``cloud_graph.sync`` detector drives."""
         from components.cloud_graph.application.use_cases.sync_cloud_assets_use_case import (
@@ -37,3 +46,40 @@ class CloudGraphProvider:
         )
 
         return SyncCloudAssetsUseCase(inventory=CloudGraphProvider.build_asset_inventory())
+
+    @staticmethod
+    def build_attack_path_store():
+        """The materialised attack-path read/write store."""
+        from components.cloud_graph.infrastructure.repositories.django_attack_path_repository import (
+            DjangoAttackPathRepository,
+        )
+
+        return DjangoAttackPathRepository()
+
+    @staticmethod
+    def build_materialize_attack_paths_use_case():
+        """The correlation JOB the ``cloud_graph.attack_paths`` detector drives — reads the
+        graph, ranks toxic combinations, replaces the materialised table, emits events."""
+        from components.cloud_graph.application.use_cases.materialize_attack_paths_use_case import (
+            MaterializeAttackPathsUseCase,
+        )
+        from components.cloud_graph.domain.services.attack_path_analyzer import AttackPathAnalyzer
+        from components.shared_kernel.infrastructure.adapters.celery_event_publisher import (
+            CeleryEventPublisher,
+        )
+
+        return MaterializeAttackPathsUseCase(
+            asset_store=CloudGraphProvider.build_cloud_asset_store(),
+            path_store=CloudGraphProvider.build_attack_path_store(),
+            analyzer=AttackPathAnalyzer(),
+            publisher=CeleryEventPublisher(),
+        )
+
+    @staticmethod
+    def build_list_attack_paths_use_case():
+        """The read use case the HUD's attack-path list drives (ranked)."""
+        from components.cloud_graph.application.use_cases.list_attack_paths_use_case import (
+            ListAttackPathsUseCase,
+        )
+
+        return ListAttackPathsUseCase(path_store=CloudGraphProvider.build_attack_path_store())
