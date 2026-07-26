@@ -548,11 +548,11 @@ class WorkspacePutSerializer(WritableNestedModelSerializer, serializers.ModelSer
         # ai_teammate_enabled internally as a safety net.
         if ai_just_enabled:
             try:
-                from components.knowledge.infrastructure.tasks.embedding_tasks import (
-                    create_embeddings_for_workspace,
+                from components.knowledge.application.providers.content_embedding_provider import (
+                    get_content_embedding_provider,
                 )
 
-                create_embeddings_for_workspace.delay(str(instance.id))
+                get_content_embedding_provider().enqueue_workspace_embedding(instance.id)
             except Exception as exc:
                 import logging
 

@@ -20,9 +20,11 @@ class LLMFactoryAdapter(LLMProviderPort):
         streaming: bool = False,
         **kwargs: Any,
     ) -> Any:
-        from components.knowledge.infrastructure.factories.llms.factory import LLMFactory
+        from components.knowledge.application.providers.langchain_llm_factory_provider import (
+            get_langchain_llm_factory_provider,
+        )
 
-        return LLMFactory.create_llm(
+        return get_langchain_llm_factory_provider().create_llm(
             provider=provider_slug,
             model_name=model_name,
             temperature=temperature,
@@ -39,9 +41,11 @@ class LLMFactoryAdapter(LLMProviderPort):
         streaming: bool = False,
         **kwargs: Any,
     ) -> Any:
-        from components.knowledge.infrastructure.factories.llms.factory import LLMFactory
+        from components.knowledge.application.providers.langchain_llm_factory_provider import (
+            get_langchain_llm_factory_provider,
+        )
 
-        return LLMFactory.create_llm(
+        return get_langchain_llm_factory_provider().create_llm(
             model_name=model_name,
             temperature=temperature,
             streaming=streaming,

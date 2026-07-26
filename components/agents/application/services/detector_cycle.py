@@ -379,13 +379,13 @@ def run_detector_cycle(
         try:
             from langchain_core.messages import HumanMessage, SystemMessage
 
-            from components.knowledge.infrastructure.factories.llms.factory import (
-                LLMFactory,
+            from components.knowledge.application.providers.langchain_llm_factory_provider import (
+                get_langchain_llm_factory_provider,
             )
 
             signals_json = json.dumps(all_signals, ensure_ascii=False)
             if len(signals_json) <= 8000:
-                llm = LLMFactory.get_llm()
+                llm = get_langchain_llm_factory_provider().get_llm()
                 response = llm.invoke(
                     [
                         SystemMessage(

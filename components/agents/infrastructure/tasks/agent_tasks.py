@@ -11,7 +11,7 @@ from django.utils import timezone
 
 from components.agents.infrastructure.services.actions_service import get_ai_action_service
 from components.agents.infrastructure.services.agents_service import get_agent_service
-from components.knowledge.infrastructure.factories.openai_breaker import (
+from components.knowledge.application.providers.openai_breaker_provider import (
     OPENAI_CHAT_SLUG,
     OpenAIUnavailableError,
     openai_allow_request,

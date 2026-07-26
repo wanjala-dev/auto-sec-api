@@ -294,9 +294,11 @@ def _generate_contextual_tasks(
     team_id: Optional[str],
     model_name: Optional[str],
 ) -> List[TaskSpec]:
-    from components.knowledge.infrastructure.factories.llms.factory import LLMFactory
+    from components.knowledge.application.providers.langchain_llm_factory_provider import (
+        get_langchain_llm_factory_provider,
+    )
 
-    llm = LLMFactory.get_llm(model_name=model_name)
+    llm = get_langchain_llm_factory_provider().get_llm(model_name=model_name)
     payload = {
         "title": project_title or "",
         "goal": goal,
@@ -331,7 +333,9 @@ def plan_with_llm(
 
     Falls back to an empty plan if parsing fails.
     """
-    from components.knowledge.infrastructure.factories.llms.factory import LLMFactory
+    from components.knowledge.application.providers.langchain_llm_factory_provider import (
+        get_langchain_llm_factory_provider,
+    )
 
     context = dict(extra_context or {})
     if domain_slugs:
@@ -339,7 +343,7 @@ def plan_with_llm(
     if deep_pack:
         context.setdefault("deep_pack", deep_pack)
 
-    llm = LLMFactory.get_llm(model_name=model_name)
+    llm = get_langchain_llm_factory_provider().get_llm(model_name=model_name)
     user_payload = json.dumps({"goal": goal, "workspace_id": workspace_id, "team_id": team_id, "context": context})
 
     # Re-resolve the system prompt per call so a newly-registered agent
@@ -438,7 +442,9 @@ def plan_project_with_llm(
     """
     Call the LLM to generate a project plan with tasks and budget lines.
     """
-    from components.knowledge.infrastructure.factories.llms.factory import LLMFactory
+    from components.knowledge.application.providers.langchain_llm_factory_provider import (
+        get_langchain_llm_factory_provider,
+    )
 
     context = dict(extra_context or {})
     if domain_slugs:
@@ -448,7 +454,7 @@ def plan_project_with_llm(
 
     llm_available = True
     try:
-        llm = LLMFactory.get_llm(model_name=model_name)
+        llm = get_langchain_llm_factory_provider().get_llm(model_name=model_name)
         payload = {
             "goal": goal,
             "workspace_id": workspace_id,
