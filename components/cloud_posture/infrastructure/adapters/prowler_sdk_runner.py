@@ -4,19 +4,22 @@
 This script is executed by the DEDICATED PROWLER VENV's Python
 (``/opt/prowler/venv/bin/python``), NOT the Django worker's interpreter — it
 imports ONLY ``prowler`` (which lives in that isolated venv) and the stdlib, so
-the venv isolation the app relies on is preserved. The worker's
-``prowler_runner.run_prowler`` invokes it as a subprocess and reads its stdout.
+the venv isolation the app relies on is preserved. The ``ScanExecutionBackend``
+(ADR 0006) invokes it as the engine subprocess/Job and reads this stdout protocol;
+``ProwlerScanner`` parses it.
 
 Protocol (one JSON object per line on stdout):
     {"t": "progress", "pct": <float 0-100>}   # after each check batch
-    {"t": "done", "count": <int>}             # findings written to the OCSF file
+    {"t": "result", "records": [<ocsf>, ...]} # emitted when argv[3] == "-"
+    {"t": "done", "count": <int>}             # findings written / emitted
     {"t": "error", "message": "<str>"}        # fatal — non-zero exit
 
 Assumed AWS credentials arrive via the environment (AWS_ACCESS_KEY_ID /
 AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN) — never long-lived keys. Argv:
     argv[1] = account_id (labelling only)
     argv[2] = comma-separated regions ("" = all enabled regions)
-    argv[3] = output OCSF file path
+    argv[3] = output OCSF file path, or "-" to emit records on stdout (the
+              ScanExecutionBackend transport — a Job pod has no shared filesystem)
 """
 
 import json
@@ -38,7 +41,7 @@ def main() -> int:
         from prowler.lib.outputs.ocsf.ocsf import OCSF
         from prowler.lib.scan.scan import Scan
         from prowler.providers.aws.aws_provider import AwsProvider
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _emit({"t": "error", "message": f"prowler import failed: {exc}"})
         return 1
 
@@ -64,11 +67,22 @@ def main() -> int:
                 last_pct = pct
                 _emit({"t": "progress", "pct": pct})
 
-        # Write the OCSF file the worker's ingest already parses.
-        OCSF(findings=findings, file_path=out_file).batch_write_data_to_file()
+        if out_file == "-":
+            # Emit records on stdout — the ScanExecutionBackend transport. Write OCSF to a
+            # throwaway file (preserving the exact format the ingest parses), read it back,
+            # emit as one protocol line, discard the file.
+            with tempfile.TemporaryDirectory() as tmp:
+                path = os.path.join(tmp, "out.ocsf.json")
+                OCSF(findings=findings, file_path=path).batch_write_data_to_file()
+                matches = sorted(Path(tmp).glob("*.json"))
+                records = json.loads(matches[0].read_text()) if matches else []
+            _emit({"t": "result", "records": records if isinstance(records, list) else []})
+        else:
+            # Write the OCSF file the worker's ingest already parses.
+            OCSF(findings=findings, file_path=out_file).batch_write_data_to_file()
         _emit({"t": "done", "count": len(findings)})
         return 0
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _emit({"t": "error", "message": f"{type(exc).__name__}: {exc}"})
         return 1
 

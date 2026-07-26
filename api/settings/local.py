@@ -430,6 +430,7 @@ CELERY_QUEUE_WORKSPACE_AGGREGATIONS = "workspace_aggregations"
 # Dedicated queue for the Prowler CSPM scans — served only by the isolated
 # cloud-posture worker (the one image that carries Prowler).
 CELERY_QUEUE_CLOUD_POSTURE = "cloud_posture"
+CELERY_QUEUE_CONTAINER_SECURITY = "container_security"
 
 CELERY_BROKER_URL = env("CELERY_BROKER", default="redis://127.0.0.1:6379/0")
 CELERY_RESULT_BACKEND = env("CELERY_BACKEND", default="redis://127.0.0.1:6379/0")
@@ -455,6 +456,11 @@ CELERY_QUEUES = (
         CELERY_QUEUE_CLOUD_POSTURE,
         Exchange(CELERY_QUEUE_CLOUD_POSTURE),
         routing_key=CELERY_QUEUE_CLOUD_POSTURE,
+    ),
+    Queue(
+        CELERY_QUEUE_CONTAINER_SECURITY,
+        Exchange(CELERY_QUEUE_CONTAINER_SECURITY),
+        routing_key=CELERY_QUEUE_CONTAINER_SECURITY,
     ),
 )
 
@@ -538,6 +544,12 @@ CELERY_BEAT_SCHEDULE = {
     "schedule_cloud_posture_scans": {
         "task": "cloud_posture.schedule_prowler_runs",
         "schedule": crontab(hour=2, minute=0),
+    },
+    # Daily Trivy container-SCA rescan — fans out per known image of opted-in
+    # workspaces (feature.container_security). Dark until opt-in; self-gates on the flag.
+    "schedule_container_scans": {
+        "task": "container_security.schedule_container_scans",
+        "schedule": crontab(hour=3, minute=0),
     },
     "schedule_ai_teammate_runs": {
         "task": "infrastructure.ai.agents.tasks.schedule_ai_teammate_runs",

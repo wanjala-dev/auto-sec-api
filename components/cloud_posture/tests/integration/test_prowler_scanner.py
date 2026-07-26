@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -12,6 +11,7 @@ from components.cloud_posture.infrastructure.adapters.prowler_scanner import Pro
 from components.cloud_posture.infrastructure.services.prowler_ingest_service import (
     records_to_scan_result,
 )
+from components.cloud_posture.tests._prowler_backend_stub import RecordsBackend
 from components.shared_kernel.application.ports.scanner_port import ScannerPort, ScanResult, ScanTarget
 from components.shared_kernel.domain.security import NormalizedFinding, Severity
 
@@ -46,7 +46,8 @@ def test_records_to_scan_result_normalizes_and_counts():
 
 @pytest.mark.unit
 def test_prowler_scanner_is_a_scanner_port_and_runs_the_engine():
-    scanner = ProwlerScanner()
+    backend = RecordsBackend(_records())
+    scanner = ProwlerScanner(backend=backend)
     assert isinstance(scanner, ScannerPort)
 
     target = ScanTarget(
@@ -54,15 +55,15 @@ def test_prowler_scanner_is_a_scanner_port_and_runs_the_engine():
         credentials={"AccessKeyId": "x", "SecretAccessKey": "y", "SessionToken": "z"},
         params={"regions": ["us-east-1"]},
     )
-    with patch(
-        "components.cloud_posture.infrastructure.adapters.prowler_runner.run_prowler",
-        return_value=_records(),
-    ) as m_run:
-        result = scanner.scan(target)
+    result = scanner.scan(target)
 
-    m_run.assert_called_once()
-    kwargs = m_run.call_args.kwargs
-    assert kwargs["account_id"] == "123456789012"
-    assert kwargs["regions"] == ["us-east-1"]
-    assert kwargs["credentials"]["AccessKeyId"] == "x"
+    # The engine ran on the backend exactly once, with the account/regions in argv and the
+    # assumed creds mounted as secret_env (never in argv).
+    assert len(backend.calls) == 1
+    spec = backend.calls[0]
+    assert spec.source == "cloud_posture.prowler"
+    assert "123456789012" in spec.args
+    assert "us-east-1" in spec.args
+    assert "123456789012" not in " ".join(f"{k}={v}" for k, v in spec.secret_env.items())
+    assert spec.secret_env["AWS_ACCESS_KEY_ID"] == "x"
     assert len(result.findings) == 2

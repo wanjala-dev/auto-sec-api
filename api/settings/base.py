@@ -117,6 +117,7 @@ INSTALLED_APPS = [
     "infrastructure.persistence.integrations",
     "infrastructure.persistence.provenance",
     "infrastructure.persistence.cloud_posture",
+    "infrastructure.persistence.scanning",
     "infrastructure.persistence.findings",
     "infrastructure.persistence.cloud_graph",
     "infrastructure.persistence.ai",
@@ -145,6 +146,7 @@ INSTALLED_APPS = [
     "components.knowledge.cli",
     "components.workflow.cli",
     "components.sign_off.cli",
+    "components.container_security.cli",
     # SaaS billing CLI/ready() wiring (subscription tiers + payments/Stripe).
     "components.subscription.cli",
     "components.payments.cli",

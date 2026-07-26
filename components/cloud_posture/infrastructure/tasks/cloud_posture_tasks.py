@@ -14,7 +14,8 @@ promotes the account link to VERIFIED, an assume/scan failure marks it FAILED
 (degrading that one account without blocking the rest of the org).
 
 The live path needs the operator IAM audit-role rollout + a Prowler install; the
-two seams (``get_aws_credentials_port`` / ``run_prowler``) are mocked in tests.
+two seams (``get_aws_credentials_port`` / the ``ScanExecutionBackend`` the
+ProwlerScanner runs on) are mocked in tests.
 """
 
 from __future__ import annotations
