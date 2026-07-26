@@ -18,5 +18,35 @@ class FindingStorePort(ABC):
         """Return the finding by its id (workspace-scoped), or None. Read side."""
 
     @abstractmethod
+    def list_findings(
+        self,
+        workspace_id: UUID,
+        *,
+        severity: str | None = None,
+        status: str | None = None,
+        source: str | None = None,
+        asset_urn: str | None = None,
+        limit: int = 25,
+        offset: int = 0,
+    ) -> list[FindingEntity]:
+        """Return a filtered, paginated page of findings for a workspace (read side).
+
+        Filters AND together; ordered most-recently-seen first. Workspace-scoped by
+        construction — a finding for another workspace is never returned.
+        """
+
+    @abstractmethod
+    def count_findings(
+        self,
+        workspace_id: UUID,
+        *,
+        severity: str | None = None,
+        status: str | None = None,
+        source: str | None = None,
+        asset_urn: str | None = None,
+    ) -> int:
+        """Total findings matching the same filter set (for pagination). Read side."""
+
+    @abstractmethod
     def upsert(self, finding: FindingEntity) -> None:
         """Insert or update the finding, keyed by its (workspace, source, fingerprint) identity."""
