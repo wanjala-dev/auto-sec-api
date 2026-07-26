@@ -161,6 +161,7 @@ CANONICAL_TOOLS: dict[str, set[str]] = {
         # with task_agent — see the declaration above.
         "list_open_findings",
         "list_pending_log_findings",
+        "query_asset_graph",
         "triage_finding",
         "record_finding",
         "open_draft_pr",
