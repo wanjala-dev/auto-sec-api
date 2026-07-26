@@ -104,7 +104,12 @@ def test_run_prowler_scan_for_account_assumes_runs_and_ingests(workspace_factory
     creds_port.assume_role.return_value = _CREDS
     with (
         patch(f"{target}.get_aws_credentials_port", return_value=creds_port),
-        patch(f"{target}.run_prowler", return_value=_RECORDS) as m_run,
+        # run_prowler now runs behind the ProwlerScanner ScannerPort adapter (Phase 4);
+        # patch it at its source so the scanner + records_to_scan_result still execute.
+        patch(
+            "components.cloud_posture.infrastructure.adapters.prowler_runner.run_prowler",
+            return_value=_RECORDS,
+        ) as m_run,
     ):
         result = run_prowler_scan_for_account(str(conn.id), "123456789012")
 

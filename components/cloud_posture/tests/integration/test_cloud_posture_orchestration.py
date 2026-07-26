@@ -124,7 +124,10 @@ class TestScanVerifiesLink:
 
         with (
             patch(f"{_TASK}.get_aws_credentials_port", return_value=port),
-            patch(f"{_TASK}.run_prowler", return_value=_RECORDS),
+            patch(
+                "components.cloud_posture.infrastructure.adapters.prowler_runner.run_prowler",
+                return_value=_RECORDS,
+            ),
         ):
             result = run_prowler_scan_for_account(str(conn.id), "863183417583")
 
@@ -192,7 +195,10 @@ class TestScanReportsBackgroundJob:
         port.assume_role.return_value = _CREDS
         with (
             patch(f"{_TASK}.get_aws_credentials_port", return_value=port),
-            patch(f"{_TASK}.run_prowler", return_value=_RECORDS),
+            patch(
+                "components.cloud_posture.infrastructure.adapters.prowler_runner.run_prowler",
+                return_value=_RECORDS,
+            ),
         ):
             run_prowler_scan_for_account(str(conn.id), "863183417583")
 

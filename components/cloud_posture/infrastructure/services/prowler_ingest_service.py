@@ -25,6 +25,9 @@ from components.cloud_posture.domain.value_objects.enums import (
     severity_from_prowler,
     status_from_prowler,
 )
+from components.shared_kernel.application.ports.scanner_port import ScanResult
+from components.shared_kernel.domain.events import FindingObserved
+from components.shared_kernel.domain.security import AssetUrn, NormalizedFinding, Severity
 
 logger = logging.getLogger(__name__)
 
@@ -88,96 +91,109 @@ def ingest_prowler_scan(
     engine_version: str = "",
     event_publisher=None,
 ):
-    """Persist one Prowler run as a scan + its actionable findings. Returns the scan.
+    """Convenience: ingest raw Prowler OCSF records (parse → normalize → ingest).
 
-    Also **dual-writes** each actionable finding into the ``findings`` SSOT by emitting
-    a ``FindingObserved`` shared-kernel event per finding (ADR 0004 Phase 3b). The
-    existing ``CloudPostureScan``/``CloudPostureFinding`` path is unchanged — the events
-    fill the new store in the background (on transaction commit) so it can be verified at
-    parity before anything cuts over. cloud_posture stays decoupled: it publishes a
-    shared-kernel event and never imports the ``findings`` context. ``event_publisher``
-    is injectable for tests (defaults to the Celery publisher).
+    A thin wrapper over ``records_to_scan_result`` + ``ingest_scan_result`` for callers
+    that hold raw records (tests). The Celery scan task goes through the ``ProwlerScanner``
+    ScannerPort adapter (ADR 0004 Phase 4) instead.
+    """
+    result = records_to_scan_result(records, engine_version=engine_version or "prowler")
+    return ingest_scan_result(
+        workspace_id=workspace_id,
+        account_id=account_id,
+        result=result,
+        connection_id=connection_id,
+        event_publisher=event_publisher,
+    )
+
+
+def ingest_scan_result(
+    *,
+    workspace_id: UUID,
+    account_id: str,
+    result: ScanResult,
+    connection_id: UUID | None = None,
+    event_publisher=None,
+):
+    """Persist a scan result: the CSPM snapshot + a dual-write into the findings SSOT.
+
+    The engine-agnostic ingest — given a ``ScanResult`` from any ScannerPort adapter
+    (Prowler today), record the ``CloudPostureScan`` snapshot + its ``CloudPostureFinding``
+    rows (CSPM specifics read from each finding's ``attributes``), and emit one
+    ``FindingObserved`` per finding for the SSOT (ADR 0004). cloud_posture stays
+    decoupled: it publishes a shared-kernel event and never imports the findings context.
+    ``event_publisher`` is injectable for tests.
     """
     from infrastructure.persistence.cloud_posture.models import CloudPostureFinding, CloudPostureScan
 
-    findings = parse_prowler_ocsf(records)
-    passed = sum(1 for f in findings if f.status is CheckStatus.PASS)
-    failed = sum(1 for f in findings if f.status is CheckStatus.FAIL)
     now = timezone.now()
-
     scan = CloudPostureScan.objects.create(
         workspace_id=workspace_id,
         connection_id=connection_id,
         account_id=str(account_id or ""),
-        engine_version=engine_version,
+        engine_version=result.engine_version,
         status=CloudPostureScan.Status.COMPLETED,
-        total_checks=len(findings),
-        passed_count=passed,
-        failed_count=failed,
+        total_checks=result.total_checks,
+        passed_count=result.passed_count,
+        failed_count=result.failed_count,
         started_at=now,
         completed_at=now,
     )
 
     created = 0
     observed_events = []
-    for finding in findings:
-        if not finding.is_actionable:
-            continue
+    for finding in result.findings:
+        attrs = finding.attributes or {}
         _, was_created = CloudPostureFinding.objects.get_or_create(
             scan=scan,
-            check_id=finding.check_id,
-            resource_uid=finding.resource_uid,
+            check_id=attrs.get("check_id", ""),
+            resource_uid=attrs.get("resource_uid", ""),
             defaults={
                 "workspace_id": workspace_id,
                 "title": finding.title,
-                "severity": str(finding.severity),
-                "status": str(finding.status),
-                "account_id": finding.account_id,
-                "region": finding.region,
-                "service": finding.service,
-                "resource_name": finding.resource_name,
-                "resource_type": finding.resource_type,
-                "finding_uid": finding.finding_uid,
+                "severity": finding.severity.value,
+                "status": attrs.get("check_status", ""),
+                "account_id": attrs.get("account_id", ""),
+                "region": attrs.get("region", ""),
+                "service": attrs.get("service", ""),
+                "resource_name": attrs.get("resource_name", ""),
+                "resource_type": attrs.get("resource_type", ""),
+                "finding_uid": attrs.get("finding_uid", ""),
                 "description": finding.description,
                 "remediation": finding.remediation,
                 "compliance": dict(finding.compliance),
             },
         )
         created += int(was_created)
-        observed_events.append(_build_finding_observed(workspace_id, finding, occurred_at=now))
+        observed_events.append(_finding_observed_from_normalized(workspace_id, finding))
 
     _publish_finding_observed(observed_events, event_publisher)
 
     logger.info(
-        "prowler_ingest workspace_id=%s account=%s checks=%s failed=%s findings_created=%s observed_emitted=%s",
+        "cloud_posture_ingest workspace_id=%s account=%s checks=%s failed=%s findings_created=%s observed=%s",
         workspace_id,
         account_id,
-        len(findings),
-        failed,
+        result.total_checks,
+        result.failed_count,
         created,
         len(observed_events),
     )
     return scan
 
 
-def _build_finding_observed(workspace_id: UUID, finding: NormalizedPostureFinding, *, occurred_at):
-    """Map a normalized Prowler finding to a ``FindingObserved`` shared-kernel event.
+def _to_normalized(finding: NormalizedPostureFinding) -> NormalizedFinding:
+    """Map a rich CSPM finding to the shared normalized shape (CSPM specifics → attributes).
 
     ``fingerprint`` is stable across scans for the same misconfiguration on the same
-    resource, so the findings SSOT dedups nightly re-scans. ``asset_urn`` is the
-    resource ARN (canonicalised); account-level checks with no resource fall back to a
-    per-account URN so the required identity is never empty.
+    resource; ``asset_urn`` is the resource ARN (canonicalised), or a per-account URN
+    for account-level checks so the required identity is never empty.
     """
-    from components.shared_kernel.domain.events import FindingObserved
-    from components.shared_kernel.domain.security import AssetUrn, Severity
-
     resource_ref = finding.resource_uid or f"account/{finding.account_id or 'unknown'}"
-    return FindingObserved(
-        workspace_id=workspace_id,
+    return NormalizedFinding(
         source="cloud_posture.prowler",
         fingerprint=f"{finding.check_id}|{finding.account_id}|{finding.resource_uid}",
         asset_urn=AssetUrn.canonical("aws", resource_ref).value,
-        severity=Severity.from_name(str(finding.severity)).value,
+        severity=Severity.from_name(str(finding.severity)),
         title=finding.title or finding.check_id,
         description=finding.description,
         remediation=finding.remediation,
@@ -193,6 +209,42 @@ def _build_finding_observed(workspace_id: UUID, finding: NormalizedPostureFindin
             "finding_uid": finding.finding_uid,
             "check_status": str(finding.status),
         },
+    )
+
+
+def records_to_scan_result(records: list[dict], *, engine_version: str = "") -> ScanResult:
+    """Parse Prowler OCSF records → a ``ScanResult`` (pure: no engine, no DB).
+
+    Counts come from ALL parsed checks (including passes); ``findings`` are the
+    actionable ones mapped to the shared ``NormalizedFinding`` shape.
+    """
+    parsed = parse_prowler_ocsf(records)
+    passed = sum(1 for f in parsed if f.status is CheckStatus.PASS)
+    failed = sum(1 for f in parsed if f.status is CheckStatus.FAIL)
+    findings = tuple(_to_normalized(f) for f in parsed if f.is_actionable)
+    return ScanResult(
+        findings=findings,
+        engine="prowler",
+        engine_version=engine_version or "prowler",
+        total_checks=len(parsed),
+        passed_count=passed,
+        failed_count=failed,
+    )
+
+
+def _finding_observed_from_normalized(workspace_id: UUID, finding: NormalizedFinding) -> FindingObserved:
+    """Map a ``NormalizedFinding`` to a ``FindingObserved`` event for the SSOT dual-write."""
+    return FindingObserved(
+        workspace_id=workspace_id,
+        source=finding.source,
+        fingerprint=finding.fingerprint,
+        asset_urn=finding.asset_urn,
+        severity=finding.severity.value,
+        title=finding.title,
+        description=finding.description,
+        remediation=finding.remediation,
+        compliance=dict(finding.compliance),
+        attributes=dict(finding.attributes),
     )
 
 
