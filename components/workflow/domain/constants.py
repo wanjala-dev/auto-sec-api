@@ -90,6 +90,12 @@ NODE_TYPES = (
     # can react to workflow-driven outcomes (e.g. user accepts an
     # AI finding on the Kanban → fire a TaskAcceptedFromBoard event).
     "publish_event",
+    # ``enrich`` — look up an IOC (from ``config.indicator_path`` into the run
+    # context, or a literal ``config.value``) against threat intel
+    # (VirusTotal/AbuseIPDB/GreyNoise) and write the corroborated verdict as the
+    # step output, so a downstream ``condition``/``switch`` can branch on
+    # ``steps.<enrich>.verdict``.
+    "enrich",
 )
 
 TRIGGER_CATALOG = [

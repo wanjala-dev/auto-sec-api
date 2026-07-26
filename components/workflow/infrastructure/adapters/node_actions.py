@@ -876,6 +876,72 @@ def _publish_task_accepted_from_board(run: Any, payload: dict[str, Any]) -> dict
         raise WorkflowActionError(f"publish_event failed: {exc}") from exc
 
 
+def _enrich_context(run: Any) -> dict[str, Any]:
+    """Minimal run context for ``indicator_path`` resolution — trigger payload +
+    target + prior step outputs. Mirrors ``workflow_tasks._build_run_context`` (that
+    module imports THIS one, so building it locally avoids an import cycle)."""
+    payload = dict(getattr(run, "trigger_payload", None) or {})
+    ctx: dict[str, Any] = dict(payload)
+    ctx["trigger"] = payload
+    ctx["target_id"] = run.target_id
+    ctx["target_type"] = run.target_type
+    from infrastructure.persistence.workspaces.workflows.models import WorkflowStepState
+
+    steps: dict[str, Any] = {}
+    for state in WorkflowStepState.objects.filter(run=run).only("node_id", "output"):
+        if state.output:
+            steps[state.node_id] = state.output
+    ctx["steps"] = steps
+    return ctx
+
+
+def _execute_enrich(run: Any, node: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    """Enrich an IOC against threat intel; write the corroborated verdict as this
+    step's output so a downstream ``condition``/``switch`` can branch on it.
+
+    config: ``{"indicator_path": "trigger.ip"}`` (dotted path into the run context) or
+    ``{"value": "<literal>"}``, plus optional ``{"provider": "virustotal"}``. Reuses the
+    same enrichment port as the triage agent (DRY). Degrades to a ``skipped`` status
+    when no indicator resolves, and to an ``unknown`` verdict when no provider key is
+    configured — never fails the run on missing intel.
+    """
+    from components.workflow.domain.services.condition_evaluator import _resolve_path
+
+    indicator_path = str(config.get("indicator_path") or config.get("indicator") or "").strip()
+    if indicator_path:
+        resolved = _resolve_path(_enrich_context(run), indicator_path)
+        raw = resolved if isinstance(resolved, str) else None
+    else:
+        raw = config.get("value")
+
+    from components.integrations.domain.value_objects.indicator import Indicator
+
+    indicator = Indicator.detect(raw or "")
+    if indicator is None:
+        return {"status": "skipped", "reason": "no resolvable indicator", "indicator_path": indicator_path}
+
+    from components.integrations.application.providers.ioc_enrichment_provider import (
+        IocEnrichmentProvider,
+    )
+    from components.integrations.domain.value_objects.enrichment_result import corroborate
+
+    provider = config.get("provider") or None
+    results = IocEnrichmentProvider.enrich_all(indicator, providers=(provider,) if provider else None)
+    agg = corroborate(indicator, results)
+    return {
+        "status": "enriched",
+        "indicator": indicator.value,
+        "kind": indicator.kind.value,
+        "verdict": agg.verdict.value,  # branch on steps.<enrich>.verdict
+        "score": agg.score,
+        "sources_answered": len(agg.sources),
+        "sources": [
+            {"provider": r.provider, "verdict": r.verdict.value, "score": r.score, "detail": r.detail, "error": r.error}
+            for r in results
+        ],
+    }
+
+
 _EXECUTORS = {
     "message": _execute_message,
     "task": _execute_task,
@@ -886,4 +952,5 @@ _EXECUTORS = {
     "update_field": _execute_update_field,
     "webhook": _execute_webhook,
     "publish_event": _execute_publish_event,
+    "enrich": _execute_enrich,
 }

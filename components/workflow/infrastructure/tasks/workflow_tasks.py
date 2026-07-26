@@ -54,6 +54,7 @@ ACTION_NODE_TYPES = {
     "update_field",
     "webhook",
     "publish_event",
+    "enrich",
 }
 # Nodes that pause the run for an external API call (human in the loop).
 HUMAN_PAUSE_NODE_TYPES = {"decision", "data_request"}
