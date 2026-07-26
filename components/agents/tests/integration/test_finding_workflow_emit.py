@@ -59,6 +59,19 @@ class TestFindingWorkflowEmit:
         assert raised.payload["service"] == "web"
         assert raised.payload["task_id"] == str(task_id)
 
+    def test_critical_finding_emits_raised_and_critical(self, workspace_factory, team_factory):
+        # impact_score 90 = a Prowler critical (cloud_posture _IMPACT["critical"]).
+        # Regression for #95: this used to derive "high" and finding_critical never
+        # fired, leaving the ON-by-default critical-finding-alert playbook dead.
+        workspace, owner, column = _board(workspace_factory, team_factory)
+        task_id = _file_finding(workspace, owner, column, impact_score=90, key="wf-emit-crit")
+
+        assert task_id is not None
+        events = WorkflowEvent.objects.filter(source_type="finding", source_id=str(task_id))
+        assert set(events.values_list("trigger_type", flat=True)) == {"finding_raised", "finding_critical"}
+        raised = events.get(trigger_type="finding_raised")
+        assert raised.payload["severity"] == "critical"
+
     def test_low_finding_emits_only_raised(self, workspace_factory, team_factory):
         workspace, owner, column = _board(workspace_factory, team_factory)
         task_id = _file_finding(workspace, owner, column, impact_score=10, key="wf-emit-low", service="nginx")
