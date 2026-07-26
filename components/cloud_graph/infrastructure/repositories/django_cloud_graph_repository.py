@@ -77,3 +77,9 @@ class DjangoCloudGraphRepository(CloudAssetStorePort):
 
         rows = CloudAssetEdge.objects.filter(workspace_id=workspace_id, src_asset_id=src_asset_id)
         return [to_edge_entity(obj) for obj in rows]
+
+    def list_all_edges(self, workspace_id: UUID, *, limit: int = 2000) -> list[CloudAssetEdgeEntity]:
+        from infrastructure.persistence.cloud_graph.models import CloudAssetEdge
+
+        rows = CloudAssetEdge.objects.filter(workspace_id=workspace_id).order_by("-last_seen_at")[:limit]
+        return [to_edge_entity(obj) for obj in rows]

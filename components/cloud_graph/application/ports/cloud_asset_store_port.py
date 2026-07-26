@@ -39,3 +39,8 @@ class CloudAssetStorePort(ABC):
     @abstractmethod
     def list_edges_from(self, workspace_id: UUID, src_asset_id: UUID) -> list[CloudAssetEdgeEntity]:
         """Outgoing edges from an asset — the traversal primitive the CTE queries build on."""
+
+    @abstractmethod
+    def list_all_edges(self, workspace_id: UUID, *, limit: int = 2000) -> list[CloudAssetEdgeEntity]:
+        """Every edge in the workspace (capped) — the whole-graph read the HUD renders,
+        distinct from the per-node ``list_edges_from`` traversal primitive."""
