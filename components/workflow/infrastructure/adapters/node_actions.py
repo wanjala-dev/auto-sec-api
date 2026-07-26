@@ -259,8 +259,8 @@ def _send_in_app_message(run: Any, target_id: str, subject: str, body: str, work
             "target_id": target_id,
         }
 
-    from components.notifications.infrastructure.adapters.notification_service import (
-        NotificationDispatcher,
+    from components.notifications.application.providers.notification_factory_provider import (
+        get_notification_factory_provider,
     )
     from infrastructure.persistence.notifications.models import Notification
     from infrastructure.persistence.workspaces.models import Workspace
@@ -272,7 +272,7 @@ def _send_in_app_message(run: Any, target_id: str, subject: str, body: str, work
         # contact themselves (there is no acting user in an automated step),
         # so allow_self_notify keeps the funnel from dropping it. Delivery is
         # queued post-commit, so "sent" here means "accepted for delivery".
-        NotificationDispatcher().dispatch(
+        get_notification_factory_provider().dispatch(
             actor=user,
             workspace=workspace,
             verb=verb[:255],

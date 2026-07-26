@@ -11,7 +11,9 @@ from datetime import timedelta
 from django.contrib.auth import get_user_model
 
 from components.identity.infrastructure.adapters.cache_lockout_adapter import CacheLockoutAdapter
-from components.notifications.infrastructure.adapters.notification_service import NotificationDispatcher
+from components.notifications.application.providers.notification_factory_provider import (
+    get_notification_factory_provider,
+)
 from infrastructure.persistence.notifications.models import Notification
 from infrastructure.persistence.users.models import AuthAuditEvent
 
@@ -45,7 +47,7 @@ def record_security_event(*, actor_id, user_id, verb, event_code, metadata=None)
     # dispatcher must not drop them. The raw-create fallback that used to
     # live here existed only to work around that no-op; the funnel now
     # handles it, and dedup happens via create_notification's window.
-    dispatcher = NotificationDispatcher()
+    dispatcher = get_notification_factory_provider()
     dispatcher.dispatch(
         actor=actor,
         workspace=None,

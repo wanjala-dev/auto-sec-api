@@ -115,8 +115,8 @@ def _notify_run_finished(run: WorkflowRun, status: str) -> None:
     try:
         from django.contrib.auth import get_user_model
 
-        from components.notifications.infrastructure.adapters.notification_service import (
-            NotificationDispatcher,
+        from components.notifications.application.providers.notification_factory_provider import (
+            get_notification_factory_provider,
         )
         from infrastructure.persistence.notifications.models import Notification
         from infrastructure.persistence.workspaces.models import Workspace
@@ -129,7 +129,7 @@ def _notify_run_finished(run: WorkflowRun, status: str) -> None:
         # System-generated; there is no acting user in an automated run, so
         # the owner stands in as actor — allow_self_notify keeps the funnel
         # from dropping it.
-        NotificationDispatcher().dispatch(
+        get_notification_factory_provider().dispatch(
             actor=owner,
             workspace=workspace,
             verb=verb[:255],

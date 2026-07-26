@@ -28,8 +28,8 @@ class ShareNotificationAdapter:
         try:
             from django.contrib.auth import get_user_model
 
-            from components.notifications.infrastructure.adapters.notification_service import (
-                NotificationDispatcher,
+            from components.notifications.application.providers.notification_factory_provider import (
+                get_notification_factory_provider,
             )
             from components.shared_platform.application.ports.email_sending_port import (
                 EmailMessage,
@@ -57,7 +57,7 @@ class ShareNotificationAdapter:
             # In-app leg goes through the canonical dispatcher funnel once for
             # the whole recipient set (preference filtering + async fan-out).
             try:
-                NotificationDispatcher().dispatch(
+                get_notification_factory_provider().dispatch(
                     actor=sender,
                     workspace=None,
                     verb=f"shared “{title}” with you",
