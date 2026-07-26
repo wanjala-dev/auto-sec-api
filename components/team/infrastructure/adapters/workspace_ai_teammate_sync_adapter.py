@@ -41,22 +41,22 @@ class WorkspaceAiTeammateSyncAdapter:
         if not actor:
             return
 
-        from components.notifications.infrastructure.adapters.notification_service import (
-            NotificationDispatcher,
-            workspace_recipient_builder,
+        from components.notifications.application.providers.notification_factory_provider import (
+            get_notification_factory_provider,
         )
         from infrastructure.persistence.notifications.models import (
             AINotificationPreference,
             Notification,
         )
 
-        recipients = workspace_recipient_builder(
+        notifications = get_notification_factory_provider()
+        recipients = notifications.workspace_recipient_builder(
             workspace, include_donors=False
         ).build()
         if not recipients:
             return
 
-        NotificationDispatcher().dispatch(
+        notifications.dispatch(
             actor=actor,
             workspace=workspace,
             verb=(

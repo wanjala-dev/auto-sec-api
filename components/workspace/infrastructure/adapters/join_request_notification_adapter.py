@@ -10,8 +10,8 @@ from __future__ import annotations
 import logging
 
 from infrastructure.persistence.notifications.models import Notification
-from components.notifications.infrastructure.adapters.notification_service import (
-    NotificationDispatcher,
+from components.notifications.application.providers.notification_factory_provider import (
+    get_notification_factory_provider,
 )
 
 logger = logging.getLogger(__name__)
@@ -38,8 +38,8 @@ class JoinRequestNotificationAdapter:
     admin alerts and team invitations).
     """
 
-    def __init__(self, dispatcher: NotificationDispatcher | None = None) -> None:
-        self._dispatcher = dispatcher or NotificationDispatcher()
+    def __init__(self, dispatcher=None) -> None:
+        self._dispatcher = dispatcher or get_notification_factory_provider()
 
     # ── email ────────────────────────────────────────────────────────
     #

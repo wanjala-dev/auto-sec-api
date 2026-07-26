@@ -3,8 +3,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from components.notifications.infrastructure.adapters.notification_service import (
-    NotificationDispatcher,
+from components.notifications.application.providers.notification_factory_provider import (
+    get_notification_factory_provider,
 )
 from components.payments.application.ports.notification_dispatch_port import (
     NotificationDispatchPort,
@@ -19,14 +19,14 @@ class NotificationDispatchAdapter(NotificationDispatchPort):
     importing from the notifications infrastructure.
     """
 
-    def __init__(self, dispatcher: NotificationDispatcher | None = None):
+    def __init__(self, dispatcher=None):
         """Initialize with optional dependency injection for testing.
 
         Args:
             dispatcher: Optional NotificationDispatcher instance. If not provided,
                        a new instance will be created with default preferences service.
         """
-        self._dispatcher = dispatcher or NotificationDispatcher()
+        self._dispatcher = dispatcher or get_notification_factory_provider()
 
     def dispatch_notification(
         self,

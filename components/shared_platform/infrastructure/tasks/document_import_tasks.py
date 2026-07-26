@@ -509,8 +509,8 @@ def _notify_user(doc_import, valid_count: int):
     root fix.
     """
     try:
-        from components.notifications.infrastructure.adapters.notification_service import (
-            NotificationDispatcher,
+        from components.notifications.application.providers.notification_factory_provider import (
+            get_notification_factory_provider,
         )
         from infrastructure.persistence.notifications.models import Notification
         from infrastructure.persistence.workspaces.models import Workspace
@@ -519,7 +519,7 @@ def _notify_user(doc_import, valid_count: int):
             return
         workspace = Workspace.objects.filter(id=doc_import.workspace_id).first()
         filename = doc_import.original_filename or "your document"
-        NotificationDispatcher().dispatch(
+        get_notification_factory_provider().dispatch(
             actor=doc_import.uploaded_by,
             workspace=workspace,
             verb=(

@@ -9,14 +9,16 @@ from __future__ import annotations
 import logging
 
 from infrastructure.persistence.notifications.models import Notification
-from components.notifications.infrastructure.adapters.notification_service import NotificationDispatcher
+from components.notifications.application.providers.notification_factory_provider import (
+    get_notification_factory_provider,
+)
 from components.team.infrastructure.adapters.utilities import send_invitation, send_invitation_accepted
 from components.workspace.infrastructure.adapters.password_setup_url_builder import (
     build_password_setup_url,
 )
 
 logger = logging.getLogger(__name__)
-notification_dispatcher = NotificationDispatcher()
+notification_dispatcher = get_notification_factory_provider()
 
 
 class InvitationNotificationAdapter:

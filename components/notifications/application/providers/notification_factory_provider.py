@@ -53,6 +53,35 @@ class NotificationFactoryProvider:
 
         return NotificationDispatcher().dispatch(*args, **kwargs)
 
+    def workspace_recipient_builder(self, *args: Any, **kwargs: Any) -> Any:
+        """Build the canonical recipient set for a workspace notification.
+
+        Passthrough over the notifications context's ``workspace_recipient_builder``
+        so cross-context callers can assemble recipients without importing another
+        context's infrastructure. Returns the builder; call ``.build()`` on it.
+        """
+        from components.notifications.infrastructure.adapters.notification_service import (
+            workspace_recipient_builder as _builder,
+        )
+
+        return _builder(*args, **kwargs)
+
+    def resolve_actor(self, instance: Any) -> Any:
+        """Resolve the acting user for a model instance (passthrough)."""
+        from components.notifications.infrastructure.adapters.notification_service import (
+            resolve_actor as _resolve_actor,
+        )
+
+        return _resolve_actor(instance)
+
+    def sanitize_metadata(self, value: Any) -> Any:
+        """Sanitize a notification metadata payload (passthrough)."""
+        from components.notifications.infrastructure.adapters.notification_service import (
+            sanitize_metadata as _sanitize_metadata,
+        )
+
+        return _sanitize_metadata(value)
+
 
 _default = NotificationFactoryProvider()
 

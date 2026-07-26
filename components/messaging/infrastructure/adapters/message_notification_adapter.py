@@ -19,8 +19,8 @@ import logging
 from collections.abc import Sequence
 from uuid import UUID
 
-from components.notifications.infrastructure.adapters.notification_service import (
-    NotificationDispatcher,
+from components.notifications.application.providers.notification_factory_provider import (
+    get_notification_factory_provider,
 )
 from infrastructure.persistence.notifications.models import Notification
 
@@ -61,7 +61,7 @@ class MessageNotificationAdapter:
             if len(trimmed_preview) > _PREVIEW_MAX_LENGTH:
                 trimmed_preview = trimmed_preview[: _PREVIEW_MAX_LENGTH - 1] + "…"
 
-            NotificationDispatcher().dispatch(
+            get_notification_factory_provider().dispatch(
                 actor=sender,
                 workspace=workspace,
                 verb="sent you a message",
