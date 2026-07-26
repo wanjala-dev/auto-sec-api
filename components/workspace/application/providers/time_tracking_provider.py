@@ -26,3 +26,9 @@ class TimeTrackingProvider:
     @staticmethod
     def build_discard_timer() -> DiscardTimerUseCase:
         return DiscardTimerUseCase(port=OrmTimeTrackingRepository())
+
+    @staticmethod
+    def build_time_tracking_port() -> OrmTimeTrackingRepository:
+        """Return the time-tracking read/write port (for callers that need the
+        repository's query methods directly, e.g. the task agent's timer status)."""
+        return OrmTimeTrackingRepository()

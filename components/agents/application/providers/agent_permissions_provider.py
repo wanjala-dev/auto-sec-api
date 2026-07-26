@@ -82,6 +82,14 @@ class AgentPermissionsProvider:
 
         return _ensure_agents_team(workspace, ai_user)
 
+    def resolve_ai_teammate_alias(self, *args, **kwargs) -> Any:
+        """Resolve the AI-teammate agent alias for a workspace (passthrough)."""
+        from components.agents.infrastructure.services.agent_permissions_service import (
+            resolve_ai_teammate_alias as _resolve_ai_teammate_alias,
+        )
+
+        return _resolve_ai_teammate_alias(*args, **kwargs)
+
 
 _default = AgentPermissionsProvider()
 

@@ -210,11 +210,11 @@ class WorkspaceSerializer(WritableNestedModelSerializer):
     def get_ai_teammate_display_name(self, obj):
         # Route through the central resolver so all surfaces (chat header,
         # task-card chip, audit copy, LLM prompt) share one default.
-        from components.agents.infrastructure.services.agent_permissions_service import (
-            resolve_ai_teammate_alias,
+        from components.agents.application.providers.agent_permissions_provider import (
+            get_agent_permissions_provider,
         )
 
-        return resolve_ai_teammate_alias(obj)
+        return get_agent_permissions_provider().resolve_ai_teammate_alias(obj)
 
     def get_orchestrator_enabled(self, obj):
         return getattr(obj, "ai_teammate_enabled", False)
@@ -333,11 +333,11 @@ class WorkspaceGetSerializer(WritableNestedModelSerializer, serializers.ModelSer
     def get_ai_teammate_display_name(self, obj):
         # Route through the central resolver so all surfaces (chat header,
         # task-card chip, audit copy, LLM prompt) share one default.
-        from components.agents.infrastructure.services.agent_permissions_service import (
-            resolve_ai_teammate_alias,
+        from components.agents.application.providers.agent_permissions_provider import (
+            get_agent_permissions_provider,
         )
 
-        return resolve_ai_teammate_alias(obj)
+        return get_agent_permissions_provider().resolve_ai_teammate_alias(obj)
 
     def get_orchestrator_enabled(self, obj):
         return getattr(obj, "ai_teammate_enabled", False)

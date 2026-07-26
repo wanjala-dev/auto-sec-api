@@ -25,6 +25,12 @@ class AgentRegistryProvider:
 
         return AgentRegistry.display_name_for(agent_type)
 
+    def is_agent_registered(self, agent_type: str) -> bool:
+        """True if an agent class is registered under *agent_type* (or an alias)."""
+        from components.agents.infrastructure.adapters.langchain.base import AgentRegistry
+
+        return AgentRegistry.get_agent_class(agent_type) is not None
+
 
 _default = AgentRegistryProvider()
 

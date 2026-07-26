@@ -1250,8 +1250,8 @@ def get_task_timer_status(agent, params: Any) -> str:
     """
     from django.utils import timezone
 
-    from components.workspace.infrastructure.repositories.time_tracking_repository import (
-        OrmTimeTrackingRepository,
+    from components.workspace.application.providers.time_tracking_provider import (
+        TimeTrackingProvider,
     )
 
     try:
@@ -1270,7 +1270,7 @@ def get_task_timer_status(agent, params: Any) -> str:
         if err:
             return err
 
-        port = OrmTimeTrackingRepository()
+        port = TimeTrackingProvider.build_time_tracking_port()
         team = port.resolve_active_team_for_timer(user=user)
 
         active_entry = port.find_active_entry(
