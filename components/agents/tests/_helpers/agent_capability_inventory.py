@@ -162,6 +162,7 @@ CANONICAL_TOOLS: dict[str, set[str]] = {
         "list_open_findings",
         "list_pending_log_findings",
         "query_asset_graph",
+        "enrich_indicator",
         "triage_finding",
         "record_finding",
         "open_draft_pr",
