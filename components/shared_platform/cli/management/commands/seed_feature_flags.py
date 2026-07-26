@@ -62,15 +62,6 @@ DEFAULT_FLAGS = [
         "assume-role scan is gated on the read-only IAM audit-role rollout. See "
         "docs/plans/SECURITY_POSTURE_VISION_2026-07-20.md §3.3.",
     ),
-    (
-        "feature.cloud_posture_board_from_findings",
-        False,
-        "ADR 0004 Phase 3c cutover toggle. Off: the CloudPostureDetector surfaces "
-        "cloud-posture cards on the board (today's path). On (per-workspace): the "
-        "FindingRaised board handler drives the board from the Finding SSOT (a local "
-        "copy carrying finding_id) and the detector stands down — reversible, "
-        "board-invisible. See docs/adr/0004-cnapp-unified-finding-and-asset-graph-spine.md.",
-    ),
 ]
 
 
