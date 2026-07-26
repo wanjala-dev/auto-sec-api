@@ -4,10 +4,10 @@ from components.notifications.infrastructure.adapters.notification_service impor
     resolve_actor,
     workspace_recipient_builder,
 )
-from components.shared_kernel.application.providers.notification_signal_provider import (
+from components.notifications.application.providers.notification_signal_provider import (
     NotificationSignalProvider,
 )
-from components.shared_kernel.infrastructure.adapters.django_model_notification_registry import (
+from components.notifications.infrastructure.adapters.django_model_notification_registry import (
     NotificationRule,
 )
 from infrastructure.persistence.project.models import Project, ProjectUpdate, Task, TaskComment

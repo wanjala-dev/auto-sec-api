@@ -1,10 +1,10 @@
 from components.shared_kernel.application.use_cases.notify_task_assignment_change_use_case import (
     NotifyTaskAssignmentChangeUseCase,
 )
-from components.shared_kernel.application.providers.notification_signal_provider import (
+from components.notifications.application.providers.notification_signal_provider import (
     NotificationSignalProvider,
 )
-from components.shared_kernel.infrastructure.adapters.task_assignment_notification_adapter import (
+from components.notifications.infrastructure.adapters.task_assignment_notification_adapter import (
     TaskAssignmentNotificationAdapter,
 )
 
@@ -14,7 +14,7 @@ def test_notification_signal_provider_registers_notification_rule(monkeypatch):
     captured = {}
 
     monkeypatch.setattr(
-        "components.shared_kernel.application.providers.notification_signal_provider.register_model_notification_rule",
+        "components.notifications.application.providers.notification_signal_provider.register_model_notification_rule",
         lambda rule: captured.setdefault("rule", rule),
     )
 
@@ -47,7 +47,7 @@ def test_notification_signal_provider_connects_task_assignment_signal(monkeypatc
             captured["actor_resolver"] = actor_resolver
 
     monkeypatch.setattr(
-        "components.shared_kernel.application.providers.notification_signal_provider.TaskAssignmentSignalAdapter",
+        "components.notifications.application.providers.notification_signal_provider.TaskAssignmentSignalAdapter",
         lambda: _Adapter(),
     )
 

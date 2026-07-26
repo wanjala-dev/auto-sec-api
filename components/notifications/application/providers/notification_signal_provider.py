@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from components.shared_kernel.application.providers.model_notification_registry_provider import (
+from components.notifications.application.providers.model_notification_registry_provider import (
     register_model_notification_rule,
 )
 from components.shared_kernel.application.use_cases.notify_task_assignment_change_use_case import (
     NotifyTaskAssignmentChangeUseCase,
 )
-from components.shared_kernel.infrastructure.adapters.task_assignment_notification_adapter import (
+from components.notifications.infrastructure.adapters.task_assignment_notification_adapter import (
     TaskAssignmentNotificationAdapter,
 )
 from components.shared_kernel.infrastructure.adapters.task_assignment_signal_adapter import (

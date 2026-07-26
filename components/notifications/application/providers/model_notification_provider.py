@@ -3,7 +3,7 @@ from __future__ import annotations
 from components.shared_kernel.application.model_notification_rule_service import (
     ModelNotificationRuleService,
 )
-from components.shared_kernel.infrastructure.adapters.django_notification_dispatch_adapter import (
+from components.notifications.infrastructure.adapters.django_notification_dispatch_adapter import (
     DjangoNotificationDispatchAdapter,
 )
 

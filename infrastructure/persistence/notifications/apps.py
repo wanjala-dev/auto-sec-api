@@ -11,7 +11,7 @@ class NotificationsConfig(AppConfig):
         from components.notifications.infrastructure.adapters.soc_notification_signal_bridge import (
             SocNotificationSignalBridge,
         )
-        from components.shared_kernel.application.providers.default_notification_catalog_provider import (
+        from components.notifications.application.providers.default_notification_catalog_provider import (
             DefaultNotificationCatalogProvider,
         )
 
