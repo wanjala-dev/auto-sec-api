@@ -31,3 +31,23 @@ class AssetGraphView(APIView):
         req = GetAssetGraphRequest.from_request(request, workspace_id)
         view = CloudGraphProvider.build_get_asset_graph_use_case().execute(req.to_query())
         return Response({"success": True, "data": AssetGraphResource.graph(view)})
+
+
+class AttackPathListView(APIView):
+    """GET /cloud-graph/workspaces/<ws>/attack-paths/?category=&min_score=&limit= — ranked paths."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+    name = "cloud-graph-attack-paths"
+
+    def get(self, request, workspace_id):
+        from components.cloud_graph.api.requests.list_attack_paths_request import ListAttackPathsRequest
+        from components.cloud_graph.api.resources.attack_path_resource import AttackPathResource
+        from components.cloud_graph.application.providers.cloud_graph_provider import CloudGraphProvider
+        from components.cloud_graph.infrastructure.services.workspace_access import is_workspace_member
+
+        if not is_workspace_member(user=request.user, workspace_id=workspace_id):
+            return Response({"success": False, "error": "forbidden"}, status=403)
+
+        req = ListAttackPathsRequest.from_request(request, workspace_id)
+        paths = CloudGraphProvider.build_list_attack_paths_use_case().execute(req.to_query())
+        return Response({"success": True, "data": AttackPathResource.collection(paths)})

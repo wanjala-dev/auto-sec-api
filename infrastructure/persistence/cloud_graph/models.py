@@ -84,3 +84,50 @@ class CloudAssetEdge(models.Model):
 
     def __str__(self) -> str:
         return f"{self.src_asset_id} -{self.relation}-> {self.dst_asset_id}"
+
+
+class AttackPath(models.Model):
+    """Materialised, ranked toxic-combination path (ADR 0004 §6 / ADR 0005 §6).
+
+    A precomputed read table: the attack-path correlation job (a background detector
+    cycle) fully recomputes a workspace's paths and replaces the rows; the HUD read is a
+    single indexed ``SELECT ... ORDER BY risk_score DESC``. Denormalised on purpose (a
+    materialised view, not a normalised store) — entry/target ids + labels + the leg
+    chain are inlined so the read needs no joins. ``id`` is a deterministic uuid5 of
+    (workspace, entry, target, category) so a re-materialisation is idempotent.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name="attack_paths")
+
+    # Ranking
+    category = models.CharField(max_length=32, help_text="AttackPathCategory.value — the toxic-combo kind.")
+    severity = models.CharField(max_length=16, help_text="Severity.value")
+    risk_band = models.CharField(max_length=8, help_text="RiskBand.value — green | amber | red.")
+    risk_score = models.FloatField(help_text="0–100 contextual risk.")
+
+    # Endpoints (denormalised — soft asset ids, within-context)
+    entry_asset_id = models.UUIDField()
+    entry_asset_urn = models.CharField(max_length=512)
+    entry_label = models.CharField(max_length=255)
+    target_asset_id = models.UUIDField()
+    target_asset_urn = models.CharField(max_length=512)
+    target_label = models.CharField(max_length=255)
+
+    # Presentation + evidence
+    title = models.CharField(max_length=512)
+    explanation = models.TextField(blank=True, default="")
+    length = models.PositiveIntegerField(default=0, help_text="Hop count (edges) entry → target.")
+    legs = models.JSONField(default=list, help_text="Ordered hops: [{src_id, src_label, relation, dst_id, dst_label}].")
+    asset_urns = models.JSONField(default=list, help_text="Ordered node chain (entry → … → target).")
+
+    computed_at = models.DateTimeField()
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["workspace", "-risk_score"], name="apath_ws_risk_idx"),
+            models.Index(fields=["workspace", "category"], name="apath_ws_category_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.category}:{self.entry_label}→{self.target_label} ({self.risk_score})"

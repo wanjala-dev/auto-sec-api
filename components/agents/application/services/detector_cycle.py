@@ -66,6 +66,7 @@ def _get_detector_modules():
     # (which it was in the fork). The security-relevant LogWatch detector is
     # wired here; add other detector modules to this list to activate them.
     from components.agents.infrastructure.adapters.actions.detectors import (  # noqa: F401
+        cloud_graph_attack_paths,
         cloud_graph_sync,
         logwatch,
         posture_report,
