@@ -1,5 +1,7 @@
 from django.core.management.base import BaseCommand
-from components.knowledge.infrastructure.tasks.embedding_tasks import create_embeddings_for_workspace_content, create_embeddings_for_all_content
+from components.knowledge.application.providers.content_embedding_provider import (
+    get_content_embedding_provider,
+)
 
 
 class Command(BaseCommand):
@@ -21,26 +23,26 @@ class Command(BaseCommand):
         if options['all']:
             if options['async']:
                 self.stdout.write('Starting full embeddings task asynchronously...')
-                task = create_embeddings_for_all_content.delay()
+                task = get_content_embedding_provider().enqueue_all_content()
                 self.stdout.write(
                     self.style.SUCCESS(f'Task started with ID: {task.id}')
                 )
             else:
                 self.stdout.write('Starting full embeddings task...')
-                result = create_embeddings_for_all_content()
+                result = get_content_embedding_provider().run_all_content()
                 self.stdout.write(
                     self.style.SUCCESS(f'Task completed: {result}')
                 )
         else:
             if options['async']:
                 self.stdout.write('Starting daily embeddings task asynchronously...')
-                task = create_embeddings_for_workspace_content.delay()
+                task = get_content_embedding_provider().enqueue_recent_content()
                 self.stdout.write(
                     self.style.SUCCESS(f'Task started with ID: {task.id}')
                 )
             else:
                 self.stdout.write('Starting daily embeddings task...')
-                result = create_embeddings_for_workspace_content()
+                result = get_content_embedding_provider().run_recent_content()
                 self.stdout.write(
                     self.style.SUCCESS(f'Task completed: {result}')
                 )

@@ -476,9 +476,11 @@ def llm_synthesizer(state: PlanState) -> dict:
     try:
         from langchain_core.messages import HumanMessage, SystemMessage
 
-        from components.knowledge.infrastructure.factories.llms.factory import LLMFactory
+        from components.knowledge.application.providers.langchain_llm_factory_provider import (
+            get_langchain_llm_factory_provider,
+        )
 
-        llm = LLMFactory.get_llm()
+        llm = get_langchain_llm_factory_provider().get_llm()
         # Tag failed task summaries inline so the LLM cannot rewrite
         # them as success. A mixed run (e.g. one tool returned data, one
         # hit the iteration cap) must surface BOTH outcomes — a partial

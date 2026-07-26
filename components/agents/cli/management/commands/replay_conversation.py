@@ -303,11 +303,11 @@ class Command(BaseCommand):
         """One-shot LLM call with the candidate system prompt."""
         from langchain_core.messages import HumanMessage, SystemMessage
 
-        from components.knowledge.infrastructure.factories.llms.factory import (
-            LLMFactory,
+        from components.knowledge.application.providers.langchain_llm_factory_provider import (
+            get_langchain_llm_factory_provider,
         )
 
-        llm = LLMFactory.get_llm(model_name=model_name)
+        llm = get_langchain_llm_factory_provider().get_llm(model_name=model_name)
         response = llm.invoke([
             SystemMessage(content=system_prompt),
             HumanMessage(content=user_prompt),

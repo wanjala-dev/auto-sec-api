@@ -29,8 +29,6 @@ COMPONENTS_DIR = ROOT / "components"
 # (source_context, target_context) pairs where app→infra is temporarily OK.
 # Each entry MUST have a tracking comment.
 _TRANSITIONAL_ALLOWLIST: set[tuple[str, str]] = {
-    # agents → knowledge: provider needs extraction to knowledge's application layer
-    ("agents", "knowledge"),
     # campaigns → sponsorship: ledger_service needs a port/facade
     ("campaigns", "sponsorship"),
     # workspace → team: membership repo + ai teammate sync need port extraction
