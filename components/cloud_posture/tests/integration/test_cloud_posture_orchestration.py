@@ -23,12 +23,16 @@ from components.cloud_posture.infrastructure.tasks.cloud_posture_tasks import (
     run_prowler_scan_for_account,
     schedule_prowler_runs,
 )
+from components.cloud_posture.tests._prowler_backend_stub import RecordsBackend
 from components.integrations.infrastructure.adapters.sts_org_adapter import StsOrgAdapter
 from infrastructure.persistence.core.models import FeatureFlag
 from infrastructure.persistence.integrations.models import AwsAccountLink, AwsOrganizationConnection
 from infrastructure.persistence.workspaces.models import WorkspaceMembership
 
 _TASK = "components.cloud_posture.infrastructure.tasks.cloud_posture_tasks"
+# ProwlerScanner runs the engine on a ScanExecutionBackend (ADR 0006); patch the backend
+# provider so the real scanner executes against canned records without a Prowler install.
+_BACKEND_PROVIDER = "components.scanning.application.providers.execution_backend_provider.build_execution_backend"
 _CREDS = {"AccessKeyId": "AK", "SecretAccessKey": "s", "SessionToken": "t"}
 _RECORDS = [
     {
@@ -124,10 +128,7 @@ class TestScanVerifiesLink:
 
         with (
             patch(f"{_TASK}.get_aws_credentials_port", return_value=port),
-            patch(
-                "components.cloud_posture.infrastructure.adapters.prowler_runner.run_prowler",
-                return_value=_RECORDS,
-            ),
+            patch(_BACKEND_PROVIDER, return_value=RecordsBackend(_RECORDS)),
         ):
             result = run_prowler_scan_for_account(str(conn.id), "863183417583")
 
@@ -195,10 +196,7 @@ class TestScanReportsBackgroundJob:
         port.assume_role.return_value = _CREDS
         with (
             patch(f"{_TASK}.get_aws_credentials_port", return_value=port),
-            patch(
-                "components.cloud_posture.infrastructure.adapters.prowler_runner.run_prowler",
-                return_value=_RECORDS,
-            ),
+            patch(_BACKEND_PROVIDER, return_value=RecordsBackend(_RECORDS)),
         ):
             run_prowler_scan_for_account(str(conn.id), "863183417583")
 

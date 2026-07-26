@@ -34,7 +34,13 @@ _POLL_SECONDS = 3
 
 
 class K8sJobBackend(ScanExecutionBackend):
-    def run(self, spec: ScanJobSpec, *, on_progress: ProgressCallback | None = None) -> ScanJobResult:
+    def run(
+        self,
+        spec: ScanJobSpec,
+        *,
+        on_progress: ProgressCallback | None = None,
+        on_output_line: OutputLineCallback | None = None,
+    ) -> ScanJobResult:
         from kubernetes import client, config
 
         try:
@@ -58,6 +64,14 @@ class K8sJobBackend(ScanExecutionBackend):
         finally:
             self._delete_secret(core, secret_name)
             self._delete_job(batch, name)
+
+        # Replay the engine's stdout protocol once (pod logs are only available post-run).
+        if on_output_line and stdout:
+            for line in stdout.splitlines():
+                try:
+                    on_output_line(line)
+                except Exception:
+                    logger.exception("scan_job on_output_line failed name=%s", name)
 
         if timed_out:
             return ScanJobResult(stdout=stdout, exit_code=124, timed_out=True)

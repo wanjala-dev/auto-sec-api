@@ -8,6 +8,15 @@ without touching the adapters — ``LocalSubprocessBackend`` (dev/CI) and ``K8sJ
 
 The spec carries a **fixed argv** (never a shell string) and separates ``secret_env``
 (short-lived creds — mounted, never in argv or logs) from plain ``env``.
+
+Two optional callbacks let the caller observe a run:
+- ``on_progress(pct)`` — a coarse 0–100 heartbeat (backends that can only see elapsed
+  time, e.g. a K8s Job, drive this).
+- ``on_output_line(line)`` — each stdout line as it is produced. An engine that streams a
+  progress/result protocol on stdout (Prowler's SDK runner) parses live per-check progress
+  and its final records from here, so no shared temp file is needed (a Job pod's filesystem
+  is ephemeral). Backends that cannot stream mid-run MAY deliver the lines once, after the
+  run completes; the full stdout is always returned on the result regardless.
 """
 
 from __future__ import annotations
@@ -18,6 +27,7 @@ from dataclasses import dataclass, field
 from components.scanning.domain.errors import InvalidScanSpecError
 
 ProgressCallback = Callable[[float], None]
+OutputLineCallback = Callable[[str], None]
 
 
 @dataclass(frozen=True)
@@ -54,5 +64,11 @@ class ScanJobResult:
 class ScanExecutionBackend:
     """Interface (structural): implement ``run`` to be an execution backend."""
 
-    def run(self, spec: ScanJobSpec, *, on_progress: ProgressCallback | None = None) -> ScanJobResult:
+    def run(
+        self,
+        spec: ScanJobSpec,
+        *,
+        on_progress: ProgressCallback | None = None,
+        on_output_line: OutputLineCallback | None = None,
+    ) -> ScanJobResult:
         raise NotImplementedError

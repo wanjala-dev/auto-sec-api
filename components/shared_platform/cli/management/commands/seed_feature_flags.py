@@ -72,6 +72,14 @@ DEFAULT_FLAGS = [
         "dual-write parity is observed. Mirrors the cloud_posture cutover (#98/#101).",
     ),
     (
+        "feature.container_security",
+        False,
+        "Container security (SCA) — Trivy-as-engine image vulnerability scans "
+        "(ADR 0006) run as ephemeral, gVisor-isolated Kubernetes Jobs on the "
+        "ScanExecutionBackend → NormalizedFindings in the SSOT. Off in prod until "
+        "GA; per-workspace opt-in. See docs/adr/0006-scanner-execution-substrate.md.",
+    ),
+    (
         "feature.cloud_asset_graph",
         False,
         "Cloud asset graph (ADR 0004 / CNAPP): the code-to-cloud resource graph "
@@ -86,7 +94,7 @@ DEFAULT_FLAGS = [
 # Flags that should be globally disabled in production (DEBUG=False).
 # Dev/local (DEBUG=True) leaves them at their default_enabled value.
 # Add product feature-gate keys here as they are introduced.
-PROD_DISABLED_FLAGS = ("feature.provenance_graph", "feature.cloud_posture")
+PROD_DISABLED_FLAGS = ("feature.provenance_graph", "feature.cloud_posture", "feature.container_security")
 
 
 # Flags that, while globally disabled in production, are kept enabled for a

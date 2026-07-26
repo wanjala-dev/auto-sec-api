@@ -16,9 +16,14 @@ import pytest
 from components.cloud_posture.infrastructure.tasks.cloud_posture_tasks import (
     run_prowler_scan_for_account,
 )
+from components.cloud_posture.tests._prowler_backend_stub import RecordsBackend
 from components.integrations.application.use_cases.generate_onboarding_template_use_case import (
     GenerateOnboardingTemplateUseCase,
 )
+
+# The ProwlerScanner now runs the engine on a ScanExecutionBackend (ADR 0006); patch the
+# backend provider so the real scanner + records_to_scan_result execute against canned records.
+_BACKEND_PROVIDER = "components.scanning.application.providers.execution_backend_provider.build_execution_backend"
 from infrastructure.persistence.cloud_posture.models import CloudPostureScan
 from infrastructure.persistence.integrations.models import AwsOrganizationConnection
 
@@ -102,21 +107,17 @@ def test_run_prowler_scan_for_account_assumes_runs_and_ingests(workspace_factory
     target = "components.cloud_posture.infrastructure.tasks.cloud_posture_tasks"
     creds_port = MagicMock()
     creds_port.assume_role.return_value = _CREDS
+    backend = RecordsBackend(_RECORDS)
     with (
         patch(f"{target}.get_aws_credentials_port", return_value=creds_port),
-        # run_prowler now runs behind the ProwlerScanner ScannerPort adapter (Phase 4);
-        # patch it at its source so the scanner + records_to_scan_result still execute.
-        patch(
-            "components.cloud_posture.infrastructure.adapters.prowler_runner.run_prowler",
-            return_value=_RECORDS,
-        ) as m_run,
+        patch(_BACKEND_PROVIDER, return_value=backend),
     ):
         result = run_prowler_scan_for_account(str(conn.id), "123456789012")
 
     assert result["success"] is True
     assert result["failed"] == 1
     creds_port.assume_role.assert_called_once()
-    m_run.assert_called_once()
+    assert len(backend.calls) == 1
     scan = CloudPostureScan.objects.get(id=result["scan_id"])
     assert scan.workspace_id == ws.id
     assert scan.account_id == "123456789012"

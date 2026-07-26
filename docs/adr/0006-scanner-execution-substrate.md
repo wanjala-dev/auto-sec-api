@@ -111,9 +111,18 @@ Selected by config: `SCAN_EXECUTION_BACKEND=k8s_job` (prod) / `local_subprocess`
   `NormalizedFinding` (severity UNKNOWN/…/CRITICAL → shared `Severity`; CVE/pkg/fixed-version
   ride in `attributes`). Trivy points `--server` at the `trivy-server` DB (gRPC) so Jobs never
   fetch the DB.
-- **Prowler** (`components/cloud_posture/`): the existing `ProwlerScanner` keeps its OCSF
-  parser but runs its engine through the *same* `ScanExecutionBackend` instead of the direct
-  `prowler_runner` subprocess. No `prowler-server` — Prowler has no DB.
+- **Prowler** (`components/cloud_posture/`): `ProwlerScanner` keeps its OCSF parser but now
+  runs its engine through the *same* `ScanExecutionBackend` (the direct `prowler_runner`
+  subprocess is deleted — DRY). The SDK runner streams a JSON-lines protocol on stdout
+  (`{"t":"progress"}` per check batch, a final `{"t":"result","records":[...]}`); the backend
+  forwards each line via `on_output_line`, so **live per-check progress is preserved** on the
+  local backend and records return without a shared temp file. No `prowler-server` — Prowler
+  has no DB.
+  - *Follow-up (not this slice):* running Prowler as a K8s Job needs a Prowler engine image
+    with the runner baked in (invocable on PATH). And because a full-account OCSF result can be
+    multi-MB, K8s-Prowler output should move to a shared-`emptyDir`/object-store transport —
+    **pod-log stdout truncates large outputs** (trivy-operator has hit exactly this). Trivy
+    (small per-image output) and Prowler-on-local (a pipe) are unaffected.
 
 ### D5 — Untrusted-input gate: the image-reference validator
 
@@ -152,5 +161,7 @@ legacy snapshot tables.
 5. `K8sJobBackend` (D3) using the kubernetes client; integration-tested against Docker Desktop
    k8s + the `auto-sec-infra` scan-job template.
 6. Minimal Trivy scanner image (or reuse `aquasec/trivy`) wired in the registry.
-7. Refactor `ProwlerScanner` onto the backend (D4).
-8. `feature.container_security` flag; dark until opt-in.
+7. Refactor `ProwlerScanner` onto the backend (D4) — *done*: `on_output_line` streaming seam
+   preserves live per-check progress; `prowler_runner` deleted.
+8. `feature.container_security` flag; dark until opt-in — *done* (`seed_feature_flags`,
+   prod-disabled).
