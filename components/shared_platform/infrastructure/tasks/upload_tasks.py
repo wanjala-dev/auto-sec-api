@@ -10,10 +10,9 @@ from contextlib import contextmanager
 from celery import shared_task
 from django.utils import timezone
 
-from components.knowledge.infrastructure.adapters.document_embeddings import create_embeddings_for_document
-
-# AI imports
-from components.knowledge.infrastructure.adapters.pdf_embeddings import create_embeddings_for_pdf
+from components.knowledge.application.providers.document_index_provider import (
+    get_document_index_provider,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -162,7 +161,7 @@ def process_pdf_file(self, file_id):
         # materializes S3-stored bytes (presigned uploads) to a temp file —
         # PyPDFLoader needs a real filesystem path.
         with _local_file_path(file_instance) as pdf_path:
-            embeddings_result = create_embeddings_for_pdf(
+            embeddings_result = get_document_index_provider().embed_pdf(
                 pdf_id=str(file_id),
                 pdf_path=pdf_path,
                 user_id=str(file_instance.owner.id) if file_instance.owner else None,
@@ -302,7 +301,7 @@ def process_document_file(self, file_id):
         # _local_file_path materializes S3-stored bytes (presigned uploads)
         # to a temp file — the document loaders need a real filesystem path.
         with _local_file_path(file_instance) as file_path:
-            embeddings_result = create_embeddings_for_document(
+            embeddings_result = get_document_index_provider().embed_document(
                 file_id=str(file_id),
                 file_path=file_path,
                 user_id=str(file_instance.owner.id) if file_instance.owner else None,
@@ -402,11 +401,11 @@ def _extract_file_insights(self, file_id, pdf_id):
     try:
         file_instance = File.objects.get(id=file_id)
 
-        from components.knowledge.infrastructure.factories.vector_stores.elasticsearch import (
-            create_elasticsearch_client,
+        from components.knowledge.application.providers.document_index_provider import (
+            get_document_index_provider,
         )
 
-        es = create_elasticsearch_client()
+        es = get_document_index_provider().elasticsearch_client()
         index_name = os.environ.get("ELASTICSEARCH_INDEX_NAME", "ai_documents")
         res = es.search(index=index_name, body={"size": 200, "query": {"term": {"metadata.pdf_id": str(pdf_id)}}})
 
@@ -423,9 +422,11 @@ def _extract_file_insights(self, file_id, pdf_id):
 
         context = "\n\n".join(chunks)[:12000]
 
-        from components.knowledge.infrastructure.factories.llms.factory import LLMFactory
+        from components.knowledge.application.providers.langchain_llm_factory_provider import (
+            get_langchain_llm_factory_provider,
+        )
 
-        llm = LLMFactory.create_llm(
+        llm = get_langchain_llm_factory_provider().create_llm(
             provider="openai",
             model_name="gpt-4o-mini",
             temperature=0.1,

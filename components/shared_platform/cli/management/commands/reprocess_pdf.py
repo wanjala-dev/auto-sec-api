@@ -1,7 +1,8 @@
 from django.core.management.base import BaseCommand
 from infrastructure.persistence.uploads.models import File
-from components.knowledge.infrastructure.adapters.pdf_embeddings import create_embeddings_for_pdf
-from components.knowledge.infrastructure.adapters.document_embeddings import create_embeddings_for_document
+from components.knowledge.application.providers.document_index_provider import (
+    get_document_index_provider,
+)
 from django.utils import timezone
 
 
@@ -40,14 +41,14 @@ class Command(BaseCommand):
 
             # Call the embeddings function directly
             if file_obj.is_pdf:
-                embeddings_result = create_embeddings_for_pdf(
+                embeddings_result = get_document_index_provider().embed_pdf(
                     pdf_id=str(pdf_id),
                     pdf_path=file_obj.file.path,
                     user_id=str(file_obj.owner.id) if file_obj.owner else None,
                     workspace_id=str(workspace_id)
                 )
             else:
-                embeddings_result = create_embeddings_for_document(
+                embeddings_result = get_document_index_provider().embed_document(
                     file_id=str(pdf_id),
                     file_path=file_obj.file.path,
                     user_id=str(file_obj.owner.id) if file_obj.owner else None,

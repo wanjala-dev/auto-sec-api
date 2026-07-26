@@ -4,7 +4,9 @@ Django management command to reprocess all files in a workspace
 from django.core.management.base import BaseCommand
 from infrastructure.persistence.uploads.models import File
 from infrastructure.persistence.uploads.tasks import process_pdf_file
-from components.knowledge.infrastructure.factories.vector_stores.elasticsearch import create_elasticsearch_client
+from components.knowledge.application.providers.document_index_provider import (
+    get_document_index_provider,
+)
 import os
 
 class Command(BaseCommand):
@@ -39,7 +41,7 @@ class Command(BaseCommand):
             # Clear existing embeddings for this workspace
             self.stdout.write("\n🧹 Clearing existing embeddings for this workspace...")
             try:
-                es_client = create_elasticsearch_client()
+                es_client = get_document_index_provider().elasticsearch_client()
                 
                 # Delete existing documents for this workspace
                 delete_query = {

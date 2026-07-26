@@ -5,7 +5,9 @@ Indexes Workspace (workspace_story/shared_body), Actions, and Comments for the p
 from django.core.management.base import BaseCommand
 from django.db.models import Q
 from infrastructure.persistence.workspaces.models import Workspace, Action, WorkspaceComment
-from components.knowledge.infrastructure.factories.vector_stores.factory import VectorStoreFactory
+from components.knowledge.application.providers.document_index_provider import (
+    get_document_index_provider,
+)
 
 
 class Command(BaseCommand):
@@ -26,7 +28,7 @@ class Command(BaseCommand):
             return
 
         # Initialize vector store (uses default OpenAI embeddings)
-        vector_store = VectorStoreFactory.create_vector_store()
+        vector_store = get_document_index_provider().build_vector_store()
 
         total = 0
 
