@@ -87,9 +87,33 @@ class TestAttackPathMaterialization:
         assert rows[0].risk_band == "red"
         assert rows[0].length == 2
         assert rows[0].risk_score > rows[1].risk_score
-        # one AttackPathDetected per path
-        assert len(pub.events) == 2
-        assert {e.path_id for e in pub.events} == {r.id for r in rows}
+        # one AttackPathDetected + one FindingObserved per path (ADR 0005 phase 3)
+        from components.shared_kernel.domain.events import AttackPathDetected, FindingObserved
+
+        detected = [e for e in pub.events if isinstance(e, AttackPathDetected)]
+        observed = [e for e in pub.events if isinstance(e, FindingObserved)]
+        assert len(detected) == 2
+        assert {e.path_id for e in detected} == {r.id for r in rows}
+        assert len(observed) == 2
+        assert {e.source for e in observed} == {"cloud_graph.attack_path"}
+        assert {e.fingerprint for e in observed} == {f"attack_path:{r.id}" for r in rows}
+
+    def test_finding_observed_carries_triage_routing_and_evidence(self, workspace_factory):
+        from components.shared_kernel.domain.events import FindingObserved
+
+        ws = workspace_factory()
+        _toxic_graph(ws)
+        pub = _FakePublisher()
+        _use_case(pub).execute(ws.id, timezone.now())
+
+        observed = [e for e in pub.events if isinstance(e, FindingObserved)]
+        admin = next(e for e in observed if e.severity == "critical")
+        # asset_urn is the ENTRY foothold (correlates with posture findings on it, C4)
+        assert admin.asset_urn == "urn:aws_ec2_instance:arn:ec2:web"
+        assert admin.attributes["agent_type"] == "triage_agent"  # the triage router target
+        assert admin.attributes["category"] == "public_compute_admin"
+        assert admin.attributes["impact_score"] == 95
+        assert [leg["relation"] for leg in admin.attributes["legs"]] == ["can_assume", "has_policy"]
 
     def test_is_idempotent_replace_not_duplicate(self, workspace_factory):
         ws = workspace_factory()
