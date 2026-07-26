@@ -26,7 +26,7 @@ def build_render_context(
     workspace_name: str,
     workspace_logo_url: str,
 ) -> dict[str, Any]:
-    from components.shared_platform.infrastructure.services.pdf_brand_assets import (
+    from components.shared_platform.application.providers.pdf_brand_assets_provider import (
         DEFAULT_BRAND_DATA_URI,
         resolve_brand_colors,
     )

@@ -100,7 +100,7 @@ def run_prowler_scan_for_account(connection_id: str, account_id: str) -> dict[st
     # in ORM models, so a module-level import here would run at Celery-app load
     # (before the app registry is ready). Import inside the task, as the model
     # imports in this file already do.
-    from components.shared_platform.infrastructure.services.job_progress import (
+    from components.shared_platform.application.providers.job_progress_provider import (
         complete_job,
         fail_job,
         start_job,
