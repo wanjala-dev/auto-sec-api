@@ -11,14 +11,17 @@ from components.integrations.application.ports.ioc_enrichment_port import IocEnr
 from components.integrations.domain.value_objects.enrichment_result import EnrichmentResult
 from components.integrations.domain.value_objects.indicator import Indicator
 
-# provider name / alias -> builder. Lazy imports keep infra out of import-time.
+# provider name / alias -> canonical. Lazy imports keep infra out of import-time.
 _BUILDERS: dict[str, str] = {
     "virustotal": "virustotal",
     "vt": "virustotal",
+    "abuseipdb": "abuseipdb",
+    "greynoise": "greynoise",
 }
 
-# Order tried by ``enrich`` when no provider is named (extend as adapters land).
-_DEFAULT_ORDER = ("virustotal",)
+# Order tried when no provider is named (extend as adapters land). VirusTotal covers all
+# kinds; AbuseIPDB + GreyNoise add independent IP signals for corroboration.
+_DEFAULT_ORDER = ("virustotal", "abuseipdb", "greynoise")
 
 
 class IocEnrichmentProvider:
@@ -31,11 +34,38 @@ class IocEnrichmentProvider:
             )
 
             return VirusTotalAdapter()
+        if canonical == "abuseipdb":
+            from components.integrations.infrastructure.adapters.ioc.abuseipdb_adapter import (
+                AbuseIPDBAdapter,
+            )
+
+            return AbuseIPDBAdapter()
+        if canonical == "greynoise":
+            from components.integrations.infrastructure.adapters.ioc.greynoise_adapter import (
+                GreyNoiseAdapter,
+            )
+
+            return GreyNoiseAdapter()
         return None
 
     @staticmethod
     def available_providers() -> tuple[str, ...]:
         return _DEFAULT_ORDER
+
+    @staticmethod
+    def enrich_all(indicator: Indicator, *, providers: tuple[str, ...] | None = None) -> list[EnrichmentResult]:
+        """Enrich against EVERY provider that supports the kind — for corroboration.
+
+        One result per applicable provider (a domain/hash yields only VirusTotal; an IP
+        yields all three). Each result is independent; fold with ``corroborate``."""
+        names = providers or _DEFAULT_ORDER
+        out: list[EnrichmentResult] = []
+        for name in names:
+            adapter = IocEnrichmentProvider.build_adapter(name)
+            if adapter is None or indicator.kind not in adapter.supports:
+                continue
+            out.append(adapter.enrich(indicator))
+        return out
 
     @staticmethod
     def enrich(indicator: Indicator, *, provider: str | None = None) -> EnrichmentResult:

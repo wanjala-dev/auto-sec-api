@@ -42,17 +42,29 @@ def enrich_indicator(agent, input_str: str = "") -> str:
     from components.integrations.application.providers.ioc_enrichment_provider import (
         IocEnrichmentProvider,
     )
+    from components.integrations.domain.value_objects.enrichment_result import corroborate
 
-    result = IocEnrichmentProvider.enrich(indicator, provider=provider)
+    providers = (provider,) if provider else None
+    results = IocEnrichmentProvider.enrich_all(indicator, providers=providers)
+    agg = corroborate(indicator, results)
     return json.dumps(
         {
             "indicator": indicator.value,
             "kind": indicator.kind.value,
-            "provider": result.provider,
-            "verdict": result.verdict.value,
-            "score": result.score,
-            "positives": result.positives,
-            "detail": result.detail,
-            "error": result.error,
+            "verdict": agg.verdict.value,  # most-severe across sources that answered
+            "score": agg.score,
+            "sources_queried": len(results),
+            "sources_answered": len(agg.sources),
+            "sources": [
+                {
+                    "provider": r.provider,
+                    "verdict": r.verdict.value,
+                    "score": r.score,
+                    "positives": r.positives,
+                    "detail": r.detail,
+                    "error": r.error,
+                }
+                for r in results
+            ],
         }
     )
