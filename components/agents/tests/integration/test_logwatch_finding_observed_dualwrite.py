@@ -100,14 +100,20 @@ class TestLogwatchFindingObservedDualWrite:
             emit_finding_observed_for_detector_result(ws.id, _logwatch_result(fingerprint="fp-nocommit"))
         assert DjangoFindingRepository().find_by_identity(ws.id, "logwatch.error", "fp-nocommit") is None
 
-    def test_ssot_write_does_not_create_a_duplicate_board_card(
+    def test_ssot_write_does_not_create_a_duplicate_board_card_when_cutover_off(
         self, workspace_factory, django_capture_on_commit_callbacks
     ):
-        # FindingRaised off the SSOT write is not board-mapped for logwatch, so the
-        # board handler no-ops — no second card, and no finding_* workflow events from
-        # this path (those come from the legacy persist_finding_as_task path).
+        # With the board cutover OFF (default), FindingRaised off the SSOT write must NOT
+        # surface a card for logwatch — the legacy cycle path owns the board, so there is
+        # no duplicate and no finding_* workflow events from this path.
+        from unittest import mock
+
         ws = workspace_factory()
-        with django_capture_on_commit_callbacks(execute=True):
+        flags = mock.Mock()
+        flags.is_feature_enabled.return_value = False  # cutover OFF
+        with mock.patch(
+            "components.shared_platform.application.providers.feature_flags_provider.get_feature_flags_provider",
+            return_value=flags,
+        ), django_capture_on_commit_callbacks(execute=True):
             emit_finding_observed_for_detector_result(ws.id, _logwatch_result(fingerprint="fp-nodup"))
-        # No workflow finding events were emitted by the SSOT path for this workspace.
         assert not WorkflowEvent.objects.filter(workspace_id=str(ws.id), source_type="finding").exists()

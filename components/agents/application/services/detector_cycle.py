@@ -310,39 +310,52 @@ def run_detector_cycle(
         }
 
         for result in outcome.results:
-            try:
-                task_id = persist_finding_as_task(
-                    workspace=workspace,
-                    suggested_column=suggested_column,
-                    ai_user_id=ai_user_id,
-                    title=result.title,
-                    summary=result.summary,
-                    source_type=f"ai.{result.action_type}",
-                    agent_type=result.agent_type or "ai_teammate",
-                    detector_key=result.detector_slug or outcome.slug,
-                    payload_data=result.payload,
-                    context=result.context,
-                    impact_score=int(result.metadata.get("impact_score", 0)) if result.metadata else 0,
-                    idempotency_key=_resolve_idempotency_key(result.payload),
-                )
-            except Exception:
-                logger.exception(
-                    "detector_cycle_persist_failed detector=%s action_type=%s",
-                    outcome.slug,
-                    result.action_type,
-                )
-                continue
-
-            # Dual-write logwatch findings into the Finding SSOT (ADR 0004). Additive
-            # and best-effort: a no-op for non-logwatch detectors, and it never breaks
-            # the cycle. Emitted for every observation (incl. board-dedup replays where
-            # task_id is None) so the SSOT updates last_seen; publish is on-commit.
             from components.agents.infrastructure.adapters.actions.detectors.finding_observed_bridge import (
                 emit_finding_observed_for_detector_result,
+                logwatch_board_cutover_active,
             )
 
+            # Reversible logwatch board cutover: when ON for this workspace, the cycle
+            # STANDS DOWN its board write — the SSOT path (FindingObserved → FindingRaised
+            # → finding_raised_board_handler) creates the card instead. We still emit
+            # FindingObserved below (that is what drives the board once cut over). OFF
+            # (default) → the legacy board write runs AND the SSOT dual-write happens.
+            board_via_ssot = logwatch_board_cutover_active(workspace.id, result)
+
+            task_id = None
+            if not board_via_ssot:
+                try:
+                    task_id = persist_finding_as_task(
+                        workspace=workspace,
+                        suggested_column=suggested_column,
+                        ai_user_id=ai_user_id,
+                        title=result.title,
+                        summary=result.summary,
+                        source_type=f"ai.{result.action_type}",
+                        agent_type=result.agent_type or "ai_teammate",
+                        detector_key=result.detector_slug or outcome.slug,
+                        payload_data=result.payload,
+                        context=result.context,
+                        impact_score=int(result.metadata.get("impact_score", 0)) if result.metadata else 0,
+                        idempotency_key=_resolve_idempotency_key(result.payload),
+                    )
+                except Exception:
+                    logger.exception(
+                        "detector_cycle_persist_failed detector=%s action_type=%s",
+                        outcome.slug,
+                        result.action_type,
+                    )
+                    continue
+
+            # Dual-write logwatch findings into the Finding SSOT (ADR 0004). Best-effort;
+            # a no-op for non-logwatch detectors. Emitted for every observation (incl.
+            # board-dedup replays) so the SSOT updates last_seen; publish is on-commit.
             emit_finding_observed_for_detector_result(workspace.id, result)
 
+            if board_via_ssot:
+                # The board card is created by the SSOT handler (async, on-commit); there
+                # is no task_id to count here.
+                continue
             if task_id is None:
                 # Idempotent replay — already have a task for this finding.
                 continue

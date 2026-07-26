@@ -62,6 +62,15 @@ DEFAULT_FLAGS = [
         "assume-role scan is gated on the read-only IAM audit-role rollout. See "
         "docs/plans/SECURITY_POSTURE_VISION_2026-07-20.md §3.3.",
     ),
+    (
+        "feature.logwatch_board_from_findings",
+        False,
+        "Reversible board cutover for logwatch (ADR 0004): when ON per-workspace, the "
+        "detector cycle stands down its board write and the Finding SSOT path "
+        "(FindingObserved → FindingRaised → finding_raised_board_handler) drives the "
+        "board instead. Default OFF — the flagship log lane is only flipped once "
+        "dual-write parity is observed. Mirrors the cloud_posture cutover (#98/#101).",
+    ),
 ]
 
 
