@@ -37,8 +37,8 @@ class ShareNotificationAdapter:
             from components.shared_platform.application.providers.email_adapter_provider import (
                 get_email_adapter_provider,
             )
-            from components.shared_platform.infrastructure.services.core_utils import (
-                resolve_frontend_base_url,
+            from components.shared_platform.application.providers.core_utils_provider import (
+                get_core_utils_provider,
             )
 
             User = get_user_model()
@@ -49,7 +49,7 @@ class ShareNotificationAdapter:
             title = str(share.get("title") or "something")
             url = str(share.get("url") or "")
             excerpt = str(share.get("excerpt") or "")
-            base_url = resolve_frontend_base_url()
+            base_url = get_core_utils_provider().resolve_frontend_base_url()
             absolute_url = url if url.startswith("http") else f"{base_url.rstrip('/')}{url}"
 
             recipients = list(User.objects.filter(pk__in=list(recipient_user_ids)))

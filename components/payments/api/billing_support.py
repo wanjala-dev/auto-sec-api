@@ -192,11 +192,11 @@ def _build_checkout_urls(
     # (api.wanjala.art), so a Stripe redirect built from it would dead-end on the
     # backend. resolve_frontend_base_url() is the single source of truth (honours
     # FRONTEND_URL → app.octopusintl.org).
-    from components.shared_platform.infrastructure.services.core_utils import (
-        resolve_frontend_base_url,
+    from components.shared_platform.application.providers.core_utils_provider import (
+        get_core_utils_provider,
     )
 
-    frontend_base = resolve_frontend_base_url().rstrip("/")
+    frontend_base = get_core_utils_provider().resolve_frontend_base_url().rstrip("/")
     success_url = checkout_request.success_url or (
         f"{frontend_base}/subscriptions/pricing/twotier/?session_id={{CHECKOUT_SESSION_ID}}&plan={plan.title}"
         + (f"&team={team.id}" if team else "")

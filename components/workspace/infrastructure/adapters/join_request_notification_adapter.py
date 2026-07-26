@@ -71,13 +71,13 @@ class JoinRequestNotificationAdapter:
     def _site_context(self, workspace):
         """(site_name, dashboard_url) using the canonical frontend-base helper."""
         from django.conf import settings
-        from components.shared_platform.infrastructure.services.core_utils import (
-            resolve_frontend_base_url,
+        from components.shared_platform.application.providers.core_utils_provider import (
+            get_core_utils_provider,
         )
 
         site_name = getattr(settings, "SITE_NAME", "Octopus")
         try:
-            base_url = (resolve_frontend_base_url() or "").rstrip("/")
+            base_url = (get_core_utils_provider().resolve_frontend_base_url() or "").rstrip("/")
         except Exception:  # noqa: BLE001
             base_url = ""
         dashboard_url = f"{base_url}/dashboard/{workspace.id}" if base_url else ""

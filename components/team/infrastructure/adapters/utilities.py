@@ -8,7 +8,9 @@ from django.template.loader import render_to_string
 from django.utils import timezone
 from django.contrib.sites.shortcuts import get_current_site
 
-from components.shared_platform.infrastructure.services.core_utils import resolve_frontend_base_url
+from components.shared_platform.application.providers.core_utils_provider import (
+    get_core_utils_provider,
+)
 
 DEFAULT_INVITE_BENEFITS = [
     {
@@ -36,7 +38,7 @@ def _site_identity():
 
 
 def _build_accept_url(code: str, email: str, site_domain: str) -> str:
-    base_url = resolve_frontend_base_url(site_domain=site_domain)
+    base_url = get_core_utils_provider().resolve_frontend_base_url(site_domain=site_domain)
     path = getattr(settings, 'TEAM_INVITE_ACCEPT_PATH', '/invite/accept') or '/invite/accept'
     path = f"/{path.lstrip('/')}"
     query = urlencode({'code': code, 'email': email})
@@ -95,7 +97,7 @@ def send_persona_invitation(invitation, *, inviter_user=None, is_existing_user=F
         or settings.EMAIL_HOST_USER
     )
     site_name, site_domain = _site_identity()
-    base_url = resolve_frontend_base_url(site_domain=site_domain)
+    base_url = get_core_utils_provider().resolve_frontend_base_url(site_domain=site_domain)
     accept_url = f"{base_url.rstrip('/')}/invite/accept?token={invitation.token}"
 
     persona_label = PERSONA_LABELS.get(invitation.persona, 'Member')

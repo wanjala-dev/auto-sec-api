@@ -8,7 +8,9 @@ import requests
 from django.core.files.base import ContentFile
 from django.utils.text import slugify
 
-from components.shared_platform.infrastructure.services.core_utils import generate_password
+from components.shared_platform.application.providers.core_utils_provider import (
+    get_core_utils_provider,
+)
 from components.workspace.application.facades.workspace_facade import ensure_workspace_scaffolding
 from components.workspace.application.ports.workspace_bootstrap_port import WorkspaceBootstrapPort
 from infrastructure.persistence.project.models import Project
@@ -183,7 +185,7 @@ class WorkspaceBootstrapRepository(WorkspaceBootstrapPort):
             user.set_password(password)
             user_dirty = True
         elif created:
-            user.set_password(generate_password())
+            user.set_password(get_core_utils_provider().generate_password())
             user_dirty = True
 
         if user_dirty:
