@@ -1,10 +1,10 @@
 from components.shared_kernel.application.model_notification_rule_service import (
     ModelNotificationRuleService,
 )
-from components.shared_kernel.application.providers.model_notification_provider import (
+from components.notifications.application.providers.model_notification_provider import (
     ModelNotificationProvider,
 )
-from components.shared_kernel.infrastructure.adapters.django_notification_dispatch_adapter import (
+from components.notifications.infrastructure.adapters.django_notification_dispatch_adapter import (
     DjangoNotificationDispatchAdapter,
 )
 

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from components.shared_kernel.application.providers.model_notification_provider import (
+from components.notifications.application.providers.model_notification_provider import (
     ModelNotificationProvider,
 )
-from components.shared_kernel.infrastructure.adapters.django_model_notification_registry import (
+from components.notifications.infrastructure.adapters.django_model_notification_registry import (
     DjangoModelNotificationRegistry,
 )
 
