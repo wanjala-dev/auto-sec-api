@@ -549,11 +549,11 @@ def _notify_user(doc_import, valid_count: int):
 def _emit_document_event(doc_import, trigger_type: str, payload: dict):
     """Emit a workflow event for document lifecycle transitions."""
     try:
-        from components.workflow.infrastructure.adapters.dispatcher import (
-            emit_workflow_event,
+        from components.workflow.application.providers.workflow_dispatcher_provider import (
+            get_workflow_dispatcher_provider,
         )
 
-        emit_workflow_event(
+        get_workflow_dispatcher_provider().emit_workflow_event(
             workspace_id=str(doc_import.workspace_id),
             source_type="document",
             source_id=str(doc_import.pk),

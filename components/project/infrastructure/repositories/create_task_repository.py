@@ -162,10 +162,10 @@ class OrmCreateTaskRepository(CreateTaskPort):
                 task.assigned_to.add(*newly_assigned)
 
         # ── Emit workflow event ─────────────────────────────────────
-        from components.workflow.infrastructure.adapters.dispatcher import emit_workflow_event
+        from components.workflow.application.providers.workflow_dispatcher_provider import get_workflow_dispatcher_provider
 
         transaction.on_commit(
-            lambda: emit_workflow_event(
+            lambda: get_workflow_dispatcher_provider().emit_workflow_event(
                 workspace_id=str(task.workspace_id),
                 source_type="task",
                 trigger_type="task_created",
@@ -191,7 +191,7 @@ class OrmCreateTaskRepository(CreateTaskPort):
         for assignee in newly_assigned:
             assignee_id = str(assignee.id)
             transaction.on_commit(
-                lambda assignee_id=assignee_id: emit_workflow_event(
+                lambda assignee_id=assignee_id: get_workflow_dispatcher_provider().emit_workflow_event(
                     workspace_id=str(task.workspace_id),
                     source_type="task",
                     trigger_type="task_assigned",

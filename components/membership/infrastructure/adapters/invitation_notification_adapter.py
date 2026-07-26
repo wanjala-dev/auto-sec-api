@@ -113,9 +113,9 @@ class InvitationNotificationAdapter:
     @staticmethod
     def _emit_directory_contact_added_event(*, workspace_id, team_id, user_id, actor_id=None, email=None):
         try:
-            from components.workflow.infrastructure.adapters.dispatcher import emit_workflow_event
+            from components.workflow.application.providers.workflow_dispatcher_provider import get_workflow_dispatcher_provider
 
-            emit_workflow_event(
+            get_workflow_dispatcher_provider().emit_workflow_event(
                 workspace_id=str(workspace_id),
                 source_type="directory",
                 trigger_type="contact_added",

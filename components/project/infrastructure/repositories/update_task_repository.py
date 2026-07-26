@@ -90,10 +90,10 @@ class OrmUpdateTaskRepository(UpdateTaskPort):
 
         # ── Emit workflow event on completion ───────────────────────
         if previous_status != Task.DONE and new_status == Task.DONE:
-            from components.workflow.infrastructure.adapters.dispatcher import emit_workflow_event
+            from components.workflow.application.providers.workflow_dispatcher_provider import get_workflow_dispatcher_provider
 
             transaction.on_commit(
-                lambda: emit_workflow_event(
+                lambda: get_workflow_dispatcher_provider().emit_workflow_event(
                     workspace_id=str(task.workspace_id),
                     source_type="task",
                     trigger_type="task_completed",
@@ -117,10 +117,10 @@ class OrmUpdateTaskRepository(UpdateTaskPort):
         # includes new_column_id + updated_at so two distinct moves on
         # the same task in the same hour still produce two events.
         if previous_column_id is not None and previous_column_id != new_column_id:
-            from components.workflow.infrastructure.adapters.dispatcher import emit_workflow_event
+            from components.workflow.application.providers.workflow_dispatcher_provider import get_workflow_dispatcher_provider
 
             transaction.on_commit(
-                lambda: emit_workflow_event(
+                lambda: get_workflow_dispatcher_provider().emit_workflow_event(
                     workspace_id=str(task.workspace_id),
                     source_type="task",
                     trigger_type="task_moved_column",
