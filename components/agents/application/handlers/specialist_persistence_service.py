@@ -35,22 +35,31 @@ from datetime import UTC, datetime
 from typing import Any
 
 from components.shared_kernel.application.transactional import atomic
+from components.shared_kernel.domain.security import Severity
 
 logger = logging.getLogger(__name__)
 
 
 def _derive_severity(impact_score: int) -> str:
-    """Map a 0-100 impact_score to the UI's severity tier.
+    """Map a 0-100 impact_score to a canonical OCSF severity band.
 
-    Threshold tuning lives here so the wire contract stays one
-    canonical place. Specialists + detectors don't pass severity in;
-    they pass impact_score and the helper computes the tier.
+    Returns a shared-kernel ``Severity`` value string so a finding's tier stays
+    aligned with the canonical severity vocabulary AND the workflow
+    ``finding_<band>`` triggers. Thresholds invert the detector ``_IMPACT`` maps
+    (``cloud_posture``: critical=90/high=70/medium=40/low=20; ``logwatch`` caps
+    at 90), so a Prowler **critical** (impact_score 90) surfaces as ``critical``
+    instead of being silently downgraded to ``high`` — which previously left the
+    ``finding_critical`` trigger (and the ON-by-default critical-finding-alert
+    playbook) permanently dead. Specialists + detectors pass impact_score, not a
+    tier; this helper is the single place the threshold contract lives.
     """
+    if impact_score >= 90:
+        return Severity.CRITICAL.value
     if impact_score >= 70:
-        return "high"
+        return Severity.HIGH.value
     if impact_score >= 40:
-        return "medium"
-    return "low"
+        return Severity.MEDIUM.value
+    return Severity.LOW.value
 
 
 def persist_finding_as_task(
