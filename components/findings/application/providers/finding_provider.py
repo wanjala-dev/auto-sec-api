@@ -24,6 +24,18 @@ class FindingProvider:
         )
 
     @staticmethod
+    def build_list_findings_use_case():
+        """The read-side use case backing the findings list API (CQRS read)."""
+        from components.findings.application.use_cases.list_findings_use_case import (
+            ListFindingsUseCase,
+        )
+        from components.findings.infrastructure.repositories.django_finding_repository import (
+            DjangoFindingRepository,
+        )
+
+        return ListFindingsUseCase(store=DjangoFindingRepository())
+
+    @staticmethod
     def build_finding_store() -> FindingStorePort:
         """The read/write store — the findings context's public data seam.
 
