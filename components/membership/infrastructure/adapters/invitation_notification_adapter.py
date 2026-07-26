@@ -12,9 +12,11 @@ from infrastructure.persistence.notifications.models import Notification
 from components.notifications.application.providers.notification_factory_provider import (
     get_notification_factory_provider,
 )
-from components.team.infrastructure.adapters.utilities import send_invitation, send_invitation_accepted
-from components.workspace.infrastructure.adapters.password_setup_url_builder import (
-    build_password_setup_url,
+from components.team.application.providers.invitation_email_provider import (
+    get_invitation_email_provider,
+)
+from components.workspace.application.providers.password_setup_url_provider import (
+    get_password_setup_url_provider,
 )
 
 logger = logging.getLogger(__name__)
@@ -42,13 +44,13 @@ class InvitationNotificationAdapter:
         email = (getattr(invited_user, "email", "") or invitation.email or "").strip().lower()
         password_setup_url = None
         if invited_user and not invited_user.has_usable_password():
-            password_setup_url = build_password_setup_url(
+            password_setup_url = get_password_setup_url_provider().build_password_setup_url(
                 user=invited_user,
                 request=request,
                 site_domain=site_domain,
             )
         if email:
-            send_invitation(
+            get_invitation_email_provider().send_invitation(
                 email,
                 invitation.code,
                 invitation.team,
@@ -88,7 +90,7 @@ class InvitationNotificationAdapter:
             email=actor.email,
         )
 
-        send_invitation_accepted(team, invitation)
+        get_invitation_email_provider().send_invitation_accepted(team, invitation)
 
         recipients = list(team.members.exclude(id=actor.id))
         if not recipients:
