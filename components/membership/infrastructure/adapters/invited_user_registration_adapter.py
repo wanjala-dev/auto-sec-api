@@ -13,8 +13,8 @@ from django.utils import timezone
 from components.shared_platform.application.facades.core_utils_facade import send_email
 from infrastructure.persistence.users.models import CustomUser
 from infrastructure.persistence.workspaces.models import Workspace
-from components.workspace.infrastructure.adapters.password_setup_url_builder import (
-    build_password_setup_url,
+from components.workspace.application.providers.password_setup_url_provider import (
+    get_password_setup_url_provider,
 )
 
 
@@ -51,7 +51,7 @@ class InvitedUserRegistrationAdapter:
         current_site = get_current_site(request) if request is not None else (site_domain or "")
         site_full_name = current_site
         workspace_name = Workspace.objects.get(id=workspace_id).workspace_name
-        password_setup_url = build_password_setup_url(
+        password_setup_url = get_password_setup_url_provider().build_password_setup_url(
             user=user,
             request=request,
             site_domain=site_domain,
