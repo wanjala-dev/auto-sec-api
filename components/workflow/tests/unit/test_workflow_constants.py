@@ -222,6 +222,7 @@ class TestWorkflowConstants:
             "assign",
             "wait",
             "webhook",
+            "enrich",
         ]
 
         for expected_type in expected_types:
