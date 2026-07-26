@@ -60,33 +60,47 @@ The strip introduced a few standing patterns — if something breaks, check thes
 - Nonprofit `bootstrap_dev` was replaced by a minimal `createsuperuser` + `seed_subscription_tiers`
   in `docker/scripts/start-web.sh`.
 
-## Running it locally (isolated from the source repo)
+## Running it locally (Kubernetes — Docker Desktop)
 
-The compose project is renamed **`auto_sec`** (set in `.env` as `COMPOSE_PROJECT_NAME`) with
-**distinct host ports** so it coexists with the source `api-v2.0` stack (which resolves to project
-`compose`). **Never** run compose without the autosec `.env`.
+Auto-Sec runs on **local Kubernetes** (Docker Desktop's built-in cluster) in namespace
+**`autosec`** — the docker-compose stack was **retired (2026-07-26)**. The Kustomize manifests live
+in the separate **`auto-sec-infra`** repo (`git@github.com:wanjala-dev/auto-sec-infra.git`, cloned
+at `/Users/henrywanjala/Desktop/auto-sec/auto-sec-infra`); that repo's **`k8s/README.md` is the
+source of truth** for the base-image build and the full apply. The two key commands:
 
 ```bash
-# from auto-sec-api/
-docker compose --env-file .env \
-  -f docker/compose/docker-compose.yml -f docker/compose/docker-compose.local.yml \
-  up -d web celery_worker celery_ai_teammate_worker celery_beat
+# from auto-sec-infra/ — bake THIS repo's source into the app image, then apply the local overlay
+docker build -t autosec-api:local -f k8s/local-image.Dockerfile \
+  /Users/henrywanjala/Desktop/auto-sec/auto-sec-api          # local-image.Dockerfile is FROM auto-sec-backend:dev
+kubectl apply -k k8s/overlays/local
 ```
 
-- **Web/API:** http://localhost:8020  (health: `curl http://localhost:8020/api/health/` → `{"status":"ok"}`)
-- **DB:** `auto_sec-db-1` on host `:5442` (pgvector). **Redis** `:6389`. **PgBouncer** `:6443`.
-- Container names are `auto_sec-<svc>-1`. Run Django commands via
-  `docker exec auto_sec-web-1 python manage.py <cmd>`.
-- The startup script runs migrate + `seed_subscription_tiers` (Free/Pro/Premium) +
-  `seed_feature_flags` + a minimal superuser (`admin` / `$SUPER_USER_PASSWORD`).
+- **Web/API:** the nginx **ingress** at `http://autosec.local` (add `127.0.0.1 autosec.local` to
+  `/etc/hosts`). Health: `curl http://autosec.local/api/health/` → `{"status":"ok"}`. Or
+  port-forward: `kubectl -n autosec port-forward svc/api 8000:8000`.
+- **Namespace `autosec`.** Deployments: `api`, `channels`, `celery-worker`,
+  `celery-ai-teammate-worker`, `celery-beat`, `scanning-worker`, `trivy-server`; StatefulSet
+  `postgres` (pgvector); `redis`. Inspect with `kubectl -n autosec get pods` /
+  `kubectl -n autosec logs deploy/<svc>` (or `k9s`).
+- Run Django commands via **`kubectl exec -n autosec deploy/api -- python manage.py <cmd>`**.
+- On `apply`, a migrate Job runs migrations and the api startup seeds `seed_subscription_tiers`
+  (Free/Pro/Premium) + `seed_feature_flags` + a minimal superuser (`admin` / `$SUPER_USER_PASSWORD`).
 
-**Frontend runs on http://localhost:3001** (3000 is the original literacyseed). See the frontend
-repo's CLAUDE.md.
+**Frontend is NOT on this cluster** — the k8s stack is backend-only (no frontend namespace,
+deployment, or manifest). The frontend runs separately from its own repo (a host dev server,
+historically `http://localhost:3001`); see the frontend repo's CLAUDE.md.
 
 ## Testing
 
 ```bash
-docker exec -e DJANGO_SETTINGS_MODULE=api.settings.test auto_sec-web-1 python -m pytest tests/architecture/
+kubectl exec -n autosec deploy/api -- env DJANGO_SETTINGS_MODULE=api.settings.test \
+  python -m pytest tests/architecture/
+```
+The test settings (`api.settings.test`) use **SQLite** (no external Postgres), so the suite also
+runs in any throwaway container built from the app image — handy for testing a worktree's code
+without touching the cluster:
+```bash
+docker run --rm --entrypoint python autosec-api:local -m pytest tests/architecture/
 ```
 Architecture tests enforce the import boundaries — keep them green (a few fork-drift fixtures may
 still need trimming; fix the fixture, never baseline a real violation).
@@ -95,8 +109,13 @@ still need trimming; fix the fixture, never baseline a real violation).
 
 - **Explicit Architecture** — the rule files in `.claude/rules/` are authoritative:
   `architecture-manifesto.md`, `bounded-context-structure.md`, `django-conventions.md`,
-  `persistence-and-orm.md`, `performance.md`, `logging.md`, `repo-hygiene.md`, `no-shortcuts.md`,
-  `branching-strategy.md`. Read them before structural changes.
+  `persistence-and-orm.md`, `performance.md`, `logging.md`, `repo-hygiene.md`, `dry-reuse.md`,
+  `no-shortcuts.md`, `verify-dont-guess.md`, `branching-strategy.md`. Read them before structural
+  changes. For structural/CNAPP work, **load the architecture skill first**
+  (`.claude/skills/architecture/SKILL.md` — the hub-and-spoke target + C1–C7 decoupling rules).
+- **Verify, don't guess** — this is a fork; when something feels off, ground it (research online +
+  MCPs, load the architecture skill, check the live system) before building on it. See
+  `verify-dont-guess.md`.
 - **No shortcuts / bandaids** — recommend the root fix, never a symptom-masking stepping-stone.
 - **Reuse, don't reinvent** — grep for an existing model/service/adapter/util before building new.
 - **After model changes:** `makemigrations` + `migrate`; write + run unit tests for new
