@@ -18,6 +18,34 @@ class WorkspaceBootstrapProvider:
 
         return should_bootstrap_workspace(*args, **kwargs)
 
+    def preferred_workspace_for_user(self, *args, **kwargs) -> Any:
+        from components.identity.infrastructure.adapters.workspace_bootstrap import (
+            _preferred_workspace_for_user,
+        )
+
+        return _preferred_workspace_for_user(*args, **kwargs)
+
+    def create_bootstrap_workspace(self, *args, **kwargs) -> Any:
+        from components.identity.infrastructure.adapters.workspace_bootstrap import (
+            _create_bootstrap_workspace,
+        )
+
+        return _create_bootstrap_workspace(*args, **kwargs)
+
+    def sync_profile_context(self, *args, **kwargs) -> Any:
+        from components.identity.infrastructure.adapters.workspace_bootstrap import (
+            _sync_profile_context,
+        )
+
+        return _sync_profile_context(*args, **kwargs)
+
+    def ensure_personal_workspace(self, *args, **kwargs) -> Any:
+        from components.identity.infrastructure.adapters.workspace_bootstrap import (
+            ensure_personal_workspace,
+        )
+
+        return ensure_personal_workspace(*args, **kwargs)
+
 
 _default = WorkspaceBootstrapProvider()
 

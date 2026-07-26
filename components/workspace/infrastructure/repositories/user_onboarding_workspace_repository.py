@@ -22,20 +22,20 @@ class UserOnboardingWorkspaceRepository(UserOnboardingWorkspacePort):
         return CustomUser.objects.get(id=user_id)
 
     def should_bootstrap(self, user_id: UUID) -> bool:
-        from components.identity.infrastructure.adapters.workspace_bootstrap import should_bootstrap_workspace
+        from components.identity.application.providers.workspace_bootstrap_provider import get_workspace_bootstrap_provider
         user = self._get_user(user_id)
-        return should_bootstrap_workspace(user)
+        return get_workspace_bootstrap_provider().should_bootstrap_workspace(user)
 
     def find_preferred_workspace_id(self, user_id: UUID) -> UUID | None:
-        from components.identity.infrastructure.adapters.workspace_bootstrap import _preferred_workspace_for_user
+        from components.identity.application.providers.workspace_bootstrap_provider import get_workspace_bootstrap_provider
         user = self._get_user(user_id)
-        workspace = _preferred_workspace_for_user(user)
+        workspace = get_workspace_bootstrap_provider().preferred_workspace_for_user(user)
         return workspace.id if workspace else None
 
     def create_personal_workspace(self, user_id: UUID) -> OnboardingWorkspaceResult | None:
-        from components.identity.infrastructure.adapters.workspace_bootstrap import _create_bootstrap_workspace
+        from components.identity.application.providers.workspace_bootstrap_provider import get_workspace_bootstrap_provider
         user = self._get_user(user_id)
-        workspace = _create_bootstrap_workspace(user)
+        workspace = get_workspace_bootstrap_provider().create_bootstrap_workspace(user)
         if workspace is None:
             return None
         return OnboardingWorkspaceResult(
@@ -45,11 +45,11 @@ class UserOnboardingWorkspaceRepository(UserOnboardingWorkspacePort):
         )
 
     def sync_profile_context(self, user_id: UUID, workspace_id: UUID, *, force: bool = False) -> None:
-        from components.identity.infrastructure.adapters.workspace_bootstrap import _sync_profile_context
+        from components.identity.application.providers.workspace_bootstrap_provider import get_workspace_bootstrap_provider
         from infrastructure.persistence.workspaces.models import Workspace
         user = self._get_user(user_id)
         workspace = Workspace.objects.get(id=workspace_id)
-        _sync_profile_context(user, workspace, force_workspace=force)
+        get_workspace_bootstrap_provider().sync_profile_context(user, workspace, force_workspace=force)
 
     def ensure_follower(self, workspace_id: UUID, user_id: UUID) -> None:
         from components.workspace.application.facades.workspace_facade import ensure_workspace_follower
