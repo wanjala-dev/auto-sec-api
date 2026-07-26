@@ -24,6 +24,7 @@ from components.agents.infrastructure.adapters.langchain.tools import _finding_p
 logger = logging.getLogger(__name__)
 
 _LOG_WATCH_SOURCE = "ai.log_watch"
+_CLOUD_EXPOSURE_SOURCE = "ai.cloud_exposure"
 TRIAGE_COLUMN_TITLE = "Triage"
 
 
@@ -94,6 +95,94 @@ def triage_finding(agent, input_str: str) -> str:
         agent,
         input_str,
         source_type=_LOG_WATCH_SOURCE,
+        column_title=TRIAGE_COLUMN_TITLE,
+        acting_agent="triage_agent",
+        advise=advise,
+        build_comment=build_comment,
+        apply_payload=apply_payload,
+        describe_action=describe_action,
+        suggestion_text=suggestion_text,
+    )
+
+
+def list_pending_cloud_exposure_findings(agent, input_str: str = "") -> str:
+    """READ — list cloud attack-path findings on the board not yet triaged."""
+    pending = fp.pending_findings_qs(agent.workspace_id, _CLOUD_EXPOSURE_SOURCE)
+    if not pending:
+        return "No pending cloud-exposure (attack-path) findings to triage."
+    rows = []
+    for t in pending[:20]:
+        payload = (t.metadata or {}).get("payload") or {}
+        rows.append(
+            {
+                "task_id": str(t.id),
+                "title": t.title[:120],
+                "category": payload.get("category") or "",
+                "entry": payload.get("entry") or "",
+                "target": payload.get("target") or "",
+                "risk_score": payload.get("risk_score"),
+            }
+        )
+    return json.dumps(rows)
+
+
+def triage_cloud_exposure(agent, input_str: str) -> str:
+    """REVERSIBLE_WRITE — triage one pending cloud attack-path finding: recommend how to
+    break the toxic chain, comment it, move the card to Triage, and record the trace.
+
+    Same board choreography + concurrency guard + grounded-verification loop as
+    ``triage_finding`` (via ``process_pending_finding``); it supplies only the
+    cloud-exposure-specific advisor (``AttackPathRemediationAdvisor``), comment, and
+    payload fields. The suggestion is grounded in the path's own evidence — it names the
+    entry and the crown-jewel target — so the ``finding_verifier`` / RubricMiddleware
+    grader grades it against the attack-path chain, not against log-error symbols.
+    """
+    from components.cloud_graph.domain.services.attack_path_remediation_advisor import (
+        AttackPathRemediationAdvisor,
+    )
+
+    advisor = AttackPathRemediationAdvisor()
+
+    def advise(payload, feedback=""):
+        return advisor.suggest(
+            category=str(payload.get("category") or ""),
+            entry_label=str(payload.get("entry") or ""),
+            target_label=str(payload.get("target") or ""),
+            feedback=feedback,
+        )
+
+    def suggestion_text(suggestion):
+        # The grounding surface the verifier checks against the attack-path evidence
+        # (it names the entry + target, which are the path's checkable specifics).
+        return f"{suggestion.likely_cause} {suggestion.suggested_fix}"
+
+    def build_comment(suggestion):
+        if suggestion is None:
+            return (
+                "🛡 Triage agent reviewed this attack path but could not derive a confident "
+                "remediation from the finding alone — needs a human eye."
+            )
+        return (
+            f"🛡 Triage agent analysed this attack path.\n\n"
+            f"Why it is toxic: {suggestion.likely_cause}\n\n"
+            f"How to break it: {suggestion.suggested_fix}\n\n"
+            f"Confidence: {suggestion.confidence}."
+        )
+
+    def apply_payload(payload, suggestion):
+        payload["probable_cause"] = suggestion.likely_cause
+        payload["suggested_fix"] = suggestion.suggested_fix
+        payload["confidence"] = suggestion.confidence
+
+    def describe_action(suggestion):
+        if suggestion is None:
+            return "reviewed; no confident remediation from the finding"
+        return f"recommended breaking the attack path ({suggestion.confidence} confidence)"
+
+    return fp.process_pending_finding(
+        agent,
+        input_str,
+        source_type=_CLOUD_EXPOSURE_SOURCE,
         column_title=TRIAGE_COLUMN_TITLE,
         acting_agent="triage_agent",
         advise=advise,

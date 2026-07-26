@@ -130,6 +130,32 @@ class TriageAgent(WorkspaceContextMixin, BaseAgent):
         return triage_tools.triage_finding(self, input_str)
 
     @tool(
+        name="list_pending_cloud_exposure_findings",
+        description=(
+            "List cloud attack-path findings on the SOC board that have not been triaged "
+            "yet. No input. Returns JSON: [{task_id, title, category, entry, target, "
+            "risk_score}]. Call this first, then triage_cloud_exposure on each."
+        ),
+        risk=ToolRisk.READ,
+    )
+    def list_pending_cloud_exposure_findings(self, input_str: str = "") -> str:
+        return triage_tools.list_pending_cloud_exposure_findings(self, input_str)
+
+    @tool(
+        name="triage_cloud_exposure",
+        description=(
+            "Triage one pending cloud attack-path finding: recommend how to break the "
+            "toxic chain (a public asset reaching admin privileges or sensitive data), "
+            "post it as a comment on the card, and move the card into the Triage column. "
+            'Input: JSON {"task_id": "<id>"} (or the bare task_id). Reversible — safe for '
+            "autonomous runs."
+        ),
+        risk=ToolRisk.REVERSIBLE_WRITE,
+    )
+    def triage_cloud_exposure(self, input_str: str) -> str:
+        return triage_tools.triage_cloud_exposure(self, input_str)
+
+    @tool(
         name="record_finding",
         description=(
             "File a triaged security finding as a task on the SOC board and "

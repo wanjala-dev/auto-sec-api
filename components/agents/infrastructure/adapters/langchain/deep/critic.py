@@ -56,8 +56,10 @@ _GRADER_MODEL = None
 # finding_verifier.py; these guide the LLM's overall judgment.
 RUBRICS = {
     "triage_agent": (
-        "- Names the specific module/symbol/config from the error, not generic advice.\n"
-        "- The likely cause is grounded in the actual error line.\n"
+        "- Grounds in the finding's own evidence: for a log error, names the specific "
+        "module/symbol/config from the error line; for a cloud attack path, names the "
+        "exposed entry and the crown-jewel target it reaches — never generic advice.\n"
+        "- The stated cause follows from that evidence (the error line, or the toxic edge chain).\n"
         "- The fix is a concrete next step an on-call engineer can act on."
     ),
     "optimization_agent": (

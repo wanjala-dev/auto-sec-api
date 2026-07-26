@@ -30,6 +30,7 @@ from components.shared_kernel.utils.salient_tokens import salient_tokens
 
 _LOG_WATCH_SOURCE = "ai.log_watch"
 _LOG_OPTIMIZATION_SOURCE = "ai.log_optimization"
+_CLOUD_EXPOSURE_SOURCE = "ai.cloud_exposure"
 
 # A concrete optimization change (vs "reduce noise" hand-waving).
 _CONCRETE_CHANGE = (
@@ -99,6 +100,28 @@ def verify_suggestion(*, source_type: str, payload: dict, suggestion_text: str) 
             reason=(
                 "The recommendation names no concrete change (a specific interval, sampling rate, "
                 "or which logs to drop) and reads as generic."
+            ),
+        )
+
+    if source_type == _CLOUD_EXPOSURE_SOURCE:
+        # For an attack-path finding the grounding anchor is the named path: the
+        # remediation must reference the actual exposed entry and/or the crown-jewel
+        # target — not generic "restrict access" boilerplate that fits any path.
+        named = [
+            n
+            for n in (str(payload.get("entry") or "").strip().lower(), str(payload.get("target") or "").strip().lower())
+            if n
+        ]
+        if not named:
+            return VerifyResult(grounded=True, reason="")  # no checkable specifics
+        if any(n in text_l for n in named):
+            return VerifyResult(grounded=True, reason="")
+        sample = " / ".join(n for n in (payload.get("entry"), payload.get("target")) if n)
+        return VerifyResult(
+            grounded=False,
+            reason=(
+                f"The remediation names neither end of the attack path ({sample}) and reads as generic. "
+                "Name the exposed entry and/or the reachable target the fix breaks."
             ),
         )
 
