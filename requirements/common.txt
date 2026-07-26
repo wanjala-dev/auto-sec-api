@@ -36,3 +36,4 @@ six==1.16.0
 soupsieve==2.3.2.post1
 sqlparse==0.4.3
 urllib3==1.26.12
+kubernetes==31.0.0  # K8sJobBackend — ephemeral per-scan Jobs (ADR 0006)
