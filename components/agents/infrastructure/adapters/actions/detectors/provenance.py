@@ -139,29 +139,15 @@ class ProvenanceLeastPrivilegeDetector(BaseDetector):
     def _refresh_graph(self, workspace_id) -> None:
         """Idempotently project the three internal sources into the graph.
 
-        Each source is fail-safe: one source erroring never blocks the others
-        or the gap detection that follows.
+        Drives provenance's application layer — the fail-safe-per-source policy
+        (one source erroring never blocks the others or the gap detection that
+        follows) lives in the ``RefreshAccessGraphUseCase``, not here.
         """
-        from components.provenance.infrastructure.services.ai_backfill_service import (
-            backfill_from_ai_findings,
-        )
-        from components.provenance.infrastructure.services.audit_backfill_service import (
-            backfill_from_audit_log,
-        )
-        from components.provenance.infrastructure.services.identity_backfill_service import (
-            backfill_from_memberships,
+        from components.provenance.application.providers.provenance_provider import (
+            get_refresh_access_graph_use_case,
         )
 
-        sources = (
-            ("audit", backfill_from_audit_log),
-            ("memberships", backfill_from_memberships),
-            ("ai_findings", backfill_from_ai_findings),
-        )
-        for name, backfill in sources:
-            try:
-                backfill(workspace_id=workspace_id)
-            except Exception:
-                logger.exception("provenance_detector backfill source=%s failed workspace=%s", name, workspace_id)
+        get_refresh_access_graph_use_case().execute(workspace_id=workspace_id)
 
 
 registry.register(ProvenanceLeastPrivilegeDetector)
