@@ -104,7 +104,7 @@ class OrmBatchMoveTasksRepository(BatchMoveTasksPort):
             # definition. Idempotency key includes the new column +
             # batch timestamp so two distinct batches that both move
             # a task to the same column still produce two events.
-            from components.workflow.infrastructure.adapters.dispatcher import emit_workflow_event
+            from components.workflow.application.providers.workflow_dispatcher_provider import get_workflow_dispatcher_provider
 
             for task in tasks_to_update:
                 previous_column_id = previous_column_by_task[str(task.id)]
@@ -113,7 +113,7 @@ class OrmBatchMoveTasksRepository(BatchMoveTasksPort):
                     continue
 
                 transaction.on_commit(
-                    lambda t=task, prev=previous_column_id: emit_workflow_event(
+                    lambda t=task, prev=previous_column_id: get_workflow_dispatcher_provider().emit_workflow_event(
                         workspace_id=str(t.workspace_id),
                         source_type="task",
                         trigger_type="task_moved_column",
