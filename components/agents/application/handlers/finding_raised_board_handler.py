@@ -1,19 +1,16 @@
-"""Surface a raised finding onto the board as a local-copy Task (ADR 0004 Phase 3c).
+"""Surface a raised finding onto the board as a local-copy Task (ADR 0004 Phase 3).
 
-The event-driven replacement for ``CloudPostureDetector``'s board-surfacing: when a
-finding is raised in the SSOT, this creates/updates the Kanban card — the *local copy*
-(C7), stamped with ``finding_id`` so it references its finding (debt #4).
-
-Reversible + board-invisible cutover: gated by
-``feature.cloud_posture_board_from_findings``. Flag OFF → the detector path runs and
-this no-ops; flag ON (per-workspace) → the detector stands down (``should_run`` returns
-False) and this drives the board. It reproduces the detector's exact card shape
-(``source_type`` / ``agent_type`` / idempotency ``lookup_key`` / title) so flipping the
-flag neither duplicates nor changes any card.
+When a finding is raised in the SSOT, this creates/updates the Kanban card — the *local
+copy* (C7), stamped with ``finding_id`` so it references its finding (debt #4). This is
+the sole board-surfacing path for cloud-posture findings: the ``CloudPostureDetector``
+it replaced (which read ``CloudPostureFinding`` directly — the debt-#3 cross-context ORM
+import) was retired once the SSOT cutover was verified. It reproduces that detector's
+card shape (``source_type`` / ``agent_type`` / idempotency ``lookup_key`` / title) so the
+retirement neither duplicated nor changed a card.
 
 Reads the finding's full detail through the findings context's port (C3: read-only
 cross-component access via a port, never its ORM). Only ``cloud_posture.prowler`` is
-board-surfaced via this path today; other sources no-op until they're mapped.
+board-surfaced today; other sources no-op until they're mapped.
 """
 
 from __future__ import annotations
@@ -25,11 +22,10 @@ from components.shared_kernel.domain.events import FindingRaised
 
 logger = logging.getLogger(__name__)
 
-_FLAG = "feature.cloud_posture_board_from_findings"
 _IMPACT = {"critical": 90, "high": 70, "medium": 40, "low": 20, "informational": 10}
 
-# Per finding-source board labels — the detector's exact labels, so the cards group
-# identically. Extend as more scanning pillars surface findings on the board.
+# Per finding-source board labels — the retired detector's exact labels, so the cards
+# group identically. Extend as more scanning pillars surface findings on the board.
 _SOURCE_BOARD = {
     "cloud_posture.prowler": {
         "source_type": "ai.cloud_posture",
@@ -42,18 +38,7 @@ _SOURCE_BOARD = {
 def handle_finding_raised_board(event: FindingRaised) -> None:
     mapping = _SOURCE_BOARD.get(event.source)
     if mapping is None:
-        return  # this source is not board-surfaced via the SSOT path yet
-
-    from components.shared_platform.application.providers.feature_flags_provider import (
-        get_feature_flags_provider,
-    )
-
-    try:
-        if not get_feature_flags_provider().is_feature_enabled(_FLAG, workspace_id=event.workspace_id):
-            return  # cutover off → the CloudPostureDetector owns the board
-    except Exception:
-        logger.exception("finding_raised_board_flag_check_failed workspace_id=%s", event.workspace_id)
-        return
+        return  # this source is not board-surfaced yet
 
     from components.agents.application.facades.ai_teammate_facade import ensure_agents_board
     from components.agents.application.handlers.specialist_persistence_service import (

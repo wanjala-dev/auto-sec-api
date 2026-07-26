@@ -1,13 +1,12 @@
-"""FindingRaised → board Task handler (ADR 0004 Phase 3c cutover).
+"""FindingRaised → board Task handler (ADR 0004 Phase 3).
 
-Feature flags are forced True by the autouse conftest fixture, so the cutover flag is
-ON by default here; the off-path tests patch the flag provider explicitly.
+The sole board-surfacing path for cloud-posture findings (the CloudPostureDetector it
+replaced was retired). Reproduces that detector's card shape so the card is unchanged.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
@@ -26,7 +25,6 @@ from infrastructure.persistence.project.models import Task
 pytestmark = [pytest.mark.integration, pytest.mark.django_db]
 
 _NOW = datetime(2026, 7, 25, 12, 0, 0, tzinfo=UTC)
-_FLAG_PROVIDER = "components.shared_platform.application.providers.feature_flags_provider.get_feature_flags_provider"
 
 
 def _seed_finding(ws) -> FindingEntity:
@@ -103,17 +101,6 @@ def test_reraise_is_idempotent_no_duplicate_card(workspace_factory):
     handle_finding_raised_board(_event(finding))  # same lookup_key → no second card
 
     assert Task.objects.filter(workspace=ws, source_type="ai.cloud_posture").count() == 1
-
-
-def test_noops_when_cutover_flag_off(workspace_factory):
-    ws = workspace_factory()
-    finding = _seed_finding(ws)
-
-    with patch(_FLAG_PROVIDER) as provider:
-        provider.return_value.is_feature_enabled.return_value = False  # cutover off
-        handle_finding_raised_board(_event(finding))
-
-    assert not Task.objects.filter(workspace=ws, source_type="ai.cloud_posture").exists()
 
 
 def test_noops_for_unmapped_source(workspace_factory):
