@@ -20,6 +20,12 @@ class DjangoFindingRepository(FindingStorePort):
         )
         return to_finding_entity(obj) if obj else None
 
+    def find_by_id(self, workspace_id: UUID, finding_id: UUID) -> FindingEntity | None:
+        from infrastructure.persistence.findings.models import Finding
+
+        obj = Finding.objects.filter(workspace_id=workspace_id, id=finding_id).select_related("workspace").first()
+        return to_finding_entity(obj) if obj else None
+
     def upsert(self, finding: FindingEntity) -> None:
         from infrastructure.persistence.findings.models import Finding
 

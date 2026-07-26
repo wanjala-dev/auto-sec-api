@@ -81,9 +81,34 @@ def test_detector_emits_board_findings_for_actionable_cspm(workspace_factory):
 
 
 def test_detector_should_run_leases_to_hourly(workspace_factory):
+    from unittest.mock import patch
+
     ws = workspace_factory()
     detector = CloudPostureDetector()
     ctx = _ctx(ws)
 
-    assert detector.should_run(ctx) is True
-    assert detector.should_run(ctx) is False
+    # The cutover flag is forced True by the autouse conftest fixture, which would
+    # stand the detector down (ADR 0004 Phase 3c). Keep the detector path active here
+    # so this asserts the hourly lease: cloud_posture on, cutover off.
+    def _flags(flag, **kwargs):
+        return flag != "feature.cloud_posture_board_from_findings"
+
+    with patch(
+        "components.shared_platform.application.providers.feature_flags_provider.get_feature_flags_provider"
+    ) as provider:
+        provider.return_value.is_feature_enabled.side_effect = _flags
+        assert detector.should_run(ctx) is True
+        assert detector.should_run(ctx) is False
+
+
+def test_detector_stands_down_when_cutover_flag_on(workspace_factory):
+    from unittest.mock import patch
+
+    ws = workspace_factory()
+    detector = CloudPostureDetector()
+
+    with patch(
+        "components.shared_platform.application.providers.feature_flags_provider.get_feature_flags_provider"
+    ) as provider:
+        provider.return_value.is_feature_enabled.return_value = True  # cutover on
+        assert detector.should_run(_ctx(ws)) is False

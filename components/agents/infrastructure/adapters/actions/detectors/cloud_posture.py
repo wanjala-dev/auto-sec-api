@@ -41,9 +41,13 @@ class CloudPostureDetector(BaseDetector):
                 get_feature_flags_provider,
             )
 
-            if not get_feature_flags_provider().is_feature_enabled(
-                "feature.cloud_posture", workspace_id=context.workspace_id
-            ):
+            flags = get_feature_flags_provider()
+            if not flags.is_feature_enabled("feature.cloud_posture", workspace_id=context.workspace_id):
+                return False
+            # ADR 0004 Phase 3c: when the board is driven from the Finding SSOT (the
+            # FindingRaised board handler), this detector stands down so the two never
+            # both file cards. Flip the flag back and this resumes — reversible.
+            if flags.is_feature_enabled("feature.cloud_posture_board_from_findings", workspace_id=context.workspace_id):
                 return False
         except Exception:
             logger.exception("cloud_posture_detector flag check failed workspace=%s", context.workspace_id)
