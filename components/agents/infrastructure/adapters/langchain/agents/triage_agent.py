@@ -32,6 +32,12 @@ from components.agents.infrastructure.adapters.langchain.base import (
     tool,
 )
 from components.agents.infrastructure.adapters.langchain.tools import (
+    asset_graph as asset_graph_tools,
+)
+from components.agents.infrastructure.adapters.langchain.tools import (
+    ioc_enrichment as ioc_enrichment_tools,
+)
+from components.agents.infrastructure.adapters.langchain.tools import (
     task_agent as task_tools,
 )
 from components.agents.infrastructure.adapters.langchain.tools import (
@@ -95,6 +101,20 @@ class TriageAgent(WorkspaceContextMixin, BaseAgent):
     )
     def query_asset_graph(self, input_str: str = "") -> str:
         return asset_graph_tools.query_asset_graph(self, input_str)
+
+    @tool(
+        name="enrich_indicator",
+        description=(
+            "Enrich an indicator of compromise against threat intel to ground a verdict. "
+            "Input: a single IP, domain, URL, or file hash (md5/sha1/sha256) — bare or "
+            '{"indicator": "...", "provider": "virustotal"}. Returns JSON {verdict '
+            "(malicious/suspicious/benign/unknown), score 0-100, positives, detail}. Use "
+            "it when a finding names an external IP/domain/URL/hash, before proposing a fix."
+        ),
+        risk=ToolRisk.READ,
+    )
+    def enrich_indicator(self, input_str: str = "") -> str:
+        return ioc_enrichment_tools.enrich_indicator(self, input_str)
 
     @tool(
         name="triage_finding",
