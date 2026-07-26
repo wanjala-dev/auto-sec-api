@@ -27,14 +27,14 @@ class Command(BaseCommand):
         parser.add_argument("email", help="Email of the user to enable private space for.")
 
     def handle(self, *args, **options):
-        from components.shared_platform.infrastructure.middleware.tenant_middlewares import (
+        from components.shared_platform.application.providers.router_db_provider import (
             set_db_for_router,
         )
-        from components.identity.infrastructure.adapters.workspace_bootstrap import (
-            ensure_personal_workspace,
+        from components.identity.application.providers.workspace_bootstrap_provider import (
+            get_workspace_bootstrap_provider,
         )
-        from components.shared_platform.infrastructure.services.feature_flags import (
-            bump_feature_flags_version,
+        from components.shared_platform.application.providers.feature_flags_provider import (
+            get_feature_flags_provider,
         )
         from infrastructure.persistence.core.models import FeatureFlag, FeatureFlagRule
         from infrastructure.persistence.users.models import CustomUser
@@ -61,7 +61,7 @@ class Command(BaseCommand):
             user=user,
             defaults={"enabled": True, "note": "Private-space pilot opt-in"},
         )
-        bump_feature_flags_version()
+        get_feature_flags_provider().bump_feature_flags_version()
         self.stdout.write(
             self.style.SUCCESS(
                 f"{'Created' if created else 'Updated'} user-scoped personal_space rule "
@@ -69,7 +69,7 @@ class Command(BaseCommand):
             )
         )
 
-        workspace = ensure_personal_workspace(user)
+        workspace = get_workspace_bootstrap_provider().ensure_personal_workspace(user)
         if workspace is None:
             raise CommandError(
                 "Could not provision the private workspace — the 'personal' sector "
