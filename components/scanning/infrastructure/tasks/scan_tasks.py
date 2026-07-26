@@ -65,7 +65,7 @@ def run_scan(
         UnknownScannerError,
         get_scanner,
     )
-    from components.scanning.application.services.run_scan_service import run_scan_and_ingest
+    from components.scanning.infrastructure.services.run_scan_service import run_scan_and_ingest
     from components.shared_kernel.application.ports.scanner_port import ScanTarget
     from components.shared_platform.application.providers.job_progress_provider import (
         complete_job,

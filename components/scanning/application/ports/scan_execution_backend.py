@@ -15,6 +15,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from components.scanning.domain.errors import InvalidScanSpecError
+
 ProgressCallback = Callable[[float], None]
 
 
@@ -29,13 +31,13 @@ class ScanJobSpec:
 
     def __post_init__(self) -> None:
         if not self.image:
-            raise ValueError("ScanJobSpec.image is required")
+            raise InvalidScanSpecError("ScanJobSpec.image is required")
         if not self.args:
-            raise ValueError("ScanJobSpec.args is required")
+            raise InvalidScanSpecError("ScanJobSpec.args is required")
         # Defense in depth: no arg may be a bare shell metacharacter payload. The argv is
         # passed literally (no shell), and the caller has already validated untrusted refs.
         if any(not isinstance(a, str) for a in self.args):
-            raise ValueError("ScanJobSpec.args must all be strings")
+            raise InvalidScanSpecError("ScanJobSpec.args must all be strings")
 
 
 @dataclass(frozen=True)

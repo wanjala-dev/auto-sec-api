@@ -35,6 +35,7 @@ import components.agents.infrastructure.tasks.ai_quality_rollup_tasks
 import components.agents.infrastructure.tasks.eval_tasks
 import components.cloud_posture.infrastructure.tasks.cloud_posture_tasks
 import components.scanning.infrastructure.tasks.scan_tasks
+import components.container_security.infrastructure.tasks.container_security_tasks
 import components.identity.workers.tasks
 import components.knowledge.infrastructure.tasks.index_freshness_tasks
 import components.knowledge.infrastructure.tasks.workspace_index_tasks

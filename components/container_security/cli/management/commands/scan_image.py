@@ -26,7 +26,7 @@ class Command(BaseCommand):
         parser.add_argument("--sync", action="store_true", help="run inline instead of enqueuing")
 
     def handle(self, *args, **opts):
-        from components.scanning.infrastructure.tasks.scan_tasks import dispatch_scan, run_scan
+        from components.scanning.application.providers.scan_dispatch_provider import dispatch_scan, run_scan
 
         kwargs = dict(
             source=_SOURCE,

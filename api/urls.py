@@ -74,6 +74,7 @@ api_patterns = [
     path("integrations/", include("components.integrations.api.urls")),
     path("provenance/", include("components.provenance.api.urls")),
     path("cloud-posture/", include("components.cloud_posture.api.urls")),
+    path("container-security/", include("components.container_security.api.urls")),
     path("findings/", include("components.findings.api.urls")),
     re_path(r"^countries/ctry/(\w{0,50})", CountryDetails.as_view()),
     path("countries/", CountryListView.as_view()),

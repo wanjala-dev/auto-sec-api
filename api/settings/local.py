@@ -545,6 +545,12 @@ CELERY_BEAT_SCHEDULE = {
         "task": "cloud_posture.schedule_prowler_runs",
         "schedule": crontab(hour=2, minute=0),
     },
+    # Daily Trivy container-SCA rescan — fans out per known image of opted-in
+    # workspaces (feature.container_security). Dark until opt-in; self-gates on the flag.
+    "schedule_container_scans": {
+        "task": "container_security.schedule_container_scans",
+        "schedule": crontab(hour=3, minute=0),
+    },
     "schedule_ai_teammate_runs": {
         "task": "infrastructure.ai.agents.tasks.schedule_ai_teammate_runs",
         "schedule": crontab(minute="*/5"),
