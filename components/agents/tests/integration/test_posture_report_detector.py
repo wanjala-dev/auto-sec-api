@@ -144,7 +144,15 @@ class TestPostureReportDetector:
         for i in range(3):
             _finding(workspace, owner, team, column, i)
 
-        run_at = datetime.now(UTC)
+        # Pin run_at to a fixed WEDNESDAY (2026-01-07, ISO week 2026-W02) so the
+        # week math is deterministic: +2 days (Fri) stays in the same ISO week
+        # (same lookup_key), +7 days (next Wed) lands in the next ISO week. With
+        # ``datetime.now()`` the test flaked ~2 days a week — whenever "now" fell
+        # within 2 days of an ISO-week boundary, +2 days crossed into the next
+        # week and the idempotency assertion failed (issue #97). Only the
+        # lookup_key uses run_at; the open-findings count is a stock measured at
+        # real now (posture_service._utc_now), so pinning run_at is safe.
+        run_at = datetime(2026, 1, 7, 12, 0, tzinfo=UTC)
         (first,) = PostureReportDetector().execute(_context(workspace, run_at))
         task_id = _persist(first, workspace, column, owner)
         assert task_id is not None
