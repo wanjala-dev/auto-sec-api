@@ -19,7 +19,7 @@ from components.payments.infrastructure.repositories.orm_payment_event_claim_rep
 from components.payments.infrastructure.repositories.orm_payment_event_recording_repository import (
     OrmPaymentEventRecordingRepository,
 )
-from components.shared_platform.infrastructure.middleware.tenant_middlewares import set_db_for_router
+from components.shared_platform.application.providers.router_db_provider import set_db_for_router
 from infrastructure.persistence.workspaces.models import Workspace
 from infrastructure.persistence.workspaces.payments.models import PaymentEvent, WorkspacePaymentMethod
 

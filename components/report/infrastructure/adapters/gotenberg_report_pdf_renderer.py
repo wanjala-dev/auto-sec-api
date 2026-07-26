@@ -8,7 +8,7 @@ own the layout.
 from __future__ import annotations
 
 from components.report.application.ports.report_pdf_renderer_port import ReportPdfRendererPort
-from components.shared_platform.infrastructure.services.gotenberg_html_to_pdf_client import (
+from components.shared_platform.application.providers.gotenberg_pdf_provider import (
     GotenbergHtmlToPdfClient,
     GotenbergPageOptions,
 )

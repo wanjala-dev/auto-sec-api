@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 
-from components.shared_platform.infrastructure.services.gotenberg_html_to_pdf_client import (
+from components.shared_platform.application.providers.gotenberg_pdf_provider import (
     GotenbergHtmlToPdfClient,
     GotenbergPageOptions,
     GotenbergRenderError,
@@ -248,7 +248,7 @@ class GotenbergWritingPdfAdapter:
         if document_html:
             html = document_html
         elif kind in _LETTERHEAD_KINDS:
-            from components.shared_platform.infrastructure.services.pdf_brand_assets import (
+            from components.shared_platform.application.providers.pdf_brand_assets_provider import (
                 resolve_brand_colors,
             )
 
