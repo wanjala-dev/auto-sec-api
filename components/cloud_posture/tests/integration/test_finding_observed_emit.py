@@ -9,14 +9,13 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import uuid4
 
 import pytest
 
 from components.cloud_posture.domain.entities.posture_finding_entity import NormalizedPostureFinding
 from components.cloud_posture.domain.value_objects.enums import CheckStatus, Severity
 from components.cloud_posture.infrastructure.services.prowler_ingest_service import (
-    _build_finding_observed,
+    _to_normalized,
     ingest_prowler_scan,
 )
 from components.shared_kernel.domain.events import FindingObserved
@@ -38,8 +37,7 @@ class _CapturingPublisher:
 
 
 @pytest.mark.unit
-def test_build_finding_observed_maps_resource_finding():
-    ws = uuid4()
+def test_to_normalized_maps_resource_finding():
     finding = NormalizedPostureFinding(
         check_id="s3_bucket_public_access",
         title="S3 public",
@@ -51,19 +49,18 @@ def test_build_finding_observed_maps_resource_finding():
         service="s3",
         compliance={"CIS-2.0": ["2.1.5"]},
     )
-    event = _build_finding_observed(ws, finding, occurred_at=_NOW)
-    assert isinstance(event, FindingObserved)
-    assert event.workspace_id == ws
-    assert event.source == "cloud_posture.prowler"
-    assert event.fingerprint == "s3_bucket_public_access|123456789012|arn:aws:s3:::b"
-    assert event.asset_urn == "arn:aws:s3:::b"
-    assert event.severity == "high"
-    assert event.attributes["region"] == "us-east-1"
-    assert event.compliance == {"CIS-2.0": ["2.1.5"]}
+    nf = _to_normalized(finding)
+    assert nf.source == "cloud_posture.prowler"
+    assert nf.fingerprint == "s3_bucket_public_access|123456789012|arn:aws:s3:::b"
+    assert nf.asset_urn == "arn:aws:s3:::b"
+    assert nf.severity.value == "high"
+    assert nf.attributes["region"] == "us-east-1"
+    assert nf.attributes["check_status"] == "fail"
+    assert nf.compliance == {"CIS-2.0": ["2.1.5"]}
 
 
 @pytest.mark.unit
-def test_build_finding_observed_account_level_fallback():
+def test_to_normalized_account_level_fallback():
     finding = NormalizedPostureFinding(
         check_id="iam_root_mfa_enabled",
         title="",  # account-level check, no resource / title
@@ -72,11 +69,11 @@ def test_build_finding_observed_account_level_fallback():
         account_id="123456789012",
         resource_uid="",
     )
-    event = _build_finding_observed(uuid4(), finding, occurred_at=_NOW)
+    nf = _to_normalized(finding)
     # No resource → per-account URN so the required identity is never empty.
-    assert event.asset_urn == "urn:aws:account/123456789012"
-    assert event.title == "iam_root_mfa_enabled"  # falls back to check_id
-    assert event.severity == "critical"
+    assert nf.asset_urn == "urn:aws:account/123456789012"
+    assert nf.title == "iam_root_mfa_enabled"  # falls back to check_id
+    assert nf.severity.value == "critical"
 
 
 @pytest.mark.integration

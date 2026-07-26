@@ -20,11 +20,11 @@ Reference: https://schema.ocsf.io/classes/security_finding
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from functools import total_ordering
 
-__all__ = ["AssetUrn", "FindingStatus", "RiskBand", "Severity"]
+__all__ = ["AssetUrn", "FindingStatus", "NormalizedFinding", "RiskBand", "Severity"]
 
 
 @total_ordering
@@ -224,3 +224,39 @@ class AssetUrn:
             return cls(ref)
         src = (source_system or "").strip().lower() or "unknown"
         return cls(f"urn:{src}:{ref}")
+
+
+@dataclass(frozen=True)
+class NormalizedFinding:
+    """The OCSF-aligned finding a scanner produces — the cross-pillar contract.
+
+    A ``ScannerPort`` returns these; the pillar's ingest maps each to a
+    ``FindingObserved`` event (the SSOT dual-write) and, where it keeps one, its own
+    snapshot row. Every scanner (Prowler today, Trivy tomorrow) normalizes its native
+    output to this one shape here, so a CSPM misconfiguration and an SCA CVE are
+    comparable and travel the same pipeline. Pillar-specific extras (a CSPM check_id,
+    an SCA package/version) ride in ``attributes`` — the OCSF "unmapped" bag.
+
+    ``fingerprint`` is the stable dedup key within ``(workspace, source)``;
+    ``asset_urn`` is the cross-pillar correlation key (see ``AssetUrn``).
+    """
+
+    source: str  # the pillar/scanner, e.g. "cloud_posture.prowler"
+    fingerprint: str
+    asset_urn: str
+    severity: Severity
+    title: str
+    description: str = ""
+    remediation: str = ""
+    compliance: dict = field(default_factory=dict)
+    attributes: dict = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.source:
+            raise ValueError("NormalizedFinding.source is required")
+        if not self.fingerprint:
+            raise ValueError("NormalizedFinding.fingerprint is required")
+        if not self.asset_urn:
+            raise ValueError("NormalizedFinding.asset_urn is required")
+        if not self.title:
+            raise ValueError("NormalizedFinding.title is required")

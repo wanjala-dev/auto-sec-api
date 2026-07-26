@@ -24,13 +24,14 @@ from typing import Any
 
 from celery import shared_task
 
-from components.cloud_posture.infrastructure.adapters.prowler_runner import run_prowler
+from components.cloud_posture.application.providers.scanner_provider import build_scanner
 from components.cloud_posture.infrastructure.services.prowler_ingest_service import (
-    ingest_prowler_scan,
+    ingest_scan_result,
 )
 from components.integrations.application.providers.aws_credentials_provider import (
     get_aws_credentials_port,
 )
+from components.shared_kernel.application.ports.scanner_port import ScanTarget
 
 logger = logging.getLogger(__name__)
 
@@ -95,8 +96,6 @@ def enqueue_scan_for_connection(*, workspace_id, connection_id) -> int | None:
 )
 def run_prowler_scan_for_account(connection_id: str, account_id: str) -> dict[str, Any]:
     """Assume the account role, run Prowler, ingest the result; (re)verify the link."""
-    from infrastructure.persistence.integrations.models import AwsAccountLink, AwsOrganizationConnection
-
     # Lazy import: the shared_platform services package __init__ eagerly pulls
     # in ORM models, so a module-level import here would run at Celery-app load
     # (before the app registry is ready). Import inside the task, as the model
@@ -107,6 +106,7 @@ def run_prowler_scan_for_account(connection_id: str, account_id: str) -> dict[st
         start_job,
         update_job,
     )
+    from infrastructure.persistence.integrations.models import AwsAccountLink, AwsOrganizationConnection
 
     connection = AwsOrganizationConnection.objects.filter(id=connection_id).first()
     if connection is None:
@@ -149,11 +149,13 @@ def run_prowler_scan_for_account(connection_id: str, account_id: str) -> dict[st
                     detail=f"Scanning {account_id} — {int(prowler_pct)}%",
                 )
 
-        records = run_prowler(
-            credentials=credentials,
-            account_id=account_id,
-            regions=list(connection.regions or []),
-            progress_callback=_on_progress,
+        scan_result = build_scanner().scan(
+            ScanTarget(
+                identifier=account_id,
+                credentials=credentials,
+                params={"regions": list(connection.regions or [])},
+            ),
+            on_progress=_on_progress,
         )
         update_job(job_id=job_id, progress=90, phase="ingesting", detail="Persisting findings")
     except Exception:
@@ -162,12 +164,11 @@ def run_prowler_scan_for_account(connection_id: str, account_id: str) -> dict[st
         fail_job(job_id=job_id, error="scan_failed")
         return {"success": False, "error": "scan_failed"}
 
-    scan = ingest_prowler_scan(
+    scan = ingest_scan_result(
         workspace_id=connection.workspace_id,
         account_id=account_id,
-        records=records,
+        result=scan_result,
         connection_id=connection.id,
-        engine_version="prowler",
     )
     # The scan proved the role in this account — promote the link to VERIFIED.
     _set_link_status(connection_id, account_id, AwsAccountLink.Status.VERIFIED)
