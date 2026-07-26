@@ -83,6 +83,20 @@ class TriageAgent(WorkspaceContextMixin, BaseAgent):
         return triage_tools.list_pending_log_findings(self, input_str)
 
     @tool(
+        name="query_asset_graph",
+        description=(
+            "Ground blast-radius: look up a cloud resource in the asset graph. Input: an "
+            "ARN, or a service / resource name or type to search. Returns JSON "
+            '{"assets": [{arn, resource_type, exposure, region, account_id, service}]} — '
+            "REAL exposure (public/internal/private), not a window-local guess. Use it "
+            "when a finding names a cloud resource or service, before proposing a fix."
+        ),
+        risk=ToolRisk.READ,
+    )
+    def query_asset_graph(self, input_str: str = "") -> str:
+        return asset_graph_tools.query_asset_graph(self, input_str)
+
+    @tool(
         name="triage_finding",
         description=(
             "Triage one pending Log-Watch finding: look at the error, propose a "
