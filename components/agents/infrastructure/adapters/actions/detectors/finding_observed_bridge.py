@@ -31,6 +31,36 @@ logger = logging.getLogger(__name__)
 # detector-based pillar joins the SSOT.
 LOGWATCH_SSOT_SOURCES = frozenset({"logwatch.error", "logwatch.optimization"})
 
+# Reversible board cutover for logwatch (mirrors cloud_posture #98). When ON for a
+# workspace, the cycle STOPS board-persisting logwatch results (stands down) and the
+# SSOT path (FindingObserved → FindingRaised → finding_raised_board_handler) drives
+# the board instead. Default OFF (per-workspace opt-in) — the flagship lane is only
+# flipped once parity is observed. The board handler gates the SAME flag key.
+LOGWATCH_BOARD_CUTOVER_FLAG = "feature.logwatch_board_from_findings"
+
+
+def logwatch_board_cutover_active(workspace_id, result) -> bool:
+    """True when the logwatch board cutover is ON for this workspace + logwatch result.
+
+    Fail-closed: any flag-check error → False → the legacy cycle board write runs, so a
+    flag-service hiccup can never drop a finding off the board. The detector cycle uses
+    this to decide whether to board-persist (legacy) or defer to the SSOT path.
+    """
+    slug = (getattr(result, "detector_slug", "") or "").strip()
+    if slug not in LOGWATCH_SSOT_SOURCES:
+        return False
+    try:
+        from components.shared_platform.application.providers.feature_flags_provider import (
+            get_feature_flags_provider,
+        )
+
+        return bool(
+            get_feature_flags_provider().is_feature_enabled(LOGWATCH_BOARD_CUTOVER_FLAG, workspace_id=workspace_id)
+        )
+    except Exception:
+        logger.exception("logwatch_board_cutover_flag_check_failed workspace_id=%s", workspace_id)
+        return False
+
 
 def emit_finding_observed_for_detector_result(workspace_id, result, *, publisher=None) -> None:
     """Emit ``FindingObserved`` for a logwatch DetectorResult (best-effort, on commit).
@@ -90,6 +120,14 @@ def _build_finding_observed(workspace_id, result):
             "action_type": result.action_type,
             "detector_slug": result.detector_slug,
             "blast_radius": (result.context or {}).get("blast_radius") or payload.get("blast_radius") or {},
+            # Everything the board-cutover path needs to rebuild the EXACT legacy card
+            # (identical source_type / agent_type / payload / context / lookup_key → a
+            # board-invisible cutover with full triage evidence preserved). Consumed by
+            # ``finding_raised_board_handler._build_logwatch_card``.
+            "agent_type": result.agent_type or "ai_teammate",
+            "impact_score": impact_score,
+            "board_payload": dict(payload),
+            "board_context": dict(result.context or {}),
         },
     )
 
