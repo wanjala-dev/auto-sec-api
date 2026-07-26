@@ -14,7 +14,8 @@ class ElasticsearchVectorStoreAdapter(VectorStorePort):
         k: int = 5,
         filters: dict | None = None,
     ) -> list[RetrievedChunk]:
-        from components.agents.infrastructure.adapters.langchain.chains.retrieval import normalize_metadata_value as _s
+        from components.agents.application.providers.retrieval_chain_provider import get_retrieval_chain_provider
+        _s = get_retrieval_chain_provider().normalize_metadata_value
         from components.knowledge.infrastructure.factories.embeddings.factory import EmbeddingsFactory
         from components.knowledge.infrastructure.factories.vector_stores.factory import VectorStoreFactory
 
@@ -60,7 +61,8 @@ class ElasticsearchVectorStoreAdapter(VectorStorePort):
         workspace_id: str | None = None,
         user_id: str | None = None,
     ) -> bool:
-        from components.agents.infrastructure.adapters.langchain.chains.retrieval import has_indexed_chunks as _has_indexed_chunks
+        from components.agents.application.providers.retrieval_chain_provider import get_retrieval_chain_provider
+        _has_indexed_chunks = get_retrieval_chain_provider().has_indexed_chunks
         from components.knowledge.infrastructure.factories.embeddings.factory import EmbeddingsFactory
         from components.knowledge.infrastructure.factories.vector_stores.factory import VectorStoreFactory
 

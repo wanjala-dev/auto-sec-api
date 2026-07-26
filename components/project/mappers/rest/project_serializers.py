@@ -428,11 +428,11 @@ class TaskSerializer(WritableNestedModelSerializer, serializers.ModelSerializer)
         alias = None
         try:
             if action.workspace_id:
-                from components.agents.infrastructure.services.agent_permissions_service import (
-                    resolve_ai_teammate_alias,
+                from components.agents.application.providers.agent_permissions_provider import (
+                    get_agent_permissions_provider,
                 )
 
-                alias = resolve_ai_teammate_alias(action.workspace)
+                alias = get_agent_permissions_provider().resolve_ai_teammate_alias(action.workspace)
         except Exception:
             alias = None
         return {

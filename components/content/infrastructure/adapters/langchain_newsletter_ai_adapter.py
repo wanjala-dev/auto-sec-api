@@ -57,12 +57,12 @@ _OUTPUT_KEYS = (
 class LangchainNewsletterAiAdapter:
     def is_configured(self) -> bool:
         try:
-            from components.agents.infrastructure.adapters.langchain.base import (
-                AgentRegistry,
+            from components.agents.application.providers.agent_registry_provider import (
+                get_agent_registry_provider,
             )
         except ImportError:
             return False
-        return AgentRegistry.get_agent_class(WRITING_AGENT_NAME) is not None
+        return get_agent_registry_provider().is_agent_registered(WRITING_AGENT_NAME)
 
     def draft_newsletter(
         self,

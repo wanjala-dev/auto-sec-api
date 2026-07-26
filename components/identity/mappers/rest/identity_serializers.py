@@ -10,7 +10,7 @@ from components.shared_platform.mappers.rest.core_serializers import (
     SimpleWorkspaceSerializer,
     TaskSimpleSerializer,
 )
-from components.workspace.infrastructure.adapters.workspace_utils import ensure_workspace_follower
+from components.workspace.application.facades.workspace_facade import ensure_workspace_follower
 from components.workspace.mappers.rest.countries_serializers import CountrySerializer
 from infrastructure.persistence.countries.models import Country
 from infrastructure.persistence.users.models import ContributorProfile, CustomUser, UserProfile
