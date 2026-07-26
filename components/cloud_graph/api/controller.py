@@ -1,0 +1,33 @@
+"""Read API for the cloud asset graph. Thin, membership-gated, ORM-free.
+
+Makes the CNAPP asset graph (ADR 0004 / ADR 0005) visible to the HUD: a workspace's
+cloud-resource nodes (exposure-typed) + the typed edges among them — the read surface
+the Asset Graph panel renders. Read-only; the graph is populated by the cloud_graph
+sync detector (owner-persists), never here.
+"""
+
+from __future__ import annotations
+
+from rest_framework import permissions
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+
+class AssetGraphView(APIView):
+    """GET /cloud-graph/workspaces/<ws>/graph/?exposure=&resource_type=&limit= — nodes+edges."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+    name = "cloud-graph-asset-graph"
+
+    def get(self, request, workspace_id):
+        from components.cloud_graph.api.requests.get_asset_graph_request import GetAssetGraphRequest
+        from components.cloud_graph.api.resources.asset_graph_resource import AssetGraphResource
+        from components.cloud_graph.application.providers.cloud_graph_provider import CloudGraphProvider
+        from components.cloud_graph.infrastructure.services.workspace_access import is_workspace_member
+
+        if not is_workspace_member(user=request.user, workspace_id=workspace_id):
+            return Response({"success": False, "error": "forbidden"}, status=403)
+
+        req = GetAssetGraphRequest.from_request(request, workspace_id)
+        view = CloudGraphProvider.build_get_asset_graph_use_case().execute(req.to_query())
+        return Response({"success": True, "data": AssetGraphResource.graph(view)})

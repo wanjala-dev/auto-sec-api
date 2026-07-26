@@ -30,6 +30,15 @@ class CloudGraphProvider:
         return FindingDerivedInventoryAdapter()
 
     @staticmethod
+    def build_get_asset_graph_use_case():
+        """The read use case the HUD's Asset Graph panel drives (nodes + edges)."""
+        from components.cloud_graph.application.use_cases.get_asset_graph_use_case import (
+            GetAssetGraphUseCase,
+        )
+
+        return GetAssetGraphUseCase(store=CloudGraphProvider.build_cloud_asset_store())
+
+    @staticmethod
     def build_sync_cloud_assets_use_case():
         """The use case the ``cloud_graph.sync`` detector drives."""
         from components.cloud_graph.application.use_cases.sync_cloud_assets_use_case import (
