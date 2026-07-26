@@ -105,6 +105,56 @@ def _build_logwatch_card(finding, event, mapping) -> dict:
     }
 
 
+def _build_cloud_exposure_card(finding, event, mapping) -> dict:
+    """Build the SOC-board card for a cloud attack-path finding (ADR 0005 phase 3).
+
+    Born SSOT-native — there is no legacy cycle card to match. The attack-path job's
+    ``FindingObserved.attributes`` carry the routing target + the path legs as evidence,
+    so this card routes to the ``triage_agent`` (unlike cloud_posture, which is operator
+    reading material and deliberately stays un-triaged).
+    """
+    attrs = finding.attributes or {}
+    severity = finding.severity.value
+    legs = attrs.get("legs") or []
+    entry_label = attrs.get("entry_label", "") or "entry"
+    target_label = attrs.get("target_label", "") or "target"
+    chain = (
+        " → ".join([entry_label, *[leg.get("dst_label", "") for leg in legs]])
+        if legs
+        else f"{entry_label} → {target_label}"
+    )
+    lookup_key = finding.fingerprint
+    title = f"{severity.title()}: {finding.title}"[:255]
+    payload = {
+        "lookup_key": lookup_key,
+        "signal": finding.title,
+        "confidence": "high",
+        "severity": severity,
+        "category": attrs.get("category", ""),
+        "risk_score": attrs.get("risk_score"),
+        "entry": entry_label,
+        "target": target_label,
+        "asset_urns": attrs.get("asset_urns", []),
+        "remediation": finding.remediation,
+        "evidence": [
+            chain,
+            *[f"{leg.get('src_label', '')} -[{leg.get('relation', '')}]-> {leg.get('dst_label', '')}" for leg in legs],
+        ],
+        "finding_id": str(finding.id),
+    }
+    return {
+        "title": title,
+        "summary": (finding.description or chain)[:2000],
+        "source_type": mapping["source_type"],
+        "agent_type": attrs.get("agent_type") or "triage_agent",  # the routing target → triaged
+        "detector_key": mapping["detector_key"],
+        "payload": payload,
+        "context": {"kind": "cloud_exposure", "workspace_id": str(event.workspace_id), "finding_id": str(finding.id)},
+        "impact_score": int(attrs.get("impact_score") or _IMPACT.get(severity, 40)),
+        "lookup_key": lookup_key,
+    }
+
+
 # Per finding-source board config: the legacy labels + card builder, plus the cutover
 # flag (None = graduated, always surfaces). Extend as more pillars surface findings.
 _SOURCE_BOARD = {
@@ -113,6 +163,12 @@ _SOURCE_BOARD = {
         "detector_key": "ai_findings.cloud_posture",
         "flag": None,  # graduated (#101)
         "build": _build_cloud_posture_card,
+    },
+    "cloud_graph.attack_path": {
+        "source_type": "ai.cloud_exposure",
+        "detector_key": "ai_findings.cloud_exposure",
+        "flag": None,  # born SSOT-native (graduated) — no legacy dual-write / cutover
+        "build": _build_cloud_exposure_card,
     },
     "logwatch.error": {
         "source_type": "ai.log_watch",

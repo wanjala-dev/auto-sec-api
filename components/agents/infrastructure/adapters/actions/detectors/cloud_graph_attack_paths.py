@@ -7,9 +7,11 @@ its materialised ``AttackPath`` rows — reusing the detector cycle's per-worksp
 in a Celery worker, this satisfies "heavy graph traversal runs in the background", never
 inline in a request.
 
-It emits NO findings yet (returns ``[]``): this slice ranks + materialises + emits
-``AttackPathDetected``. Turning each path into an ``ai.cloud_exposure`` finding is the
-next slice (ADR 0005 phase 3).
+The detector returns ``[]`` on purpose — it does NOT write board cards via the cycle.
+Findings are SSOT-native (ADR 0005 phase 3): the materialise use case emits a
+``FindingObserved`` per path, the ``findings`` context owner-persists it, and
+``FindingRaised`` → ``finding_raised_board_handler`` builds the ``ai.cloud_exposure``
+board card (routed to the triage specialist). No legacy cycle dual-write / cutover.
 """
 
 from __future__ import annotations
