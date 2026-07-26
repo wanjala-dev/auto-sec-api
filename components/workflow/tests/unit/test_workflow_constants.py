@@ -8,6 +8,7 @@ from components.workflow.domain.constants import (
     EVENT_STATUSES,
     NODE_TYPES,
     RUN_STATUSES,
+    SELF_TARGETING_SOURCE_TYPES,
     SOURCE_TYPES,
     STEP_EVENT_TYPES,
     STEP_STATES,
@@ -195,10 +196,18 @@ class TestWorkflowConstants:
             assert len(source_type) > 0
 
     def test_target_types_contains_expected_values(self):
-        """TARGET_TYPES should contain contact and group."""
+        """TARGET_TYPES should contain contact, group, and the finding self-target."""
         assert "contact" in TARGET_TYPES
         assert "group" in TARGET_TYPES
-        assert len(TARGET_TYPES) == 2
+        assert "finding" in TARGET_TYPES
+        assert len(TARGET_TYPES) == 3
+
+    def test_self_targeting_source_types_are_targetable_finding(self):
+        """finding is self-targeting (source_id IS the target) and a valid target type."""
+        assert "finding" in SELF_TARGETING_SOURCE_TYPES
+        for source_type in SELF_TARGETING_SOURCE_TYPES:
+            assert source_type in SOURCE_TYPES
+            assert source_type in TARGET_TYPES
 
     def test_node_types_contains_all_expected_nodes(self):
         """NODE_TYPES should contain all expected node types."""

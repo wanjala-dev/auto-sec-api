@@ -35,7 +35,21 @@ SOURCE_TYPES = (
     "finding",
 )
 
-TARGET_TYPES = ("contact", "group")
+# What a run "acts on". ``contact``/``group`` are the nonprofit directory targets
+# (a person or a segment). ``finding`` is a security finding (an ``ai.*`` board
+# Task): a finding-triggered run targets the finding ITSELF, so branch/ai/webhook
+# nodes read its severity/service/detector and act on it. See
+# ``SELF_TARGETING_SOURCE_TYPES``.
+TARGET_TYPES = ("contact", "group", "finding")
+
+# Source types whose event ``source_id`` IS the run's target — the emitted entity
+# is the thing the playbook acts on, so no separate ``target_id`` is carried in
+# the payload. A ``finding`` event sets ``source_id`` = the finding's board-Task
+# id (see ``specialist_persistence_service._emit_finding_triggers``); the
+# dispatcher derives ``target_type="finding", target_id=<source_id>`` from it.
+# Contact/group flows, by contrast, carry an explicit ``target_id`` because the
+# event source (e.g. a task move) is not the target (a person).
+SELF_TARGETING_SOURCE_TYPES = ("finding",)
 
 NODE_TYPES = (
     "start",
@@ -105,7 +119,9 @@ TRIGGER_CATALOG = [
         goal_ids=("security",),
     ),
     # ── Documents (library / uploads) ────────────────────────
-    TriggerDefinition(id="document_uploaded", source_type="document", label="Document uploaded", goal_ids=("security",)),
+    TriggerDefinition(
+        id="document_uploaded", source_type="document", label="Document uploaded", goal_ids=("security",)
+    ),
     TriggerDefinition(
         id="document_processed", source_type="document", label="Document processed", goal_ids=("security",)
     ),
@@ -118,7 +134,9 @@ TRIGGER_CATALOG = [
     # for every finding; the severity-scoped triggers fire additionally when the
     # band matches, so a playbook can bind straight to "critical finding". The
     # run targets the finding (task id); payload carries severity/service/detector.
-    TriggerDefinition(id="finding_raised", source_type="finding", label="Security finding raised", goal_ids=("security",)),
+    TriggerDefinition(
+        id="finding_raised", source_type="finding", label="Security finding raised", goal_ids=("security",)
+    ),
     TriggerDefinition(
         id="finding_critical", source_type="finding", label="Critical finding raised", goal_ids=("security",)
     ),

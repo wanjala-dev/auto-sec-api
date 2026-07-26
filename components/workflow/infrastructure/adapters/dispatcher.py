@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any
 
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
+from components.workflow.domain.constants import SELF_TARGETING_SOURCE_TYPES
 from infrastructure.persistence.workspaces.workflows.models import (
     WorkflowBinding,
     WorkflowEvent,
@@ -24,8 +25,8 @@ def emit_workflow_event(
     workspace_id: str,
     source_type: str,
     trigger_type: str,
-    payload: Optional[Dict[str, Any]] = None,
-    source_id: Optional[str] = None,
+    payload: dict[str, Any] | None = None,
+    source_id: str | None = None,
     idempotency_key: str = "",
 ) -> WorkflowEvent:
     """Persist a workflow event and enqueue processing after commit."""
@@ -55,6 +56,17 @@ def dispatch_event(event: WorkflowEvent) -> int:
     target_type = event.payload.get("target_type", "contact")
     target_id = event.payload.get("target_id") or event.payload.get("contact_id")
 
+    # Self-targeting sources (a ``finding``) ARE the run's target: the emitter
+    # sets ``source_id`` = the entity's id precisely so the run can target it
+    # (see specialist_persistence_service._emit_finding_triggers, which carries
+    # no ``target_id`` because there is no separate contact). Derive the target
+    # from ``source_id`` here so the finding-triggered playbooks actually start,
+    # instead of being dropped as "no_target". Without this the seeded
+    # critical-finding-alert / finding-soar-webhook workflows never fire.
+    if not target_id and event.source_id and event.source_type in SELF_TARGETING_SOURCE_TYPES:
+        target_id = event.source_id
+        target_type = event.source_type
+
     bindings = WorkflowBinding.objects.select_related("workflow").filter(
         workflow__workspace_id=event.workspace_id,
         source_type=event.source_type,
@@ -81,7 +93,9 @@ def dispatch_event(event: WorkflowEvent) -> int:
         if not target_id:
             logger.warning(
                 "workflow_event_dropped no_target trigger=%s workflow_id=%s event_id=%s",
-                event.trigger_type, binding.workflow_id, event.id,
+                event.trigger_type,
+                binding.workflow_id,
+                event.id,
             )
             continue
         run = WorkflowRun.objects.create(
