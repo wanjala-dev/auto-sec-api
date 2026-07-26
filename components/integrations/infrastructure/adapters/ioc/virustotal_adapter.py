@@ -74,7 +74,7 @@ class VirusTotalAdapter(IocEnrichmentPort):
         cache_key = f"ioc:virustotal:{indicator.kind.value}:{indicator.value}"
         cached = cache.get(cache_key)
         if isinstance(cached, dict):
-            return self._from_cache(cached, indicator)
+            return EnrichmentResult.from_cache_dict(cached, provider=self.provider_name, indicator=indicator)
 
         try:
             resp = requests.get(f"{_BASE}{self._path(indicator)}", headers={"x-apikey": key}, timeout=_TIMEOUT)
@@ -94,7 +94,7 @@ class VirusTotalAdapter(IocEnrichmentPort):
         else:
             result = self._map(resp.json(), indicator)
 
-        cache.set(cache_key, self._to_cache(result), _CACHE_TTL)
+        cache.set(cache_key, result.to_cache_dict(), _CACHE_TTL)
         return result
 
     def _map(self, data: dict, indicator: Indicator) -> EnrichmentResult:
@@ -116,25 +116,4 @@ class VirusTotalAdapter(IocEnrichmentPort):
             score=score,
             positives=malicious,
             detail=f"{malicious} malicious / {suspicious} suspicious of {total} engines",
-        )
-
-    @staticmethod
-    def _to_cache(r: EnrichmentResult) -> dict:
-        return {
-            "verdict": r.verdict.value,
-            "score": r.score,
-            "positives": r.positives,
-            "detail": r.detail,
-            "error": r.error,
-        }
-
-    def _from_cache(self, d: dict, indicator: Indicator) -> EnrichmentResult:
-        return EnrichmentResult(
-            provider=self.provider_name,
-            indicator=indicator,
-            verdict=EnrichmentVerdict(d.get("verdict", "unknown")),
-            score=int(d.get("score", 0) or 0),
-            positives=d.get("positives"),
-            detail=d.get("detail", ""),
-            error=d.get("error"),
         )
