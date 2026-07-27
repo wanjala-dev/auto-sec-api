@@ -66,6 +66,10 @@ def _seed_attack_path_finding(ws) -> FindingEntity:
                     "tactic": "privilege_escalation",
                 },
             ],
+            "attack_flow": [
+                {"label": "web-frontend", "relation": None, "technique_id": "T1190"},
+                {"label": "app-exec-role", "relation": "can_assume", "technique_id": "T1078.004"},
+            ],
             "legs": [
                 {"src_label": "web-frontend", "relation": "can_assume", "dst_label": "app-exec-role"},
                 {"src_label": "app-exec-role", "relation": "has_policy", "dst_label": "AdministratorAccess"},
@@ -109,8 +113,11 @@ def test_creates_triaged_board_card(workspace_factory):
     assert task.metadata["payload"]["category"] == "public_compute_admin"
     # the path legs are carried as evidence
     assert any("can_assume" in line for line in task.metadata["payload"]["evidence"])
-    # the ATT&CK attack-flow is surfaced on the card (kill-chain order)
+    # the ATT&CK technique set + per-hop attack-flow are surfaced on the card
     assert [m["technique_id"] for m in task.metadata["payload"]["mitre"]] == ["T1190", "T1078.004"]
+    flow = task.metadata["payload"]["attack_flow"]
+    assert [s["technique_id"] for s in flow] == ["T1190", "T1078.004"]
+    assert flow[1]["relation"] == "can_assume"
 
 
 def test_reraise_is_idempotent_no_duplicate_card(workspace_factory):

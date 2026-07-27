@@ -29,3 +29,35 @@ def techniques_for_category(category: AttackPathCategory) -> tuple[MitreTechniqu
     """The ATT&CK techniques for a path category, in kill-chain order."""
     ids = _CATEGORY_TECHNIQUES.get(category, (_ENTRY,))
     return order_flow(tuple(technique(tid) for tid in ids))
+
+
+# Each traversed edge relation → the ATT&CK technique that hop represents. Structural
+# relations (attached_to, in_subnet) carry no technique and are skipped in the flow.
+_RELATION_TECHNIQUES: dict[str, str] = {
+    "allows_ingress_from": _ENTRY,  # public inbound rule → Exploit Public-Facing App
+    "routes_to_igw": _ENTRY,  # internet-routable path → exposure
+    "can_assume": "T1078.004",  # assume a role via valid cloud creds → Priv-Esc
+    "has_policy": "T1098.003",  # role carries additional/powerful cloud roles → Priv-Esc
+    "reads_bucket": "T1530",  # read from cloud storage → Collection
+}
+
+
+def technique_for_relation(relation: str) -> MitreTechnique | None:
+    """The ATT&CK technique a single traversed edge represents (or None if structural)."""
+    tid = _RELATION_TECHNIQUES.get(relation)
+    return technique(tid) if tid else None
+
+
+def build_attack_flow(entry_label: str, legs) -> list[dict]:
+    """The hop-by-hop ATT&CK attack-flow for a path — the render the HUD draws.
+
+    Starts at the public entry (Initial Access), then one step per traversed leg that
+    maps to a technique. ``legs`` is an iterable of objects with ``.relation`` +
+    ``.dst_label``. Each step is a flat dict (technique fields + hop label/relation).
+    """
+    flow = [{"label": entry_label, "relation": None, **technique(_ENTRY).to_dict()}]
+    for leg in legs:
+        tech = technique_for_relation(leg.relation)
+        if tech is not None:
+            flow.append({"label": leg.dst_label, "relation": leg.relation, **tech.to_dict()})
+    return flow

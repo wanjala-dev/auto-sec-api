@@ -135,7 +135,8 @@ def _build_cloud_exposure_card(finding, event, mapping) -> dict:
         "entry": entry_label,
         "target": target_label,
         "asset_urns": attrs.get("asset_urns", []),
-        "mitre": attrs.get("mitre", []),  # ATT&CK attack-flow (id/name/tactic), kill-chain order
+        "mitre": attrs.get("mitre", []),  # ATT&CK technique set for the finding (chip), kill-chain order
+        "attack_flow": attrs.get("attack_flow", []),  # per-hop ATT&CK render: entry → each mapped leg
         "remediation": finding.remediation,
         "evidence": [
             chain,
