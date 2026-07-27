@@ -17,6 +17,7 @@ class AssetSyncResult:
     workspace_id: UUID
     assets_upserted: int = 0
     findings_scanned: int = 0
+    edges_upserted: int = 0
 
 
 class AssetInventoryPort(ABC):

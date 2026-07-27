@@ -21,13 +21,21 @@ class CloudGraphProvider:
 
     @staticmethod
     def build_asset_inventory():
-        """The ingestion adapter (spike §5). Prowler/SSOT-derived today; a CloudQuery
-        adapter can replace it here without touching the use case."""
+        """The ingestion adapter (spike §5). A composite: the finding/SSOT-derived source
+        for node breadth + the boto3 source for relationship depth (typed edges → attack
+        paths). boto3 is a no-op for workspaces without AWS account access, so the composite
+        is always safe to run."""
+        from components.cloud_graph.infrastructure.adapters.boto3_inventory_adapter import (
+            Boto3InventoryAdapter,
+        )
+        from components.cloud_graph.infrastructure.adapters.composite_inventory_adapter import (
+            CompositeInventoryAdapter,
+        )
         from components.cloud_graph.infrastructure.adapters.finding_derived_inventory_adapter import (
             FindingDerivedInventoryAdapter,
         )
 
-        return FindingDerivedInventoryAdapter()
+        return CompositeInventoryAdapter([FindingDerivedInventoryAdapter(), Boto3InventoryAdapter()])
 
     @staticmethod
     def build_get_asset_graph_use_case():

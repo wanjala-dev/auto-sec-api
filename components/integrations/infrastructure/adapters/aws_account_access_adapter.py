@@ -70,3 +70,29 @@ class AwsAccountAccessAdapter(AwsAccountAccessPort):
             connection.id,
         )
         return creds
+
+    def accounts_for(self, workspace_id: str) -> list[str]:
+        from infrastructure.persistence.integrations.models import (
+            AwsAccountLink,
+            AwsOrganizationConnection,
+        )
+
+        # Scannable = discovered/verified links (skip terminal), same set the CSPM
+        # enqueue uses. Union the connections' management accounts to cover the
+        # single/management-account case that may not have an explicit link row yet.
+        terminal = [
+            AwsAccountLink.Status.FAILED,
+            AwsAccountLink.Status.SUSPENDED,
+            AwsAccountLink.Status.EXCLUDED,
+        ]
+        account_ids: set[str] = set(
+            AwsAccountLink.objects.filter(connection__workspace_id=workspace_id)
+            .exclude(status__in=terminal)
+            .values_list("account_id", flat=True)
+        )
+        account_ids.update(
+            AwsOrganizationConnection.objects.filter(workspace_id=workspace_id).values_list(
+                "management_account_id", flat=True
+            )
+        )
+        return sorted(a for a in account_ids if a)

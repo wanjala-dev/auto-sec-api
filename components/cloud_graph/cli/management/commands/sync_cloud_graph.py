@@ -38,7 +38,8 @@ class Command(BaseCommand):
         self.stdout.write(
             self.style.SUCCESS(
                 f"cloud_graph synced workspace={workspace_id} "
-                f"assets_upserted={sync.assets_upserted} findings_scanned={sync.findings_scanned}"
+                f"assets_upserted={sync.assets_upserted} edges_upserted={sync.edges_upserted} "
+                f"findings_scanned={sync.findings_scanned}"
             )
         )
 
