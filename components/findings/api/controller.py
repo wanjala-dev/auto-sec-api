@@ -45,6 +45,7 @@ class AttckCoverageView(APIView):
     name = "findings-attck-coverage"
 
     def get(self, request, workspace_id):
+        from django.utils import timezone
 
         from components.findings.api.resources.attck_coverage_resource import AttckCoverageResource
         from components.findings.application.providers.finding_provider import FindingProvider
