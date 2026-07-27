@@ -305,15 +305,15 @@ CORS_ORIGIN_ALLOW_ALL = True
 
 CORS_ALLOW_CREDENTIALS = True
 
+# Auto-Sec dev origins: the frontend dev server (:3001) and the k8s Gateway host
+# (autosec.local). The source's literacyseed/wanjala prod origins were fork-drift — removed:
+# a security tool must not allow CORS origins it doesn't own. Prod origins are env-driven in prod.py.
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:8080",
-    "http://127.0.0.1:9000",
-    "http://127.0.0.1:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:3001",
+    "http://autosec.local",
     "http://localhost:3000",
-    "https://www.literacyseed.com",
-    "https://api.wanjala.art",
-    "https://www.api.wanjala.art",
-    "https://d1ij8ii546ff6q.cloudfront.net",
+    "http://127.0.0.1:3000",
 ]
 
 CORS_ALLOW_METHODS = [
@@ -334,12 +334,10 @@ CORS_ALLOW_HEADERS = list(default_headers) + [
 ]
 
 CORS_ORIGIN_WHITELIST = [
+    "http://localhost:3001",
+    "http://127.0.0.1:3001",
+    "http://autosec.local",
     "http://localhost:3000",
-    "http://127.0.0.1:8080",
-    "https://www.literacyseed.com",
-    "https://api.wanjala.art",
-    "https://www.api.wanjала.art",
-    "https://d1ij8ii546ff6q.cloudfront.net",
 ]
 
 # Logging
