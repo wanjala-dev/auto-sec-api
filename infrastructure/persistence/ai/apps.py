@@ -39,6 +39,7 @@ class AiConfig(AppConfig):
             packages=(
                 "components.agents.application.handlers",
                 "components.findings.application.handlers",
+                "components.integrations.application.handlers",
             ),
         )
 
