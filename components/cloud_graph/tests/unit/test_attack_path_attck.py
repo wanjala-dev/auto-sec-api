@@ -121,3 +121,13 @@ class TestFindingEmission:
         assert [s["technique_id"] for s in flow] == ["T1190", "T1078.004"]
         assert flow[0]["label"] == "i-abc" and flow[0]["relation"] is None
         assert flow[1]["label"] == "AdminRole" and flow[1]["relation"] == "can_assume"
+
+    def test_remediation_is_specific_not_generic(self):
+        # The ticket's remediation names the entry + crown-jewel target (the grounded
+        # advisor), not the old one-size-fits-all "strip the over-privileged policy" line.
+        finding = _to_finding_observed(_fake_path())
+        assert "i-abc" in finding.remediation and "AdminRole" in finding.remediation
+        assert finding.remediation != (
+            "Break the chain: remove the public exposure of the entry asset, or strip the "
+            "over-privileged role/policy it can reach."
+        )
