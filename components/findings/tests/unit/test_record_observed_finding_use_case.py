@@ -43,6 +43,15 @@ class _FakeStore(FindingStorePort):
     def upsert(self, finding: FindingEntity) -> None:
         self.by_identity[(finding.workspace_id, finding.source, finding.fingerprint)] = finding
 
+    # Read side — unused by these write-path tests, but the port requires them.
+    def list_findings(
+        self, workspace_id, *, severity=None, status=None, source=None, asset_urn=None, limit=25, offset=0
+    ):
+        return []
+
+    def count_findings(self, workspace_id, *, severity=None, status=None, source=None, asset_urn=None):
+        return 0
+
 
 class _FakePublisher:
     def __init__(self) -> None:

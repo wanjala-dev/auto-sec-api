@@ -36,6 +36,30 @@ class FindingProvider:
         return ListFindingsUseCase(store=DjangoFindingRepository())
 
     @staticmethod
+    def build_recompute_attck_coverage_use_case():
+        """The background aggregator that materializes the ATT&CK coverage heatmap."""
+        from components.findings.application.use_cases.recompute_attck_coverage_use_case import (
+            RecomputeAttckCoverageUseCase,
+        )
+        from components.findings.infrastructure.repositories.attck_coverage_repository import (
+            DjangoAttckCoverageRepository,
+        )
+
+        return RecomputeAttckCoverageUseCase(store=DjangoAttckCoverageRepository())
+
+    @staticmethod
+    def build_get_attck_coverage_use_case():
+        """The read-side use case backing the ATT&CK coverage API (CQRS read)."""
+        from components.findings.application.use_cases.get_attck_coverage_use_case import (
+            GetAttckCoverageUseCase,
+        )
+        from components.findings.infrastructure.repositories.attck_coverage_repository import (
+            DjangoAttckCoverageRepository,
+        )
+
+        return GetAttckCoverageUseCase(store=DjangoAttckCoverageRepository())
+
+    @staticmethod
     def build_finding_store() -> FindingStorePort:
         """The read/write store — the findings context's public data seam.
 
