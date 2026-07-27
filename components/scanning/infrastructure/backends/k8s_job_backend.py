@@ -111,8 +111,8 @@ class K8sJobBackend(ScanExecutionBackend):
             runtime_class_name=_RUNTIME_CLASS,
             security_context=client.V1PodSecurityContext(
                 run_as_non_root=True,
-                run_as_user=10001,
-                fs_group=10001,
+                run_as_user=spec.run_as_user or 10001,
+                fs_group=spec.run_as_user or 10001,
                 seccomp_profile=client.V1SeccompProfile(type="RuntimeDefault"),
             ),
             containers=[container],

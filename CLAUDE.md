@@ -110,15 +110,18 @@ still need trimming; fix the fixture, never baseline a real violation).
 - **Explicit Architecture** — the rule files in `.claude/rules/` are authoritative:
   `architecture-manifesto.md`, `bounded-context-structure.md`, `django-conventions.md`,
   `persistence-and-orm.md`, `performance.md`, `logging.md`, `repo-hygiene.md`, `dry-reuse.md`,
-  `no-shortcuts.md`, `verify-dont-guess.md`, `improve-dont-replicate.md`, `branching-strategy.md`.
-  Read them before structural changes. For structural/CNAPP work, **load the architecture skill
-  first** (`.claude/skills/architecture/SKILL.md` — the hub-and-spoke target + C1–C7 decoupling rules).
+  `no-shortcuts.md`, `verify-dont-guess.md`, `improve-dont-replicate.md`, `pin-versions.md`,
+  `branching-strategy.md`. Read them before structural changes. For structural/CNAPP work, **load
+  the architecture skill first** (`.claude/skills/architecture/SKILL.md` — the hub-and-spoke target
+  + C1–C7 decoupling rules).
 - **Verify, don't guess** — this is a fork; when something feels off, ground it (research online +
   MCPs, load the architecture skill, check the live system) before building on it. See
   `verify-dont-guess.md`.
 - **Improve, don't replicate** — don't blindly copy the fork's existing pattern; when there's room
   to improve (a superseded tool, fragile coupling, dead drift), dig in and fix it as you see it. See
   `improve-dont-replicate.md`.
+- **Pin versions, never `:latest`** — this is a security tool; every container image / dependency is
+  pinned to an explicit version (a digest for images we execute). See `pin-versions.md`.
 - **No shortcuts / bandaids** — recommend the root fix, never a symptom-masking stepping-stone.
 - **Reuse, don't reinvent** — grep for an existing model/service/adapter/util before building new.
 - **After model changes:** `makemigrations` + `migrate`; write + run unit tests for new

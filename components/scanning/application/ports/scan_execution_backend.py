@@ -38,6 +38,10 @@ class ScanJobSpec:
     env: dict[str, str] = field(default_factory=dict)  # non-secret env
     secret_env: dict[str, str] = field(default_factory=dict)  # creds — mounted, not logged
     timeout_seconds: int = 1800
+    # The non-root uid the engine container runs as. Default is the backend's hardened uid; an
+    # engine whose official image ships its own non-root user (e.g. Prowler's uid 1000, whose venv
+    # binary only its owner can reach) overrides it. Must be non-zero — never run a scan as root.
+    run_as_user: int | None = None
 
     def __post_init__(self) -> None:
         if not self.image:
@@ -48,6 +52,8 @@ class ScanJobSpec:
         # passed literally (no shell), and the caller has already validated untrusted refs.
         if any(not isinstance(a, str) for a in self.args):
             raise InvalidScanSpecError("ScanJobSpec.args must all be strings")
+        if self.run_as_user is not None and self.run_as_user <= 0:
+            raise InvalidScanSpecError("ScanJobSpec.run_as_user must be a non-root uid")
 
 
 @dataclass(frozen=True)
