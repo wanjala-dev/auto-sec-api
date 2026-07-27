@@ -61,3 +61,22 @@ class Finding(models.Model):
 
     def __str__(self) -> str:
         return f"[{self.severity}] {self.title}"
+
+
+class WorkspaceAttckCoverage(models.Model):
+    """Materialized MITRE ATT&CK coverage heatmap for a workspace (perf rule §6).
+
+    A background task aggregates the workspace's open findings by ATT&CK technique
+    into ``coverage`` (``{"tactics": [...], "totals": {...}}``); the HUD read is a
+    single-row SELECT. One row per workspace, overwritten on each recompute.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    workspace = models.OneToOneField(Workspace, on_delete=models.CASCADE, related_name="attck_coverage")
+    coverage = models.JSONField(default=dict, help_text="The heatmap blob: tactics → techniques with counts.")
+    technique_count = models.IntegerField(default=0)
+    finding_count = models.IntegerField(default=0)
+    computed_at = models.DateTimeField()
+
+    def __str__(self) -> str:
+        return f"ATT&CK coverage ({self.technique_count} techniques)"
