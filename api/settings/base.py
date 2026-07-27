@@ -120,6 +120,7 @@ INSTALLED_APPS = [
     "infrastructure.persistence.scanning",
     "infrastructure.persistence.findings",
     "infrastructure.persistence.cloud_graph",
+    "infrastructure.persistence.response",
     "infrastructure.persistence.ai",
     "infrastructure.persistence.recycle_bin",
     # ai submodules
@@ -348,6 +349,13 @@ WEBPUSH_VAPID_ADMIN_EMAIL = os.environ.get("WEBPUSH_VAPID_ADMIN_EMAIL", "")
 # either way; this flag flips the actual sender on. Off by default so no
 # environment sends emails until ops explicitly enables it.
 NOTIF_EMAIL_CHANNEL_ENABLED = os.environ.get("NOTIF_EMAIL_CHANNEL_ENABLED", "false").lower() == "true"
+
+# Reversible SOC response actions (roadmap #5): default every proposed action to a
+# DRY-RUN so approving one only permission-probes AWS (boto3 DryRun) rather than
+# mutating a real security group. Flip to "false" (per-deployment) only once the
+# audit role has been granted the narrow ec2:Revoke/AuthorizeSecurityGroupIngress
+# write permission — a deliberate, reviewable change, never the default.
+SOC_RESPONSE_DRY_RUN_DEFAULT = os.environ.get("SOC_RESPONSE_DRY_RUN_DEFAULT", "true").lower() == "true"
 
 AUTH_USER_MODEL = "users.CustomUser"
 
