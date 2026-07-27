@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
 from uuid import UUID
 
 from celery import shared_task
@@ -18,7 +17,5 @@ def recompute_workspace_attck_coverage(workspace_id: str) -> dict:
     from components.findings.application.providers.finding_provider import FindingProvider
 
     logger.info("recompute_attck_coverage started workspace_id=%s", workspace_id)
-    coverage = FindingProvider.build_recompute_attck_coverage_use_case().execute(
-        UUID(workspace_id), datetime.now(UTC)
-    )
+    coverage = FindingProvider.build_recompute_attck_coverage_use_case().execute(UUID(workspace_id), timezone.now())
     return {"success": True, "techniques": coverage["totals"]["techniques"]}

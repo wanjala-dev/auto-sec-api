@@ -8,8 +8,6 @@ scanners (cloud_posture, logwatch) populate the SSOT. Read-only; writes stay on 
 
 from __future__ import annotations
 
-from datetime import UTC
-
 from rest_framework import permissions
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -47,7 +45,6 @@ class AttckCoverageView(APIView):
     name = "findings-attck-coverage"
 
     def get(self, request, workspace_id):
-        from datetime import datetime
 
         from components.findings.api.resources.attck_coverage_resource import AttckCoverageResource
         from components.findings.application.providers.finding_provider import FindingProvider
@@ -59,9 +56,9 @@ class AttckCoverageView(APIView):
         if not is_workspace_member(user=request.user, workspace_id=workspace_id):
             return Response({"success": False, "error": "forbidden"}, status=403)
 
-        snapshot, is_stale = FindingProvider.build_get_attck_coverage_use_case().execute(
-            workspace_id, datetime.now(UTC)
-        )
+        # timezone.now() respects USE_TZ (=False here → naive), matching the ORM's naive
+        # computed_at so the staleness comparison never mixes naive/aware datetimes.
+        snapshot, is_stale = FindingProvider.build_get_attck_coverage_use_case().execute(workspace_id, timezone.now())
         if is_stale:
             recompute_workspace_attck_coverage.delay(str(workspace_id))
         return Response({"success": True, "data": AttckCoverageResource.from_snapshot(snapshot, refreshing=is_stale)})

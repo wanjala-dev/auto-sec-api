@@ -7,7 +7,7 @@ heavy aggregation never runs in the request path (perf rule §6).
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import UUID
 
 from components.findings.application.ports.attck_coverage_port import (
@@ -16,6 +16,14 @@ from components.findings.application.ports.attck_coverage_port import (
 )
 
 DEFAULT_TTL_SECONDS = 300
+
+
+def _as_aware(dt: datetime) -> datetime:
+    """Coerce a datetime to tz-aware (naive → UTC) so the staleness subtraction never
+    trips on a naive/aware mismatch. The project runs ``USE_TZ=False`` (the ORM returns
+    naive datetimes), so the caller should pass ``django.utils.timezone.now()``; this is
+    the belt-and-suspenders that keeps the use case correct for any caller."""
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
 
 
 class GetAttckCoverageUseCase:
@@ -28,5 +36,5 @@ class GetAttckCoverageUseCase:
         snapshot = self._store.get(workspace_id)
         if not snapshot.is_materialized:
             return snapshot, True
-        age = (now - snapshot.computed_at).total_seconds()
+        age = (_as_aware(now) - _as_aware(snapshot.computed_at)).total_seconds()
         return snapshot, age > ttl_seconds
