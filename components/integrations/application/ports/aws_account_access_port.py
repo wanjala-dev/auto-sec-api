@@ -13,6 +13,18 @@ only on ``integrations.application`` — never its models.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class AwsAccountRef:
+    """A scannable account + its target regions (from the workspace's connection).
+
+    ``regions`` empty means the connection didn't pin a set — the caller picks a
+    sensible default. Keeps callers off the ``AwsOrganizationConnection`` ORM."""
+
+    account_id: str
+    regions: tuple[str, ...] = ()
 
 
 class AwsAccountAccessPort(ABC):
@@ -31,3 +43,10 @@ class AwsAccountAccessPort(ABC):
         Raises ``LookupError`` if the workspace has no connection covering the
         account, and propagates assume-role failures from the credentials port.
         """
+
+    @abstractmethod
+    def accounts_for(self, workspace_id: str) -> list[AwsAccountRef]:
+        """Every scannable AWS account for the workspace + its target regions,
+        resolved from the workspace's CONNECTED connection. Empty list if the
+        workspace has no connection. Terminal account links (failed/suspended/
+        excluded) are skipped, mirroring the scanner fan-out."""

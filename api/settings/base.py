@@ -358,6 +358,12 @@ NOTIF_EMAIL_CHANNEL_ENABLED = os.environ.get("NOTIF_EMAIL_CHANNEL_ENABLED", "fal
 # write permission — a deliberate, reviewable change, never the default.
 SOC_RESPONSE_DRY_RUN_DEFAULT = os.environ.get("SOC_RESPONSE_DRY_RUN_DEFAULT", "true").lower() == "true"
 
+# Cloud-graph inventory source (ADR 0005 §7 #1): "finding_derived" (default — nodes
+# from Prowler findings, no edges) or "boto3" (the real collector: assume-role +
+# describe/list for live topology → nodes AND edges the attack-path analyzer walks).
+# Flip to "boto3" per-deployment once the audit role can read EC2/IAM (SecurityAudit).
+CLOUD_GRAPH_INVENTORY_SOURCE = os.environ.get("CLOUD_GRAPH_INVENTORY_SOURCE", "finding_derived")
+
 AUTH_USER_MODEL = "users.CustomUser"
 
 # Password validation

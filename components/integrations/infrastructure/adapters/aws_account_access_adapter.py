@@ -12,6 +12,7 @@ import logging
 
 from components.integrations.application.ports.aws_account_access_port import (
     AwsAccountAccessPort,
+    AwsAccountRef,
 )
 from components.integrations.application.providers.aws_credentials_provider import (
     get_aws_credentials_port,
@@ -21,6 +22,34 @@ logger = logging.getLogger(__name__)
 
 
 class AwsAccountAccessAdapter(AwsAccountAccessPort):
+    def accounts_for(self, workspace_id: str) -> list[AwsAccountRef]:
+        from infrastructure.persistence.integrations.models import (
+            AwsAccountLink,
+            AwsOrganizationConnection,
+        )
+
+        connection = AwsOrganizationConnection.objects.filter(
+            workspace_id=workspace_id, status=AwsOrganizationConnection.Status.CONNECTED
+        ).first()
+        if connection is None:
+            return []
+
+        regions = tuple(str(r) for r in (connection.regions or ()))
+        terminal = [
+            AwsAccountLink.Status.FAILED,
+            AwsAccountLink.Status.SUSPENDED,
+            AwsAccountLink.Status.EXCLUDED,
+        ]
+        account_ids = list(
+            AwsAccountLink.objects.filter(connection_id=connection.id)
+            .exclude(status__in=terminal)
+            .values_list("account_id", flat=True)
+        )
+        # No discovered links yet → the management account itself is scannable.
+        if not account_ids and connection.management_account_id:
+            account_ids = [connection.management_account_id]
+        return [AwsAccountRef(account_id=str(a), regions=regions) for a in account_ids]
+
     def credentials_for(
         self,
         *,

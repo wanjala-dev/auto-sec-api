@@ -21,8 +21,23 @@ class CloudGraphProvider:
 
     @staticmethod
     def build_asset_inventory():
-        """The ingestion adapter (spike §5). Prowler/SSOT-derived today; a CloudQuery
-        adapter can replace it here without touching the use case."""
+        """The ingestion adapter — selected by ``CLOUD_GRAPH_INVENTORY_SOURCE``.
+
+        - ``finding_derived`` (default): NODES only, aggregated from the Prowler
+          findings already in the SSOT (no extra AWS calls, no edges).
+        - ``boto3``: the real collector — assume-role + targeted ``describe``/``list``
+          for the live topology, producing NODES **and** the typed EDGES the
+          attack-path analyzer walks (ADR 0005 §7 #1). Flip on per-deployment once the
+          audit role can read EC2/IAM (SecurityAudit already covers it).
+        The use case never changes — this is the composition-root swap (Rule 5)."""
+        import os
+
+        if os.environ.get("CLOUD_GRAPH_INVENTORY_SOURCE", "finding_derived") == "boto3":
+            from components.cloud_graph.infrastructure.adapters.boto3_asset_inventory_adapter import (
+                Boto3AssetInventoryAdapter,
+            )
+
+            return Boto3AssetInventoryAdapter()
         from components.cloud_graph.infrastructure.adapters.finding_derived_inventory_adapter import (
             FindingDerivedInventoryAdapter,
         )
