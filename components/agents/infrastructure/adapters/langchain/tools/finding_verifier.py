@@ -31,6 +31,7 @@ from components.shared_kernel.utils.salient_tokens import salient_tokens
 _LOG_WATCH_SOURCE = "ai.log_watch"
 _LOG_OPTIMIZATION_SOURCE = "ai.log_optimization"
 _CLOUD_EXPOSURE_SOURCE = "ai.cloud_exposure"
+_CONTAINER_SECURITY_SOURCE = "ai.container_security"
 
 # A concrete optimization change (vs "reduce noise" hand-waving).
 _CONCRETE_CHANGE = (
@@ -122,6 +123,34 @@ def verify_suggestion(*, source_type: str, payload: dict, suggestion_text: str) 
             reason=(
                 f"The remediation names neither end of the attack path ({sample}) and reads as generic. "
                 "Name the exposed entry and/or the reachable target the fix breaks."
+            ),
+        )
+
+    if source_type == _CONTAINER_SECURITY_SOURCE:
+        # For a container CVE the grounding anchor is the fix that Trivy already told us:
+        # the remediation must name the package, the CVE id, or the fixed version — not
+        # generic "update your dependencies" boilerplate.
+        anchors = [
+            a
+            for a in (
+                str(payload.get("pkg_name") or "").strip().lower(),
+                str(payload.get("vulnerability_id") or "").strip().lower(),
+                str(payload.get("fixed_version") or "").strip().lower(),
+            )
+            if a
+        ]
+        if not anchors:
+            return VerifyResult(grounded=True, reason="")  # no checkable specifics
+        if any(a in text_l for a in anchors):
+            return VerifyResult(grounded=True, reason="")
+        sample = " / ".join(
+            s for s in (payload.get("pkg_name"), payload.get("vulnerability_id"), payload.get("fixed_version")) if s
+        )
+        return VerifyResult(
+            grounded=False,
+            reason=(
+                f"The remediation names none of the CVE's specifics ({sample}) and reads as generic. "
+                "Name the affected package, the CVE id, or the fixed version to upgrade to."
             ),
         )
 

@@ -69,7 +69,7 @@ def _event(finding: FindingEntity) -> FindingRaised:
     )
 
 
-def test_creates_operator_reading_board_card(workspace_factory):
+def test_creates_triaged_board_card(workspace_factory):
     ws = workspace_factory()
     finding = _seed_trivy_finding(ws)
 
@@ -78,8 +78,8 @@ def test_creates_operator_reading_board_card(workspace_factory):
     task = Task.objects.get(workspace=ws, source_type="ai.container_security")
     assert task.title.startswith("High:")
     assert "openssl" in task.title
-    # operator-reading (like cloud_posture) — NOT routed to a triage specialist yet
-    assert task.metadata["agent_type"] == "ai_teammate"
+    # routed to the CVE-triage specialist (slice 2)
+    assert task.metadata["agent_type"] == "triage_agent"
     assert task.metadata["payload"]["vulnerability_id"] == "CVE-2024-1234"
     assert task.metadata["payload"]["fixed_version"] == "3.0.14"
     assert task.metadata["payload"]["finding_id"] == str(finding.id)
