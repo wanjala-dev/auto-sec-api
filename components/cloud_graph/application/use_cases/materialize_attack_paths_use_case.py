@@ -19,6 +19,9 @@ from components.cloud_graph.application.ports.cloud_asset_store_port import Clou
 from components.cloud_graph.domain.entities.attack_path_entity import AttackPathEntity
 from components.cloud_graph.domain.services.attack_path_analyzer import AttackPathAnalyzer
 from components.cloud_graph.domain.services.attack_path_attck import build_attack_flow, techniques_for_category
+from components.cloud_graph.domain.services.attack_path_remediation_advisor import (
+    AttackPathRemediationAdvisor,
+)
 from components.shared_kernel.domain.events import AttackPathDetected, FindingObserved
 
 # Source tag for the Finding SSOT (owner-persists on FindingObserved) + the board handler
@@ -62,6 +65,16 @@ def _to_finding_observed(path: AttackPathEntity) -> FindingObserved:
     ``attributes["mitre"]`` so the board/HUD show the attack-flow without a lookup.
     """
     techniques = techniques_for_category(path.category)
+    # Specific, deterministic remediation on the TICKET at emission (read-only — the
+    # customer applies it, autosec never mutates their cloud): the advisor names the entry,
+    # the crown-jewel target, and how to sever the chain, grounded in the path's own
+    # resources. Reuses the advisor the triage agent uses, so the ticket is actionable
+    # immediately, without waiting for an LLM triage run.
+    suggestion = AttackPathRemediationAdvisor().suggest(
+        category=path.category.value,
+        entry_label=path.entry_label,
+        target_label=path.target_label,
+    )
     return FindingObserved(
         workspace_id=path.workspace_id,
         source=FINDING_SOURCE,
@@ -70,10 +83,7 @@ def _to_finding_observed(path: AttackPathEntity) -> FindingObserved:
         severity=path.severity.value,
         title=path.title,
         description=path.explanation,
-        remediation=(
-            "Break the chain: remove the public exposure of the entry asset, or strip the "
-            "over-privileged role/policy it can reach."
-        ),
+        remediation=suggestion.suggested_fix,
         compliance={"MITRE ATT&CK": [t.technique_id for t in techniques]},
         attributes={
             "agent_type": _TRIAGE_SPECIALIST,
