@@ -496,6 +496,25 @@ def _risk_gated(func, tool_name, explicit_risk, agent):
     return wrapper
 
 
+def _serialize_tool_result(func):
+    """Honor the ``ToolResult`` contract: a tool that returns a ``ToolResult`` gets it
+    ``.serialize()``-d to the string the LLM reads (see the ``ToolResult`` docstring).
+
+    Without this the raw dataclass reaches the model as an ugly ``repr`` (and a tool
+    returning a non-string trips the tool-smoke ``isinstance(result, str)`` guard). Any
+    other return type — a plain string, a refusal string from ``_risk_gated`` — passes
+    through unchanged. Applied as the outermost wrapper in the promotion loop so it
+    normalises every return path.
+    """
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        result = func(*args, **kwargs)
+        return result.serialize() if isinstance(result, ToolResult) else result
+
+    return wrapper
+
+
 # Status string constants (avoids importing the AgentExecution ORM model).
 EXECUTION_STATUS_COMPLETED = "completed"
 EXECUTION_STATUS_FAILED = "failed"
@@ -859,6 +878,9 @@ class BaseAgent(ABC):
                     meta.get("risk"),
                     self,
                 )
+                # Outermost: honor the ToolResult contract — serialize a ToolResult
+                # return to the string the LLM reads (str/refusal returns pass through).
+                func_to_register = _serialize_tool_result(func_to_register)
                 promoted.append(
                     StructuredTool.from_function(
                         func=func_to_register,
