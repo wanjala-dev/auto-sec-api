@@ -148,6 +148,7 @@ INSTALLED_APPS = [
     "components.workflow.cli",
     "components.sign_off.cli",
     "components.container_security.cli",
+    "components.cloud_graph.cli",
     # SaaS billing CLI/ready() wiring (subscription tiers + payments/Stripe).
     "components.subscription.cli",
     "components.payments.cli",
