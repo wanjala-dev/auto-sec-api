@@ -156,16 +156,18 @@ CANONICAL_TOOLS: dict[str, set[str]] = {
     "triage_agent": {
         # SOC triage specialist. Aliases: ``triage``, ``soc_triage``,
         # ``security_triage``. Files findings on the SOC board, triages
-        # pending log-watch AND cloud attack-path findings, and (rung-1
-        # HITL) opens draft PRs. The three task tools are the deliberate
-        # SHARED_TOOLS overlap with task_agent — see the declaration above.
+        # pending log-watch, cloud attack-path, AND container-CVE findings,
+        # and (rung-1 HITL) opens draft PRs. The three task tools are the
+        # deliberate SHARED_TOOLS overlap with task_agent — see above.
         "list_open_findings",
         "list_pending_log_findings",
         "list_pending_cloud_exposure_findings",
+        "list_pending_container_vuln_findings",
         "query_asset_graph",
         "enrich_indicator",
         "triage_finding",
         "triage_cloud_exposure",
+        "triage_container_vuln",
         "record_finding",
         "open_draft_pr",
         "assign_task",

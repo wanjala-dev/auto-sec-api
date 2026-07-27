@@ -156,6 +156,32 @@ class TriageAgent(WorkspaceContextMixin, BaseAgent):
         return triage_tools.triage_cloud_exposure(self, input_str)
 
     @tool(
+        name="list_pending_container_vuln_findings",
+        description=(
+            "List Trivy container-image vulnerability (CVE) findings on the SOC board that "
+            "have not been triaged yet. No input. Returns JSON: [{task_id, title, "
+            "vulnerability_id, pkg_name, fixed_version}]. Call this first, then "
+            "triage_container_vuln on each."
+        ),
+        risk=ToolRisk.READ,
+    )
+    def list_pending_container_vuln_findings(self, input_str: str = "") -> str:
+        return triage_tools.list_pending_container_vuln_findings(self, input_str)
+
+    @tool(
+        name="triage_container_vuln",
+        description=(
+            "Triage one pending container-image CVE finding: recommend the package upgrade "
+            "(or a mitigation when no fix exists), post it as a comment on the card, and "
+            'move the card into the Triage column. Input: JSON {"task_id": "<id>"} (or the '
+            "bare task_id). Reversible — safe for autonomous runs."
+        ),
+        risk=ToolRisk.REVERSIBLE_WRITE,
+    )
+    def triage_container_vuln(self, input_str: str) -> str:
+        return triage_tools.triage_container_vuln(self, input_str)
+
+    @tool(
         name="record_finding",
         description=(
             "File a triaged security finding as a task on the SOC board and "

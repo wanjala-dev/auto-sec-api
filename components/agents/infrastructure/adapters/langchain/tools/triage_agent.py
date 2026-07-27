@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 _LOG_WATCH_SOURCE = "ai.log_watch"
 _CLOUD_EXPOSURE_SOURCE = "ai.cloud_exposure"
+_CONTAINER_SECURITY_SOURCE = "ai.container_security"
 TRIAGE_COLUMN_TITLE = "Triage"
 
 
@@ -183,6 +184,94 @@ def triage_cloud_exposure(agent, input_str: str) -> str:
         agent,
         input_str,
         source_type=_CLOUD_EXPOSURE_SOURCE,
+        column_title=TRIAGE_COLUMN_TITLE,
+        acting_agent="triage_agent",
+        advise=advise,
+        build_comment=build_comment,
+        apply_payload=apply_payload,
+        describe_action=describe_action,
+        suggestion_text=suggestion_text,
+    )
+
+
+def list_pending_container_vuln_findings(agent, input_str: str = "") -> str:
+    """READ — list Trivy container-image CVE findings on the board not yet triaged."""
+    pending = fp.pending_findings_qs(agent.workspace_id, _CONTAINER_SECURITY_SOURCE)
+    if not pending:
+        return "No pending container-vulnerability findings to triage."
+    rows = []
+    for t in pending[:20]:
+        payload = (t.metadata or {}).get("payload") or {}
+        rows.append(
+            {
+                "task_id": str(t.id),
+                "title": t.title[:120],
+                "vulnerability_id": payload.get("vulnerability_id") or "",
+                "pkg_name": payload.get("pkg_name") or "",
+                "fixed_version": payload.get("fixed_version") or "",
+            }
+        )
+    return json.dumps(rows)
+
+
+def triage_container_vuln(agent, input_str: str) -> str:
+    """REVERSIBLE_WRITE — triage one pending container-image CVE finding: recommend the
+    package upgrade (or a mitigation when no fix exists), comment it, move the card to
+    Triage, and record the trace.
+
+    Same board choreography + concurrency guard + grounded-verification loop as
+    ``triage_finding`` (via ``process_pending_finding``); it supplies only the CVE-specific
+    advisor (``ContainerVulnRemediationAdvisor``), comment, and payload fields. The
+    suggestion is grounded in the finding's own evidence — it names the package + the fixed
+    version — so the ``finding_verifier`` / RubricMiddleware grader grades it against the CVE.
+    """
+    from components.container_security.domain.services.container_vuln_remediation_advisor import (
+        ContainerVulnRemediationAdvisor,
+    )
+
+    advisor = ContainerVulnRemediationAdvisor()
+
+    def advise(payload, feedback=""):
+        return advisor.suggest(
+            vulnerability_id=str(payload.get("vulnerability_id") or ""),
+            pkg_name=str(payload.get("pkg_name") or ""),
+            installed_version=str(payload.get("installed_version") or ""),
+            fixed_version=str(payload.get("fixed_version") or ""),
+            feedback=feedback,
+        )
+
+    def suggestion_text(suggestion):
+        # The grounding surface the verifier checks against the CVE evidence (it names the
+        # package + fixed version, the finding's checkable specifics).
+        return f"{suggestion.likely_cause} {suggestion.suggested_fix}"
+
+    def build_comment(suggestion):
+        if suggestion is None:
+            return (
+                "📦 Triage agent reviewed this vulnerability but could not derive a confident "
+                "remediation from the finding alone — needs a human eye."
+            )
+        return (
+            f"📦 Triage agent analysed this container vulnerability.\n\n"
+            f"Why it is a risk: {suggestion.likely_cause}\n\n"
+            f"How to fix it: {suggestion.suggested_fix}\n\n"
+            f"Confidence: {suggestion.confidence}."
+        )
+
+    def apply_payload(payload, suggestion):
+        payload["probable_cause"] = suggestion.likely_cause
+        payload["suggested_fix"] = suggestion.suggested_fix
+        payload["confidence"] = suggestion.confidence
+
+    def describe_action(suggestion):
+        if suggestion is None:
+            return "reviewed; no confident remediation from the finding"
+        return f"recommended a package upgrade ({suggestion.confidence} confidence)"
+
+    return fp.process_pending_finding(
+        agent,
+        input_str,
+        source_type=_CONTAINER_SECURITY_SOURCE,
         column_title=TRIAGE_COLUMN_TITLE,
         acting_agent="triage_agent",
         advise=advise,

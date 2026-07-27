@@ -191,7 +191,7 @@ def _build_container_security_card(finding, event, mapping) -> dict:
         "title": title,
         "summary": (summary or finding.description)[:2000],
         "source_type": mapping["source_type"],
-        "agent_type": "ai_teammate",  # operator-reading; triage routing is the next slice
+        "agent_type": "triage_agent",  # routed to the CVE-triage specialist (slice 2)
         "detector_key": mapping["detector_key"],
         "payload": payload,
         "context": {

@@ -58,8 +58,10 @@ RUBRICS = {
     "triage_agent": (
         "- Grounds in the finding's own evidence: for a log error, names the specific "
         "module/symbol/config from the error line; for a cloud attack path, names the "
-        "exposed entry and the crown-jewel target it reaches — never generic advice.\n"
-        "- The stated cause follows from that evidence (the error line, or the toxic edge chain).\n"
+        "exposed entry and the crown-jewel target it reaches; for a container CVE, names "
+        "the affected package and the fixed version — never generic advice.\n"
+        "- The stated cause follows from that evidence (the error line, the toxic edge chain, "
+        "or the vulnerable package).\n"
         "- The fix is a concrete next step an on-call engineer can act on."
     ),
     "optimization_agent": (
