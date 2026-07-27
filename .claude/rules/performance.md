@@ -238,15 +238,16 @@ class TransactionList(APIView):
 
 No APM / Datadog. Django logs every SQL query when `DEBUG=True`.
 
-1. Start the stack: `make up`.
-2. Hit the suspect endpoint from frontend or curl.
-3. Count queries:
+1. Bring the stack up: `kubectl apply -k k8s/overlays/local` (from `auto-sec-infra`). Ensure the
+   api deployment runs with `DEBUG=True` (the local overlay) so Django logs every query.
+2. Hit the suspect endpoint (via the `autosec.local` ingress or a port-forward) from the frontend or curl.
+3. Count queries in the api pod's logs:
    ```bash
-   make logs-web | grep -E "(SELECT|INSERT|UPDATE|DELETE) " | wc -l
+   kubectl -n autosec logs deploy/api | grep -E "(SELECT|INSERT|UPDATE|DELETE) " | wc -l
    ```
 4. If the count is disproportionate to the page (50+ queries for a 9-row list), find repeats:
    ```bash
-   make logs-web | grep -E "^\(" | sort | uniq -c | sort -rn | head
+   kubectl -n autosec logs deploy/api | grep -E "^\(" | sort | uniq -c | sort -rn | head
    ```
 5. Any query appearing `N+` times for an `N`-row list is an N+1. Trace it to the serializer field, fix in the repository.
 

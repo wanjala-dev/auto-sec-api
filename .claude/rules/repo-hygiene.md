@@ -33,7 +33,8 @@ components/MIGRATION_SUMMARY.txt
 - `README.md` — Project readme
 - `requirements/` — Python dependencies
 - `pyproject.toml`, `pytest.ini`, `setup.cfg` — Tool config
-- `manage.py`, `Dockerfile`, `docker-compose*.yml` — Infrastructure
+- `manage.py`, `Dockerfile` — Infrastructure (the k8s Kustomize stack lives in the separate
+  `auto-sec-infra` repo, not here; compose was retired 2026-07-26)
 - `.env*` — Environment config
 
 Everything else goes in `docs/` under the appropriate subdirectory:
