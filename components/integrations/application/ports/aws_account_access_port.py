@@ -31,3 +31,10 @@ class AwsAccountAccessPort(ABC):
         Raises ``LookupError`` if the workspace has no connection covering the
         account, and propagates assume-role failures from the credentials port.
         """
+
+    @abstractmethod
+    def accounts_for(self, workspace_id: str) -> list[str]:
+        """Return the account ids in the workspace that are scannable (non-terminal
+        ``AwsAccountLink``s across its connections). The companion to
+        ``credentials_for`` — lets a consumer iterate a workspace's accounts without
+        reaching into integrations' models. Empty list when there is no connection."""
