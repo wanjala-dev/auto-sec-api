@@ -82,6 +82,7 @@ jsonpatch==1.33
 jsonpointer==3.0.0
 jsonschema==4.17.3
 kombu==5.4.0
+kubernetes==31.0.0  # K8sJobBackend — ephemeral, hardened per-scan Jobs (ADR 0006)
 # ── LangChain 1.x stack (migrated 2026-07-19 to unlock deepagents.RubricMiddleware).
 # See docs/plans/LANGCHAIN_1X_MIGRATION_2026-07-18.md. deepagents 0.6.12 drives the
 # lower bounds: langchain>=1.3.11, langchain-core>=1.4.8, langchain-anthropic>=1.4.7.
