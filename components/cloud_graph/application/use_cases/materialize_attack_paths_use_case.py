@@ -18,6 +18,7 @@ from components.cloud_graph.application.ports.attack_path_store_port import Atta
 from components.cloud_graph.application.ports.cloud_asset_store_port import CloudAssetStorePort
 from components.cloud_graph.domain.entities.attack_path_entity import AttackPathEntity
 from components.cloud_graph.domain.services.attack_path_analyzer import AttackPathAnalyzer
+from components.cloud_graph.domain.services.attack_path_attck import techniques_for_category
 from components.shared_kernel.domain.events import AttackPathDetected, FindingObserved
 
 # Source tag for the Finding SSOT (owner-persists on FindingObserved) + the board handler
@@ -54,7 +55,13 @@ def _to_finding_observed(path: AttackPathEntity) -> FindingObserved:
     (C4) with any posture finding on the same asset — the triage agent sees both. The
     ``attributes`` carry everything the board-card builder + router need: the routing
     target (``triage_agent``), the impact score, and the path legs as evidence.
+
+    ATT&CK: the path category maps deterministically to a kill-chain-ordered technique
+    set. The technique ids ride in ``compliance`` (ATT&CK is a framework mapping, like
+    CIS — no new contract), and a rendered copy (id + name + tactic) rides in
+    ``attributes["mitre"]`` so the board/HUD show the attack-flow without a lookup.
     """
+    techniques = techniques_for_category(path.category)
     return FindingObserved(
         workspace_id=path.workspace_id,
         source=FINDING_SOURCE,
@@ -67,6 +74,7 @@ def _to_finding_observed(path: AttackPathEntity) -> FindingObserved:
             "Break the chain: remove the public exposure of the entry asset, or strip the "
             "over-privileged role/policy it can reach."
         ),
+        compliance={"MITRE ATT&CK": [t.technique_id for t in techniques]},
         attributes={
             "agent_type": _TRIAGE_SPECIALIST,
             "impact_score": int(path.risk_score),
@@ -79,6 +87,7 @@ def _to_finding_observed(path: AttackPathEntity) -> FindingObserved:
             "target_label": path.target_label,
             "target_asset_urn": path.target_asset_urn,
             "asset_urns": list(path.asset_urns),
+            "mitre": [t.to_dict() for t in techniques],
             "legs": [
                 {"src_label": leg.src_label, "relation": leg.relation, "dst_label": leg.dst_label} for leg in path.legs
             ],
