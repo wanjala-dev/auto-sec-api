@@ -57,13 +57,31 @@ def test_prowler_scanner_is_a_scanner_port_and_runs_the_engine():
     )
     result = scanner.scan(target)
 
-    # The engine ran on the backend exactly once, with the account/regions in argv and the
-    # assumed creds mounted as secret_env (never in argv).
+    # The engine ran on the backend exactly once: the official prowler CLI with native json-ocsf
+    # and the validated region, creds mounted as secret_env (never in the command).
     assert len(backend.calls) == 1
     spec = backend.calls[0]
     assert spec.source == "cloud_posture.prowler"
-    assert "123456789012" in spec.args
-    assert "us-east-1" in spec.args
-    assert "123456789012" not in " ".join(f"{k}={v}" for k, v in spec.secret_env.items())
+    script = spec.args[-1]  # ("sh", "-c", <script>)
+    assert "prowler aws" in script
+    assert "--output-formats json-ocsf" in script
+    assert "--region us-east-1" in script
+    # The account id is a label only — it must never enter the command line.
+    assert "123456789012" not in script
     assert spec.secret_env["AWS_ACCESS_KEY_ID"] == "x"
+    assert spec.run_as_user == 1000  # the official prowler image's non-root uid
     assert len(result.findings) == 2
+
+
+@pytest.mark.unit
+def test_prowler_scanner_rejects_a_malicious_region():
+    from components.cloud_posture.domain.aws_scan_target import InvalidAwsScanTargetError
+
+    scanner = ProwlerScanner(backend=RecordsBackend([]))
+    target = ScanTarget(
+        identifier="123456789012",
+        credentials={},
+        params={"regions": ["us-east-1; rm -rf /"]},  # injection attempt
+    )
+    with pytest.raises(InvalidAwsScanTargetError):
+        scanner.scan(target)

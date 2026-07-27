@@ -1,9 +1,9 @@
 """Test helper: a ScanExecutionBackend stub that replays canned OCSF records.
 
 Lets the Prowler scanner tests exercise the *real* ProwlerScanner + records_to_scan_result
-without a Prowler install — the stub feeds the runner's stdout protocol
-(``{"t":"progress"}`` then ``{"t":"result","records":[...]}``) to ``on_output_line``,
-exactly as the real backend does. Not a pytest module (leading underscore → not collected).
+without a Prowler install — the stub returns the OCSF records as the Job's ``stdout`` (a JSON
+array), exactly as the official-Prowler Job does (it ``cat``s its OCSF file to stdout). Not a
+pytest module (leading underscore → not collected).
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from components.scanning.application.ports.scan_execution_backend import ScanJob
 
 
 class RecordsBackend:
-    """A ``ScanExecutionBackend`` that yields ``records`` via the stdout protocol."""
+    """A ``ScanExecutionBackend`` that yields ``records`` as the OCSF JSON array on stdout."""
 
     def __init__(self, records: list):
         self._records = records
@@ -22,8 +22,4 @@ class RecordsBackend:
 
     def run(self, spec, *, on_progress=None, on_output_line=None) -> ScanJobResult:
         self.calls.append(spec)
-        if on_output_line is not None:
-            on_output_line(json.dumps({"t": "progress", "pct": 50.0}))
-            on_output_line(json.dumps({"t": "result", "records": self._records}))
-            on_output_line(json.dumps({"t": "done", "count": len(self._records)}))
-        return ScanJobResult(stdout="", exit_code=0)
+        return ScanJobResult(stdout=json.dumps(self._records), exit_code=0)

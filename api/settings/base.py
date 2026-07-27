@@ -620,14 +620,6 @@ PUSH_SUBSCRIPTION_PRUNE_AFTER_DAYS = int(os.environ.get("PUSH_SUBSCRIPTION_PRUNE
 PUSH_SUBSCRIPTION_STALE_AFTER_DAYS = int(os.environ.get("PUSH_SUBSCRIPTION_STALE_AFTER_DAYS", "180"))
 NOTIFICATION_DELIVERY_RETENTION_DAYS = int(os.environ.get("NOTIFICATION_DELIVERY_RETENTION_DAYS", "180"))
 
-# Cloud posture (CSPM) — path to the Prowler CLI. The dedicated cloud-posture
-# worker image sets this to its isolated venv (/opt/prowler/venv/bin/prowler);
-# elsewhere it stays "prowler" (only that worker runs scans).
-PROWLER_BIN = os.environ.get("PROWLER_BIN", "prowler")
-
-# The venv's Python (sibling of PROWLER_BIN) runs the SDK progress runner script
-# in-process for real per-check progress. Overridable; else derived from
-# PROWLER_BIN's directory so no separate env var is needed on the worker image.
-PROWLER_VENV_PYTHON = os.environ.get("PROWLER_VENV_PYTHON") or (
-    os.path.join(os.path.dirname(PROWLER_BIN), "python") if os.path.dirname(PROWLER_BIN) else "python"
-)
+# Cloud posture (CSPM) — Prowler runs as the OFFICIAL Prowler image via its native json-ocsf CLI
+# (ADR 0006 D4). The image is configured with the PROWLER_IMAGE env var, read in ProwlerScanner
+# (default toniblyx/prowler:<pinned>) — like TRIVY_IMAGE for the container-security scanner.
