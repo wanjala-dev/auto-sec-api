@@ -53,6 +53,10 @@ _PROWLER_BIN_DIR = "/home/prowler/.venv/bin"
 # The official image's non-root user (uid 1000); its venv binary is only reachable by that uid, so
 # the scan Job must run as it — not the backend's default hardened uid. Stable for the pinned digest.
 _PROWLER_UID = 1000
+# Prowler loads every provider SDK and accumulates an account's findings in-memory across all
+# regions; the backend's 2Gi default OOMKills a real scan (→ zero findings, silent). 4Gi carries
+# a full single-account scan with headroom. Override via PROWLER_MEMORY_LIMIT for larger estates.
+_PROWLER_MEM = os.environ.get("PROWLER_MEMORY_LIMIT", "4Gi")
 
 
 class ProwlerScanner(ScannerPort):
@@ -85,6 +89,7 @@ class ProwlerScanner(ScannerPort):
                 env={"HOME": "/tmp"},  # prowler config/cache under the writable /tmp (readOnlyRootFS)
                 secret_env=_aws_secret_env(target.credentials),
                 run_as_user=_PROWLER_UID,  # the official image's uid; the venv binary needs it
+                memory_limit=_PROWLER_MEM,  # 2Gi default OOMKills a full account scan → 0 findings
             ),
             on_progress=on_progress,  # K8s elapsed-time heartbeat (Prowler has no stdout progress)
         )

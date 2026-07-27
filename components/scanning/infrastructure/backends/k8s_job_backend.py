@@ -97,7 +97,7 @@ class K8sJobBackend(ScanExecutionBackend):
             volume_mounts=[client.V1VolumeMount(name="scratch", mount_path="/tmp")],
             resources=client.V1ResourceRequirements(
                 requests={"memory": "256Mi", "cpu": "250m", "ephemeral-storage": "1Gi"},
-                limits={"memory": "2Gi", "cpu": "2", "ephemeral-storage": "4Gi"},
+                limits={"memory": spec.memory_limit or "2Gi", "cpu": "2", "ephemeral-storage": "4Gi"},
             ),
             security_context=client.V1SecurityContext(
                 allow_privilege_escalation=False,

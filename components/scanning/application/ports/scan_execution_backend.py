@@ -42,6 +42,11 @@ class ScanJobSpec:
     # engine whose official image ships its own non-root user (e.g. Prowler's uid 1000, whose venv
     # binary only its owner can reach) overrides it. Must be non-zero — never run a scan as root.
     run_as_user: int | None = None
+    # The container memory limit (a k8s quantity string, e.g. "2Gi"). Default suits the light
+    # engines (Trivy reads a local image tarball). A heavy engine that loads every provider SDK
+    # and enumerates a whole account in-memory (Prowler, all regions) overrides it upward — at
+    # 2Gi a real Prowler account scan is OOMKilled and silently yields zero findings.
+    memory_limit: str | None = None
 
     def __post_init__(self) -> None:
         if not self.image:

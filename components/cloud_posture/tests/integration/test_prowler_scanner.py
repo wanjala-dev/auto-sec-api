@@ -70,6 +70,9 @@ def test_prowler_scanner_is_a_scanner_port_and_runs_the_engine():
     assert "123456789012" not in script
     assert spec.secret_env["AWS_ACCESS_KEY_ID"] == "x"
     assert spec.run_as_user == 1000  # the official prowler image's non-root uid
+    # A full account scan loads every provider SDK + accumulates findings in-memory; the backend's
+    # 2Gi default OOMKills it (→ 0 findings, silent). Prowler must ask for headroom.
+    assert spec.memory_limit == "4Gi"
     assert len(result.findings) == 2
 
 
