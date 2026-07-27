@@ -18,7 +18,7 @@ from components.cloud_graph.application.ports.attack_path_store_port import Atta
 from components.cloud_graph.application.ports.cloud_asset_store_port import CloudAssetStorePort
 from components.cloud_graph.domain.entities.attack_path_entity import AttackPathEntity
 from components.cloud_graph.domain.services.attack_path_analyzer import AttackPathAnalyzer
-from components.cloud_graph.domain.services.attack_path_attck import techniques_for_category
+from components.cloud_graph.domain.services.attack_path_attck import build_attack_flow, techniques_for_category
 from components.shared_kernel.domain.events import AttackPathDetected, FindingObserved
 
 # Source tag for the Finding SSOT (owner-persists on FindingObserved) + the board handler
@@ -88,6 +88,7 @@ def _to_finding_observed(path: AttackPathEntity) -> FindingObserved:
             "target_asset_urn": path.target_asset_urn,
             "asset_urns": list(path.asset_urns),
             "mitre": [t.to_dict() for t in techniques],
+            "attack_flow": build_attack_flow(path.entry_label, path.legs),
             "legs": [
                 {"src_label": leg.src_label, "relation": leg.relation, "dst_label": leg.dst_label} for leg in path.legs
             ],

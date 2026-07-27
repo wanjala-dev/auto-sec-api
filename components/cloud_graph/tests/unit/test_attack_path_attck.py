@@ -10,11 +10,55 @@ import pytest
 from components.cloud_graph.application.use_cases.materialize_attack_paths_use_case import (
     _to_finding_observed,
 )
-from components.cloud_graph.domain.services.attack_path_attck import techniques_for_category
+from components.cloud_graph.domain.services.attack_path_attck import (
+    build_attack_flow,
+    technique_for_relation,
+    techniques_for_category,
+)
 from components.cloud_graph.domain.value_objects.attack_path import AttackPathCategory
 from components.shared_kernel.domain.mitre import TECHNIQUES, MitreTactic
 
 pytestmark = pytest.mark.unit
+
+
+def _leg(relation, dst_label="dst"):
+    return SimpleNamespace(src_label="src", relation=relation, dst_label=dst_label)
+
+
+class TestRelationMapping:
+    def test_known_relations_map_to_techniques(self):
+        assert technique_for_relation("can_assume").technique_id == "T1078.004"
+        assert technique_for_relation("has_policy").technique_id == "T1098.003"
+        assert technique_for_relation("reads_bucket").technique_id == "T1530"
+        assert technique_for_relation("allows_ingress_from").technique_id == "T1190"
+
+    def test_structural_relation_has_no_technique(self):
+        assert technique_for_relation("attached_to") is None
+        assert technique_for_relation("in_subnet") is None
+
+    def test_every_relation_technique_is_catalogued(self):
+        for rel in ("can_assume", "has_policy", "reads_bucket", "allows_ingress_from", "routes_to_igw"):
+            assert technique_for_relation(rel).technique_id in TECHNIQUES
+
+
+class TestAttackFlow:
+    def test_flow_starts_at_public_entry(self):
+        flow = build_attack_flow("i-abc", [_leg("can_assume", "AdminRole")])
+        assert flow[0]["label"] == "i-abc"
+        assert flow[0]["technique_id"] == "T1190"  # entry = Initial Access
+        assert flow[0]["relation"] is None
+
+    def test_flow_appends_one_step_per_mapped_leg(self):
+        flow = build_attack_flow(
+            "i-abc",
+            [_leg("can_assume", "role"), _leg("has_policy", "AdminPolicy"), _leg("reads_bucket", "secrets")],
+        )
+        assert [s["technique_id"] for s in flow] == ["T1190", "T1078.004", "T1098.003", "T1530"]
+        assert flow[1]["label"] == "role" and flow[1]["relation"] == "can_assume"
+
+    def test_structural_legs_are_skipped(self):
+        flow = build_attack_flow("i-abc", [_leg("attached_to"), _leg("can_assume", "role")])
+        assert [s["technique_id"] for s in flow] == ["T1190", "T1078.004"]
 
 
 class TestCategoryMapping:
@@ -69,3 +113,11 @@ class TestFindingEmission:
         assert mitre[0]["tactic"] == "initial_access"
         assert mitre[0]["name"] == "Exploit Public-Facing Application"
         assert mitre[0]["url"].startswith("https://attack.mitre.org/")
+
+    def test_attributes_carry_per_hop_attack_flow(self):
+        # slice 2: entry (Initial Access) then the can_assume leg (Priv-Esc).
+        finding = _to_finding_observed(_fake_path())
+        flow = finding.attributes["attack_flow"]
+        assert [s["technique_id"] for s in flow] == ["T1190", "T1078.004"]
+        assert flow[0]["label"] == "i-abc" and flow[0]["relation"] is None
+        assert flow[1]["label"] == "AdminRole" and flow[1]["relation"] == "can_assume"
