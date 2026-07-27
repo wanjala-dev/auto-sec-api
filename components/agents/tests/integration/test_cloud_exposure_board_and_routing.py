@@ -58,6 +58,14 @@ def _seed_attack_path_finding(ws) -> FindingEntity:
             "target_label": "AdministratorAccess",
             "target_asset_urn": "urn:aws_iam_policy:arn:iam:admin",
             "asset_urns": ["urn:aws_ec2_instance:arn:ec2:web", "urn:x", "urn:aws_iam_policy:arn:iam:admin"],
+            "mitre": [
+                {"technique_id": "T1190", "name": "Exploit Public-Facing Application", "tactic": "initial_access"},
+                {
+                    "technique_id": "T1078.004",
+                    "name": "Valid Accounts: Cloud Accounts",
+                    "tactic": "privilege_escalation",
+                },
+            ],
             "legs": [
                 {"src_label": "web-frontend", "relation": "can_assume", "dst_label": "app-exec-role"},
                 {"src_label": "app-exec-role", "relation": "has_policy", "dst_label": "AdministratorAccess"},
@@ -101,6 +109,8 @@ def test_creates_triaged_board_card(workspace_factory):
     assert task.metadata["payload"]["category"] == "public_compute_admin"
     # the path legs are carried as evidence
     assert any("can_assume" in line for line in task.metadata["payload"]["evidence"])
+    # the ATT&CK attack-flow is surfaced on the card (kill-chain order)
+    assert [m["technique_id"] for m in task.metadata["payload"]["mitre"]] == ["T1190", "T1078.004"]
 
 
 def test_reraise_is_idempotent_no_duplicate_card(workspace_factory):
