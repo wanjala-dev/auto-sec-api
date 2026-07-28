@@ -82,6 +82,24 @@ class CloudGraphProvider:
         )
 
     @staticmethod
+    def build_get_exposure_summary_use_case():
+        """The read use case backing the HUD's Attack-Surface + Asset-Inventory cards.
+
+        Reads the graph store (asset counts by exposure/type + public asset URNs) and the
+        findings SSOT (open critical/high asset URNs, via the findings store port — C3),
+        then correlates by URN (C4). All real counts; no fabricated coverage %."""
+        from components.cloud_graph.application.use_cases.get_exposure_summary_use_case import (
+            GetExposureSummaryUseCase,
+        )
+        from components.findings.application.providers.finding_provider import FindingProvider
+
+        return GetExposureSummaryUseCase(
+            asset_store=CloudGraphProvider.build_cloud_asset_store(),
+            finding_store=FindingProvider.build_finding_store(),
+            attack_path_store=CloudGraphProvider.build_attack_path_store(),
+        )
+
+    @staticmethod
     def build_materialize_attack_paths_use_case():
         """The correlation JOB the ``cloud_graph.attack_paths`` detector drives — reads the
         graph, ranks toxic combinations, replaces the materialised table, emits events."""

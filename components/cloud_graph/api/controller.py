@@ -73,3 +73,26 @@ class RiskScoreView(APIView):
 
         score = CloudGraphProvider.build_get_risk_score_use_case().execute(workspace_id)
         return Response({"success": True, "data": RiskScoreResource.of(score)})
+
+
+class ExposureSummaryView(APIView):
+    """GET /cloud-graph/workspaces/<ws>/exposure-summary/ — the cloud attack-surface +
+    asset-inventory rollup the HUD's Attack-Surface / Asset cards read.
+
+    Real counts only: assets by exposure + type, internet-exposed assets carrying an open
+    critical/high finding (correlated by asset_urn), and the live attack-path count.
+    """
+
+    permission_classes = (permissions.IsAuthenticated,)
+    name = "cloud-graph-exposure-summary"
+
+    def get(self, request, workspace_id):
+        from components.cloud_graph.api.resources.exposure_summary_resource import ExposureSummaryResource
+        from components.cloud_graph.application.providers.cloud_graph_provider import CloudGraphProvider
+        from components.cloud_graph.infrastructure.services.workspace_access import is_workspace_member
+
+        if not is_workspace_member(user=request.user, workspace_id=workspace_id):
+            return Response({"success": False, "error": "forbidden"}, status=403)
+
+        summary = CloudGraphProvider.build_get_exposure_summary_use_case().execute(workspace_id)
+        return Response({"success": True, "data": ExposureSummaryResource.of(summary)})

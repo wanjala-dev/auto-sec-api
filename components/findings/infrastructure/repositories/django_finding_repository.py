@@ -75,6 +75,16 @@ class DjangoFindingRepository(FindingStorePort):
             workspace_id, severity=severity, status=status, source=source, asset_urn=asset_urn
         ).count()
 
+    def open_finding_asset_urns(self, workspace_id: UUID, *, severities: tuple[str, ...]) -> set[str]:
+        from infrastructure.persistence.findings.models import Finding
+
+        return set(
+            Finding.objects.filter(workspace_id=workspace_id, status="open", severity__in=list(severities))
+            .exclude(asset_urn="")
+            .values_list("asset_urn", flat=True)
+            .distinct()
+        )
+
     def upsert(self, finding: FindingEntity) -> None:
         from infrastructure.persistence.findings.models import Finding
 

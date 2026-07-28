@@ -72,6 +72,40 @@ class DjangoCloudGraphRepository(CloudAssetStorePort):
         rows = qs.select_related("workspace").order_by("-last_seen_at")[offset : offset + limit]
         return [to_asset_entity(obj) for obj in rows]
 
+    def count_by_exposure(self, workspace_id: UUID) -> dict[str, int]:
+        from django.db.models import Count
+
+        from infrastructure.persistence.cloud_graph.models import CloudAsset
+
+        rows = (
+            CloudAsset.objects.filter(workspace_id=workspace_id, is_deleted=False)
+            .values("exposure")
+            .annotate(n=Count("id"))
+        )
+        return {r["exposure"]: r["n"] for r in rows}
+
+    def count_by_type(self, workspace_id: UUID, *, top: int = 8) -> list[tuple[str, int]]:
+        from django.db.models import Count
+
+        from infrastructure.persistence.cloud_graph.models import CloudAsset
+
+        rows = (
+            CloudAsset.objects.filter(workspace_id=workspace_id, is_deleted=False)
+            .values("resource_type")
+            .annotate(n=Count("id"))
+            .order_by("-n")[:top]
+        )
+        return [(r["resource_type"], r["n"]) for r in rows]
+
+    def list_public_asset_urns(self, workspace_id: UUID) -> list[str]:
+        from infrastructure.persistence.cloud_graph.models import CloudAsset
+
+        return list(
+            CloudAsset.objects.filter(workspace_id=workspace_id, is_deleted=False, exposure="public")
+            .exclude(asset_urn="")
+            .values_list("asset_urn", flat=True)
+        )
+
     def list_edges_from(self, workspace_id: UUID, src_asset_id: UUID) -> list[CloudAssetEdgeEntity]:
         from infrastructure.persistence.cloud_graph.models import CloudAssetEdge
 

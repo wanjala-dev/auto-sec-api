@@ -48,5 +48,13 @@ class FindingStorePort(ABC):
         """Total findings matching the same filter set (for pagination). Read side."""
 
     @abstractmethod
+    def open_finding_asset_urns(self, workspace_id: UUID, *, severities: tuple[str, ...]) -> set[str]:
+        """Distinct non-empty asset_urns of OPEN findings at the given severities.
+
+        The cross-pillar correlation read (C4): intersected with the graph's public asset
+        URNs to find internet-exposed assets that carry an unresolved critical/high finding.
+        """
+
+    @abstractmethod
     def upsert(self, finding: FindingEntity) -> None:
         """Insert or update the finding, keyed by its (workspace, source, fingerprint) identity."""
