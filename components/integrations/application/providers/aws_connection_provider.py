@@ -25,7 +25,11 @@ def get_aws_connection_service() -> AwsConnectionService:
 
 def get_onboarding_template_use_case() -> GenerateOnboardingTemplateUseCase:
     from components.integrations.infrastructure.adapters.vendor_account_adapter import (
+        resolve_hosted_cfn_template_url,
         resolve_vendor_account_id,
     )
 
-    return GenerateOnboardingTemplateUseCase(_vendor_account_resolver=resolve_vendor_account_id)
+    return GenerateOnboardingTemplateUseCase(
+        _vendor_account_resolver=resolve_vendor_account_id,
+        _template_url_resolver=resolve_hosted_cfn_template_url,
+    )

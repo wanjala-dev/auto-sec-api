@@ -21,3 +21,12 @@ def resolve_vendor_account_id() -> str:
             "platform's AWS account id before generating onboarding templates."
         )
     return acct
+
+
+def resolve_hosted_cfn_template_url() -> str:
+    """The public S3 URL of the hosted parameterized CloudFormation template — powers the
+    one-click 'Launch Stack' link. Optional: unset → "" → the wizard falls back to
+    copy-the-template. Settings/env, same pattern as the vendor account id."""
+    from django.conf import settings
+
+    return getattr(settings, "AUTOSEC_CFN_TEMPLATE_URL", "") or os.environ.get("AUTOSEC_CFN_TEMPLATE_URL", "")
