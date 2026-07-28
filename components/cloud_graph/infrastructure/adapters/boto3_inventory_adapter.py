@@ -171,7 +171,8 @@ class Boto3InventoryAdapter(AssetInventoryPort):
         self._collect_iam(session, account_id, mk, add, edges)
         self._collect_s3(session, account_id, mk, add)
         for region in self._regions:
-            self._collect_ec2(session, account_id, region, mk, add, edges)
+            net = self._collect_network(session, account_id, region, mk, add, edges)
+            self._collect_ec2(session, account_id, region, mk, add, edges, net)
 
         # Fan a role's "reads S3" grant (Resource "*" or s3:*) out to every bucket node —
         # the coarse data-reach edge for slice 1 (precise bucket-ARN matching is a follow-up).
@@ -184,7 +185,7 @@ class Boto3InventoryAdapter(AssetInventoryPort):
                 expanded.append(edge)
         return assets, expanded
 
-    def _collect_ec2(self, session, account_id, region, mk, add, edges):
+    def _collect_ec2(self, session, account_id, region, mk, add, edges, net):
         try:
             ec2 = session.client("ec2", region_name=region)
             paginator = ec2.get_paginator("describe_instances")
@@ -195,16 +196,41 @@ class Boto3InventoryAdapter(AssetInventoryPort):
                         if not iid:
                             continue
                         arn = f"arn:aws:ec2:{region}:{account_id}:instance/{iid}"
-                        public = bool(inst.get("PublicIpAddress")) or bool(
-                            inst.get("NetworkInterfaces", [{}])[0].get("Association", {}).get("PublicIp")
-                            if inst.get("NetworkInterfaces")
-                            else False
+                        nics = inst.get("NetworkInterfaces") or []
+                        has_public_ip = bool(inst.get("PublicIpAddress")) or any(
+                            (nic.get("Association") or {}).get("PublicIp") for nic in nics
                         )
+                        subnet_id = inst.get("SubnetId") or (nics[0].get("SubnetId") if nics else None)
+                        sg_ids = [g.get("GroupId") for g in inst.get("SecurityGroups", []) if g.get("GroupId")]
+                        open_sg_ids = [s for s in sg_ids if s in net["open_sgs"]]
+
+                        # Real reachability, not a public-IP heuristic: an internet-routable
+                        # path (a public IP or a subnet whose route table reaches an IGW) AND an
+                        # open firewall (a security group allowing 0.0.0.0/0 ingress). A public IP
+                        # behind a closed SG is NOT reachable — this cuts false-positive entries.
+                        in_public_subnet = subnet_id in net["public_subnets"]
+                        routable = has_public_ip or in_public_subnet
+                        reachable = routable and bool(open_sg_ids)
+                        exposure = Exposure.PUBLIC if reachable else Exposure.INTERNAL if routable else Exposure.PRIVATE
+
                         name = next(
                             (t["Value"] for t in inst.get("Tags", []) if t.get("Key") == "Name"),
                             iid,
                         )
-                        add(mk(arn, "AwsEc2Instance", Exposure.PUBLIC if public else Exposure.PRIVATE, name, region))
+                        add(
+                            mk(
+                                arn,
+                                "AwsEc2Instance",
+                                exposure,
+                                name,
+                                region,
+                                attrs={"public_ip": has_public_ip, "open_to_internet": bool(open_sg_ids)},
+                            )
+                        )
+                        if subnet_id and subnet_id in net["subnet_arns"]:
+                            edges.append(_Edge(arn, net["subnet_arns"][subnet_id], AssetRelation.IN_SUBNET))
+                        for sid in open_sg_ids:
+                            edges.append(_Edge(arn, net["sg_arns"][sid], AssetRelation.ALLOWS_INGRESS_FROM))
                         prof = (inst.get("IamInstanceProfile") or {}).get("Arn")
                         if prof:
                             # Instance profile arn: arn:aws:iam::acct:instance-profile/Name
@@ -212,6 +238,103 @@ class Boto3InventoryAdapter(AssetInventoryPort):
                             edges.append(_Edge(arn, prof, AssetRelation.ATTACHED_TO))
         except Exception:
             logger.exception("boto3_inventory ec2 enumerate failed account=%s region=%s", account_id, region)
+
+    def _collect_network(self, session, account_id, region, mk, add, edges) -> dict:
+        """Enumerate the VPC network: subnets, route-table→IGW reachability, and security-group
+        internet-exposure — the inputs that decide whether an instance is REALLY reachable.
+        Adds subnet / IGW / security-group nodes + the topology edges, and returns the maps
+        ``_collect_ec2`` reads. Best-effort: a failure degrades EC2 to the public-IP heuristic.
+        """
+        empty = {"open_sgs": {}, "public_subnets": set(), "subnet_arns": {}, "sg_arns": {}}
+        try:
+            ec2 = session.client("ec2", region_name=region)
+
+            def _arn(kind, rid):
+                return f"arn:aws:ec2:{region}:{account_id}:{kind}/{rid}"
+
+            # IGWs by VPC (an attached IGW is the door to the internet).
+            vpc_igw: dict[str, str] = {}
+            for page in ec2.get_paginator("describe_internet_gateways").paginate():
+                for igw in page.get("InternetGateways", []):
+                    gid = igw.get("InternetGatewayId")
+                    if not gid:
+                        continue
+                    garn = _arn("internet-gateway", gid)
+                    add(mk(garn, "AwsEc2InternetGateway", Exposure.PUBLIC, gid, region))
+                    for att in igw.get("Attachments", []):
+                        if att.get("VpcId"):
+                            vpc_igw[att["VpcId"]] = garn
+
+            # Route tables → which subnets have a default route to an IGW (public subnets).
+            main_public: dict[str, bool] = {}  # vpc_id → main route table is public
+            explicit_public: dict[str, bool] = {}  # subnet_id → its route table is public
+            for page in ec2.get_paginator("describe_route_tables").paginate():
+                for rt in page.get("RouteTables", []):
+                    to_igw = any(
+                        str(r.get("GatewayId", "")).startswith("igw-") and r.get("DestinationCidrBlock") == "0.0.0.0/0"
+                        for r in rt.get("Routes", [])
+                    )
+                    for a in rt.get("Associations", []):
+                        if a.get("Main") and rt.get("VpcId"):
+                            main_public[rt["VpcId"]] = to_igw
+                        if a.get("SubnetId"):
+                            explicit_public[a["SubnetId"]] = to_igw
+
+            # Subnets → node + public/private exposure + ROUTES_TO_IGW edge.
+            subnet_arns: dict[str, str] = {}
+            public_subnets: set[str] = set()
+            for page in ec2.get_paginator("describe_subnets").paginate():
+                for s in page.get("Subnets", []):
+                    sid = s.get("SubnetId")
+                    if not sid:
+                        continue
+                    vpc_id = s.get("VpcId")
+                    is_public = explicit_public.get(sid, main_public.get(vpc_id, False))
+                    sarn = _arn("subnet", sid)
+                    subnet_arns[sid] = sarn
+                    add(mk(sarn, "AwsEc2Subnet", Exposure.PUBLIC if is_public else Exposure.PRIVATE, sid, region))
+                    if is_public:
+                        public_subnets.add(sid)
+                        if vpc_id in vpc_igw:
+                            edges.append(_Edge(sarn, vpc_igw[vpc_id], AssetRelation.ROUTES_TO_IGW))
+
+            # Security groups → node + which open 0.0.0.0/0 (or ::/0) ingress.
+            sg_arns: dict[str, str] = {}
+            open_sgs: dict[str, str] = {}
+            for page in ec2.get_paginator("describe_security_groups").paginate():
+                for sg in page.get("SecurityGroups", []):
+                    gid = sg.get("GroupId")
+                    if not gid:
+                        continue
+                    open_internet = any(
+                        any(r.get("CidrIp") == "0.0.0.0/0" for r in perm.get("IpRanges", []))
+                        or any(r.get("CidrIpv6") == "::/0" for r in perm.get("Ipv6Ranges", []))
+                        for perm in sg.get("IpPermissions", [])
+                    )
+                    garn = _arn("security-group", gid)
+                    sg_arns[gid] = garn
+                    add(
+                        mk(
+                            garn,
+                            "AwsEc2SecurityGroup",
+                            Exposure.PUBLIC if open_internet else Exposure.INTERNAL,
+                            sg.get("GroupName", gid),
+                            region,
+                            attrs={"open_from_internet": open_internet},
+                        )
+                    )
+                    if open_internet:
+                        open_sgs[gid] = garn
+
+            return {
+                "open_sgs": open_sgs,
+                "public_subnets": public_subnets,
+                "subnet_arns": subnet_arns,
+                "sg_arns": sg_arns,
+            }
+        except Exception:
+            logger.exception("boto3_inventory network enumerate failed account=%s region=%s", account_id, region)
+            return empty
 
     def _collect_iam(self, session, account_id, mk, add, edges):
         try:

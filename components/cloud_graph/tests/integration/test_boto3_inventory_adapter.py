@@ -28,25 +28,60 @@ class _Paginator:
 
 
 class _FakeEc2:
-    def get_paginator(self, _name):
-        return _Paginator(
-            [
-                {
-                    "Reservations": [
-                        {
-                            "Instances": [
-                                {
-                                    "InstanceId": "i-0abc",
-                                    "PublicIpAddress": "203.0.113.7",
-                                    "IamInstanceProfile": {"Arn": f"arn:aws:iam::{_ACCOUNT}:instance-profile/app"},
-                                    "Tags": [{"Key": "Name", "Value": "web"}],
-                                }
-                            ]
-                        }
-                    ]
-                }
-            ]
-        )
+    """A public instance in a public subnet (route → IGW) behind an open SG, plus an
+    optional closed-SG variant to prove reachability gating."""
+
+    def __init__(self, sg_open=True):
+        self._sg_open = sg_open
+
+    def get_paginator(self, name):
+        if name == "describe_instances":
+            return _Paginator(
+                [
+                    {
+                        "Reservations": [
+                            {
+                                "Instances": [
+                                    {
+                                        "InstanceId": "i-0abc",
+                                        "PublicIpAddress": "203.0.113.7",
+                                        "SubnetId": "subnet-pub",
+                                        "SecurityGroups": [{"GroupId": "sg-web"}],
+                                        "IamInstanceProfile": {"Arn": f"arn:aws:iam::{_ACCOUNT}:instance-profile/app"},
+                                        "Tags": [{"Key": "Name", "Value": "web"}],
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            )
+        if name == "describe_internet_gateways":
+            return _Paginator(
+                [{"InternetGateways": [{"InternetGatewayId": "igw-1", "Attachments": [{"VpcId": "vpc-1"}]}]}]
+            )
+        if name == "describe_route_tables":
+            return _Paginator(
+                [
+                    {
+                        "RouteTables": [
+                            {
+                                "VpcId": "vpc-1",
+                                "Routes": [{"GatewayId": "igw-1", "DestinationCidrBlock": "0.0.0.0/0"}],
+                                "Associations": [{"SubnetId": "subnet-pub", "Main": False}],
+                            }
+                        ]
+                    }
+                ]
+            )
+        if name == "describe_subnets":
+            return _Paginator([{"Subnets": [{"SubnetId": "subnet-pub", "VpcId": "vpc-1"}]}])
+        if name == "describe_security_groups":
+            perms = [{"IpRanges": [{"CidrIp": "0.0.0.0/0"}]}] if self._sg_open else [{"IpRanges": []}]
+            return _Paginator(
+                [{"SecurityGroups": [{"GroupId": "sg-web", "GroupName": "web-sg", "IpPermissions": perms}]}]
+            )
+        return _Paginator([])
 
 
 class _FakeIam:
@@ -92,8 +127,11 @@ class _FakeS3:
 
 
 class _FakeSession:
+    def __init__(self, sg_open=True):
+        self._sg_open = sg_open
+
     def client(self, name, region_name=None):
-        return {"ec2": _FakeEc2(), "iam": _FakeIam(), "s3": _FakeS3()}[name]
+        return {"ec2": _FakeEc2(sg_open=self._sg_open), "iam": _FakeIam(), "s3": _FakeS3()}[name]
 
 
 class _FakeAccess:
@@ -117,16 +155,40 @@ def test_boto3_adapter_synthesizes_a_public_compute_admin_path(workspace_factory
 
     result = adapter.sync_workspace(workspace_id)
 
-    # instance + instance-profile + role + admin policy + bucket
-    assert result.assets_upserted >= 5
-    # ATTACHED_TO (instance→profile), CAN_ASSUME (profile→role), HAS_POLICY (role→policy), READS_BUCKET
-    assert result.edges_upserted >= 4
+    # instance + instance-profile + role + admin policy + bucket + subnet + sg + igw
+    assert result.assets_upserted >= 7
+    # slice-1 edges (ATTACHED_TO/CAN_ASSUME/HAS_POLICY/READS_BUCKET) + topology
+    # (IN_SUBNET, ALLOWS_INGRESS_FROM, ROUTES_TO_IGW)
+    assert result.edges_upserted >= 6
 
-    # The analyzer walks the graph: public web instance → profile → role → AdministratorAccess.
+    # The instance is PUBLIC by REAL reachability — public subnet (route→IGW) + an open SG —
+    # so the analyzer walks: public web instance → profile → role → AdministratorAccess.
     from django.utils import timezone
 
     paths = CloudGraphProvider.build_materialize_attack_paths_use_case().execute(workspace_id, timezone.now())
     assert paths.paths_found >= 1
+
+
+@pytest.mark.django_db
+def test_closed_security_group_makes_the_instance_unreachable(workspace_factory):
+    """A public IP behind a CLOSED security group is not internet-reachable — no PUBLIC
+    entry, so no attack path. This is the accuracy the topology pass buys over the
+    public-IP heuristic."""
+    workspace_id = workspace_factory().id
+    store = CloudGraphProvider.build_cloud_asset_store()
+    adapter = Boto3InventoryAdapter(
+        access_port=_FakeAccess(),
+        asset_store=store,
+        session_factory=lambda _creds: _FakeSession(sg_open=False),
+        regions=["us-east-1"],
+    )
+
+    adapter.sync_workspace(workspace_id)
+
+    from django.utils import timezone
+
+    paths = CloudGraphProvider.build_materialize_attack_paths_use_case().execute(workspace_id, timezone.now())
+    assert paths.paths_found == 0
 
 
 def test_analyze_policy_flags_admin_and_s3():
