@@ -48,6 +48,16 @@ class Boto3CloudResponseAdapter(CloudResponsePort):
 
     def apply(self, spec: ResponseActionSpec, *, workspace_id: str, dry_run: bool) -> ResponseOutcome:
         from botocore.exceptions import ClientError
+        from django.conf import settings
+
+        # Read-only guarantee (default ON): autosec never mutates the customer's cloud. Unless
+        # a deployment explicitly opts OUT (SOC_RESPONSE_READ_ONLY=false + a customer-granted
+        # write role), a real execute is downgraded to a DryRun permission-probe — the
+        # "response" stays a proposal + a remediation ticket a human applies, never an
+        # autosec-run mutation.
+        if not dry_run and getattr(settings, "SOC_RESPONSE_READ_ONLY", True):
+            logger.warning("response_execute_blocked_read_only kind=%s group=%s", spec.kind.value, spec.group_id)
+            dry_run = True
 
         client = self._ec2_client(
             workspace_id=workspace_id,
