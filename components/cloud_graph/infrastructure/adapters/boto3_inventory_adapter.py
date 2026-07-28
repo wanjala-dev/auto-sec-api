@@ -384,7 +384,7 @@ class Boto3InventoryAdapter(AssetInventoryPort):
         for parn, pname, doc in docs:
             if not parn:
                 continue
-            is_admin, grants_s3 = _analyze_policy(doc)
+            is_admin, reads_all_s3, s3_buckets = _analyze_policy(doc)
             # The analyzer flags an admin sink by name/arn text ("admin"/"*"); surface a
             # detected wildcard-admin as "* " so a custom broad policy is caught too.
             display = (
@@ -392,8 +392,13 @@ class Boto3InventoryAdapter(AssetInventoryPort):
             )
             add(mk(parn, "AwsIamPolicy", Exposure.INTERNAL, display, attrs={"is_admin": is_admin}))
             edges.append(_Edge(rarn, parn, AssetRelation.HAS_POLICY))
-            if grants_s3:
+            if reads_all_s3:
                 edges.append(_Edge(rarn, "__ALL_BUCKETS__", AssetRelation.READS_BUCKET))
+            else:
+                # Precise: reach only the buckets this grant scopes to (resolves to a bucket
+                # node if it exists; a cross-account / absent bucket simply drops).
+                for bname in s3_buckets:
+                    edges.append(_Edge(rarn, f"arn:aws:s3:::{bname}", AssetRelation.READS_BUCKET))
 
     def _managed_policy_doc(self, iam, policy_arn):
         try:
@@ -418,10 +423,16 @@ class Boto3InventoryAdapter(AssetInventoryPort):
             logger.exception("boto3_inventory s3 enumerate failed account=%s", account_id)
 
 
-def _analyze_policy(doc: dict) -> tuple[bool, bool]:
-    """(is_admin, grants_s3) from an IAM policy document — best-effort, defensive."""
+def _analyze_policy(doc: dict) -> tuple[bool, bool, set[str]]:
+    """(is_admin, reads_all_s3, s3_bucket_names) from an IAM policy document — best-effort.
+
+    ``reads_all_s3`` is True when an s3 grant targets Resource ``*`` (every bucket);
+    ``s3_bucket_names`` is the set of specific buckets an s3 grant scopes to. This lets the
+    READS_BUCKET edge point at the buckets a role can ACTUALLY reach, not all of them.
+    """
     is_admin = False
-    grants_s3 = False
+    reads_all_s3 = False
+    s3_buckets: set[str] = set()
     statements = doc.get("Statement", []) if isinstance(doc, dict) else []
     if isinstance(statements, dict):
         statements = [statements]
@@ -433,8 +444,14 @@ def _analyze_policy(doc: dict) -> tuple[bool, bool]:
         resources = st.get("Resource", [])
         resources = [resources] if isinstance(resources, str) else (resources or [])
         acts = [a.lower() for a in actions if isinstance(a, str)]
-        if any(a in ("*", "*:*") for a in acts) and any(r == "*" for r in resources):
+        res = [r for r in resources if isinstance(r, str)]
+        if any(a in ("*", "*:*") for a in acts) and any(r == "*" for r in res):
             is_admin = True
         if any(a == "*" or a.startswith("s3:") for a in acts):
-            grants_s3 = True
-    return is_admin, grants_s3
+            for r in res:
+                if r in ("*", "arn:aws:s3:::*"):
+                    reads_all_s3 = True
+                elif r.startswith("arn:aws:s3:::"):
+                    # arn:aws:s3:::bucket | …/* | …/key → the bucket name
+                    s3_buckets.add(r[len("arn:aws:s3:::") :].split("/", 1)[0])
+    return is_admin, reads_all_s3, s3_buckets

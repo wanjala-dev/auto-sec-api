@@ -192,14 +192,20 @@ def test_closed_security_group_makes_the_instance_unreachable(workspace_factory)
 
 
 def test_analyze_policy_flags_admin_and_s3():
+    # admin (*/*): also reads every bucket, no specific scoping.
     admin_doc = {"Statement": [{"Effect": "Allow", "Action": "*", "Resource": "*"}]}
-    assert _analyze_policy(admin_doc) == (True, True)
+    assert _analyze_policy(admin_doc) == (True, True, set())
 
-    s3_only = {"Statement": [{"Effect": "Allow", "Action": ["s3:GetObject"], "Resource": "arn:aws:s3:::x/*"}]}
-    assert _analyze_policy(s3_only) == (False, True)
+    # s3:* on Resource * → reads all buckets (wildcard), no specific names.
+    s3_star = {"Statement": [{"Effect": "Allow", "Action": ["s3:*"], "Resource": "*"}]}
+    assert _analyze_policy(s3_star) == (False, True, set())
+
+    # scoped to a specific bucket → that bucket only, not all.
+    scoped = {"Statement": [{"Effect": "Allow", "Action": ["s3:GetObject"], "Resource": "arn:aws:s3:::crown-jewels/*"}]}
+    assert _analyze_policy(scoped) == (False, False, {"crown-jewels"})
 
     benign = {"Statement": [{"Effect": "Allow", "Action": ["ec2:DescribeInstances"], "Resource": "*"}]}
-    assert _analyze_policy(benign) == (False, False)
+    assert _analyze_policy(benign) == (False, False, set())
 
     deny_star = {"Statement": [{"Effect": "Deny", "Action": "*", "Resource": "*"}]}
-    assert _analyze_policy(deny_star) == (False, False)
+    assert _analyze_policy(deny_star) == (False, False, set())
