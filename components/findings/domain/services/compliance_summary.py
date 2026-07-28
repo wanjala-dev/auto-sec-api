@@ -28,10 +28,17 @@ _CURATED: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 
+# Cap the sample of control ids carried per framework — the drill-down callout shows
+# these; `failing_controls` still reports the true total. Keeps the summary payload bounded
+# (a framework like PCI can fail 300+ controls).
+_CONTROLS_SAMPLE = 40
+
+
 @dataclass(frozen=True)
 class ComplianceFramework:
     name: str
     failing_controls: int
+    controls: tuple[str, ...] = ()  # sorted sample (≤ _CONTROLS_SAMPLE) of failing control ids
 
 
 @dataclass(frozen=True)
@@ -42,7 +49,14 @@ class ComplianceSummary:
 
     def to_dict(self) -> dict:
         return {
-            "frameworks": [{"name": f.name, "failing_controls": f.failing_controls} for f in self.frameworks],
+            "frameworks": [
+                {
+                    "name": f.name,
+                    "failing_controls": f.failing_controls,
+                    "controls": list(f.controls),
+                }
+                for f in self.frameworks
+            ],
             "frameworks_with_failures": self.frameworks_with_failures,
             "total_failing_controls": self.total_failing_controls,
         }
@@ -63,7 +77,13 @@ def build(compliance_bags: list[dict]) -> ComplianceSummary:
                     controls[name].update(ctrls or [])
                     break
     rows = [
-        ComplianceFramework(name=name, failing_controls=len(controls[name])) for name, _ in _CURATED if controls[name]
+        ComplianceFramework(
+            name=name,
+            failing_controls=len(controls[name]),
+            controls=tuple(sorted(controls[name])[:_CONTROLS_SAMPLE]),
+        )
+        for name, _ in _CURATED
+        if controls[name]
     ]
     rows.sort(key=lambda r: r.failing_controls, reverse=True)
     return ComplianceSummary(
