@@ -51,3 +51,25 @@ class AttackPathListView(APIView):
         req = ListAttackPathsRequest.from_request(request, workspace_id)
         paths = CloudGraphProvider.build_list_attack_paths_use_case().execute(req.to_query())
         return Response({"success": True, "data": AttackPathResource.collection(paths)})
+
+
+class RiskScoreView(APIView):
+    """GET /cloud-graph/workspaces/<ws>/risk-score/ — one opinionated, attack-path-led risk score.
+
+    The centerpiece the HUD gauge reads: value (0–100 risk) + posture (100-value) + the factor
+    breakdown of what drives it. Read-only rollup over findings + attack paths.
+    """
+
+    permission_classes = (permissions.IsAuthenticated,)
+    name = "cloud-graph-risk-score"
+
+    def get(self, request, workspace_id):
+        from components.cloud_graph.api.resources.risk_score_resource import RiskScoreResource
+        from components.cloud_graph.application.providers.cloud_graph_provider import CloudGraphProvider
+        from components.cloud_graph.infrastructure.services.workspace_access import is_workspace_member
+
+        if not is_workspace_member(user=request.user, workspace_id=workspace_id):
+            return Response({"success": False, "error": "forbidden"}, status=403)
+
+        score = CloudGraphProvider.build_get_risk_score_use_case().execute(workspace_id)
+        return Response({"success": True, "data": RiskScoreResource.of(score)})
