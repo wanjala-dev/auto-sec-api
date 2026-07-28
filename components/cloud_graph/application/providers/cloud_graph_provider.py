@@ -65,6 +65,23 @@ class CloudGraphProvider:
         return DjangoAttackPathRepository()
 
     @staticmethod
+    def build_get_risk_score_use_case():
+        """The read use case backing the workspace risk-score gauge (attack-path-led rollup).
+
+        Reads the findings SSOT (via the findings context's public store port, C3) for
+        severity counts + the materialised attack paths — cross-context reads through ports,
+        never another context's ORM."""
+        from components.cloud_graph.application.use_cases.get_risk_score_use_case import (
+            GetRiskScoreUseCase,
+        )
+        from components.findings.application.providers.finding_provider import FindingProvider
+
+        return GetRiskScoreUseCase(
+            finding_store=FindingProvider.build_finding_store(),
+            attack_path_store=CloudGraphProvider.build_attack_path_store(),
+        )
+
+    @staticmethod
     def build_materialize_attack_paths_use_case():
         """The correlation JOB the ``cloud_graph.attack_paths`` detector drives — reads the
         graph, ranks toxic combinations, replaces the materialised table, emits events."""
