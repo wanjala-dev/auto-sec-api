@@ -60,9 +60,15 @@ logger = logging.getLogger(__name__)
 # webhook URL the admin supplies before it does anything.
 #   - critical-finding-alert (finding_critical): notify + AI triage → ON.
 #   - finding-soar-webhook (finding_raised): forward to SOAR → OFF (needs a URL).
+#   - cnapp-high-priority-triage (finding_raised): auto-triage crit/high → OFF
+#     (broad; fires on every finding, so the admin opts in from the gallery).
+#   - cnapp-critical-soar-ticket (finding_critical): AI triage → SOAR ticket → OFF
+#     (needs the SOAR webhook URL before it does anything).
 STARTER_TEMPLATES: list[dict[str, Any]] = [
     {"template_id": "critical-finding-alert", "activate": True},
     {"template_id": "finding-soar-webhook", "activate": False},
+    {"template_id": "cnapp-high-priority-triage", "activate": False},
+    {"template_id": "cnapp-critical-soar-ticket", "activate": False},
 ]
 
 # Goal stored on the cloned workflow. "general" is the unconstrained goal
