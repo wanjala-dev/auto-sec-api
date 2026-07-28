@@ -358,6 +358,12 @@ NOTIF_EMAIL_CHANNEL_ENABLED = os.environ.get("NOTIF_EMAIL_CHANNEL_ENABLED", "fal
 # write permission — a deliberate, reviewable change, never the default.
 SOC_RESPONSE_DRY_RUN_DEFAULT = os.environ.get("SOC_RESPONSE_DRY_RUN_DEFAULT", "true").lower() == "true"
 
+# Hard read-only guarantee (default ON): autosec NEVER mutates the customer's cloud — a
+# real execute of a response action is downgraded to a DryRun permission-probe at the AWS
+# boundary. The "response" is a proposal + a remediation ticket a human applies. Flip OFF
+# only with a customer-granted write role + explicit opt-in (a deliberate, reviewable change).
+SOC_RESPONSE_READ_ONLY = os.environ.get("SOC_RESPONSE_READ_ONLY", "true").lower() == "true"
+
 AUTH_USER_MODEL = "users.CustomUser"
 
 # Password validation

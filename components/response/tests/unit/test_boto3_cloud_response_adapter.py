@@ -62,12 +62,22 @@ def _client_error(code):
 
 
 class TestApply:
-    def test_real_revoke_marks_performed(self):
+    def test_real_revoke_marks_performed(self, settings):
+        settings.SOC_RESPONSE_READ_ONLY = False  # a real execute requires opting out of the guard
         fake = _FakeEc2()
         outcome = _StubAdapter(fake).apply(_spec(), workspace_id="w", dry_run=False)
         assert outcome.performed and outcome.ok and not outcome.dry_run
         assert fake.calls[0][0] == "revoke"
         assert fake.calls[0][1]["DryRun"] is False
+
+    def test_read_only_guard_downgrades_real_execute_to_dryrun(self, settings):
+        # The read-only guarantee (default): a requested real execute is forced to a DryRun
+        # probe at the AWS boundary — autosec never mutates the customer's cloud.
+        settings.SOC_RESPONSE_READ_ONLY = True
+        fake = _FakeEc2(revoke_error=_client_error("DryRunOperation"))
+        outcome = _StubAdapter(fake).apply(_spec(), workspace_id="w", dry_run=False)
+        assert fake.calls[0][1]["DryRun"] is True  # forced, despite dry_run=False
+        assert outcome.dry_run and not outcome.performed
 
     def test_dry_run_permitted_would_succeed(self):
         fake = _FakeEc2(revoke_error=_client_error("DryRunOperation"))
