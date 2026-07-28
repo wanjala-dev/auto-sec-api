@@ -27,6 +27,20 @@ def test_buckets_versioned_keys_by_family_and_dedups_controls():
     assert by_name["SOC 2"] == 1
     assert summary.frameworks_with_failures == 3
     assert summary.total_failing_controls == 5
+    # the per-framework control sample is carried (sorted, deduped) for the drill-down
+    cis = next(f for f in summary.frameworks if f.name == "CIS AWS")
+    assert cis.controls == ("1.4", "2.1.5", "3.1")
+
+
+def test_controls_sample_is_capped_and_sorted():
+    from components.findings.domain.services.compliance_summary import _CONTROLS_SAMPLE
+
+    bags = [{"PCI-4.0": [f"ctrl-{i:03d}" for i in range(100)]}]
+    summary = build(bags)
+    pci = next(f for f in summary.frameworks if f.name == "PCI-DSS")
+    assert pci.failing_controls == 100  # true total preserved
+    assert len(pci.controls) == _CONTROLS_SAMPLE  # sample capped
+    assert list(pci.controls) == sorted(pci.controls)  # sorted
 
 
 def test_sorted_worst_first_and_ignores_unknown_frameworks():
