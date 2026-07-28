@@ -56,5 +56,10 @@ class FindingStorePort(ABC):
         """
 
     @abstractmethod
+    def open_finding_compliance(self, workspace_id: UUID) -> list[dict]:
+        """The compliance tag bags ({framework: [controls]}) of every OPEN finding — the
+        read behind the Compliance card's per-framework failing-control roll-up."""
+
+    @abstractmethod
     def upsert(self, finding: FindingEntity) -> None:
         """Insert or update the finding, keyed by its (workspace, source, fingerprint) identity."""

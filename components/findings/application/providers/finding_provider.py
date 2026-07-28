@@ -60,6 +60,16 @@ class FindingProvider:
         return GetAttckCoverageUseCase(store=DjangoAttckCoverageRepository())
 
     @staticmethod
+    def build_get_compliance_summary_use_case():
+        """The read use case backing the HUD's Compliance card — distinct failing controls
+        per curated framework, rolled up from open findings' compliance tags."""
+        from components.findings.application.use_cases.get_compliance_summary_use_case import (
+            GetComplianceSummaryUseCase,
+        )
+
+        return GetComplianceSummaryUseCase(finding_store=FindingProvider.build_finding_store())
+
+    @staticmethod
     def build_finding_store() -> FindingStorePort:
         """The read/write store — the findings context's public data seam.
 

@@ -63,3 +63,24 @@ class AttckCoverageView(APIView):
         if is_stale:
             recompute_workspace_attck_coverage.delay(str(workspace_id))
         return Response({"success": True, "data": AttckCoverageResource.from_snapshot(snapshot, refreshing=is_stale)})
+
+
+class ComplianceSummaryView(APIView):
+    """GET /findings/workspaces/<ws>/compliance-summary/ — distinct failing controls per
+    curated framework (CIS, PCI-DSS, SOC 2, ISO 27001, HIPAA, NIST, FedRAMP…), rolled up
+    from open findings' compliance tags. Real failures only — no fabricated pass %.
+    """
+
+    permission_classes = (permissions.IsAuthenticated,)
+    name = "findings-compliance-summary"
+
+    def get(self, request, workspace_id):
+        from components.findings.api.resources.compliance_summary_resource import ComplianceSummaryResource
+        from components.findings.application.providers.finding_provider import FindingProvider
+        from components.findings.infrastructure.services.workspace_access import is_workspace_member
+
+        if not is_workspace_member(user=request.user, workspace_id=workspace_id):
+            return Response({"success": False, "error": "forbidden"}, status=403)
+
+        summary = FindingProvider.build_get_compliance_summary_use_case().execute(workspace_id)
+        return Response({"success": True, "data": ComplianceSummaryResource.of(summary)})

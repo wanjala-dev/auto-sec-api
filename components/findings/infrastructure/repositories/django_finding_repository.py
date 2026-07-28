@@ -85,6 +85,15 @@ class DjangoFindingRepository(FindingStorePort):
             .distinct()
         )
 
+    def open_finding_compliance(self, workspace_id: UUID) -> list[dict]:
+        from infrastructure.persistence.findings.models import Finding
+
+        return list(
+            Finding.objects.filter(workspace_id=workspace_id, status="open")
+            .exclude(compliance={})
+            .values_list("compliance", flat=True)
+        )
+
     def upsert(self, finding: FindingEntity) -> None:
         from infrastructure.persistence.findings.models import Finding
 
