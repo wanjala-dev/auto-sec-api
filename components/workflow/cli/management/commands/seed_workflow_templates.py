@@ -50,9 +50,32 @@ SYSTEM_TEMPLATES = [
         "description": "When a critical finding lands, alert the SOC in-app and run the AI triage agent on it automatically.",
         "default_graph": {
             "nodes": [
-                {"id": "start", "type": "start", "label": "Critical finding raised", "subtitle": "A critical alert lands on the board", "config": {"triggerType": "finding_critical"}},
-                {"id": "notify", "type": "message", "label": "Alert the SOC", "subtitle": "In-app notification to the team", "config": {"channel": "in_app", "body": "A critical security finding was just raised. Triage is starting automatically."}},
-                {"id": "triage", "type": "ai", "label": "AI triage", "subtitle": "Run the triage agent on the finding", "config": {"prompt": "Triage this critical security finding: assess blast radius, likely root cause, and the first containment step. Ground every claim in the finding evidence."}},
+                {
+                    "id": "start",
+                    "type": "start",
+                    "label": "Critical finding raised",
+                    "subtitle": "A critical alert lands on the board",
+                    "config": {"triggerType": "finding_critical"},
+                },
+                {
+                    "id": "notify",
+                    "type": "message",
+                    "label": "Alert the SOC",
+                    "subtitle": "In-app notification to the team",
+                    "config": {
+                        "channel": "in_app",
+                        "body": "A critical security finding was just raised. Triage is starting automatically.",
+                    },
+                },
+                {
+                    "id": "triage",
+                    "type": "ai",
+                    "label": "AI triage",
+                    "subtitle": "Run the triage agent on the finding",
+                    "config": {
+                        "prompt": "Triage this critical security finding: assess blast radius, likely root cause, and the first containment step. Ground every claim in the finding evidence."
+                    },
+                },
                 {"id": "end", "type": "end", "label": "End", "subtitle": "Triage complete", "config": {}},
             ],
             "edges": [
@@ -71,9 +94,32 @@ SYSTEM_TEMPLATES = [
         "description": "Run the AI triage agent on every high-severity finding, then notify the team with the result.",
         "default_graph": {
             "nodes": [
-                {"id": "start", "type": "start", "label": "High finding raised", "subtitle": "A high-severity alert lands", "config": {"triggerType": "finding_high"}},
-                {"id": "triage", "type": "ai", "label": "AI triage", "subtitle": "Assess and recommend", "config": {"prompt": "Triage this high-severity finding and recommend whether it needs immediate action or can be queued. Ground the recommendation in the finding evidence."}},
-                {"id": "notify", "type": "message", "label": "Notify the team", "subtitle": "Share the triage result", "config": {"channel": "in_app", "body": "A high-severity finding was triaged automatically — review the recommendation on the board."}},
+                {
+                    "id": "start",
+                    "type": "start",
+                    "label": "High finding raised",
+                    "subtitle": "A high-severity alert lands",
+                    "config": {"triggerType": "finding_high"},
+                },
+                {
+                    "id": "triage",
+                    "type": "ai",
+                    "label": "AI triage",
+                    "subtitle": "Assess and recommend",
+                    "config": {
+                        "prompt": "Triage this high-severity finding and recommend whether it needs immediate action or can be queued. Ground the recommendation in the finding evidence."
+                    },
+                },
+                {
+                    "id": "notify",
+                    "type": "message",
+                    "label": "Notify the team",
+                    "subtitle": "Share the triage result",
+                    "config": {
+                        "channel": "in_app",
+                        "body": "A high-severity finding was triaged automatically — review the recommendation on the board.",
+                    },
+                },
                 {"id": "end", "type": "end", "label": "End", "subtitle": "Complete", "config": {}},
             ],
             "edges": [
@@ -92,10 +138,42 @@ SYSTEM_TEMPLATES = [
         "description": "On every finding, branch on severity: forward high/critical findings to an external SOAR webhook; log the rest.",
         "default_graph": {
             "nodes": [
-                {"id": "start", "type": "start", "label": "Finding raised", "subtitle": "Any finding lands on the board", "config": {"triggerType": "finding_raised"}},
-                {"id": "severe", "type": "condition", "label": "High or critical?", "subtitle": "Branch on severity band", "config": {"predicate": {"match": "any", "conditions": [{"field": "severity", "op": "eq", "value": "high"}, {"field": "severity", "op": "eq", "value": "critical"}]}}},
-                {"id": "forward", "type": "webhook", "label": "Forward to SOAR", "subtitle": "POST the finding to your SOAR", "config": {"url": "", "method": "POST"}},
-                {"id": "log", "type": "message", "label": "Log low/medium", "subtitle": "Record for the record", "config": {"channel": "in_app", "body": "A lower-severity finding was logged and not escalated."}},
+                {
+                    "id": "start",
+                    "type": "start",
+                    "label": "Finding raised",
+                    "subtitle": "Any finding lands on the board",
+                    "config": {"triggerType": "finding_raised"},
+                },
+                {
+                    "id": "severe",
+                    "type": "condition",
+                    "label": "High or critical?",
+                    "subtitle": "Branch on severity band",
+                    "config": {
+                        "predicate": {
+                            "match": "any",
+                            "conditions": [
+                                {"field": "severity", "op": "eq", "value": "high"},
+                                {"field": "severity", "op": "eq", "value": "critical"},
+                            ],
+                        }
+                    },
+                },
+                {
+                    "id": "forward",
+                    "type": "webhook",
+                    "label": "Forward to SOAR",
+                    "subtitle": "POST the finding to your SOAR",
+                    "config": {"url": "", "method": "POST"},
+                },
+                {
+                    "id": "log",
+                    "type": "message",
+                    "label": "Log low/medium",
+                    "subtitle": "Record for the record",
+                    "config": {"channel": "in_app", "body": "A lower-severity finding was logged and not escalated."},
+                },
                 {"id": "end", "type": "end", "label": "End", "subtitle": "Complete", "config": {}},
             ],
             "edges": [
@@ -123,13 +201,230 @@ SYSTEM_TEMPLATES = [
         ),
         "default_graph": {
             "nodes": [
-                {"id": "start", "type": "start", "label": "Task moves between columns", "subtitle": "Triggered by Kanban drag-drop or PATCH", "config": {"triggerType": "task_moved_column"}},
-                {"id": "publish", "type": "publish_event", "label": "Publish TaskAcceptedFromBoard", "subtitle": "Fan out to specialist handlers", "config": {"event_type": "task_accepted_from_board", "filters": {"task_source_type_prefix": "ai.", "new_column_title": "Accepted"}}},
+                {
+                    "id": "start",
+                    "type": "start",
+                    "label": "Task moves between columns",
+                    "subtitle": "Triggered by Kanban drag-drop or PATCH",
+                    "config": {"triggerType": "task_moved_column"},
+                },
+                {
+                    "id": "publish",
+                    "type": "publish_event",
+                    "label": "Publish TaskAcceptedFromBoard",
+                    "subtitle": "Fan out to specialist handlers",
+                    "config": {
+                        "event_type": "task_accepted_from_board",
+                        "filters": {"task_source_type_prefix": "ai.", "new_column_title": "Accepted"},
+                    },
+                },
                 {"id": "end", "type": "end", "label": "Done", "subtitle": "Workflow complete", "config": {}},
             ],
             "edges": [
                 {"id": "ai-findings-0", "from": "start", "to": "publish"},
                 {"id": "ai-findings-1", "from": "publish", "to": "end"},
+            ],
+        },
+    },
+    # ── CNAPP starter pack ────────────────────────────────────────────
+    # Finding-driven security automations for the cloud posture / attack-surface
+    # spine. All fire off the finding_* triggers the findings context emits; the
+    # actions are SOC-safe (notify / AI triage / open an external ticket) — never
+    # a direct mutation of the customer's cloud.
+    {
+        "id": "cnapp-severity-router",
+        "label": "CNAPP — Route Findings by Severity",
+        "category": "security",
+        "version": "1",
+        "description": (
+            "One automation for every finding: route it by severity — critical escalates "
+            "to the SOC immediately, high is queued for triage, everything else is logged."
+        ),
+        "default_graph": {
+            "nodes": [
+                {
+                    "id": "start",
+                    "type": "start",
+                    "label": "Finding raised",
+                    "subtitle": "Any finding lands on the board",
+                    "config": {"triggerType": "finding_raised"},
+                },
+                {
+                    "id": "route",
+                    "type": "switch",
+                    "label": "Route by severity",
+                    "subtitle": "Critical / high / everything else",
+                    "config": {
+                        "cases": [
+                            {"label": "critical", "predicate": {"field": "severity", "op": "eq", "value": "critical"}},
+                            {"label": "high", "predicate": {"field": "severity", "op": "eq", "value": "high"}},
+                            {"label": "default", "predicate": None},
+                        ]
+                    },
+                },
+                {
+                    "id": "escalate",
+                    "type": "message",
+                    "label": "Escalate to SOC",
+                    "subtitle": "Critical — notify now",
+                    "config": {
+                        "channel": "in_app",
+                        "body": "A CRITICAL finding was raised — escalating to the SOC for immediate triage.",
+                    },
+                },
+                {
+                    "id": "queue",
+                    "type": "message",
+                    "label": "Queue for triage",
+                    "subtitle": "High — review soon",
+                    "config": {"channel": "in_app", "body": "A HIGH-severity finding was raised — queued for triage."},
+                },
+                {
+                    "id": "logit",
+                    "type": "message",
+                    "label": "Log",
+                    "subtitle": "Lower severity — recorded",
+                    "config": {
+                        "channel": "in_app",
+                        "body": "A lower-severity finding was recorded for the audit trail.",
+                    },
+                },
+                {"id": "end", "type": "end", "label": "End", "subtitle": "Routed", "config": {}},
+            ],
+            "edges": [
+                {"id": "csr-0", "from": "start", "to": "route"},
+                {"id": "csr-1", "from": "route", "to": "escalate", "label": "critical"},
+                {"id": "csr-2", "from": "route", "to": "queue", "label": "high"},
+                {"id": "csr-3", "from": "route", "to": "logit", "label": "default"},
+                {"id": "csr-4", "from": "escalate", "to": "end"},
+                {"id": "csr-5", "from": "queue", "to": "end"},
+                {"id": "csr-6", "from": "logit", "to": "end"},
+            ],
+        },
+    },
+    {
+        "id": "cnapp-critical-soar-ticket",
+        "label": "CNAPP — Critical → AI Triage → SOAR Ticket",
+        "category": "security",
+        "version": "1",
+        "description": (
+            "When a critical finding lands, run AI triage, forward it to your SOAR/ticketing "
+            "system to open a tracked ticket, then notify the SOC. Set the SOAR webhook URL "
+            "after cloning."
+        ),
+        "default_graph": {
+            "nodes": [
+                {
+                    "id": "start",
+                    "type": "start",
+                    "label": "Critical finding raised",
+                    "subtitle": "A critical alert lands",
+                    "config": {"triggerType": "finding_critical"},
+                },
+                {
+                    "id": "triage",
+                    "type": "ai",
+                    "label": "AI triage",
+                    "subtitle": "Assess + first containment step",
+                    "config": {
+                        "prompt": "Triage this critical finding: blast radius, likely root cause, and the first safe containment step. Ground every claim in the finding evidence — keep it to what a responder needs to open a ticket."
+                    },
+                },
+                {
+                    "id": "ticket",
+                    "type": "webhook",
+                    "label": "Open SOAR ticket",
+                    "subtitle": "POST the finding to your SOAR",
+                    "config": {"url": "", "method": "POST"},
+                },
+                {
+                    "id": "notify",
+                    "type": "message",
+                    "label": "Notify the SOC",
+                    "subtitle": "Ticket opened",
+                    "config": {
+                        "channel": "in_app",
+                        "body": "A critical finding was triaged and a SOAR ticket was opened — review on the board.",
+                    },
+                },
+                {"id": "end", "type": "end", "label": "End", "subtitle": "Complete", "config": {}},
+            ],
+            "edges": [
+                {"id": "cst-0", "from": "start", "to": "triage"},
+                {"id": "cst-1", "from": "triage", "to": "ticket"},
+                {"id": "cst-2", "from": "ticket", "to": "notify"},
+                {"id": "cst-3", "from": "notify", "to": "end"},
+            ],
+        },
+    },
+    {
+        "id": "cnapp-high-priority-triage",
+        "label": "CNAPP — Auto-Triage Critical & High",
+        "category": "security",
+        "version": "1",
+        "description": (
+            "An always-on triage net: for every finding, branch on severity — critical or "
+            "high gets AI triage and a team notification; lower severities are just logged."
+        ),
+        "default_graph": {
+            "nodes": [
+                {
+                    "id": "start",
+                    "type": "start",
+                    "label": "Finding raised",
+                    "subtitle": "Any finding lands",
+                    "config": {"triggerType": "finding_raised"},
+                },
+                {
+                    "id": "severe",
+                    "type": "condition",
+                    "label": "Critical or high?",
+                    "subtitle": "Branch on severity band",
+                    "config": {
+                        "predicate": {
+                            "match": "any",
+                            "conditions": [
+                                {"field": "severity", "op": "eq", "value": "critical"},
+                                {"field": "severity", "op": "eq", "value": "high"},
+                            ],
+                        }
+                    },
+                },
+                {
+                    "id": "triage",
+                    "type": "ai",
+                    "label": "AI triage",
+                    "subtitle": "Assess + recommend",
+                    "config": {
+                        "prompt": "Triage this finding and recommend whether it needs immediate action or can be queued. Ground the recommendation in the finding evidence."
+                    },
+                },
+                {
+                    "id": "notify",
+                    "type": "message",
+                    "label": "Notify the team",
+                    "subtitle": "Share the triage",
+                    "config": {
+                        "channel": "in_app",
+                        "body": "A critical/high finding was triaged automatically — review the recommendation on the board.",
+                    },
+                },
+                {
+                    "id": "logit",
+                    "type": "message",
+                    "label": "Log",
+                    "subtitle": "Lower severity",
+                    "config": {"channel": "in_app", "body": "A lower-severity finding was recorded."},
+                },
+                {"id": "end", "type": "end", "label": "End", "subtitle": "Complete", "config": {}},
+            ],
+            "edges": [
+                {"id": "cht-0", "from": "start", "to": "severe"},
+                {"id": "cht-1", "from": "severe", "to": "triage", "label": "yes"},
+                {"id": "cht-2", "from": "severe", "to": "logit", "label": "no"},
+                {"id": "cht-3", "from": "triage", "to": "notify"},
+                {"id": "cht-4", "from": "notify", "to": "end"},
+                {"id": "cht-5", "from": "logit", "to": "end"},
             ],
         },
     },
