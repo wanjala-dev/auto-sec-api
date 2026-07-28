@@ -12,7 +12,13 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from types import SimpleNamespace
+from urllib.parse import quote
+
+
+def _no_template_url() -> str:
+    return ""
 
 
 @dataclass
@@ -20,6 +26,9 @@ class GenerateOnboardingTemplateUseCase:
     """Builds the CloudFormation template / Terraform module for a connection."""
 
     _vendor_account_resolver: Callable[[], str]
+    # The public S3 URL of the HOSTED parameterized template — powers the one-click
+    # "Launch Stack" quick-create link. Injected (settings-free); "" → no launch link.
+    _template_url_resolver: Callable[[], str] = field(default=_no_template_url)
 
     # ── CloudFormation ───────────────────────────────────────────────────
 
@@ -133,6 +142,52 @@ class GenerateOnboardingTemplateUseCase:
             ),
             "Resources": resources,
         }
+
+    # ── One-click Launch Stack (hosted, parameterized) ───────────────────
+
+    def hosted_cloudformation(self) -> dict:
+        """The STATIC, parameterized single-account template hosted once (public S3) for the
+        one-click quick-create link. Reuses ``cloudformation`` with ExternalId/RoleName as
+        CloudFormation ``Ref`` values, so ONE hosted template serves every connection — the
+        launch URL just prefills ``param_ExternalId``. (Single-account only; the org-wide
+        StackSet path keeps the copy-the-template flow.)"""
+        ref = SimpleNamespace(
+            external_id={"Ref": "ExternalId"}, role_name={"Ref": "RoleName"}, org_wide=False, id="hosted"
+        )
+        tmpl = self.cloudformation(ref)
+        tmpl["Description"] = "Auto-Sec read-only audit role (assume-role, External-ID protected)."
+        tmpl["Parameters"] = {
+            "ExternalId": {
+                "Type": "String",
+                "MinLength": 8,
+                "Description": "Your Auto-Sec External ID (shown in the connect wizard) — confused-deputy protection.",
+            },
+            "RoleName": {
+                "Type": "String",
+                "Default": "AutoSecAuditRole",
+                "Description": "Name for the read-only audit role.",
+            },
+        }
+        return tmpl
+
+    def launch_url(self, conn, region: str = "us-east-1") -> str | None:
+        """The CloudFormation quick-create 'Launch Stack' URL — a one-click console deep-link
+        that loads the hosted template and prefills this connection's External ID. Returns
+        None when no hosted-template URL is configured (the wizard falls back to copy-template).
+        The template creates a NAMED IAM role, so the console asks the user to acknowledge
+        CAPABILITY_NAMED_IAM (a link cannot pre-check that)."""
+        template_url = (self._template_url_resolver() or "").strip()
+        if not template_url:
+            return None
+        query = "&".join(
+            [
+                f"templateURL={quote(template_url, safe='')}",
+                f"stackName={quote(str(conn.role_name), safe='')}",
+                f"param_ExternalId={quote(str(conn.external_id), safe='')}",
+                f"param_RoleName={quote(str(conn.role_name), safe='')}",
+            ]
+        )
+        return f"https://console.aws.amazon.com/cloudformation/home?region={region}#/stacks/quickcreate?{query}"
 
     # ── Terraform ────────────────────────────────────────────────────────
 

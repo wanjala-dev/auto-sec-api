@@ -95,11 +95,15 @@ class AwsConnectionTemplateView(APIView):
         fmt = (request.query_params.get("fmt") or "cloudformation").lower()
         if fmt == "terraform":
             return Response({"success": True, "format": "terraform", "data": use_case.terraform(conn)})
+        region = (list(conn.regions or []) or ["us-east-1"])[0]
         return Response(
             {
                 "success": True,
                 "format": "cloudformation",
                 "data": use_case.cloudformation(conn),
+                # One-click quick-create URL (None when no hosted template is configured →
+                # the wizard falls back to copy-the-template). org-wide keeps copy-template.
+                "launch_url": None if conn.org_wide else use_case.launch_url(conn, region=region),
             }
         )
 
@@ -144,9 +148,7 @@ class AwsConnectionScanView(APIView):
             get_feature_flags_provider,
         )
 
-        if not get_feature_flags_provider().is_feature_enabled(
-            "feature.cloud_posture", workspace_id=str(workspace_id)
-        ):
+        if not get_feature_flags_provider().is_feature_enabled("feature.cloud_posture", workspace_id=str(workspace_id)):
             return Response(
                 {"success": False, "error": "cloud_posture_not_enabled"},
                 status=status.HTTP_409_CONFLICT,
