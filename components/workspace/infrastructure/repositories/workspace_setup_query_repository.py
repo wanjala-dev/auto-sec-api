@@ -44,7 +44,12 @@ class OrmWorkspaceSetupQueryRepository:
 
     @staticmethod
     def _has_first_scan(workspace) -> bool:
-        return ScanRun.objects.filter(workspace=workspace, status=ScanRun.Status.COMPLETED).exists()
+        # A completed scan run, OR any finding (findings only exist because a scan
+        # produced them — covers workspaces whose findings predate ScanRun tracking).
+        return (
+            ScanRun.objects.filter(workspace=workspace, status=ScanRun.Status.COMPLETED).exists()
+            or Finding.objects.filter(workspace=workspace).exists()
+        )
 
     @staticmethod
     def _has_findings_triaged(workspace) -> bool:
