@@ -1364,6 +1364,107 @@ class WorkspaceThemeView(APIView):
         return Response({"status": "success", "data": result}, status=HTTP_200_OK)
 
 
+class WorkspaceBrandAssetsView(APIView):
+    """A workspace's brand image library — ``<ws>/brand/assets/``.
+
+    GET lists non-deleted assets (newest first); POST registers an image whose
+    bytes were already uploaded via the shared presigned-PUT flow. There is NO
+    delete here — deletion routes through the recycle bin
+    (``POST /recycle-bin/trash/`` with ``entity_type="brand_asset"``), giving
+    trash → restore → purge for free.
+    """
+
+    permission_classes = (IsWorkspaceAdmin,)
+    name = "workspace-brand-assets"
+
+    def get(self, request, workspace=None):
+        from components.workspace.application.providers.brand_asset_provider import (
+            get_brand_asset_provider,
+        )
+
+        assets = get_brand_asset_provider().build_list_use_case().execute(workspace)
+        return Response({"status": "success", "data": assets}, status=HTTP_200_OK)
+
+    def post(self, request, workspace=None):
+        from components.workspace.application.providers.brand_asset_provider import (
+            get_brand_asset_provider,
+        )
+        from components.workspace.domain.errors import WorkspaceValidationError
+        from components.workspace.mappers.rest.brand_asset_serializers import (
+            BrandAssetCreateSerializer,
+        )
+
+        serializer = BrandAssetCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            asset = (
+                get_brand_asset_provider()
+                .build_create_use_case()
+                .execute(
+                    workspace,
+                    uploaded_by_id=getattr(request.user, "id", None),
+                    **serializer.validated_data,
+                )
+            )
+        except WorkspaceValidationError as exc:
+            return Response({"status": "error", "detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"status": "success", "data": asset}, status=status.HTTP_201_CREATED)
+
+
+class WorkspaceBrandAssetDetailView(APIView):
+    """Caption metadata updates for one brand asset — ``<ws>/brand/assets/<id>/``."""
+
+    permission_classes = (IsWorkspaceAdmin,)
+    name = "workspace-brand-asset-detail"
+
+    def patch(self, request, workspace=None, asset_id=None):
+        from components.workspace.application.providers.brand_asset_provider import (
+            get_brand_asset_provider,
+        )
+        from components.workspace.domain.errors import WorkspaceNotFoundError
+        from components.workspace.mappers.rest.brand_asset_serializers import (
+            BrandAssetUpdateSerializer,
+        )
+
+        serializer = BrandAssetUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            asset = (
+                get_brand_asset_provider()
+                .build_update_use_case()
+                .execute(workspace, asset_id, **serializer.validated_data)
+            )
+        except WorkspaceNotFoundError as exc:
+            return Response({"status": "error", "detail": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+        return Response({"status": "success", "data": asset}, status=HTTP_200_OK)
+
+
+class BrandFontCatalogView(APIView):
+    """The curated brand-font catalog — ``/workspaces/brand-fonts/``.
+
+    Read-only menu for the brand settings font pickers. Platform data (seeded
+    by ``seed_brand_fonts``), not workspace-scoped — any authenticated user may
+    read it; only workspace admins can PUT a selection onto their theme.
+    """
+
+    permission_classes = (permissions.IsAuthenticated,)
+    name = "workspace-brand-fonts"
+
+    def get(self, request, *args, **kwargs):
+        options = WorkspaceThemeProvider.build_font_catalog().list_active()
+        data = [
+            {
+                "key": o.key,
+                "label": o.label,
+                "category": o.category,
+                "css_stack": o.css_stack,
+                "google_family": o.google_family,
+            }
+            for o in options
+        ]
+        return Response({"status": "success", "data": data}, status=HTTP_200_OK)
+
+
 class WorkspacePublicBrandView(APIView):
     """Public brand tokens for a workspace — ``/workspaces/<id>/public/brand/``.
 

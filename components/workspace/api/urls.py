@@ -30,10 +30,13 @@ from components.workspace.api.controller import (
     ActionDetail,
     ActionList,
     ActionWorkspaceAll,
+    BrandFontCatalogView,
     CategorySubcategoryListView,
     MyWorkspaceJoinRequestsView,
     PublicAiPrivacyBriefContractView,
     PublicAiPrivacyBriefView,
+    WorkspaceBrandAssetDetailView,
+    WorkspaceBrandAssetsView,
     WorkspaceCardByWorkspaceView,
     WorkspaceCardView,
     WorkspaceCategoryDetail,
@@ -90,9 +93,24 @@ urlpatterns = [
     # Workspace Branding / Theme
     # ========================================================================
     path(
+        "brand-fonts/",
+        BrandFontCatalogView.as_view(),
+        name=BrandFontCatalogView.name,
+    ),
+    path(
         "<uuid:workspace>/theme/",
         WorkspaceThemeView.as_view(),
         name="workspace-theme",
+    ),
+    path(
+        "<uuid:workspace>/brand/assets/",
+        WorkspaceBrandAssetsView.as_view(),
+        name=WorkspaceBrandAssetsView.name,
+    ),
+    path(
+        "<uuid:workspace>/brand/assets/<uuid:asset_id>/",
+        WorkspaceBrandAssetDetailView.as_view(),
+        name=WorkspaceBrandAssetDetailView.name,
     ),
     # ========================================================================
     # Workspace Categories
