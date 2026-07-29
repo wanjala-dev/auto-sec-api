@@ -27,22 +27,34 @@ from components.team.application.facades.serializer_facade import (
     TeamSummaryWithMembersSerializer,
 )
 from components.workspace.api.permissions import (
+    IsWorkspaceAdmin,
     IsWorkspaceFollowerOrMember,
 )
 from components.workspace.api.workspace_permissions import (
     IsOwnerOrReadOnly,
     IsUnauthenticatedOrAdminOrStaff,
 )
+from components.workspace.application.commands.update_workspace_theme_command import (
+    UpdateWorkspaceThemeCommand,
+)
 from components.workspace.application.facades.workspace_facade import (
     ensure_workspace_follower,
 )
+from components.workspace.application.providers.brand_resolution_provider import (
+    get_brand_resolution_provider,
+)
 from components.workspace.application.providers.workspace_cache_provider import (
     get_workspace_cache_provider,
+)
+from components.workspace.application.providers.workspace_theme_provider import (
+    WorkspaceThemeProvider,
 )
 from components.workspace.application.queries.workspace_detail_query import (
     FetchWorkspaceDetailQuery,
 )
 from components.workspace.application.service import WorkspaceService
+from components.workspace.domain.errors import InvalidBrandSeedError, UnknownBrandFontError
+from components.workspace.domain.value_objects.semantic_token_set import BrandOutputShape
 from components.workspace.mappers.rest.countries_serializers import (
     CountrySerializer,
 )
@@ -63,6 +75,9 @@ from components.workspace.mappers.rest.workspace_serializers import (
     WorkspacePutSerializer,
     WorkspaceSerializer,
     WorkspaceSetupStatusSerializer,
+)
+from components.workspace.mappers.rest.workspace_theme_serializers import (
+    WorkspaceThemeUpdateSerializer,
 )
 from infrastructure.persistence.workspaces.models import (
     Workspace,
@@ -1317,3 +1332,55 @@ class WorkspaceJoinRequestManageView(APIView):
             raise
 
         return Response(_serialize_join_request(result), status=status.HTTP_200_OK)
+
+
+# ============================================================================
+# SECTION: Workspace Branding / Theme
+# ============================================================================
+
+
+class WorkspaceThemeView(APIView):
+    """Per-workspace brand-kit settings (admin-managed).
+
+    GET returns the stored brand inputs (seeds, logo slots, fonts, voice) + the
+    resolved token preview; PUT updates them. The whole-app palette itself is
+    delivered separately via the ``me/summary`` bootstrap payload.
+    """
+
+    permission_classes = (IsWorkspaceAdmin,)
+
+    def get(self, request, workspace=None):
+        result = WorkspaceThemeProvider.build_get_use_case().execute(workspace)
+        return Response({"status": "success", "data": result}, status=HTTP_200_OK)
+
+    def put(self, request, workspace=None):
+        serializer = WorkspaceThemeUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        command = UpdateWorkspaceThemeCommand(workspace_id=workspace, **serializer.validated_data)
+        try:
+            result = WorkspaceThemeProvider.build_update_use_case().execute(command)
+        except (InvalidBrandSeedError, UnknownBrandFontError) as exc:
+            return Response({"status": "error", "detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"status": "success", "data": result}, status=HTTP_200_OK)
+
+
+class WorkspacePublicBrandView(APIView):
+    """Public brand tokens for a workspace — ``/workspaces/<id>/public/brand/``.
+
+    The anonymous counterpart to the admin-only ``WorkspaceThemeView``. Public
+    surfaces call this so they can paint themselves in the org's brand (resolved
+    semantic colour tokens + logo + mode) without a login — the same resolved
+    palette the ``me/summary`` bootstrap delivers to authenticated members,
+    exposed here for anonymous visitors.
+
+    Returns the default palette for an unthemed or unknown workspace, so the
+    page always renders — a missing theme is decoration, not an error, and the
+    entity's own data fetch (public profile / form) enforces existence.
+    """
+
+    permission_classes = (permissions.AllowAny,)
+    name = "workspace-public-brand"
+
+    def get(self, request, workspace_id, *args, **kwargs):
+        tokens = get_brand_resolution_provider().port().resolve(workspace_id, BrandOutputShape.CSS)
+        return Response({"status": "success", "data": tokens}, status=HTTP_200_OK)
