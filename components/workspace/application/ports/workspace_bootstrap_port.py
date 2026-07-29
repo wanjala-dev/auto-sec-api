@@ -75,6 +75,13 @@ class WorkspaceBootstrapPort(Protocol):
         active_team_id: Any,
     ) -> None: ...
 
+    def activate_workspace(self, *, workspace: Any) -> None:
+        """Mark a freshly-created workspace ACTIVE so it's usable + visible.
+
+        The model defaults status to 'inactive' (the state archived workspaces use);
+        a new workspace must be flipped active or the active-only me/summary + HUD
+        resolution never surface it (a just-onboarded user lands workspace-less)."""
+
     def ensure_workspace_follower(
         self,
         *,
