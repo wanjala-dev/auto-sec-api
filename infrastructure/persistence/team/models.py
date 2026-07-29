@@ -42,6 +42,12 @@ class Team(models.Model):
         DEPARTMENT = "department", "Department"
         PROJECT_TEAM = "project_team", "Project Team"
         AI_AGENTS = "ai_agents", "AI Agents"
+        # Security disciplines (ADR 0007). Blue = defensive SOC (the default/home
+        # team); Red = offensive adversary-emulation (seeded but opt-in). These
+        # scope people + boards + actions, NOT findings (which stay the
+        # workspace-scoped SSOT per ADR 0004).
+        BLUE_TEAM = "blue_team", "Blue Team"
+        RED_TEAM = "red_team", "Red Team"
 
     #
     # Fields

@@ -26,6 +26,9 @@ def ensure_workspace_scaffolding(workspace, owner, *, team_title: str = "General
         "status": Team.ACTIVE,
         "privacy": Team.PRIVATE,
         "is_default": True,
+        # The default/home team IS the Blue team — every workspace is
+        # defensive-by-default (ADR 0007).
+        "kind": Team.Kind.BLUE_TEAM,
     }
     # One default ("home") team per workspace. Prefer an EXISTING default team
     # regardless of its title so neither bootstrap nor downstream seeding ever
@@ -46,13 +49,49 @@ def ensure_workspace_scaffolding(workspace, owner, *, team_title: str = "General
         Team.objects.filter(id=team.id).update(status=Team.ACTIVE)
         team.refresh_from_db()
 
+    # An existing default team (created before ADR 0007) may still be tagged as a
+    # generic DEPARTMENT — promote it to the Blue team. Only touch generic kinds
+    # so a workspace that deliberately re-purposed its home team is left alone.
+    if team.kind in (Team.Kind.DEPARTMENT, Team.Kind.PROJECT_TEAM):
+        Team.objects.filter(id=team.id).update(kind=Team.Kind.BLUE_TEAM)
+        team.refresh_from_db()
+
     team.members.add(owner)
     ensure_workspace_membership(workspace, owner, role=WorkspaceMembership.Role.OWNER)
     ensure_team_membership(team, owner, role=TeamMembership.Role.LEAD)
 
     ensure_team_board_columns(workspace, team, owner)
 
+    # Seed the Red team alongside Blue — a necessary system team, present from
+    # bootstrap but opt-in (not the default). Owner leads both (ADR 0007).
+    ensure_red_team(workspace, owner)
+
     return team, None
+
+
+def ensure_red_team(workspace, owner) -> Team:
+    """Ensure the workspace has its offensive Red team (ADR 0007).
+
+    Idempotent: one Red team per workspace, seeded at bootstrap. It is NOT the
+    default team (defensive-by-default) — offensive work is opt-in. The owner is
+    enrolled as LEAD and the team gets its own board. Findings/assets are never
+    team-scoped; this scopes people + board + (later) offensive actions only.
+    """
+    red = Team.objects.filter(workspace=workspace, kind=Team.Kind.RED_TEAM).first()
+    if red is None:
+        red = Team.objects.create(
+            workspace=workspace,
+            title="Red Team",
+            created_by=owner,
+            status=Team.ACTIVE,
+            privacy=Team.PRIVATE,
+            is_default=False,
+            kind=Team.Kind.RED_TEAM,
+        )
+    red.members.add(owner)
+    ensure_team_membership(red, owner, role=TeamMembership.Role.LEAD)
+    ensure_team_board_columns(workspace, red, owner)
+    return red
 
 
 def ensure_workspace_follower(workspace, user: CustomUser) -> None:
