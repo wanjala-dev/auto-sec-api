@@ -8,6 +8,7 @@ from components.findings.api.controller import (
     AttckCoverageView,
     ComplianceSummaryView,
     FindingListView,
+    SampleDataView,
 )
 
 urlpatterns = [
@@ -21,5 +22,10 @@ urlpatterns = [
         "workspaces/<uuid:workspace_id>/compliance-summary/",
         ComplianceSummaryView.as_view(),
         name="findings-compliance-summary",
+    ),
+    path(
+        "workspaces/<uuid:workspace_id>/sample-data/",
+        SampleDataView.as_view(),
+        name="findings-sample-data",
     ),
 ]

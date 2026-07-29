@@ -103,3 +103,14 @@ class DjangoFindingRepository(FindingStorePort):
             fingerprint=finding.fingerprint,
             defaults=to_finding_defaults(finding),
         )
+
+    def has_real_findings(self, workspace_id: UUID, *, sample_prefix: str) -> bool:
+        from infrastructure.persistence.findings.models import Finding
+
+        return Finding.objects.filter(workspace_id=workspace_id).exclude(source__startswith=sample_prefix).exists()
+
+    def delete_sample_findings(self, workspace_id: UUID, *, sample_prefix: str) -> int:
+        from infrastructure.persistence.findings.models import Finding
+
+        deleted, _ = Finding.objects.filter(workspace_id=workspace_id, source__startswith=sample_prefix).delete()
+        return deleted

@@ -63,3 +63,12 @@ class FindingStorePort(ABC):
     @abstractmethod
     def upsert(self, finding: FindingEntity) -> None:
         """Insert or update the finding, keyed by its (workspace, source, fingerprint) identity."""
+
+    @abstractmethod
+    def has_real_findings(self, workspace_id: UUID, *, sample_prefix: str) -> bool:
+        """True if the workspace has any NON-sample finding — the guard that stops
+        sample data from ever landing on a workspace with real findings."""
+
+    @abstractmethod
+    def delete_sample_findings(self, workspace_id: UUID, *, sample_prefix: str) -> int:
+        """Delete every finding whose source starts with ``sample_prefix``; returns the count."""

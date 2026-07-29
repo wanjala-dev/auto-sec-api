@@ -13,6 +13,40 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 
+class SampleDataView(APIView):
+    """POST seeds / DELETE clears the never-empty-HUD sample findings for a workspace
+    (onboarding slice B). Sample rows are source-prefixed ``sample.`` and seeding is
+    guarded to workspaces with no real findings — the demo/real data is never touched."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+    name = "findings-sample-data"
+
+    def _guard(self, request, workspace_id):
+        from components.findings.infrastructure.services.workspace_access import is_workspace_member
+
+        return is_workspace_member(user=request.user, workspace_id=workspace_id)
+
+    def post(self, request, workspace_id):
+        from django.utils import timezone
+
+        from components.findings.application.providers.finding_provider import FindingProvider
+
+        if not self._guard(request, workspace_id):
+            return Response({"success": False, "error": "forbidden"}, status=403)
+        result = FindingProvider.build_seed_sample_data_use_case().execute(workspace_id, now=timezone.now())
+        return Response({"success": True, "data": result})
+
+    def delete(self, request, workspace_id):
+        from django.utils import timezone
+
+        from components.findings.application.providers.finding_provider import FindingProvider
+
+        if not self._guard(request, workspace_id):
+            return Response({"success": False, "error": "forbidden"}, status=403)
+        result = FindingProvider.build_clear_sample_data_use_case().execute(workspace_id, now=timezone.now())
+        return Response({"success": True, "data": result})
+
+
 class FindingListView(APIView):
     """GET /findings/workspaces/<ws>/?severity=&status=&source=&limit=&offset= — the SSOT list."""
 
