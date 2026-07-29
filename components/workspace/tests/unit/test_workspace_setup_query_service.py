@@ -29,11 +29,11 @@ def test_workspace_setup_query_service_builds_status_from_snapshot():
     snapshot = WorkspaceSetupSnapshot(
         workspace_id="workspace-1",
         workspace_name="Alpha",
-        has_contribution_means=True,
-        has_story=True,
-        has_cover_photo=False,
-        has_budget=True,
-        has_active_team=True,
+        has_cloud_connected=True,
+        has_first_scan=True,
+        has_findings_triaged=False,
+        has_teammates_invited=True,
+        has_slack_connected=True,
     )
     queries = SimpleNamespace(build_setup_snapshot=Mock(return_value=snapshot))
     service = WorkspaceSetupQueryService(
@@ -43,5 +43,5 @@ def test_workspace_setup_query_service_builds_status_from_snapshot():
 
     status = service.build_status("workspace-object")
 
-    assert status["pending"] == ["has_cover_photo"]
+    assert status["pending"] == ["findings_triaged"]
     queries.build_setup_snapshot.assert_called_once_with("workspace-object")

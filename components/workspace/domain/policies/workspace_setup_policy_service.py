@@ -1,18 +1,19 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Sequence
 
 
 @dataclass(frozen=True)
 class WorkspaceSetupSnapshot:
     workspace_id: object
     workspace_name: str
-    has_contribution_means: bool
-    has_story: bool
-    has_cover_photo: bool
-    has_budget: bool
-    has_active_team: bool
+    # Security getting-started milestones (the funnel to first value).
+    has_cloud_connected: bool
+    has_first_scan: bool
+    has_findings_triaged: bool
+    has_teammates_invited: bool
+    has_slack_connected: bool
 
 
 @dataclass(frozen=True)
@@ -104,55 +105,57 @@ class WorkspaceSetupPolicyService:
 
     @staticmethod
     def _default_definitions() -> tuple[SetupCheckDefinition, ...]:
+        # The security getting-started funnel: connect → scan → triage → invite →
+        # notify. Ordered by priority (the path to first value first).
         return (
             SetupCheckDefinition(
-                code="has_contribution_means",
-                label="Contribution means configured",
-                detail="Add at least one contribution method so supporters know how to help.",
-                snapshot_field="has_contribution_means",
+                code="cloud_connected",
+                label="Connect a cloud account",
+                detail="Connect an AWS account so Auto-Sec can scan your cloud posture.",
+                snapshot_field="has_cloud_connected",
+                severity="warning",
+                priority=10,
+                banner_title="Connect your first cloud",
+                banner_message="Connect an AWS account to start scanning your cloud for misconfigurations.",
+            ),
+            SetupCheckDefinition(
+                code="first_scan",
+                label="Run your first scan",
+                detail="Run a scan to surface misconfigurations, exposures, and vulnerabilities.",
+                snapshot_field="has_first_scan",
+                severity="warning",
+                priority=20,
+                banner_title="Run your first scan",
+                banner_message="Kick off a scan to see your findings, attack paths, and compliance posture.",
+            ),
+            SetupCheckDefinition(
+                code="findings_triaged",
+                label="Triage a finding",
+                detail="Move a finding off the board — triage or resolve it — to close the loop.",
+                snapshot_field="has_findings_triaged",
+                severity="info",
+                priority=30,
+                banner_title="Triage your findings",
+                banner_message="Review and triage a finding so your team knows what to act on.",
+            ),
+            SetupCheckDefinition(
+                code="teammates_invited",
+                label="Invite a teammate",
+                detail="Invite a teammate so your Blue/Red teams can work findings together.",
+                snapshot_field="has_teammates_invited",
                 severity="info",
                 priority=40,
-                banner_title="Add contribution means",
-                banner_message="Add at least one contribution method so supporters know how supporters can contribute.",
-            ),
-            SetupCheckDefinition(
-                code="has_story",
-                label="Workspace story authored",
-                detail="Share your workspace story so visitors understand your mission.",
-                snapshot_field="has_story",
-                severity="info",
-                priority=45,
-                banner_title="Tell your story",
-                banner_message="Write a compelling workspace story so visitors can connect with your mission.",
-            ),
-            SetupCheckDefinition(
-                code="has_cover_photo",
-                label="Cover photo added",
-                detail="Upload a cover photo to make the workspace page more engaging.",
-                snapshot_field="has_cover_photo",
-                severity="info",
-                priority=46,
-                banner_title="Add a cover photo",
-                banner_message="Upload a cover photo to make your workspace stand out.",
-            ),
-            SetupCheckDefinition(
-                code="has_budget",
-                label="Budget created",
-                detail="Create a budget so supporters can see how resources are allocated.",
-                snapshot_field="has_budget",
-                severity="warning",
-                priority=47,
-                banner_title="Create a budget",
-                banner_message="Set up a workspace budget so supporters can understand how funds will be used.",
-            ),
-            SetupCheckDefinition(
-                code="has_active_team",
-                label="Team assembled",
-                detail="Invite team members so everyone can collaborate on the workspace.",
-                snapshot_field="has_active_team",
-                severity="info",
-                priority=48,
                 banner_title="Invite your team",
-                banner_message="Invite teammates so you can collaborate on tasks and updates together.",
+                banner_message="Invite teammates so you can triage and respond to findings together.",
+            ),
+            SetupCheckDefinition(
+                code="slack_connected",
+                label="Connect Slack",
+                detail="Connect Slack so high-severity findings reach your team in real time.",
+                snapshot_field="has_slack_connected",
+                severity="info",
+                priority=50,
+                banner_title="Connect Slack",
+                banner_message="Route critical findings to Slack so nothing slips through.",
             ),
         )

@@ -5,41 +5,59 @@ from django.db.models import Exists, OuterRef
 from components.workspace.domain.policies.workspace_setup_policy_service import (
     WorkspaceSetupSnapshot,
 )
+from infrastructure.persistence.findings.models import Finding
+from infrastructure.persistence.integrations.models import (
+    AwsOrganizationConnection,
+    SinkConnector,
+)
+from infrastructure.persistence.scanning.models import ScanRun
 from infrastructure.persistence.team.models import Team
+from infrastructure.persistence.workspaces.models import WorkspaceMembership
 
 
 class OrmWorkspaceSetupQueryRepository:
     def annotate_setup_state(self, queryset):
+        # List-view optimization (unchanged): a lightweight "does this workspace
+        # have an active team" flag for workspace summaries.
         return queryset.annotate(
             has_active_team=Exists(Team.objects.filter(workspace=OuterRef("pk"), status=Team.ACTIVE)),
         )
 
     def build_setup_snapshot(self, workspace) -> WorkspaceSetupSnapshot:
+        # The security getting-started funnel. Each is a cheap EXISTS against the
+        # existing SSOT models — findings/scans/assets stay workspace-scoped.
         return WorkspaceSetupSnapshot(
             workspace_id=workspace.id,
             workspace_name=workspace.workspace_name or "",
-            has_contribution_means=self._has_contribution_means(workspace),
-            has_story=bool((workspace.workspace_story or "").strip()),
-            has_cover_photo=bool((workspace.photo_url or "").strip()),
-            has_budget=self._has_budget(workspace),
-            has_active_team=self._has_active_team(workspace),
+            has_cloud_connected=self._has_cloud_connected(workspace),
+            has_first_scan=self._has_first_scan(workspace),
+            has_findings_triaged=self._has_findings_triaged(workspace),
+            has_teammates_invited=self._has_teammates_invited(workspace),
+            has_slack_connected=self._has_slack_connected(workspace),
         )
 
     @staticmethod
-    def _has_contribution_means(workspace) -> bool:
-        prefetched = getattr(workspace, "_prefetched_objects_cache", {})
-        if "contribution_means" in prefetched:
-            return bool(prefetched["contribution_means"])
-        return workspace.contribution_means.exists()
+    def _has_cloud_connected(workspace) -> bool:
+        return AwsOrganizationConnection.objects.filter(
+            workspace=workspace, status=AwsOrganizationConnection.Status.CONNECTED
+        ).exists()
 
     @staticmethod
-    def _has_budget(workspace) -> bool:
-        # Budgets are not part of the security product's workspace core.
-        return False
+    def _has_first_scan(workspace) -> bool:
+        return ScanRun.objects.filter(workspace=workspace, status=ScanRun.Status.COMPLETED).exists()
 
     @staticmethod
-    def _has_active_team(workspace) -> bool:
-        annotated = getattr(workspace, "has_active_team", None)
-        if annotated is not None:
-            return bool(annotated)
-        return Team.objects.filter(workspace=workspace, status=Team.ACTIVE).exists()
+    def _has_findings_triaged(workspace) -> bool:
+        # "Triaged" = at least one finding moved off the default "open" state.
+        return Finding.objects.filter(workspace=workspace).exclude(status="open").exists()
+
+    @staticmethod
+    def _has_teammates_invited(workspace) -> bool:
+        # More than the owner alone (exclude support-impersonation memberships).
+        return WorkspaceMembership.objects.filter(workspace=workspace).exclude(is_impersonation=True).count() > 1
+
+    @staticmethod
+    def _has_slack_connected(workspace) -> bool:
+        return SinkConnector.objects.filter(
+            workspace=workspace, kind=SinkConnector.Kind.SLACK, is_enabled=True
+        ).exists()
