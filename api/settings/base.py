@@ -96,6 +96,7 @@ INSTALLED_APPS = [
     "infrastructure.persistence.notifications.userpreferences",
     "infrastructure.persistence.workspaces",
     "infrastructure.persistence.workspaces.workflows",
+    "infrastructure.persistence.workspaces.theming",
     # Security domains (generalized 'sector') a workspace operates across.
     "infrastructure.persistence.domains",
     # Security report templates — the report-writing kind of the Template Kernel.

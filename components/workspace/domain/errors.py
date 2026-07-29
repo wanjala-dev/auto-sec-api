@@ -104,3 +104,15 @@ class JoinRequestAlreadyExistsError(WorkspaceDomainError, ConflictError):
 
 class JoinRequestPermissionError(WorkspaceAuthorizationError):
     """Caller lacks permission to act on the join request."""
+
+
+class InvalidBrandSeedError(WorkspaceValidationError):
+    """A brand seed colour is not a valid hex value."""
+
+
+class UnknownBrandFontError(WorkspaceValidationError):
+    """A stored brand font key does not exist in the font catalog."""
+
+
+class BrandContrastError(WorkspaceValidationError):
+    """A resolved brand pair could not be made WCAG-accessible."""

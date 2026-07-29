@@ -58,9 +58,11 @@ from components.workspace.api.controller import (
     WorkspaceOperationsView,
     WorkspacePreferencesByWorkspaceView,
     WorkspacePreferencesView,
+    WorkspacePublicBrandView,
     WorkspacePublicProfileView,
     WorkspaceSetupStatusView,
     WorkspaceTagList,
+    WorkspaceThemeView,
 )
 
 urlpatterns = [
@@ -79,6 +81,19 @@ urlpatterns = [
     ),
     path("public/ai-privacy-brief/", PublicAiPrivacyBriefView.as_view(), name=PublicAiPrivacyBriefView.name),
     path("<uuid:workspace_id>/public/", WorkspacePublicProfileView.as_view(), name=WorkspacePublicProfileView.name),
+    path(
+        "<uuid:workspace_id>/public/brand/",
+        WorkspacePublicBrandView.as_view(),
+        name=WorkspacePublicBrandView.name,
+    ),
+    # ========================================================================
+    # Workspace Branding / Theme
+    # ========================================================================
+    path(
+        "<uuid:workspace>/theme/",
+        WorkspaceThemeView.as_view(),
+        name="workspace-theme",
+    ),
     # ========================================================================
     # Workspace Categories
     # ========================================================================
