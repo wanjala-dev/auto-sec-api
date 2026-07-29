@@ -70,6 +70,30 @@ class FindingProvider:
         return GetComplianceSummaryUseCase(finding_store=FindingProvider.build_finding_store())
 
     @staticmethod
+    def build_seed_sample_data_use_case():
+        """Seed the never-empty-HUD sample findings (onboarding slice B)."""
+        from components.findings.application.use_cases.manage_sample_data_use_case import (
+            SeedSampleDataUseCase,
+        )
+
+        return SeedSampleDataUseCase(
+            store=FindingProvider.build_finding_store(),
+            recompute_coverage=FindingProvider.build_recompute_attck_coverage_use_case(),
+        )
+
+    @staticmethod
+    def build_clear_sample_data_use_case():
+        """Clear the sample findings (the banner's one-click reset)."""
+        from components.findings.application.use_cases.manage_sample_data_use_case import (
+            ClearSampleDataUseCase,
+        )
+
+        return ClearSampleDataUseCase(
+            store=FindingProvider.build_finding_store(),
+            recompute_coverage=FindingProvider.build_recompute_attck_coverage_use_case(),
+        )
+
+    @staticmethod
     def build_finding_store() -> FindingStorePort:
         """The read/write store — the findings context's public data seam.
 
