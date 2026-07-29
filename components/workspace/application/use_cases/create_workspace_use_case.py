@@ -72,6 +72,10 @@ class CreateWorkspaceUseCase:
             team_title=default_team_title,
         )
 
+        # A new workspace is created 'inactive' (the model default) — activate it
+        # so it's usable + visible in me/summary and the HUD from the first load.
+        self._bootstrap.activate_workspace(workspace=workspace)
+
         self._bootstrap.finalize_owner_profile(
             owner=owner,
             workspace_id=workspace.id,

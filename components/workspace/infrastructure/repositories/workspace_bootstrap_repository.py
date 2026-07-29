@@ -229,6 +229,14 @@ class WorkspaceBootstrapRepository(WorkspaceBootstrapPort):
         profile.active_team_id = active_team_id
         profile.save(update_fields=["active_workspace_id", "active_team_id"])
 
+    def activate_workspace(self, *, workspace: Any) -> None:
+        # Flip a freshly-created workspace from the model's 'inactive' default to
+        # 'active' so it surfaces in me/summary + the HUD (a just-onboarded user
+        # would otherwise land workspace-less — ADR 0007 follow-up).
+        if getattr(workspace, "status", None) != "active":
+            workspace.status = "active"
+            workspace.save(update_fields=["status"])
+
     def seed_projects(
         self,
         *,
