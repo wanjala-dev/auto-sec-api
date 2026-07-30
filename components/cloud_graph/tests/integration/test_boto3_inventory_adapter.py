@@ -31,8 +31,15 @@ class _FakeEc2:
     """A public instance in a public subnet (route → IGW) behind an open SG, plus an
     optional closed-SG variant to prove reachability gating."""
 
-    def __init__(self, sg_open=True):
+    def __init__(self, sg_open=True, regions=None, describe_regions_error=False):
         self._sg_open = sg_open
+        self._regions = regions
+        self._describe_regions_error = describe_regions_error
+
+    def describe_regions(self):
+        if self._describe_regions_error:
+            raise RuntimeError("AccessDenied: ec2:DescribeRegions")
+        return {"Regions": [{"RegionName": r} for r in (self._regions or ["us-east-1"])]}
 
     def get_paginator(self, name):
         if name == "describe_instances":
@@ -127,11 +134,21 @@ class _FakeS3:
 
 
 class _FakeSession:
-    def __init__(self, sg_open=True):
+    def __init__(self, sg_open=True, regions=None, describe_regions_error=False):
         self._sg_open = sg_open
+        self._regions = regions
+        self._describe_regions_error = describe_regions_error
 
     def client(self, name, region_name=None):
-        return {"ec2": _FakeEc2(sg_open=self._sg_open), "iam": _FakeIam(), "s3": _FakeS3()}[name]
+        return {
+            "ec2": _FakeEc2(
+                sg_open=self._sg_open,
+                regions=self._regions,
+                describe_regions_error=self._describe_regions_error,
+            ),
+            "iam": _FakeIam(),
+            "s3": _FakeS3(),
+        }[name]
 
 
 class _FakeAccess:
@@ -189,6 +206,28 @@ def test_closed_security_group_makes_the_instance_unreachable(workspace_factory)
 
     paths = CloudGraphProvider.build_materialize_attack_paths_use_case().execute(workspace_id, timezone.now())
     assert paths.paths_found == 0
+
+
+def test_resolve_regions_auto_discovers_enabled_regions():
+    """With no pin, the adapter scans the account's ENABLED regions (describe_regions)."""
+    adapter = Boto3InventoryAdapter(access_port=_FakeAccess())
+    session = _FakeSession(regions=["us-east-1", "eu-west-1", "ap-southeast-2"])
+    assert adapter._resolve_regions(session, _ACCOUNT) == ("us-east-1", "eu-west-1", "ap-southeast-2")
+
+
+def test_resolve_regions_respects_explicit_pin_without_discovery():
+    """An explicit region pin wins verbatim — discovery is skipped (proven: a session that
+    would RAISE on describe_regions still returns the pin, never touching it)."""
+    adapter = Boto3InventoryAdapter(access_port=_FakeAccess(), regions=["ap-southeast-2"])
+    session = _FakeSession(describe_regions_error=True)
+    assert adapter._resolve_regions(session, _ACCOUNT) == ("ap-southeast-2",)
+
+
+def test_resolve_regions_falls_back_when_discovery_denied():
+    """describe_regions denied (missing IAM permission) → degrade to us-east-1, not crash."""
+    adapter = Boto3InventoryAdapter(access_port=_FakeAccess())
+    session = _FakeSession(describe_regions_error=True)
+    assert adapter._resolve_regions(session, _ACCOUNT) == ("us-east-1",)
 
 
 def test_analyze_policy_flags_admin_and_s3():

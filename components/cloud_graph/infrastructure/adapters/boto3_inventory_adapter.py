@@ -6,10 +6,11 @@ role, reused from the CSPM creds seam) and emits the **typed edges** the
 ``AttackPathAnalyzer`` walks — so a PUBLIC workload → privileged role → admin policy /
 data store becomes a ranked attack path.
 
-Slice 1 (toxic-path core): EC2 instances (entries), IAM roles + instance-profiles +
-policies (privilege sinks), S3 buckets (data sinks), and the edges linking them
-(ATTACHED_TO / CAN_ASSUME / HAS_POLICY / READS_BUCKET). Full network reachability
-(subnets / route-tables / IGW topology) and multi-region breadth are later slices.
+Toxic-path core: EC2 instances (entries), IAM roles + instance-profiles + policies
+(privilege sinks), S3 buckets (data sinks), and the edges linking them (ATTACHED_TO /
+CAN_ASSUME / HAS_POLICY / READS_BUCKET). Network reachability (subnets / route-tables /
+IGW topology → real exposure) and multi-region breadth (auto-discovered enabled regions)
+are wired; CloudQuery-grade full inventory is a later slice.
 
 Driven adapter (Rule 5): shaped to the core's ``sync_workspace`` need. Cross-context
 access goes ONLY through ``integrations.application.ports.AwsAccountAccessPort`` — never
@@ -35,11 +36,20 @@ from components.cloud_graph.domain.value_objects.enums import AssetRelation, Exp
 
 logger = logging.getLogger(__name__)
 
-# EC2 is regional; IAM + S3 are global. Slice 1 scans a small default region set (the
-# demo lives in us-east-1); override with a comma list. Multi-region breadth is a follow-up.
-_DEFAULT_REGIONS = tuple(
-    r.strip() for r in os.environ.get("AUTOSEC_INVENTORY_REGIONS", "us-east-1").split(",") if r.strip()
-)
+# EC2 + VPC are regional; IAM + S3 are global. By DEFAULT we auto-discover the account's
+# enabled (opted-in) regions via ec2:DescribeRegions, so multi-region workloads aren't
+# invisible outside us-east-1. Pin/scope the scan with AUTOSEC_INVENTORY_REGIONS (a comma
+# list) — when set it is used verbatim and auto-discovery is skipped.
+_ANCHOR_REGION = "us-east-1"  # anchors the region-discovery + global (IAM/S3) calls
+_FALLBACK_REGIONS = ("us-east-1",)  # used only when discovery is denied / fails
+
+
+def _configured_regions() -> tuple[str, ...] | None:
+    """The explicit region allowlist from the env, or ``None`` to auto-discover."""
+    raw = os.environ.get("AUTOSEC_INVENTORY_REGIONS", "").strip()
+    if not raw:
+        return None
+    return tuple(r.strip() for r in raw.split(",") if r.strip()) or None
 
 
 def _default_session_factory(creds: dict):
@@ -64,7 +74,8 @@ class Boto3InventoryAdapter(AssetInventoryPort):
         self._access_port = access_port
         self._asset_store = asset_store
         self._session_factory = session_factory or _default_session_factory
-        self._regions = tuple(regions) if regions else _DEFAULT_REGIONS
+        # An explicit override (constructor arg or env) is used verbatim; None → discover.
+        self._explicit_regions = tuple(regions) if regions else _configured_regions()
 
     def _deps(self):
         access = self._access_port
@@ -170,7 +181,9 @@ class Boto3InventoryAdapter(AssetInventoryPort):
         # IAM + S3 are global — one client each.
         self._collect_iam(session, account_id, mk, add, edges)
         self._collect_s3(session, account_id, mk, add)
-        for region in self._regions:
+        regions = self._resolve_regions(session, account_id)
+        logger.info("boto3_inventory scanning regions account=%s count=%d", account_id, len(regions))
+        for region in regions:
             net = self._collect_network(session, account_id, region, mk, add, edges)
             self._collect_ec2(session, account_id, region, mk, add, edges, net)
 
@@ -184,6 +197,36 @@ class Boto3InventoryAdapter(AssetInventoryPort):
             else:
                 expanded.append(edge)
         return assets, expanded
+
+    def _resolve_regions(self, session, account_id) -> tuple[str, ...]:
+        """Which regions to scan for this account.
+
+        An explicit override (constructor arg or ``AUTOSEC_INVENTORY_REGIONS``) wins
+        verbatim; otherwise discover the account's ENABLED regions via
+        ``ec2:DescribeRegions`` (opted-in only — not every AWS region). Best-effort: a
+        denied or failed discovery degrades to us-east-1 so the sync still runs.
+        """
+        if self._explicit_regions:
+            return self._explicit_regions
+        try:
+            ec2 = session.client("ec2", region_name=_ANCHOR_REGION)
+            resp = ec2.describe_regions()  # AllRegions=False → regions enabled for the account
+            names = tuple(r["RegionName"] for r in resp.get("Regions", []) if r.get("RegionName"))
+            if names:
+                return names
+            logger.warning(
+                "boto3_inventory describe_regions returned none account=%s; using %s",
+                account_id,
+                _FALLBACK_REGIONS,
+            )
+        except Exception:
+            logger.warning(
+                "boto3_inventory describe_regions failed account=%s; falling back to %s",
+                account_id,
+                _FALLBACK_REGIONS,
+                exc_info=True,
+            )
+        return _FALLBACK_REGIONS
 
     def _collect_ec2(self, session, account_id, region, mk, add, edges, net):
         try:
