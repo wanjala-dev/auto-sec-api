@@ -34,6 +34,7 @@ class AssetRelation(str, Enum):
     IN_SUBNET = "in_subnet"
     ROUTES_TO_IGW = "routes_to_igw"
     READS_BUCKET = "reads_bucket"
+    READS_TABLE = "reads_table"
 
     @classmethod
     def from_value(cls, value) -> AssetRelation:
