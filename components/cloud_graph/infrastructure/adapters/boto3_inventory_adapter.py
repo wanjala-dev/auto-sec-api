@@ -69,6 +69,22 @@ class _Edge:
     relation: AssetRelation
 
 
+@dataclass(frozen=True)
+class _PolicyReach:
+    """What an IAM policy document grants reach to — the inputs to the data/privilege edges.
+
+    Per data service: ``reads_all_*`` is True when a grant targets Resource ``*`` (every
+    resource of that type); the name set holds the specific resources a grant scopes to. A
+    dataclass (not an ever-widening tuple) so adding the next service stays a one-field change.
+    """
+
+    is_admin: bool = False
+    reads_all_s3: bool = False
+    s3_buckets: frozenset[str] = frozenset()
+    reads_all_dynamodb: bool = False
+    dynamodb_tables: frozenset[str] = frozenset()
+
+
 class Boto3InventoryAdapter(AssetInventoryPort):
     def __init__(self, *, access_port=None, asset_store=None, session_factory=None, regions=None):
         self._access_port = access_port
@@ -186,14 +202,23 @@ class Boto3InventoryAdapter(AssetInventoryPort):
         for region in regions:
             net = self._collect_network(session, account_id, region, mk, add, edges)
             self._collect_ec2(session, account_id, region, mk, add, edges, net)
+            self._collect_lambda(session, account_id, region, mk, add, edges)
+            self._collect_dynamodb(session, account_id, region, mk, add)
 
-        # Fan a role's "reads S3" grant (Resource "*" or s3:*) out to every bucket node —
-        # the coarse data-reach edge for slice 1 (precise bucket-ARN matching is a follow-up).
+        # Fan a role's wildcard data grant (Resource "*" / service:*) out to every resource
+        # node of that type — the coarse data-reach edge; scoped grants already point precisely.
         bucket_arns = [a.arn for a in assets if a.resource_type == "AwsS3Bucket"]
+        table_arns = [a.arn for a in assets if a.resource_type == "AwsDynamoDbTable"]
+        fan = {
+            "__ALL_BUCKETS__": (bucket_arns, AssetRelation.READS_BUCKET),
+            "__ALL_TABLES__": (table_arns, AssetRelation.READS_TABLE),
+        }
         expanded: list[_Edge] = []
         for edge in edges:
-            if edge.dst_arn == "__ALL_BUCKETS__":
-                expanded.extend(_Edge(edge.src_arn, b, AssetRelation.READS_BUCKET) for b in bucket_arns)
+            targets = fan.get(edge.dst_arn)
+            if targets is not None:
+                arns, relation = targets
+                expanded.extend(_Edge(edge.src_arn, arn, relation) for arn in arns)
             else:
                 expanded.append(edge)
         return assets, expanded
@@ -427,21 +452,30 @@ class Boto3InventoryAdapter(AssetInventoryPort):
         for parn, pname, doc in docs:
             if not parn:
                 continue
-            is_admin, reads_all_s3, s3_buckets = _analyze_policy(doc)
+            reach = _analyze_policy(doc)
             # The analyzer flags an admin sink by name/arn text ("admin"/"*"); surface a
             # detected wildcard-admin as "* " so a custom broad policy is caught too.
             display = (
-                f"* {pname}" if (is_admin and not any(h in pname.lower() for h in ("admin", "poweruser"))) else pname
+                f"* {pname}"
+                if (reach.is_admin and not any(h in pname.lower() for h in ("admin", "poweruser")))
+                else pname
             )
-            add(mk(parn, "AwsIamPolicy", Exposure.INTERNAL, display, attrs={"is_admin": is_admin}))
+            add(mk(parn, "AwsIamPolicy", Exposure.INTERNAL, display, attrs={"is_admin": reach.is_admin}))
             edges.append(_Edge(rarn, parn, AssetRelation.HAS_POLICY))
-            if reads_all_s3:
+            # S3 data-reach: a wildcard grant fans to all buckets; a scoped grant points precisely
+            # (resolves to a bucket node if present; a cross-account / absent bucket simply drops).
+            if reach.reads_all_s3:
                 edges.append(_Edge(rarn, "__ALL_BUCKETS__", AssetRelation.READS_BUCKET))
             else:
-                # Precise: reach only the buckets this grant scopes to (resolves to a bucket
-                # node if it exists; a cross-account / absent bucket simply drops).
-                for bname in s3_buckets:
+                for bname in reach.s3_buckets:
                     edges.append(_Edge(rarn, f"arn:aws:s3:::{bname}", AssetRelation.READS_BUCKET))
+            # DynamoDB data-reach: same shape as S3 (table ARNs carry region+account, so a
+            # scoped edge resolves only when the policy names the concrete table ARN).
+            if reach.reads_all_dynamodb:
+                edges.append(_Edge(rarn, "__ALL_TABLES__", AssetRelation.READS_TABLE))
+            else:
+                for table_arn in reach.dynamodb_tables:
+                    edges.append(_Edge(rarn, table_arn, AssetRelation.READS_TABLE))
 
     def _managed_policy_doc(self, iam, policy_arn):
         try:
@@ -465,17 +499,76 @@ class Boto3InventoryAdapter(AssetInventoryPort):
         except Exception:
             logger.exception("boto3_inventory s3 enumerate failed account=%s", account_id)
 
+    def _collect_lambda(self, session, account_id, region, mk, add, edges):
+        """Lambda functions + the edge to their execution role. A function is PUBLIC when it is
+        internet-invocable — a Function URL with AuthType NONE, OR a resource-based policy that
+        lets a public principal invoke it. Public function → execution role → (its policies) is
+        the serverless analog of the public-EC2 → role → admin path the analyzer already walks.
+        """
+        try:
+            lam = session.client("lambda", region_name=region)
+            for page in lam.get_paginator("list_functions").paginate():
+                for fn in page.get("Functions", []):
+                    arn = fn.get("FunctionArn")
+                    name = fn.get("FunctionName")
+                    role = fn.get("Role")
+                    if not arn:
+                        continue
+                    public = self._lambda_is_public(lam, name)
+                    exposure = Exposure.PUBLIC if public else Exposure.INTERNAL
+                    add(mk(arn, "AwsLambdaFunction", exposure, name, region, attrs={"public_invoke": public}))
+                    if role:
+                        # The execution role is also enumerated by _collect_iam (same ARN), which
+                        # fans its HAS_POLICY / READS_* edges — so this just links the function in.
+                        add(mk(role, "AwsIamRole", Exposure.INTERNAL, role.rsplit("/", 1)[-1]))
+                        edges.append(_Edge(arn, role, AssetRelation.ATTACHED_TO))
+        except Exception:
+            logger.exception("boto3_inventory lambda enumerate failed account=%s region=%s", account_id, region)
 
-def _analyze_policy(doc: dict) -> tuple[bool, bool, set[str]]:
-    """(is_admin, reads_all_s3, s3_bucket_names) from an IAM policy document — best-effort.
+    def _lambda_is_public(self, lam, name) -> bool:
+        """Best-effort: absence of a URL config / resource policy is the common case (not an
+        error), so a missing config just means "not public via that signal". A denied read
+        degrades coverage, never the sync."""
+        try:
+            if lam.get_function_url_config(FunctionName=name).get("AuthType") == "NONE":
+                return True
+        except Exception:
+            pass  # no Function URL configured (the common case) or read denied
+        try:
+            pol = lam.get_policy(FunctionName=name).get("Policy")
+            doc = json.loads(pol) if isinstance(pol, str) else pol
+            if doc and _policy_allows_public_principal(doc):
+                return True
+        except Exception:
+            pass  # no resource-based policy (the common case) or read denied
+        return False
 
-    ``reads_all_s3`` is True when an s3 grant targets Resource ``*`` (every bucket);
-    ``s3_bucket_names`` is the set of specific buckets an s3 grant scopes to. This lets the
-    READS_BUCKET edge point at the buckets a role can ACTUALLY reach, not all of them.
+    def _collect_dynamodb(self, session, account_id, region, mk, add):
+        """DynamoDB tables — crown-jewel data sinks reached purely via IAM (no network exposure).
+        A role whose policy grants dynamodb access gets a READS_TABLE edge here (see _role_policies),
+        so public-compute → role → table surfaces as a data-exposure path (mirrors S3)."""
+        try:
+            ddb = session.client("dynamodb", region_name=region)
+            for page in ddb.get_paginator("list_tables").paginate():
+                for name in page.get("TableNames", []):
+                    arn = f"arn:aws:dynamodb:{region}:{account_id}:table/{name}"
+                    add(mk(arn, "AwsDynamoDbTable", Exposure.PRIVATE, name, region))
+        except Exception:
+            logger.exception("boto3_inventory dynamodb enumerate failed account=%s region=%s", account_id, region)
+
+
+def _analyze_policy(doc: dict) -> _PolicyReach:
+    """What an IAM policy document grants reach to — best-effort (see ``_PolicyReach``).
+
+    ``reads_all_*`` is True when a data grant targets Resource ``*`` (every resource of that
+    type); the name/ARN sets hold the specific resources a grant scopes to. This lets the
+    data-reach edges (READS_BUCKET / READS_TABLE) point at what a role can ACTUALLY reach.
     """
     is_admin = False
     reads_all_s3 = False
     s3_buckets: set[str] = set()
+    reads_all_dynamodb = False
+    dynamodb_tables: set[str] = set()
     statements = doc.get("Statement", []) if isinstance(doc, dict) else []
     if isinstance(statements, dict):
         statements = [statements]
@@ -497,4 +590,43 @@ def _analyze_policy(doc: dict) -> tuple[bool, bool, set[str]]:
                 elif r.startswith("arn:aws:s3:::"):
                     # arn:aws:s3:::bucket | …/* | …/key → the bucket name
                     s3_buckets.add(r[len("arn:aws:s3:::") :].split("/", 1)[0])
-    return is_admin, reads_all_s3, s3_buckets
+        if any(a == "*" or a.startswith("dynamodb:") for a in acts):
+            for r in res:
+                if r == "*":
+                    reads_all_dynamodb = True
+                elif ":table/" in r:
+                    # arn:aws:dynamodb:region:acct:table/Name[/index/..|/stream/..] → table root arn
+                    head, tail = r.split(":table/", 1)
+                    table_name = tail.split("/", 1)[0]
+                    if table_name == "*":
+                        reads_all_dynamodb = True
+                    else:
+                        dynamodb_tables.add(f"{head}:table/{table_name}")
+    return _PolicyReach(
+        is_admin=is_admin,
+        reads_all_s3=reads_all_s3,
+        s3_buckets=frozenset(s3_buckets),
+        reads_all_dynamodb=reads_all_dynamodb,
+        dynamodb_tables=frozenset(dynamodb_tables),
+    )
+
+
+def _policy_allows_public_principal(doc: dict) -> bool:
+    """A resource-based policy that lets an anonymous/public principal act — Principal ``*``
+    (or ``{"AWS": "*"}``) on an Allow. Best-effort; a public principal is worth surfacing even
+    when a Condition narrows it, so conditions are not treated as a mitigation here.
+    """
+    statements = doc.get("Statement", []) if isinstance(doc, dict) else []
+    if isinstance(statements, dict):
+        statements = [statements]
+    for st in statements:
+        if not isinstance(st, dict) or st.get("Effect") != "Allow":
+            continue
+        principal = st.get("Principal")
+        if principal == "*":
+            return True
+        if isinstance(principal, dict):
+            aws = principal.get("AWS")
+            if aws == "*" or (isinstance(aws, list) and "*" in aws):
+                return True
+    return False
