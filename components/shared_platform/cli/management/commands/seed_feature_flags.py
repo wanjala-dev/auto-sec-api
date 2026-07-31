@@ -88,6 +88,14 @@ DEFAULT_FLAGS = [
         "CloudQuery-backfillable later with no schema change. See "
         "docs/plans/CLOUD_ASSET_GRAPH_SPIKE.md.",
     ),
+    (
+        "feature.log_source_cloudwatch",
+        True,
+        "Multi-source log ingestion (ADR 0008 D5): registers the CloudWatch Logs "
+        "LogSourcePort adapter — the second real log source after S3. On by default; "
+        "flip OFF to hide CloudWatch from the Log Sources API/UI. Datadog/Splunk follow "
+        "the same per-adapter flag pattern. See docs/adr/0008-multi-source-log-ingestion-port.md.",
+    ),
 ]
 
 

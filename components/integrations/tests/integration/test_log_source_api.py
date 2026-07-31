@@ -71,6 +71,37 @@ class TestLogSourceCrud:
         assert resp.status_code == 400
         assert "not available" in resp.data["error"]
 
+    def test_create_cloudwatch_source_starts_as_draft(self, api_client, owner_ws):
+        ws, owner = owner_ws
+        conn = _connection(ws, owner)
+        api_client.force_authenticate(owner)
+        resp = api_client.post(
+            _base(ws.id),
+            {
+                "kind": "cloudwatch",
+                "name": "lambda logs",
+                "config": {
+                    "aws_connection_id": str(conn.id),
+                    "log_group": "/aws/lambda/acme",
+                    "region": "us-east-1",
+                },
+            },
+            format="json",
+        )
+        assert resp.status_code == 201, resp.data
+        assert resp.data["data"]["kind"] == "cloudwatch"
+        assert resp.data["data"]["status"] == "draft"
+        assert resp.data["data"]["config"]["log_group"] == "/aws/lambda/acme"
+
+    def test_create_cloudwatch_rejects_missing_log_group(self, api_client, owner_ws):
+        ws, owner = owner_ws
+        api_client.force_authenticate(owner)
+        resp = api_client.post(
+            _base(ws.id), {"kind": "cloudwatch", "config": {"aws_connection_id": "x"}}, format="json"
+        )
+        assert resp.status_code == 400
+        assert "log_group" in resp.data["error"]
+
     def test_patch_disable_then_enable(self, api_client, owner_ws):
         ws, owner = owner_ws
         conn = _connection(ws, owner)

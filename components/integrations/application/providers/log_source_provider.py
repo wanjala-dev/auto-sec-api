@@ -35,9 +35,16 @@ class LogSourceProvider:
             S3LogSourceAdapter,
         )
 
-        # S3 is the first (and, in Phase 1, only) real adapter. CloudWatch / Datadog
-        # / Splunk register here behind their feature flags as they land (ADR 0008 D5).
-        return {S3LogSourceAdapter.KIND: S3LogSourceAdapter()}
+        # S3 is the first real adapter, always on. CloudWatch is the second — registered
+        # behind its feature flag (ADR 0008 D5); Datadog/Splunk follow the same pattern.
+        sources: LogSourceAdapters = {S3LogSourceAdapter.KIND: S3LogSourceAdapter()}
+        if _is_cloudwatch_enabled():
+            from components.integrations.infrastructure.adapters.log_sources.cloudwatch_log_source_adapter import (
+                CloudWatchLogSourceAdapter,
+            )
+
+            sources[CloudWatchLogSourceAdapter.KIND] = CloudWatchLogSourceAdapter()
+        return sources
 
     def get(self, kind: str) -> LogSourcePort:
         adapter = self._sources.get((kind or "").lower())
@@ -47,6 +54,20 @@ class LogSourceProvider:
 
     def kinds(self) -> tuple[str, ...]:
         return tuple(self._sources.keys())
+
+
+def _is_cloudwatch_enabled() -> bool:
+    """Whether the CloudWatch log-source adapter is enabled (feature-flag gated,
+    ADR 0008 D5). Evaluated global (no workspace context); fails CLOSED so a
+    flag-service outage never registers an unvetted adapter."""
+    try:
+        from components.shared_platform.application.providers.feature_flags_provider import (
+            get_feature_flags_provider,
+        )
+
+        return bool(get_feature_flags_provider().is_feature_enabled("feature.log_source_cloudwatch"))
+    except Exception:  # pragma: no cover - import/flag-service safety
+        return False
 
 
 _PROVIDER: LogSourceProvider | None = None

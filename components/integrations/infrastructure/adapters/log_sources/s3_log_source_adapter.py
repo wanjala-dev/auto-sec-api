@@ -77,19 +77,11 @@ class S3LogSourceAdapter(LogSourcePort):
     @staticmethod
     def _client(config: dict):
         """Assume the customer's read role and return an S3 client scoped to it."""
-        import boto3
-
-        creds = boto3.client("sts").assume_role(
-            RoleArn=f"arn:aws:iam::{config['management_account_id']}:role/{config['role_name']}",
-            RoleSessionName="autosec-logwatch",
-            ExternalId=config["external_id"],
-        )["Credentials"]
-        return boto3.client(
-            "s3",
-            aws_access_key_id=creds["AccessKeyId"],
-            aws_secret_access_key=creds["SecretAccessKey"],
-            aws_session_token=creds["SessionToken"],
+        from components.integrations.infrastructure.adapters.log_sources._aws_creds import (
+            assume_role_client,
         )
+
+        return assume_role_client(config, "s3")
 
     @staticmethod
     def _list_window_keys(s3, config: dict, *, max_objects: int, after: str = "") -> list[str]:
