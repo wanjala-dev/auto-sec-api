@@ -12,11 +12,8 @@ double-alert. Records are keyed by content hash for within-batch dedupe.
 
 from __future__ import annotations
 
-import gzip
 import hashlib
-import json
 import logging
-import re
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -39,6 +36,11 @@ class LogRecord:
     # line carried no parseable timestamp (the aggregator falls back to
     # ingestion time).
     ts: datetime | None = None
+    # Which log source produced this record (ADR 0008 D2). Lets a merged,
+    # multi-source stream self-identify so the HUD/map can group or filter by
+    # source. Defaults keep every existing construction valid.
+    source_kind: str = ""  # "s3" | "cloudwatch" | "datadog" | "splunk" | …
+    source_id: str = ""  # the WorkspaceLogSource id, once sources are first-class
 
 
 @dataclass
@@ -53,111 +55,45 @@ class DetectionResult:
     tail: list[LogRecord] = field(default_factory=list)
 
 
-# Docker's json-driver timestamps carry nanoseconds; ``fromisoformat`` wants
-# at most microseconds — trim anything beyond 6 fractional digits.
-_ISO_FRACTION_TRIM_RE = re.compile(r"(\.\d{6})\d+")
-
-
-def _parse_record_time(rec: dict) -> datetime | None:
-    """Parse the Docker json-driver ``time`` field (best-effort, never raises)."""
-    raw_time = rec.get("time") or rec.get("timestamp") or ""
-    if not raw_time:
-        return None
-    try:
-        cleaned = _ISO_FRACTION_TRIM_RE.sub(r"\1", str(raw_time).replace("Z", "+00:00"))
-        return datetime.fromisoformat(cleaned)
-    except (ValueError, TypeError):
-        return None
-
-
-def _flatten_record(rec: dict) -> LogRecord:
-    """A Docker-json line whose ``log`` field is itself app JSON (web/celery)."""
-    service = (rec.get("attrs") or {}).get("com.docker.compose.service", "?")
-    inner_raw = rec.get("log") or rec.get("message") or ""
-    level, message = "INFO", inner_raw.strip()
-    try:
-        inner = json.loads(inner_raw)
-        if isinstance(inner, dict):
-            level = str(inner.get("level") or inner.get("levelname") or "INFO").upper()
-            message = str(inner.get("message") or inner.get("msg") or inner_raw)
-    except (ValueError, TypeError):
-        pass
-    return LogRecord(service=service, level=level, message=message[:1000], raw=inner_raw, ts=_parse_record_time(rec))
-
-
 def _is_error(r: LogRecord) -> bool:
     if r.level in _ERROR_LEVELS:
         return True
     return any(m in r.raw for m in _ERROR_MARKERS)
 
 
-def _assume_role_s3_client(connection):
-    """Assume the customer's read role and return an S3 client scoped to it.
+def _s3_config_from_connection(connection) -> dict:
+    """The S3 source's config, derived from the AWS connection.
 
-    Extracted so both the error scan (``scan_connection``) and the temporal
-    pattern aggregator (``log_pattern_analyzer``) share ONE credential path —
-    the assume-role + confused-deputy ``ExternalId`` posture lives in a single
-    place, not copy-pasted per reader (DRY; solve once).
+    Phase-1 bridge (ADR 0008): the S3 log source still reads its bucket/prefix
+    from the connection's (deprecated) trail fields. In Phase 2 this config comes
+    from a first-class ``WorkspaceLogSource`` row instead, and this helper goes
+    away — the read path (the S3 adapter) does not change.
     """
-    import boto3
+    return {
+        "management_account_id": connection.management_account_id,
+        "role_name": connection.role_name,
+        "external_id": connection.external_id,
+        "bucket": connection.trail_s3_bucket,
+        "prefix": connection.trail_s3_prefix or "logs/",
+    }
 
-    creds = boto3.client("sts").assume_role(
-        RoleArn=f"arn:aws:iam::{connection.management_account_id}:role/{connection.role_name}",
-        RoleSessionName="autosec-logwatch",
-        ExternalId=connection.external_id,
-    )["Credentials"]
-    return boto3.client(
-        "s3",
-        aws_access_key_id=creds["AccessKeyId"],
-        aws_secret_access_key=creds["SecretAccessKey"],
-        aws_session_token=creds["SessionToken"],
+
+def read_source_window(connection, *, max_objects: int = 20, after: str = "") -> LogWindow:
+    """Read the newest window of records for a connection's log source(s).
+
+    The shared read seam both the error scan (``scan_connection``) and the
+    temporal aggregator (``log_pattern_analyzer``) go through — it resolves the
+    source adapter from the provider and drives it via ``LogSourcePort`` (ADR
+    0008). Checkpoint-free (the caller decides whether to advance a cursor), so
+    the aggregator can re-read overlapping windows without disturbing the error
+    scan's cursor. Phase 1: one S3 source per connection.
+    """
+    from components.integrations.application.providers.log_source_provider import (
+        get_log_source_provider,
     )
 
-
-def _list_window_keys(s3, connection, *, max_objects: int, after: str = "") -> list[str]:
-    """Return the newest ``max_objects`` object keys under the connection prefix.
-
-    ``after`` (a checkpoint cursor) skips already-processed keys; pass "" for a
-    full recent-window read (what the temporal aggregator wants — it needs the
-    whole window each run, not just what's new since the last error scan).
-    """
-    prefix = connection.trail_s3_prefix or "logs/"
-    keys: list[str] = []
-    paginator = s3.get_paginator("list_objects_v2")
-    for page in paginator.paginate(Bucket=connection.trail_s3_bucket, Prefix=prefix):
-        for obj in page.get("Contents", []):
-            if after and obj["Key"] <= after:
-                continue
-            keys.append(obj["Key"])
-    keys.sort()
-    return keys[-max_objects:]  # newest window
-
-
-def iter_window_records(connection, *, max_objects: int = 20, after: str = ""):
-    """Yield ``(LogRecord, object_key)`` for the newest window — no side effects.
-
-    The shared read primitive: assume role → list newest keys → download →
-    gunzip → parse each JSON line. Checkpoint-free (the caller decides whether to
-    advance a cursor), so the pattern aggregator can re-read overlapping windows
-    to observe a pattern SUSTAINED over time without disturbing the error scan's
-    cursor.
-    """
-    s3 = _assume_role_s3_client(connection)
-    for key in _list_window_keys(s3, connection, max_objects=max_objects, after=after):
-        body = s3.get_object(Bucket=connection.trail_s3_bucket, Key=key)["Body"].read()
-        try:
-            text = gzip.decompress(body).decode("utf-8", "replace")
-        except OSError:
-            text = body.decode("utf-8", "replace")
-        for line in text.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except ValueError:
-                continue
-            yield _flatten_record(rec), key
+    source = get_log_source_provider().get("s3")
+    return source.read_window(_s3_config_from_connection(connection), since=after, limit=max_objects)
 
 
 def scan_connection(connection, *, max_objects: int = 20, only_new: bool = True) -> DetectionResult:
@@ -176,21 +112,19 @@ def scan_connection(connection, *, max_objects: int = 20, only_new: bool = True)
     )
     after = checkpoint.last_object_key if only_new else ""
 
+    window = read_source_window(connection, max_objects=max_objects, after=after)
+
     result = DetectionResult()
+    result.objects_scanned = window.objects_scanned
+    result.newest_key = window.cursor
     seen_hashes: set[str] = set()
-    seen_keys: set[str] = set()
-    window_records: list[LogRecord] = []
-    for lr, key in iter_window_records(connection, max_objects=max_objects, after=after):
-        if key not in seen_keys:
-            seen_keys.add(key)
-            result.objects_scanned += 1
-        result.newest_key = max(result.newest_key, key)
+    window_records: list[LogRecord] = list(window.records)
+    for lr in window.records:
         result.records_parsed += 1
         result.tail.append(lr)
         if len(result.tail) > 150:
             result.tail.pop(0)
         result.by_service[lr.service] = result.by_service.get(lr.service, 0) + 1
-        window_records.append(lr)
         if _is_error(lr):
             h = hashlib.sha256(lr.raw.encode()).hexdigest()[:16]
             if h not in seen_hashes:

@@ -28,7 +28,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from components.integrations.application.log_ingest_service import iter_window_records
+from components.integrations.application.log_ingest_service import read_source_window
 
 logger = logging.getLogger(__name__)
 
@@ -191,7 +191,7 @@ def aggregate_workspace_log_patterns(
     counts: dict[str, int] = {}
     meta: dict[str, dict] = {}
     total_lines = 0
-    for lr, _key in iter_window_records(conn, max_objects=max_objects, after=""):
+    for lr in read_source_window(conn, max_objects=max_objects, after="").records:
         total_lines += 1
         kind, subject = _classify(lr.service, lr.message)
         sig = _signature(lr.service, lr.message)
