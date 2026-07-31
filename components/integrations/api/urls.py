@@ -9,6 +9,9 @@ from components.integrations.api.controller import (
     AwsConnectionTemplateView,
     AwsConnectionVerifyView,
     FindingOpenDraftPrView,
+    WorkspaceLogSourceDetailView,
+    WorkspaceLogSourceListCreateView,
+    WorkspaceLogSourceVerifyView,
 )
 
 urlpatterns = [
@@ -44,5 +47,21 @@ urlpatterns = [
         "workspaces/<uuid:workspace_id>/findings/<str:task_id>/open-draft-pr/",
         FindingOpenDraftPrView.as_view(),
         name=FindingOpenDraftPrView.name,
+    ),
+    # ── Log sources (ADR 0008 Phase 3) ──
+    path(
+        "workspaces/<uuid:workspace_id>/log-sources/",
+        WorkspaceLogSourceListCreateView.as_view(),
+        name=WorkspaceLogSourceListCreateView.name,
+    ),
+    path(
+        "workspaces/<uuid:workspace_id>/log-sources/<uuid:source_id>/",
+        WorkspaceLogSourceDetailView.as_view(),
+        name=WorkspaceLogSourceDetailView.name,
+    ),
+    path(
+        "workspaces/<uuid:workspace_id>/log-sources/<uuid:source_id>/verify/",
+        WorkspaceLogSourceVerifyView.as_view(),
+        name=WorkspaceLogSourceVerifyView.name,
     ),
 ]
