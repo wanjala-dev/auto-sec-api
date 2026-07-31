@@ -62,19 +62,45 @@ def _is_error(r: LogRecord) -> bool:
 
 
 def _s3_config_from_connection(connection) -> dict:
-    """The S3 source's config, derived from the AWS connection.
+    """The S3 source's config: bucket/prefix from the WorkspaceLogSource, creds
+    from the AWS connection (ADR 0008 D7).
 
-    Phase-1 bridge (ADR 0008): the S3 log source still reads its bucket/prefix
-    from the connection's (deprecated) trail fields. In Phase 2 this config comes
-    from a first-class ``WorkspaceLogSource`` row instead, and this helper goes
-    away — the read path (the S3 adapter) does not change.
+    The S3 *location* now lives on a first-class ``WorkspaceLogSource`` row, so a
+    connection re-verify can no longer blank where logs are read from — the fix
+    for the "logs silently stopped" regression. The connection still vends the
+    assume-role identity (management account / role / ExternalId). A transitional
+    fallback to the deprecated ``trail_s3_*`` fields keeps envs that predate the
+    seed migration working; it is removed once every env is migrated.
     """
+    from infrastructure.persistence.integrations.models import WorkspaceLogSource
+
+    source = (
+        WorkspaceLogSource.objects.filter(
+            workspace_id=connection.workspace_id,
+            kind=WorkspaceLogSource.Kind.S3,
+            status=WorkspaceLogSource.Status.ACTIVE,
+            config__aws_connection_id=str(connection.id),
+        )
+        .order_by("created_at")
+        .first()
+    )
+    if source is not None:
+        bucket = source.config.get("bucket", "")
+        prefix = source.config.get("prefix") or "logs/"
+        source_id = str(source.id)
+    else:
+        # Deprecated fallback (ADR 0008 D7): the connection's own trail fields.
+        bucket = connection.trail_s3_bucket
+        prefix = connection.trail_s3_prefix or "logs/"
+        source_id = ""
+
     return {
         "management_account_id": connection.management_account_id,
         "role_name": connection.role_name,
         "external_id": connection.external_id,
-        "bucket": connection.trail_s3_bucket,
-        "prefix": connection.trail_s3_prefix or "logs/",
+        "bucket": bucket,
+        "prefix": prefix,
+        "source_id": source_id,
     }
 
 

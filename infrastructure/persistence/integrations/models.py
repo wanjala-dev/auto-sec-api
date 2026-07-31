@@ -53,7 +53,12 @@ class AwsOrganizationConnection(models.Model):
     regions = models.JSONField(default=list, help_text="Regions to ingest from; empty = all enabled.")
     # Org-wide rollout: StackSet w/ service-managed perms + auto-deployment.
     org_wide = models.BooleanField(default=True)
-    # Ingestion wiring (org trail → central S3 → SQS)
+    # Ingestion wiring (org trail → central S3 → SQS).
+    # DEPRECATED (ADR 0008 D7): the S3 log location now lives on a first-class
+    # WorkspaceLogSource(kind=s3) row (seeded from these by migration 0006), so a
+    # re-verify can't blank where logs are read from. The read path prefers the
+    # WorkspaceLogSource and only falls back to these transitionally. Do not add
+    # new readers of these fields; a later migration drops the columns.
     trail_s3_bucket = models.CharField(max_length=255, blank=True, default="")
     trail_s3_prefix = models.CharField(max_length=255, blank=True, default="")
     sqs_queue_url = models.CharField(max_length=512, blank=True, default="")
@@ -124,6 +129,61 @@ class IngestCheckpoint(models.Model):
                 name="uniq_ingest_cursor",
             )
         ]
+
+
+class WorkspaceLogSource(models.Model):
+    """A configured log source for a workspace (ADR 0008).
+
+    Many rows per workspace = many sources ingested at once (an S3 trail, a
+    CloudWatch log group, a Datadog site, a Splunk index, an HTTP webhook). The
+    per-kind ``config`` is opaque to the core — each ``LogSourcePort`` adapter
+    knows its own shape. Crucially this is a FIRST-CLASS, owned resource with its
+    own lifecycle, so log configuration survives operations on other resources: an
+    AWS connection re-verify can no longer silently blank *where* logs are read
+    from (the regression that motivated ADR 0008). The S3 location lives here; the
+    connection only vends the assume-role credentials.
+    """
+
+    class Kind(models.TextChoices):
+        S3 = "s3", "Amazon S3 trail"
+        CLOUDWATCH = "cloudwatch", "Amazon CloudWatch Logs"
+        DATADOG = "datadog", "Datadog"
+        SPLUNK = "splunk", "Splunk"
+        WEBHOOK = "webhook", "HTTP webhook (push)"
+
+    class Status(models.TextChoices):
+        DRAFT = "draft", "Draft"
+        ACTIVE = "active", "Active"
+        ERROR = "error", "Error"
+        DISABLED = "disabled", "Disabled"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name="log_sources")
+    kind = models.CharField(max_length=16, choices=Kind.choices)
+    name = models.CharField(max_length=120, default="")
+    # Per-kind, opaque to the core. S3: {aws_connection_id, bucket, prefix}.
+    # CloudWatch: {aws_connection_id, log_group, region}. Datadog: {site}. Splunk:
+    # {host, index}. 3P API keys are NEVER stored here in plaintext — they ride on
+    # ``secret_ref`` (a secret_envelope id) once those adapters land.
+    config = models.JSONField(default=dict, blank=True)
+    secret_ref = models.CharField(max_length=255, blank=True, default="")
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT)
+    # Per-source ingestion cursor (generalizes IngestCheckpoint.last_object_key
+    # across source kinds — an S3 key, a CloudWatch nextToken, a time cursor).
+    cursor = models.CharField(max_length=1024, blank=True, default="")
+    last_verified_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["workspace", "status"]),
+            models.Index(fields=["workspace", "kind"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.kind}:{self.name or self.id}"
 
 
 class LogPatternRollup(models.Model):
