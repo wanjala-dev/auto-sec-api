@@ -5,9 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 _VALID_KINDS = {"s3", "cloudwatch", "datadog", "splunk", "webhook"}
-# Phase 3 ships only the S3 adapter; the rest are catalog-visible but not yet
-# selectable via the API until their adapters land (behind their feature flags).
-_ENABLED_KINDS = {"s3"}
+# Kinds with a shipped adapter, selectable via the API. CloudWatch (Phase 4) is
+# additionally gated at the provider by ``feature.log_source_cloudwatch``; Datadog/
+# Splunk stay catalog-only until their adapters land.
+_ENABLED_KINDS = {"s3", "cloudwatch"}
 _VALID_STATUSES = {"draft", "active", "error", "disabled"}
 
 
@@ -38,6 +39,11 @@ class CreateLogSourceRequest:
                 return "S3 log source requires config.aws_connection_id."
             if not str(self.config.get("bucket") or "").strip():
                 return "S3 log source requires config.bucket."
+        if self.kind == "cloudwatch":
+            if not str(self.config.get("aws_connection_id") or "").strip():
+                return "CloudWatch log source requires config.aws_connection_id."
+            if not str(self.config.get("log_group") or "").strip():
+                return "CloudWatch log source requires config.log_group."
         return None
 
 

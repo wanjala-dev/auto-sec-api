@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest import mock
+
 import pytest
 
 from components.integrations.application.providers.log_source_provider import (
@@ -9,9 +11,14 @@ from components.integrations.application.providers.log_source_provider import (
     UnsupportedLogSourceError,
     get_log_source_provider,
 )
+from components.integrations.infrastructure.adapters.log_sources.cloudwatch_log_source_adapter import (
+    CloudWatchLogSourceAdapter,
+)
 from components.integrations.infrastructure.adapters.log_sources.s3_log_source_adapter import (
     S3LogSourceAdapter,
 )
+
+_MODULE = "components.integrations.application.providers.log_source_provider"
 
 
 @pytest.mark.unit
@@ -36,3 +43,15 @@ class TestLogSourceProvider:
 
     def test_singleton_accessor_is_stable(self):
         assert get_log_source_provider() is get_log_source_provider()
+
+    def test_cloudwatch_registered_when_flag_on(self):
+        with mock.patch(f"{_MODULE}._is_cloudwatch_enabled", return_value=True):
+            provider = LogSourceProvider()
+        assert isinstance(provider.get("cloudwatch"), CloudWatchLogSourceAdapter)
+        assert "cloudwatch" in provider.kinds()
+
+    def test_cloudwatch_absent_when_flag_off(self):
+        with mock.patch(f"{_MODULE}._is_cloudwatch_enabled", return_value=False):
+            provider = LogSourceProvider()
+        with pytest.raises(UnsupportedLogSourceError):
+            provider.get("cloudwatch")
