@@ -25,6 +25,7 @@ from components.integrations.application.log_metrics_service import (
     SECURITY_METRICS,
     aggregate_security_metrics,
 )
+from components.integrations.application.ports.log_source_port import LogWindow
 
 _INGEST = "components.integrations.application.log_ingest_service"
 _METRICS = "components.integrations.application.log_metrics_service"
@@ -202,13 +203,13 @@ class TestIngestWiringFailureSafety:
     def _window(self):
         msg = "ERROR boom"
         rec = LogRecord(service="web", level="ERROR", message=msg, raw=msg, ts=_HOUR)
-        return [(rec, "logs/2026/window.json.gz")]
+        return LogWindow(records=(rec,), cursor="logs/2026/window.json.gz", objects_scanned=1)
 
     def test_scan_connection_feeds_buckets(self, connection):
         from components.integrations.application.log_ingest_service import scan_connection
         from infrastructure.persistence.integrations.models import LogMetricBucket
 
-        with mock.patch(f"{_INGEST}.iter_window_records", return_value=self._window()):
+        with mock.patch(f"{_INGEST}.read_source_window", return_value=self._window()):
             result = scan_connection(connection, only_new=False)
 
         assert result.records_parsed == 1
@@ -220,7 +221,7 @@ class TestIngestWiringFailureSafety:
         from infrastructure.persistence.integrations.models import IngestCheckpoint
 
         with (
-            mock.patch(f"{_INGEST}.iter_window_records", return_value=self._window()),
+            mock.patch(f"{_INGEST}.read_source_window", return_value=self._window()),
             mock.patch(
                 f"{_METRICS}.aggregate_security_metrics",
                 side_effect=RuntimeError("aggregation exploded"),

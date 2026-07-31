@@ -19,6 +19,7 @@ from unittest import mock
 import pytest
 
 from components.integrations.application.log_ingest_service import LogRecord
+from components.integrations.application.ports.log_source_port import LogWindow
 
 _ANALYZER = "components.integrations.application.log_pattern_analyzer_service"
 
@@ -35,9 +36,9 @@ def _health_line():
 
 def _window(beat_n=12, health_n=25):
     """One synthetic window: an over-scheduled beat task + redis housekeeping."""
-    recs = [(_beat_line(), "logs/2026/window.json.gz") for _ in range(beat_n)]
-    recs += [(_health_line(), "logs/2026/window.json.gz") for _ in range(health_n)]
-    return recs
+    recs = [_beat_line() for _ in range(beat_n)]
+    recs += [_health_line() for _ in range(health_n)]
+    return LogWindow(records=tuple(recs), cursor="logs/2026/window.json.gz", objects_scanned=1)
 
 
 @pytest.fixture
@@ -64,7 +65,7 @@ class TestLogPatternAnalyzer:
         )
         from infrastructure.persistence.integrations.models import LogPatternRollup
 
-        with mock.patch(f"{_ANALYZER}.iter_window_records", return_value=_window()):
+        with mock.patch(f"{_ANALYZER}.read_source_window", return_value=_window()):
             first = aggregate_workspace_log_patterns(connected_workspace.id, min_runs=2)
         # First observation is a blip — nothing surfaced yet, but the rollup exists.
         assert first == []
@@ -75,7 +76,7 @@ class TestLogPatternAnalyzer:
         assert beat_rollup.kind == "periodic_task"
 
         # Second run — now sustained; the over-scheduled task is surfaced.
-        with mock.patch(f"{_ANALYZER}.iter_window_records", return_value=_window()):
+        with mock.patch(f"{_ANALYZER}.read_source_window", return_value=_window()):
             second = aggregate_workspace_log_patterns(connected_workspace.id, min_runs=2)
 
         kinds = {f.kind for f in second}
@@ -91,7 +92,7 @@ class TestLogPatternAnalyzer:
         )
 
         for _ in range(2):
-            with mock.patch(f"{_ANALYZER}.iter_window_records", return_value=_window()):
+            with mock.patch(f"{_ANALYZER}.read_source_window", return_value=_window()):
                 findings = aggregate_workspace_log_patterns(connected_workspace.id, min_runs=2)
 
         beat = next(f for f in findings if f.kind == "periodic_task")
@@ -115,7 +116,7 @@ class TestLogPatternAnalyzer:
 
         fps = []
         for _ in range(3):
-            with mock.patch(f"{_ANALYZER}.iter_window_records", return_value=_window()):
+            with mock.patch(f"{_ANALYZER}.read_source_window", return_value=_window()):
                 findings = aggregate_workspace_log_patterns(connected_workspace.id, min_runs=2)
             beat = [f for f in findings if f.kind == "periodic_task"]
             if beat:
