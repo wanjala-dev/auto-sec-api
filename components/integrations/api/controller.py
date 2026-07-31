@@ -32,6 +32,10 @@ from rest_framework.views import APIView
 from components.integrations.api.requests.create_aws_connection_request import (
     CreateAwsConnectionRequest,
 )
+from components.integrations.api.requests.log_source_request import (
+    CreateLogSourceRequest,
+    UpdateLogSourceRequest,
+)
 from components.integrations.api.requests.open_draft_pr_request import (
     OpenDraftPrRequest,
 )
@@ -39,12 +43,16 @@ from components.integrations.api.resources.aws_connection_resource import (
     AwsConnectionResource,
 )
 from components.integrations.api.resources.draft_pr_resource import DraftPrResource
+from components.integrations.api.resources.log_source_resource import LogSourceResource
 from components.integrations.application.aws_connection_service import (
     OrgVerificationError,
 )
 from components.integrations.application.providers.aws_connection_provider import (
     get_aws_connection_service,
     get_onboarding_template_use_case,
+)
+from components.integrations.application.providers.log_source_provider import (
+    get_log_source_service,
 )
 from components.membership.api.permissions import has_workspace_permission
 
@@ -289,3 +297,67 @@ class AwsConnectionLogStreamView(APIView):
             }
             cache.set(cache_key, payload, 60)
         return Response({"success": True, "data": payload})
+
+
+# ── WorkspaceLogSource CRUD (ADR 0008 Phase 3) — configure one or many log
+#    sources per workspace (S3 today; CloudWatch/Datadog/Splunk as adapters land).
+
+
+class WorkspaceLogSourceListCreateView(APIView):
+    permission_classes = (permissions.IsAuthenticated, CanManageIntegrations)
+    name = "integrations-log-sources"
+
+    def get(self, request, workspace_id):
+        sources = get_log_source_service().list_sources(workspace_id)
+        return Response({"success": True, "data": [LogSourceResource.from_model(s).to_dict() for s in sources]})
+
+    def post(self, request, workspace_id):
+        req = CreateLogSourceRequest.from_payload(request.data)
+        error = req.validation_error()
+        if error:
+            return Response({"success": False, "error": error}, status=status.HTTP_400_BAD_REQUEST)
+        source = get_log_source_service().create_source(
+            workspace_id=workspace_id, kind=req.kind, name=req.name, config=req.config
+        )
+        return Response(
+            {"success": True, "data": LogSourceResource.from_model(source).to_dict()},
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class WorkspaceLogSourceDetailView(APIView):
+    permission_classes = (permissions.IsAuthenticated, CanManageIntegrations)
+    name = "integrations-log-source-detail"
+
+    def patch(self, request, workspace_id, source_id):
+        service = get_log_source_service()
+        source = service.get_source(workspace_id, source_id)
+        if source is None:
+            return Response({"success": False, "error": "Log source not found."}, status=404)
+        req = UpdateLogSourceRequest.from_payload(request.data)
+        error = req.validation_error()
+        if error:
+            return Response({"success": False, "error": error}, status=status.HTTP_400_BAD_REQUEST)
+        source = service.update_source(source, name=req.name, config=req.config, status=req.status)
+        return Response({"success": True, "data": LogSourceResource.from_model(source).to_dict()})
+
+    def delete(self, request, workspace_id, source_id):
+        service = get_log_source_service()
+        source = service.get_source(workspace_id, source_id)
+        if source is None:
+            return Response({"success": False, "error": "Log source not found."}, status=404)
+        service.delete_source(source)
+        return Response({"success": True, "deleted": True})
+
+
+class WorkspaceLogSourceVerifyView(APIView):
+    permission_classes = (permissions.IsAuthenticated, CanManageIntegrations)
+    name = "integrations-log-source-verify"
+
+    def post(self, request, workspace_id, source_id):
+        service = get_log_source_service()
+        source = service.get_source(workspace_id, source_id)
+        if source is None:
+            return Response({"success": False, "error": "Log source not found."}, status=404)
+        source = service.verify_source(source)
+        return Response({"success": True, "data": LogSourceResource.from_model(source).to_dict()})

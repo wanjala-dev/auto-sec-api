@@ -58,3 +58,15 @@ def get_log_source_provider() -> LogSourceProvider:
     if _PROVIDER is None:
         _PROVIDER = LogSourceProvider()
     return _PROVIDER
+
+
+def get_log_source_service():
+    """Composition root for the WorkspaceLogSource lifecycle service (ADR 0008
+    Phase 3) — wires the repository + the adapter registry. Controllers resolve
+    this and stay ORM/SDK-free."""
+    from components.integrations.application.log_source_service import LogSourceService
+    from components.integrations.infrastructure.repositories.log_source_repository import (
+        LogSourceRepository,
+    )
+
+    return LogSourceService(_repo=LogSourceRepository(), _provider=get_log_source_provider())

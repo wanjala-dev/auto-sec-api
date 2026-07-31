@@ -84,6 +84,15 @@ def _s3_config_from_connection(connection) -> dict:
         .order_by("created_at")
         .first()
     )
+    return s3_adapter_config(connection, source)
+
+
+def s3_adapter_config(connection, source=None) -> dict:
+    """Assemble the S3 adapter's config: assume-role creds from the AWS connection,
+    bucket/prefix from the WorkspaceLogSource (or the deprecated trail fields when
+    no source is given). The one canonical place this is built — reused by the read
+    path (connection → its source) and by verify (source → its connection).
+    """
     if source is not None:
         bucket = source.config.get("bucket", "")
         prefix = source.config.get("prefix") or "logs/"
