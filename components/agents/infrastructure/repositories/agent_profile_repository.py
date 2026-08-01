@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from components.agents.application.config.agent_capabilities import ALLOWED_AGENT_CAPABILITIES
 from components.agents.application.ports.agent_profile_port import (
     AgentProfileData,
     AgentProfilePort,
@@ -222,11 +223,12 @@ class OrmAgentProfileRepository(AgentProfilePort):
 
         return PatchAgentSettingsResult(profile=serializer.data)
 
-    # Capabilities toggleable via the API. Adding a new gated capability means
-    # adding it here AND wiring the tool/use case that reads it — never accept
-    # arbitrary keys (capabilities unlock risk-gated tools; this allowlist is
-    # the API-side half of that gate).
-    ALLOWED_CAPABILITIES = {"open_draft_pr"}
+    # Capabilities toggleable via the API. The accepted key set is the ONE
+    # canonical allowlist in ``application/config/agent_capabilities.py`` —
+    # shared with the workspace-level owner toggle so a new capability is added
+    # once and both surfaces agree. Kept as a class attribute for back-compat
+    # with existing callers/tests that read ``ALLOWED_CAPABILITIES``.
+    ALLOWED_CAPABILITIES = set(ALLOWED_AGENT_CAPABILITIES)
 
     def patch_agent_capabilities(self, *, command):
         """Merge boolean toggles into ``Agent.config.capabilities``.
@@ -259,9 +261,7 @@ class OrmAgentProfileRepository(AgentProfilePort):
         # so every change leaves an immutable audit row (who granted what,
         # when). The audit facade suppresses no-op writes itself. Read-side:
         # ``ai_governance_service.capability_grants``.
-        actor = getattr(command, "user", None) or getattr(
-            getattr(command, "http_request", None), "user", None
-        )
+        actor = getattr(command, "user", None) or getattr(getattr(command, "http_request", None), "user", None)
         try:
             from components.audit.application.providers.audit_log_provider import (
                 get_audit_log_provider,
@@ -276,8 +276,6 @@ class OrmAgentProfileRepository(AgentProfilePort):
                 reason="agent capability toggle via API",
             )
         except Exception:
-            logger.exception(
-                "capability grant audit write failed agent_id=%s", agent.agent_id
-            )
+            logger.exception("capability grant audit write failed agent_id=%s", agent.agent_id)
 
         return PatchAgentCapabilitiesResult(capabilities=capabilities)

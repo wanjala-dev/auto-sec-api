@@ -9,6 +9,7 @@ from components.integrations.api.controller import (
     AwsConnectionTemplateView,
     AwsConnectionVerifyView,
     FindingOpenDraftPrView,
+    TriageCapabilityView,
     VcsConnectionDetailView,
     VcsConnectionListCreateView,
     VcsConnectionVerifyView,
@@ -82,5 +83,11 @@ urlpatterns = [
         "workspaces/<uuid:workspace_id>/vcs-connections/<uuid:connection_id>/verify/",
         VcsConnectionVerifyView.as_view(),
         name=VcsConnectionVerifyView.name,
+    ),
+    # ── Triage-agent capability toggle (ADR 0010) — owner-gated ──
+    path(
+        "workspaces/<uuid:workspace_id>/triage-capabilities/",
+        TriageCapabilityView.as_view(),
+        name=TriageCapabilityView.name,
     ),
 ]

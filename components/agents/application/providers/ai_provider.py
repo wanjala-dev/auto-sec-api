@@ -545,6 +545,14 @@ class AIProvider:
 
         return SetAiKillSwitchUseCase()
 
+    @staticmethod
+    def build_set_workspace_agent_capability_use_case():
+        from components.agents.application.use_cases.set_workspace_agent_capability_use_case import (
+            SetWorkspaceAgentCapabilityUseCase,
+        )
+
+        return SetWorkspaceAgentCapabilityUseCase()
+
     # ── Engagement use cases ──────────────────────────────────────────
 
     @staticmethod
