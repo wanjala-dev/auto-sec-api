@@ -108,8 +108,13 @@ experts** — the security team you don't hire.
   in." Reinforces the CTEM/exposure lean.
 
 **Top validated build gaps (ranked by signal):**
-1. **Remediation → open a PR against their IaC (Terraform/CD).** Unprompted: "that should be a feature."
-   We have the response-action framework (propose→approve→execute→rollback) but not an *IaC-PR* action.
+1. **Remediation → draft PR to the linked repo (any fix, any provider).** Unprompted: "that should be a
+   feature." Turns out this is *mostly built* — a `GitHubPrPort` + adapter + `OpenDraftPrUseCase` +
+   `GitHubConnection` (repo-allowlist, encrypted PAT) + a real triage-agent tool already open draft PRs.
+   The gap is **productizing + generalizing** it: no CRUD API / Settings UI to link repos (so GitHub isn't
+   in the Integrations UI), and it's GitHub-only. **ADR 0010** generalizes it into a multi-provider
+   `VcsPort` (GitHub/GitLab/Bitbucket, mirroring the log-source multiport) + CRUD + panel. Not IaC-specific
+   — commits one file + opens a draft PR for *any* fix.
 2. **AI-introduced-vulnerability detection** — he lived it: a coding agent shipped broken tenant
    isolation (cross-customer data access). New threat class we're uniquely placed for: *catch the
    security regressions your coding agent introduces* (tenant leaks, secrets, over-permissive IaC in a PR).
