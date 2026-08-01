@@ -1,10 +1,10 @@
-"""Port for the GitHub draft-PR remediation surface (Explicit Architecture).
+"""Port for the VCS draft-PR remediation surface (Explicit Architecture, ADR 0010).
 
-Defines exactly the operations the ``open_draft_pr`` use case needs — fetch
-the default branch, read a file, create a branch, commit one file, open a
-DRAFT pull request. Shaped to fit the application core, not to mirror the
-GitHub API. The concrete adapter lives in
-``components/integrations/infrastructure/adapters/github_pr_adapter.py``.
+Defines exactly the operations the ``open_draft_pr`` use case needs — probe
+reachability, fetch the default branch, read a file, create a branch, commit one
+file, open a DRAFT pull request. Shaped to fit the application core, not to mirror
+any one provider's API. Concrete adapters (GitHub today; GitLab/Bitbucket behind
+flags) live in ``components/integrations/infrastructure/adapters/vcs/``.
 """
 
 from __future__ import annotations
@@ -13,14 +13,22 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 
-class GitHubApiError(RuntimeError):
-    """A GitHub API call failed. Never swallowed — carries the HTTP status and
+class VcsApiError(RuntimeError):
+    """A VCS provider API call failed. Never swallowed — carries the HTTP status and
     a truncated response detail (never the token)."""
 
     def __init__(self, message: str, *, status_code: int | None = None, detail: str = ""):
         super().__init__(message)
         self.status_code = status_code
         self.detail = detail
+
+
+@dataclass(frozen=True)
+class VcsHealth:
+    """The result of a reachability/access probe (mirrors ``LogSourceHealth``)."""
+
+    ok: bool
+    detail: str = ""  # human-readable reason on failure (never a secret)
 
 
 @dataclass(frozen=True)
@@ -50,7 +58,8 @@ class CommittedFile:
 
 @dataclass(frozen=True)
 class DraftPullRequest:
-    """An opened draft pull request."""
+    """An opened draft pull request (a GitLab *merge request* / Bitbucket *pull
+    request* is the adapter's mapping onto this shape)."""
 
     url: str
     number: int
@@ -59,8 +68,15 @@ class DraftPullRequest:
     base: str
 
 
-class GitHubPrPort(ABC):
-    """Driving-side contract for opening a draft PR against an allowlisted repo."""
+class VcsPort(ABC):
+    """Driving-side contract for opening a draft PR against an allowlisted repo on a
+    code host (GitHub / GitLab / Bitbucket)."""
+
+    @abstractmethod
+    def verify(self, repo: str | None = None) -> VcsHealth:
+        """Probe reachability + token validity; if ``repo`` is given, confirm the
+        connection can access it. Returns a :class:`VcsHealth` — never raises for an
+        expected auth/access failure (the detail is scrubbed of secrets)."""
 
     @abstractmethod
     def get_default_branch(self, repo: str) -> DefaultBranch:

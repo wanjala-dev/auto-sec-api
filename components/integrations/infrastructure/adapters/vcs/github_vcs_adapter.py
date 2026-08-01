@@ -1,9 +1,10 @@
-"""GitHub REST adapter for the draft-PR port (plain ``requests``).
+"""GitHub REST adapter for the VCS draft-PR port (plain ``requests``).
 
-Implements :class:`GitHubPrPort` against ``https://api.github.com`` with a
-fine-grained PAT (Phase A). Every non-2xx response raises
-:class:`GitHubApiError` with the status and a truncated response body — never
-swallowed, and the token never appears in logs, errors, or exception state.
+Implements :class:`VcsPort` against ``https://api.github.com`` with a fine-grained
+PAT (Phase A). Every non-2xx response raises :class:`VcsApiError` with the status
+and a truncated response body — never swallowed, and the token never appears in
+logs, errors, or exception state. Registered under ``provider="github"`` in the
+``VcsProvider`` registry; GitLab/Bitbucket adapters follow the same shape.
 """
 
 from __future__ import annotations
@@ -14,13 +15,14 @@ import logging
 import requests
 from django.views.decorators.debug import sensitive_variables
 
-from components.integrations.application.ports.github_pr_port import (
+from components.integrations.application.ports.vcs_port import (
     CommittedFile,
     DefaultBranch,
     DraftPullRequest,
-    GitHubApiError,
-    GitHubPrPort,
     RepoFile,
+    VcsApiError,
+    VcsHealth,
+    VcsPort,
 )
 
 logger = logging.getLogger(__name__)
@@ -30,13 +32,13 @@ _TIMEOUT_SECONDS = 20
 _API_VERSION = "2022-11-28"
 
 
-class GitHubPrAdapter(GitHubPrPort):
-    """Concrete GitHub REST implementation of the draft-PR port."""
+class GitHubVcsAdapter(VcsPort):
+    """Concrete GitHub REST implementation of the VCS draft-PR port."""
 
     @sensitive_variables("token")
     def __init__(self, token: str, *, base_url: str = _BASE_URL) -> None:
         if not token:
-            raise GitHubApiError("A GitHub token is required.", status_code=None)
+            raise VcsApiError("A GitHub token is required.", status_code=None)
         self._token = token
         self._base_url = base_url.rstrip("/")
 
@@ -56,7 +58,7 @@ class GitHubPrAdapter(GitHubPrPort):
             )
         except requests.RequestException as exc:
             logger.exception("github_api_request_failed method=%s path=%s", method, path)
-            raise GitHubApiError(f"GitHub request failed: {method} {path}", status_code=None) from exc
+            raise VcsApiError(f"GitHub request failed: {method} {path}", status_code=None) from exc
         if response.status_code >= 300:
             detail = (response.text or "")[:500]
             logger.error(
@@ -66,7 +68,7 @@ class GitHubPrAdapter(GitHubPrPort):
                 response.status_code,
                 detail[:200],
             )
-            raise GitHubApiError(
+            raise VcsApiError(
                 f"GitHub API {method} {path} returned {response.status_code}",
                 status_code=response.status_code,
                 detail=detail,
@@ -77,24 +79,39 @@ class GitHubPrAdapter(GitHubPrPort):
 
     # ── Port operations ───────────────────────────────────────────────
 
+    def verify(self, repo: str | None = None) -> VcsHealth:
+        """Probe token validity (and, if given, access to ``repo``). Turns an expected
+        auth/access failure into a :class:`VcsHealth`; the detail never carries the token."""
+        try:
+            if repo:
+                self._request("GET", f"/repos/{repo}")
+                return VcsHealth(ok=True, detail=f"Reachable — {repo} accessible.")
+            self._request("GET", "/user")
+            return VcsHealth(ok=True, detail="Reachable — token valid.")
+        except VcsApiError as exc:
+            reason = "token invalid or missing scope" if exc.status_code in (401, 403) else "not reachable"
+            if repo and exc.status_code == 404:
+                reason = f"{repo} not found or not accessible to this token"
+            return VcsHealth(ok=False, detail=f"GitHub {reason}.")
+
     def get_default_branch(self, repo: str) -> DefaultBranch:
         repo_data = self._request("GET", f"/repos/{repo}")
         branch = repo_data.get("default_branch") or "main"
         ref = self._request("GET", f"/repos/{repo}/git/ref/heads/{branch}")
         sha = (ref.get("object") or {}).get("sha") or ""
         if not sha:
-            raise GitHubApiError(f"Could not resolve head SHA for {repo}@{branch}", status_code=None)
+            raise VcsApiError(f"Could not resolve head SHA for {repo}@{branch}", status_code=None)
         return DefaultBranch(name=branch, head_sha=sha)
 
     def get_file(self, repo: str, path: str, ref: str) -> RepoFile:
         data = self._request("GET", f"/repos/{repo}/contents/{path}", params={"ref": ref})
         if isinstance(data, list):
-            raise GitHubApiError(f"{path} is a directory, not a file, in {repo}", status_code=None)
+            raise VcsApiError(f"{path} is a directory, not a file, in {repo}", status_code=None)
         raw = data.get("content") or ""
         try:
             content = base64.b64decode(raw).decode("utf-8")
         except (ValueError, UnicodeDecodeError) as exc:
-            raise GitHubApiError(f"Could not decode {path} from {repo}", status_code=None) from exc
+            raise VcsApiError(f"Could not decode {path} from {repo}", status_code=None) from exc
         return RepoFile(path=path, content=content, sha=data.get("sha") or "")
 
     def create_branch(self, repo: str, branch: str, from_sha: str) -> None:
@@ -130,5 +147,5 @@ class GitHubPrAdapter(GitHubPrPort):
         url = data.get("html_url") or ""
         number = int(data.get("number") or 0)
         if not url:
-            raise GitHubApiError(f"GitHub created a PR on {repo} but returned no URL", status_code=None)
+            raise VcsApiError(f"GitHub created a PR on {repo} but returned no URL", status_code=None)
         return DraftPullRequest(url=url, number=number, repo=repo, head=head, base=base)

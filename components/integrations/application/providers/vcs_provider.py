@@ -1,0 +1,48 @@
+"""Composition root + registry for the VCS draft-PR capability (ADR 0010).
+
+``provider -> VcsPort`` adapter, exactly like ``LogSourceProvider``'s ``kind ->
+adapter``. The only application-layer file that knows the concrete adapters exist
+(provider files are the allowed composition-root slot for own-context infrastructure
+imports). GitHub is the shipped adapter; GitLab/Bitbucket land here behind
+``feature.vcs_gitlab`` / ``feature.vcs_bitbucket`` when their adapters ship (D4).
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+
+from components.integrations.application.ports.vcs_port import VcsPort
+from components.integrations.application.use_cases.open_draft_pr_use_case import OpenDraftPrUseCase
+
+
+class UnsupportedVcsProviderError(Exception):
+    """The requested VCS provider has no registered/enabled adapter."""
+
+
+def _github_adapter(token: str) -> VcsPort:
+    from components.integrations.infrastructure.adapters.vcs.github_vcs_adapter import GitHubVcsAdapter
+
+    return GitHubVcsAdapter(token)
+
+
+# provider -> adapter factory (the registry). GitLab/Bitbucket are added here behind
+# their feature flags once built — until then an unknown provider fails closed.
+_ADAPTER_FACTORIES: dict[str, Callable[[str], VcsPort]] = {
+    "github": _github_adapter,
+}
+
+
+def get_vcs_adapter(provider: str, token: str) -> VcsPort:
+    """Resolve the adapter for a provider. Raises :class:`UnsupportedVcsProviderError`
+    for a provider with no enabled adapter (fail closed)."""
+    factory = _ADAPTER_FACTORIES.get((provider or "").strip().lower())
+    if factory is None:
+        raise UnsupportedVcsProviderError(f"No enabled VCS adapter for provider '{provider}'.")
+    return factory(token)
+
+
+def get_open_draft_pr_use_case() -> OpenDraftPrUseCase:
+    # Phase 1: GitHub is the only connection type, so the injected factory resolves the
+    # GitHub adapter through the registry. Phase 2 (``VcsConnection.provider``) threads
+    # the row's provider through instead of hard-coding "github".
+    return OpenDraftPrUseCase(adapter_factory=lambda token: get_vcs_adapter("github", token))
