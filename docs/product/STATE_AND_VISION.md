@@ -13,7 +13,7 @@
 ## 0. TL;DR
 
 Auto-Sec is an **AI-native cloud security platform** built on one idea: **a single security graph, read
-through three lenses — defend (blue) / attack (red) / prove (compliance) — with an AI agent arm that does
+through three lenses — defend (blue) / attack (red) / comply (compliance) — with an AI agent arm that does
 the SOC *and* the audit-evidence toil.** Under the hood
 it's a well-architected CNAPP spine (unified Findings SSOT + cloud asset graph + attack paths) with a
 **LangGraph deep-agent orchestrator routing to 13 live specialist agents**, a **multi-source
@@ -52,9 +52,12 @@ Three lenses read it:
   the context to fix it."*
 - ⚔️ **Red (attacker):** MITRE ATT&CK kill-chain + attack paths over the *same* findings → *"how do these
   chain into a breach?"*
-- 🟢 **Prove (compliance):** the *same* findings + asset/access graph, mapped to framework controls and
-  packaged as **audit-grade evidence with provenance** → *"prove — to an auditor — that we're secure, with
-  where/when/how each piece of evidence was generated."* (New third lens — see ADR 0009 and §2.2.)
+- 🟢 **Comply (compliance):** the *same* findings + asset/access graph, mapped to framework controls and
+  packaged as **audit-grade evidence with provenance** → *"show an auditor — with where/when/how each piece
+  of evidence was generated — that we're secure."* (New third lens — see ADR 0009 and §2.2.)
+
+The lens is chosen in the HUD via a **"Teams" selector** (a lunar callout listing Defend / Attack / Comply,
++ "Add team") — the old blue⇄red toggle generalized to N teams.
 
 And an **AI agent arm** closes the loop on all three: detect → triage → propose fix → (human approves) →
 execute → rollback for blue/red, and control → evidence → chase-and-collect → assemble for compliance.
@@ -129,7 +132,7 @@ implication: **run more operator calls like this before building further.** He o
 Second feedback session, a *different persona*: a solo security engineer (ex-Clio) who is also the de-facto
 compliance owner at a small, cost-cutting startup, mid-flight on a **SOC 2 Type II** with **Vanta**. His
 entire world is **audit evidence + the GRC cycle**, not detection — and it reveals a **third co-equal lens
-on the same graph: _prove_ (compliance).** This is now a first-class direction (see ADR 0009 for the build).
+on the same graph: _comply_ (compliance).** This is now a first-class direction (see ADR 0009 for the build).
 
 **The core insight — provenance is the product.** *"You gotta look at a piece of evidence — where it comes
 from, how it was made, when it was made, and if it's the original report. That's what gives it credence."*
@@ -159,6 +162,11 @@ screenshots. ICP-adjacent and real.
    workflow + Slack + sign-off; gap is the GRC-cycle orchestration on top.
 6. **Cross-source corroboration** — his MDM-list × antivirus-console trick (one report proves inventory *and*
    AV coverage): corroborate two sources for stronger, dual-purpose evidence.
+7. **Compliance Q&A + policy drafting** — a recurring ask on his plate: a manager wants a policy *drafted*,
+   or wants infra/security questions answered ("do we encrypt files at rest? do we run vulnerability
+   scanners? data residency? tenancy?") — the security-questionnaire / org-FAQ grind, today a hand-built
+   spreadsheet. An agent grounded in the live graph + findings + config answers these *and* drafts policies,
+   with the answer/policy itself emitted as provenance-stamped evidence. Reuses the existing agentic RAG.
 
 **Cautions (his words).** Crowded, sales-heavy market (Vanta even supplies the auditor), and the money quote:
 *"Vanta helps you the first time; after that, why do you even need a platform?"* — our own company rolled its
@@ -300,8 +308,8 @@ recycle-bin/forecast stubs are the remaining trust gaps.
 **Auto-Sec is the AI-native security platform where the defender's, attacker's, and auditor's views share
 one cloud graph, and AI agents close the loop from detection to reversible response — and from control to
 audit-ready evidence.** It's the convergence play: **CNAPP** (see the exposure) + **CTEM** (prioritize &
-*validate* what matters) + **Continuous Compliance** (*prove* it, with provenance) + **Agentic SOC** (handle
-it) — unified because it's built on one graph and one reproducible agent framework.
+*validate* what matters) + **Continuous Compliance** (*comply* — evidence it, with provenance) + **Agentic
+SOC** (handle it) — unified because it's built on one graph and one reproducible agent framework.
 
 - **The wedge (first real customer):** **AI-native teams shipping fast with AI-generated code**, on AWS,
   with real exposure (misconfigs, over-permissioned IAM, public data — *and now AI-introduced bugs like
@@ -317,7 +325,7 @@ it) — unified because it's built on one graph and one reproducible agent frame
   *prove* an exposure is reachable (BAS-like validation), then flip back to defend. Most CNAPPs stop at
   "here's a misconfig"; Auto-Sec can say "here's the attack path, mapped to ATT&CK, and here's the
   reversible fix."
-- **The compliance (prove) lens — the third view:** the *same* graph + findings, mapped to framework
+- **The compliance (comply) lens — the third view:** the *same* graph + findings, mapped to framework
   controls and emitted as **audit-grade evidence with provenance** (where/when/how each artifact was
   generated). Because Auto-Sec *generates* the scans rather than scraping them from other tools, its
   evidence carries provenance a Vanta-style aggregator can't match. The wedge is **automation + provenance

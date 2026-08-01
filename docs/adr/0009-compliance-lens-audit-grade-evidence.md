@@ -7,7 +7,7 @@ Status: Proposed (2026-07-31)
 Auto-Sec's thesis is **one graph, read through lenses**: blue (defend) and red (attack) already read the
 same Findings SSOT + cloud asset graph. A second operator interview (Andrea — a solo security engineer who
 also owns compliance at a small startup, mid-flight on a **SOC 2 Type II** with Vanta; see
-`docs/product/STATE_AND_VISION.md` §2.2) surfaced a **third co-equal lens: _prove_ (compliance)** — read
+`docs/product/STATE_AND_VISION.md` §2.2) surfaced a **third co-equal lens: _comply_ (compliance)** — read
 the same graph, map it to framework controls, and emit **audit-grade evidence**.
 
 His core insight, verbatim: *"You gotta look at a piece of evidence — where it comes from, how it was made,
@@ -47,7 +47,7 @@ teams past their first audit**.
 
 ## Decision
 
-Add a **compliance (prove) lens** as a **new bounded context** that reads the existing graph and reuses the
+Add a **compliance (comply) lens** as a **new bounded context** that reads the existing graph and reuses the
 existing primitives — never a parallel silo (hub-and-spoke; ADR 0004). The load-bearing seams mirror the
 `ScannerPort` / `LogSourcePort` pattern (ADR 0006 / 0008): a port + pluggable adapters + a registry.
 
@@ -109,9 +109,28 @@ the thing a raw report is not.
 Extend the `ai_governance` specialist to surface "who is talking to known AI platforms" (monitor; enforce is
 a later bonus) and emit it as governance-control evidence.
 
+### D10 — Compliance Q&A + policy drafting (grounded agent)
+
+A recurring, unmet ask from the interview: a manager asks the compliance owner to **draft a policy** or to
+**answer infra/security questions** — *"do we encrypt files at rest? do we run vulnerability scanners? what's
+our data residency / tenancy model?"* — today a hand-built spreadsheet of org FAQs (the
+security-questionnaire / RFP-security-section grind). A `compliance` specialist agent answers these **grounded
+in the live graph + findings + config + collected evidence** (reusing the existing agentic RAG / knowledge
+context — do not build a second RAG), and **drafts policies** from the actual posture. Crucially, an answered
+questionnaire or a drafted policy is **itself provenance-stamped evidence** (D2): it cites which findings /
+assets / evidence artifacts it was derived from, so the answer is traceable, not asserted. This is *drafting
+assistance grounded in truth*, not a policy-lifecycle manager (see Non-goals).
+
+### Naming
+
+The lens/team label is **Comply** (verb, alongside **Defend** / **Attack**); the domain/context is
+**compliance**. In the HUD, the old blue⇄red toggle generalizes to a **"Teams" selector** — a lunar callout
+listing Defend / Attack / Comply with an **"Add team"** affordance (extensible to future teams). ("Attest"
+was considered and rejected — it collides with the CI "test/attest an image before push" meaning.)
+
 ## Consequences
 
-- The **prove** lens compounds the graph investment — a third buyer (the compliance-owning operator) with no
+- The **comply** lens compounds the graph investment — a third buyer (the compliance-owning operator) with no
   new data model beyond `Evidence` + the control catalog.
 - Provenance-at-source is a defensible differentiator vs Vanta/Drata for repeat-audit teams.
 - `feature.provenance_graph` finally has a customer-facing reason to ship.
@@ -121,8 +140,9 @@ a later bonus) and emit it as governance-control evidence.
 
 ## Non-goals
 
-- **Not** a full GRC/policy-management suite (policy authoring, vendor risk, personnel/training records are
-  out — integrate, don't rebuild).
+- **Not** a full GRC/policy-*management* suite (policy lifecycle/versioning/acknowledgement-tracking, vendor
+  risk, personnel/training records are out — integrate, don't rebuild). Policy *drafting assistance* grounded
+  in real posture (D10) *is* in scope; managing the policy's lifecycle afterward is not.
 - **Not** replacing the auditor or auto-answering Type II samples.
 - **Not** a first-timer onboarding wizard (that's the incumbents' game).
 - **Not** faking evidence or pass percentages — ever.
@@ -139,8 +159,12 @@ a later bonus) and emit it as governance-control evidence.
    `workflow`/`sign_off`/Slack.
 5. **Evidence export package** (D8) — provenance manifest + bundle, per control/framework.
 6. **Shadow-AI + AI-governance evidence** (D9).
-7. **HUD "prove" lens** — surface controls → evidence → export in the cockpit (third lens alongside
-   blue/red); + later, manual/push evidence intake for no-API sources.
+7. **Compliance Q&A + policy drafting** (D10) — a `compliance` specialist over the existing agentic RAG that
+   answers infra/security questions and drafts policies grounded in the graph/findings/evidence, emitting the
+   answer/draft as provenance-stamped evidence.
+8. **HUD "comply" lens + Teams selector** — generalize the blue⇄red toggle to a **"Teams" lunar-callout
+   dropdown** (Defend / Attack / Comply + "Add team"); surface controls → evidence → export in the cockpit;
+   + later, manual/push evidence intake for no-API sources.
 
 Phases 1–2 prove the seam (like S3 did for `LogSourcePort`); 3+ generalize. Build only after a validation
 pass with a real compliance operator.
