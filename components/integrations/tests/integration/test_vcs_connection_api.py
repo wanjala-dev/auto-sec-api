@@ -65,6 +65,33 @@ class TestVcsConnectionCrud:
         patched = api_client.patch(detail, {"repo_root": "backend"}, format="json")
         assert patched.data["data"]["repo_root"] == "backend"
 
+    def test_repo_root_rejects_path_traversal_on_create(self, api_client, owner_ws):
+        # A `..`-bearing repo_root would escape the repo-scoped GitHub URL — the DTO
+        # boundary rejects it with a 400 before it ever reaches persistence.
+        ws, owner = owner_ws
+        api_client.force_authenticate(owner)
+        for bad in ("../../../etc", "/etc/passwd", "api-v2.0/../..", "foo/./bar"):
+            resp = api_client.post(
+                _base(ws.id),
+                {"provider": "github", "repo_allowlist": ["acme/app"], "token": "ghp_secret", "repo_root": bad},
+                format="json",
+            )
+            assert resp.status_code == 400, (bad, resp.data)
+            assert "repo_root" in resp.data["error"]
+
+    def test_repo_root_rejects_path_traversal_on_patch(self, api_client, owner_ws):
+        ws, owner = owner_ws
+        api_client.force_authenticate(owner)
+        created = api_client.post(
+            _base(ws.id),
+            {"provider": "github", "repo_allowlist": ["acme/app"], "token": "ghp_secret"},
+            format="json",
+        ).data["data"]
+        detail = f"{_base(ws.id)}{created['id']}/"
+        resp = api_client.patch(detail, {"repo_root": "../../../etc"}, format="json")
+        assert resp.status_code == 400
+        assert "repo_root" in resp.data["error"]
+
     def test_repo_root_defaults_empty(self, api_client, owner_ws):
         ws, owner = owner_ws
         api_client.force_authenticate(owner)

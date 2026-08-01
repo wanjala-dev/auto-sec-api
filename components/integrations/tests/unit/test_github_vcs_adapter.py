@@ -103,6 +103,8 @@ class TestGitHubVcsAdapterListTree:
         # It resolved the ref → sha, then read the recursive tree.
         assert any("/git/ref/heads/main" in c for c in fake.calls)
         assert any("/git/trees/treesha" in c for c in fake.calls)
+        # Invariant the resolver leans on: git trees never carry `..` segments.
+        assert not any(".." in p.split("/") for p in paths)
 
     def test_truncated_tree_warns(self, caplog):
         adapter = GitHubVcsAdapter("ghp_secret_token")

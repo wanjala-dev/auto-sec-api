@@ -19,6 +19,26 @@ def _clean_allowlist(raw) -> list[str]:
     return [r.strip() for r in raw if isinstance(r, str) and r.strip()]
 
 
+def _repo_root_error(repo_root: str) -> str | None:
+    """Reject a ``repo_root`` that could escape the repo-scoped GitHub URL.
+
+    A monorepo subdirectory is a relative, forward-slash path (``api-v2.0`` or
+    ``services/api``) — never absolute, never with ``.``/``..`` segments. An
+    attacker-set ``../../../etc`` would interpolate into ``/repos/<repo>/contents/``
+    and climb out of the repo (→ ``api.github.com/repos/etc/...``). Blank is fine
+    (auto-detect). Returns an error string, or ``None`` when safe."""
+    root = (repo_root or "").strip().replace("\\", "/")
+    if not root:
+        return None
+    if root.startswith("/"):
+        return "repo_root must be a relative path (no leading '/')."
+    # A leading/trailing slash alone is harmless (normalized away); only '.'/'..'
+    # segments can climb out of the repo-scoped URL.
+    if any(seg in (".", "..") for seg in root.split("/")):
+        return "repo_root must not contain '.' or '..' path segments."
+    return None
+
+
 @dataclass(frozen=True)
 class CreateVcsConnectionRequest:
     """Validated input for ``POST /integrations/workspaces/<ws>/vcs-connections/``."""
@@ -49,7 +69,7 @@ class CreateVcsConnectionRequest:
             return f"The {self.provider} provider is not available yet."
         if not self.token:
             return "A token is required to create a VCS connection."
-        return None
+        return _repo_root_error(self.repo_root)
 
 
 @dataclass(frozen=True)
@@ -84,4 +104,6 @@ class UpdateVcsConnectionRequest:
     def validation_error(self) -> str | None:
         if self.status is not None and self.status not in _VALID_STATUSES:
             return "status can only be set to 'connected' or 'disabled' via the API."
+        if self.repo_root is not None:
+            return _repo_root_error(self.repo_root)
         return None

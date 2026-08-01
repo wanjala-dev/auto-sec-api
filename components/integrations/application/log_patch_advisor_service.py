@@ -115,12 +115,32 @@ def derive_candidate_path(payload: dict) -> str | None:
     return None
 
 
+def _has_traversal_segment(path: str) -> bool:
+    """True if ``path`` is absolute or carries a ``.``/``..`` path segment.
+
+    Such a path can climb out of the repo-scoped GitHub URL
+    (``/repos/<repo>/contents/<path>``) — a path-traversal escape. Guards both the
+    user-set ``repo_root`` AND the traceback-derived ``runtime_path`` (the latter is
+    attacker-influenceable log content, so it is NEVER trusted). A leading/trailing
+    slash alone is harmless normalization (``strip('/')`` handles it) and is NOT
+    flagged — only an absolute path or a ``.``/``..`` segment is."""
+    if not path:
+        return False
+    normalized = path.replace("\\", "/")
+    if normalized.startswith("/"):
+        return True
+    return any(seg in (".", "..") for seg in normalized.split("/"))
+
+
 def resolve_repo_path(*, adapter, repo: str, ref: str, runtime_path: str, explicit_prefix: str | None = None) -> str:
     """Resolve a runtime-relative source path to its actual path in ``repo``.
 
     A monitored backend is often a MONOREPO: its runtime ``derive_candidate_path``
     strips the ``/app/`` prefix (→ ``components/x/y.py``), but the app may live under
     a subdirectory (→ ``api-v2.0/components/x/y.py``). This bridges the two.
+
+    Auto-detect picks the SHALLOWEST tree match (fewest leading path segments = the
+    single app root); ``repo_root`` is the deterministic operator override.
 
     Two modes:
 
@@ -134,8 +154,18 @@ def resolve_repo_path(*, adapter, repo: str, ref: str, runtime_path: str, explic
       match, return it; on several, pick the shallowest prefix (fewest leading
       segments — the single app root); on a remaining tie, raise
       ``ambiguous_candidate_path``; on none, raise ``candidate_file_not_in_repo``.
+
+    Security: BOTH ``runtime_path`` and ``explicit_prefix`` are checked for
+    path-traversal (``..``/``.``/absolute) BEFORE any adapter call — an escaped path
+    never reaches ``get_file``/``list_tree``. This defends the traceback-derived
+    vector even when the DTO boundary (which only sees ``repo_root``) can't.
     """
     runtime_path = (runtime_path or "").strip().lstrip("/")
+    if _has_traversal_segment(runtime_path) or (explicit_prefix and _has_traversal_segment(explicit_prefix.strip())):
+        raise RepoPathResolutionError(
+            "candidate_file_not_in_repo",
+            f"'{runtime_path}' resolves to a path outside {repo} — refusing (path traversal).",
+        )
     if explicit_prefix:
         return f"{explicit_prefix.strip('/')}/{runtime_path}"
 
