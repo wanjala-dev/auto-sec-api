@@ -46,6 +46,10 @@ class CloudAsset(models.Model):
     first_seen_at = models.DateTimeField()
     last_seen_at = models.DateTimeField()
     is_deleted = models.BooleanField(default=False)
+    # Sample/demo marker (ADR 0011): tagged rows the sample-data coordinator injects and
+    # tears down. Reads DO include sample rows (that's the demo); teardown is a reliable
+    # delete-by-``is_sample=True`` so demo data never mixes into real posture.
+    is_sample = models.BooleanField(default=False)
 
     class Meta:
         constraints = [
@@ -73,6 +77,8 @@ class CloudAssetEdge(models.Model):
     )
     attributes = models.JSONField(default=dict)
     last_seen_at = models.DateTimeField()
+    # Sample/demo marker (ADR 0011) — see CloudAsset.is_sample.
+    is_sample = models.BooleanField(default=False)
 
     class Meta:
         constraints = [
@@ -122,6 +128,11 @@ class AttackPath(models.Model):
     asset_urns = models.JSONField(default=list, help_text="Ordered node chain (entry → … → target).")
 
     computed_at = models.DateTimeField()
+    # Sample/demo marker (ADR 0011): sample paths are seeded directly (NOT via the
+    # materialize detector) and torn down by ``is_sample=True``. The read path includes
+    # them — they ARE the demo — but a real ``replace_for_workspace`` recompute leaves them
+    # alone (it only replaces real paths).
+    is_sample = models.BooleanField(default=False)
 
     class Meta:
         indexes = [

@@ -25,3 +25,15 @@ class AttackPathStorePort(ABC):
         limit: int = 50,
     ) -> list[AttackPathEntity]:
         """Ranked read (highest risk first), workspace-scoped, optionally filtered."""
+
+    # ── Sample/demo data (ADR 0011) ───────────────────────────────────────────
+
+    @abstractmethod
+    def seed_sample_paths(self, workspace_id: UUID, paths: list[AttackPathEntity]) -> int:
+        """Insert tagged (``is_sample=True``) demo paths directly — NOT via the
+        materialize detector (no graph read, no events). First clears any existing sample
+        paths so re-seeding is idempotent; real paths are untouched. Returns the count."""
+
+    @abstractmethod
+    def clear_sample_paths(self, workspace_id: UUID) -> int:
+        """Delete the workspace's ``is_sample=True`` attack paths. Real paths untouched."""

@@ -58,3 +58,27 @@ class CloudAssetStorePort(ABC):
     def list_all_edges(self, workspace_id: UUID, *, limit: int = 2000) -> list[CloudAssetEdgeEntity]:
         """Every edge in the workspace (capped) — the whole-graph read the HUD renders,
         distinct from the per-node ``list_edges_from`` traversal primitive."""
+
+    # ── Sample/demo data (ADR 0011) ───────────────────────────────────────────
+    # Sample rows are written DIRECTLY (no sync, no events) and torn down by tag, so
+    # demo data never mixes into real posture nor fires real side-effects.
+
+    @abstractmethod
+    def has_real_assets(self, workspace_id: UUID) -> bool:
+        """True if the workspace has ANY non-sample cloud asset — the mutual-exclusivity
+        guard that stops sample data seeding onto a live workspace (mirrors
+        ``FindingStorePort.has_real_findings``)."""
+
+    @abstractmethod
+    def create_sample_asset(self, asset: CloudAssetEntity) -> CloudAssetEntity:
+        """Insert a tagged (``is_sample=True``) demo asset directly. Not idempotent on
+        identity like ``upsert_asset`` — the seeder is guarded and cleared as a whole set."""
+
+    @abstractmethod
+    def create_sample_edge(self, edge: CloudAssetEdgeEntity) -> CloudAssetEdgeEntity:
+        """Insert a tagged (``is_sample=True``) demo edge directly."""
+
+    @abstractmethod
+    def clear_sample_assets(self, workspace_id: UUID) -> int:
+        """Delete all ``is_sample=True`` assets (and, by cascade, their edges) for the
+        workspace. Returns the number of assets removed. Real rows are untouched."""

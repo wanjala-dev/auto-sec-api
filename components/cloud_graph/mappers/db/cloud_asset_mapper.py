@@ -23,6 +23,7 @@ def to_asset_entity(obj) -> CloudAssetEntity:
         first_seen_at=obj.first_seen_at,
         last_seen_at=obj.last_seen_at,
         is_deleted=obj.is_deleted,
+        is_sample=obj.is_sample,
     )
 
 
@@ -40,6 +41,7 @@ def to_asset_update_defaults(asset: CloudAssetEntity) -> dict:
         "attributes": asset.attributes,
         "last_seen_at": asset.last_seen_at,
         "is_deleted": asset.is_deleted,
+        "is_sample": asset.is_sample,
     }
 
 
@@ -52,6 +54,7 @@ def to_edge_entity(obj) -> CloudAssetEdgeEntity:
         relation=AssetRelation.from_value(obj.relation),
         attributes=dict(obj.attributes or {}),
         last_seen_at=obj.last_seen_at,
+        is_sample=obj.is_sample,
     )
 
 
@@ -60,4 +63,5 @@ def to_edge_defaults(edge: CloudAssetEdgeEntity) -> dict:
         "workspace_id": edge.workspace_id,
         "attributes": edge.attributes,
         "last_seen_at": edge.last_seen_at,
+        "is_sample": edge.is_sample,
     }

@@ -19,7 +19,9 @@ class DjangoAttackPathRepository(AttackPathStorePort):
         from infrastructure.persistence.cloud_graph.models import AttackPath
 
         with transaction.atomic():
-            AttackPath.objects.filter(workspace_id=workspace_id).delete()
+            # Replace only REAL paths — a live recompute must never wipe seeded demo paths
+            # (demo⇔live are mutually exclusive, but keep the delete scoped to be safe).
+            AttackPath.objects.filter(workspace_id=workspace_id, is_sample=False).delete()
             if not paths:
                 return 0
             AttackPath.objects.bulk_create(AttackPath(**to_attack_path_model_kwargs(p)) for p in paths)
@@ -42,3 +44,21 @@ class DjangoAttackPathRepository(AttackPathStorePort):
             qs = qs.filter(risk_score__gte=min_score)
         rows = qs.order_by("-risk_score", "length")[:limit]
         return [to_attack_path_entity(obj) for obj in rows]
+
+    # ── Sample/demo data (ADR 0011) ───────────────────────────────────────────
+
+    def seed_sample_paths(self, workspace_id: UUID, paths: list[AttackPathEntity]) -> int:
+        from infrastructure.persistence.cloud_graph.models import AttackPath
+
+        with transaction.atomic():
+            AttackPath.objects.filter(workspace_id=workspace_id, is_sample=True).delete()
+            if not paths:
+                return 0
+            AttackPath.objects.bulk_create(AttackPath(**to_attack_path_model_kwargs(p)) for p in paths)
+        return len(paths)
+
+    def clear_sample_paths(self, workspace_id: UUID) -> int:
+        from infrastructure.persistence.cloud_graph.models import AttackPath
+
+        deleted, _ = AttackPath.objects.filter(workspace_id=workspace_id, is_sample=True).delete()
+        return deleted

@@ -94,6 +94,19 @@ class FindingProvider:
         )
 
     @staticmethod
+    def build_sample_data_seeder():
+        """The findings context's SampleDataSeederPort adapter (ADR 0011) — the coordinator
+        drives findings sample data through this, wrapping the seed/clear use cases."""
+        from components.findings.infrastructure.adapters.findings_sample_seeder import (
+            FindingsSampleSeeder,
+        )
+
+        return FindingsSampleSeeder(
+            seed_use_case=FindingProvider.build_seed_sample_data_use_case(),
+            clear_use_case=FindingProvider.build_clear_sample_data_use_case(),
+        )
+
+    @staticmethod
     def build_finding_store() -> FindingStorePort:
         """The read/write store — the findings context's public data seam.
 

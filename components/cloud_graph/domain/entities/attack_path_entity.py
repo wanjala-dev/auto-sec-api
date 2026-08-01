@@ -45,6 +45,7 @@ class AttackPathEntity:
     legs: tuple[AttackPathLeg, ...] = ()
     asset_urns: tuple[str, ...] = ()  # ordered node chain (entry → … → target)
     computed_at: datetime | None = None
+    is_sample: bool = False  # ADR 0011 — a seeded demo path (not from the materialize detector)
 
     def __post_init__(self) -> None:
         if self.entry_asset_id == self.target_asset_id:

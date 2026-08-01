@@ -61,7 +61,7 @@ class SampleDataModeView(APIView):
     def post(self, request, workspace_id):
         from django.utils import timezone
 
-        from components.findings.application.sample_data_service import SampleDataService
+        from components.sample_data.application.sample_data_service import SampleDataService
 
         enabled = bool((request.data or {}).get("enabled"))
         actor_id = str(getattr(request.user, "id", "") or "") or None

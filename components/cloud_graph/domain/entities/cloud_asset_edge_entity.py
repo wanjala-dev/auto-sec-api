@@ -18,6 +18,7 @@ class CloudAssetEdgeEntity:
     relation: AssetRelation
     last_seen_at: datetime
     attributes: dict = field(default_factory=dict)
+    is_sample: bool = False  # ADR 0011 — a tagged demo edge, torn down by is_sample
 
     def __post_init__(self) -> None:
         if self.src_asset_id == self.dst_asset_id:

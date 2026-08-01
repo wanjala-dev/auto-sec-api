@@ -50,6 +50,7 @@ def to_attack_path_model_kwargs(entity: AttackPathEntity) -> dict:
         "legs": [_leg_to_dict(leg) for leg in entity.legs],
         "asset_urns": list(entity.asset_urns),
         "computed_at": entity.computed_at,
+        "is_sample": entity.is_sample,
     }
 
 
@@ -71,4 +72,5 @@ def to_attack_path_entity(obj) -> AttackPathEntity:
         legs=tuple(_leg_from_dict(d) for d in (obj.legs or [])),
         asset_urns=tuple(obj.asset_urns or []),
         computed_at=obj.computed_at,
+        is_sample=obj.is_sample,
     )

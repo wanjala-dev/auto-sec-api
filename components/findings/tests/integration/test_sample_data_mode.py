@@ -27,7 +27,8 @@ class TestSampleDataModeToggle:
         resp = api_client.post(_mode_url(ws.id), {"enabled": True}, format="json")
         assert resp.status_code == 200, resp.data
         assert resp.data["enabled"] is True
-        assert resp.data["data"]["seeded"] > 0
+        # The coordinator returns an aggregate keyed by context (ADR 0011 Phase 2).
+        assert resp.data["data"]["seeded"]["findings"]["seeded"] > 0
         assert is_feature_enabled(_FLAG, workspace_id=str(ws.id)) is True
         assert _sample_findings_exist(ws.id)
 

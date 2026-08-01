@@ -52,6 +52,18 @@ class _FakeStore(FindingStorePort):
     def count_findings(self, workspace_id, *, severity=None, status=None, source=None, asset_urn=None):
         return 0
 
+    def open_finding_asset_urns(self, workspace_id, *, severities=None):
+        return []
+
+    def open_finding_compliance(self, workspace_id):
+        return []
+
+    def has_real_findings(self, workspace_id, *, sample_prefix):
+        return False
+
+    def delete_sample_findings(self, workspace_id, *, sample_prefix):
+        return 0
+
 
 class _FakePublisher:
     def __init__(self) -> None:

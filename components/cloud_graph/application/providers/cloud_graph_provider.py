@@ -126,3 +126,17 @@ class CloudGraphProvider:
         )
 
         return ListAttackPathsUseCase(path_store=CloudGraphProvider.build_attack_path_store())
+
+    @staticmethod
+    def build_sample_data_seeder():
+        """The cloud_graph context's SampleDataSeederPort adapter (ADR 0011) — seeds a
+        coherent sample environment (assets + edges + attack paths, tagged ``is_sample``)
+        directly, so demo mode's graph/map/attack-surface/risk-gauge populate."""
+        from components.cloud_graph.infrastructure.adapters.cloud_graph_sample_seeder import (
+            CloudGraphSampleSeeder,
+        )
+
+        return CloudGraphSampleSeeder(
+            asset_store=CloudGraphProvider.build_cloud_asset_store(),
+            path_store=CloudGraphProvider.build_attack_path_store(),
+        )

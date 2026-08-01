@@ -117,3 +117,43 @@ class DjangoCloudGraphRepository(CloudAssetStorePort):
 
         rows = CloudAssetEdge.objects.filter(workspace_id=workspace_id).order_by("-last_seen_at")[:limit]
         return [to_edge_entity(obj) for obj in rows]
+
+    # ── Sample/demo data (ADR 0011) ───────────────────────────────────────────
+
+    def has_real_assets(self, workspace_id: UUID) -> bool:
+        from infrastructure.persistence.cloud_graph.models import CloudAsset
+
+        return CloudAsset.objects.filter(workspace_id=workspace_id, is_sample=False).exists()
+
+    def create_sample_asset(self, asset: CloudAssetEntity) -> CloudAssetEntity:
+        from infrastructure.persistence.cloud_graph.models import CloudAsset
+
+        obj = CloudAsset.objects.create(
+            id=asset.id,
+            workspace_id=asset.workspace_id,
+            arn=asset.arn,
+            first_seen_at=asset.first_seen_at,
+            **to_asset_update_defaults(asset),
+        )
+        return to_asset_entity(obj)
+
+    def create_sample_edge(self, edge: CloudAssetEdgeEntity) -> CloudAssetEdgeEntity:
+        from infrastructure.persistence.cloud_graph.models import CloudAssetEdge
+
+        obj = CloudAssetEdge.objects.create(
+            id=edge.id,
+            src_asset_id=edge.src_asset_id,
+            dst_asset_id=edge.dst_asset_id,
+            relation=edge.relation.value,
+            **to_edge_defaults(edge),
+        )
+        return to_edge_entity(obj)
+
+    def clear_sample_assets(self, workspace_id: UUID) -> int:
+        from infrastructure.persistence.cloud_graph.models import CloudAsset
+
+        # Edges FK-cascade off their assets, so deleting the sample assets removes the
+        # sample edges too; any sample edge whose endpoints were both sample assets is
+        # thus cleared without a second pass.
+        deleted, _ = CloudAsset.objects.filter(workspace_id=workspace_id, is_sample=True).delete()
+        return deleted

@@ -25,6 +25,7 @@ class CloudAssetEntity:
     name: str = ""
     attributes: dict = field(default_factory=dict)
     is_deleted: bool = False
+    is_sample: bool = False  # ADR 0011 — a tagged demo row (torn down by is_sample), not real posture
 
     def __post_init__(self) -> None:
         if not self.arn:
