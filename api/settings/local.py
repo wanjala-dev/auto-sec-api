@@ -114,10 +114,12 @@ STRIPE_CONNECT_DONATIONS_WEBHOOK_SECRET = env(
 STRIPE_SUBSCRIPTIONS_WEBHOOK_SECRET = env("STRIPE_SUBSCRIPTIONS_WEBHOOK_SECRET", default="")
 SUBSCRIPTION_WEBHOOK_URL = env("SUBSCRIPTION_WEBHOOK_URL", default="")
 WORKSPACE_BILLING_WEBHOOK_URL = env("WORKSPACE_BILLING_WEBHOOK_URL", default="")
-# auto-sec frontend dev server runs on :3001 (:3000 is the original literacyseed).
-# Email links (password reset, email verification) are built against this base.
-LOCALHOST_FRONTEND_URL = env("LOCALHOST_FRONTEND_URL", default="http://localhost:3001")
-FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:3001")
+# auto-sec frontend dev server runs on :3007 (:3000 is the original literacyseed;
+# :3001 was the earlier default). Email links (password reset, email verification)
+# are built against this base — override FRONTEND_URL in the env when the frontend
+# dev server runs on a different port (worktrees vary).
+LOCALHOST_FRONTEND_URL = env("LOCALHOST_FRONTEND_URL", default="http://localhost:3007")
+FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:3007")
 
 LANGFUSE_SECRET_KEY = env("LANGFUSE_SECRET_KEY", default="")
 LANGFUSE_PUBLIC_KEY = env("LANGFUSE_PUBLIC_KEY", default="")
@@ -305,10 +307,13 @@ CORS_ORIGIN_ALLOW_ALL = True
 
 CORS_ALLOW_CREDENTIALS = True
 
-# Auto-Sec dev origins: the frontend dev server (:3001) and the k8s Gateway host
-# (autosec.local). The source's literacyseed/wanjala prod origins were fork-drift — removed:
-# a security tool must not allow CORS origins it doesn't own. Prod origins are env-driven in prod.py.
+# Auto-Sec dev origins: the frontend dev server (:3007 now; :3001/:3000 kept for
+# older worktrees) and the k8s Gateway host (autosec.local). The source's
+# literacyseed/wanjala prod origins were fork-drift — removed: a security tool must not
+# allow CORS origins it doesn't own. Prod origins are env-driven in prod.py.
 CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3007",
+    "http://127.0.0.1:3007",
     "http://localhost:3001",
     "http://127.0.0.1:3001",
     "http://autosec.local",
@@ -334,6 +339,8 @@ CORS_ALLOW_HEADERS = list(default_headers) + [
 ]
 
 CORS_ORIGIN_WHITELIST = [
+    "http://localhost:3007",
+    "http://127.0.0.1:3007",
     "http://localhost:3001",
     "http://127.0.0.1:3001",
     "http://autosec.local",
