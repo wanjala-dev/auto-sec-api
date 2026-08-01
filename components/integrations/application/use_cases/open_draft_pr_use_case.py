@@ -32,7 +32,7 @@ from components.integrations.application.log_patch_advisor_service import (
     LogPatchAdvisor,
     derive_candidate_path,
 )
-from components.integrations.application.ports.vcs_port import VcsPort
+from components.integrations.application.ports.vcs_port import VcsApiError, VcsPort
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +100,20 @@ class OpenDraftPrUseCase:
 
         adapter = self._adapter_factory(connection.provider, token)
         default_branch = adapter.get_default_branch(target_repo)
-        repo_file = adapter.get_file(target_repo, candidate_path, ref=default_branch.name)
+        try:
+            repo_file = adapter.get_file(target_repo, candidate_path, ref=default_branch.name)
+        except VcsApiError as exc:
+            if exc.status_code == 404:
+                # The finding derived a source path that isn't in the allowlisted repo — a
+                # common, expected case (the finding references a different codebase). Turn
+                # it into a 4xx precondition, not a 502; genuine API failures still propagate.
+                raise DraftPrPreconditionError(
+                    "candidate_file_not_in_repo",
+                    f"The file '{candidate_path}' derived from this finding does not exist in "
+                    f"{target_repo} (branch {default_branch.name}). This finding may reference a "
+                    "different codebase than the allowlisted repo — nothing to patch.",
+                ) from exc
+            raise
 
         proposal = self._advisor.propose(payload=payload, path=candidate_path, current_content=repo_file.content)
         if proposal is None:

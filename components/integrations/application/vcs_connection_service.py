@@ -71,9 +71,12 @@ class VcsConnectionService:
     # ── Verify ───────────────────────────────────────────────────────────
 
     def verify_connection(self, connection):
-        """Probe the connection's reachability and record the outcome. Success keeps
-        it CONNECTED (+ last_verified_at); failure marks ERROR with a scrubbed reason.
-        Never raises for an expected auth/config/probe failure."""
+        """Probe the connection's reachability and record the outcome. First probes the
+        token itself; then probes EVERY allowlisted repo (not just the first) so a repo the
+        token can't reach is named, not silently masked by an accessible sibling. Success
+        (token valid + all repos reachable) keeps it CONNECTED (+ last_verified_at); any
+        failure marks ERROR with a scrubbed reason. Never raises for an expected
+        auth/config/probe failure."""
         token = self._decrypt(connection.token_ciphertext)
         if not token:
             return self._repo.mark_error(connection, "The connection has no stored token.")
@@ -83,8 +86,17 @@ class VcsConnectionService:
         except Exception as exc:  # UnsupportedVcsProviderError — adapter not registered (e.g. flag off)
             return self._repo.mark_error(connection, f"{connection.provider} is not available: {exc}")
 
+        # 1) Token probe (GET /user) — an invalid/missing-scope token fails everything, so
+        #    report it as the single root cause rather than N per-repo failures.
+        token_health = adapter.verify(None)
+        if not token_health.ok:
+            return self._repo.mark_error(connection, token_health.detail or "token invalid or missing scope")
+
+        # 2) Per-repo probe — one call per repo (allowlists are small). Aggregate the
+        #    inaccessible ones so the operator sees WHICH repos are blocked.
         allowlist = [r for r in (connection.repo_allowlist or []) if isinstance(r, str) and r.strip()]
-        health = adapter.verify(allowlist[0] if allowlist else None)
-        if health.ok:
-            return self._repo.mark_verified(connection)
-        return self._repo.mark_error(connection, health.detail or "Verification failed.")
+        inaccessible = [repo for repo in allowlist if not adapter.verify(repo).ok]
+        if inaccessible:
+            return self._repo.mark_error(connection, f"connected, but no access to: {', '.join(inaccessible)}")
+
+        return self._repo.mark_verified(connection)

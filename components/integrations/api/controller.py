@@ -212,6 +212,7 @@ class FindingOpenDraftPrView(APIView):
         "capability_disabled": status.HTTP_403_FORBIDDEN,
         "no_candidate_path": status.HTTP_422_UNPROCESSABLE_ENTITY,
         "no_grounded_patch": status.HTTP_422_UNPROCESSABLE_ENTITY,
+        "candidate_file_not_in_repo": status.HTTP_422_UNPROCESSABLE_ENTITY,
     }
 
     def post(self, request, workspace_id, task_id):
