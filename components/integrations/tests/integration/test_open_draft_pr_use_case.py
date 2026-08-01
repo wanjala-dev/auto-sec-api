@@ -312,6 +312,48 @@ class TestOpenDraftPrPreconditions:
             self._execute(workspace, task, owner)
         assert exc.value.reason == "finding_not_found"
 
+    def test_candidate_file_not_in_repo_is_precondition(self, workspace_factory, team_factory):
+        # The derived source file 404s in the allowlisted repo → a typed precondition
+        # (candidate_file_not_in_repo), NOT a propagated VcsApiError. The advisor never runs.
+        from components.integrations.application.ports.vcs_port import VcsApiError
+
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _triaged_finding(workspace, owner, team, column)
+        _connection(workspace, owner)
+        _capability_agent(workspace, owner)
+        _get_file_path = (
+            "components.integrations.infrastructure.adapters.vcs.github_vcs_adapter.GitHubVcsAdapter.get_file"
+        )
+        fake = _FakeGitHub()
+        with (
+            mock.patch(_REQUESTS_PATH, new=fake),
+            mock.patch(_get_file_path, side_effect=VcsApiError("not found", status_code=404)),
+            mock.patch(_PROPOSE_PATH) as propose,
+            pytest.raises(DraftPrPreconditionError) as exc,
+        ):
+            _use_case().execute(workspace_id=str(workspace.id), task_id=str(task.id), performed_by=str(owner.id))
+        assert exc.value.reason == "candidate_file_not_in_repo"
+        propose.assert_not_called()
+
+    def test_non_404_get_file_error_propagates(self, workspace_factory, team_factory):
+        # A genuine API failure (e.g. 500) on get_file is NOT a precondition — it propagates.
+        from components.integrations.application.ports.vcs_port import VcsApiError
+
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _triaged_finding(workspace, owner, team, column)
+        _connection(workspace, owner)
+        _capability_agent(workspace, owner)
+        _get_file_path = (
+            "components.integrations.infrastructure.adapters.vcs.github_vcs_adapter.GitHubVcsAdapter.get_file"
+        )
+        fake = _FakeGitHub()
+        with (
+            mock.patch(_REQUESTS_PATH, new=fake),
+            mock.patch(_get_file_path, side_effect=VcsApiError("server error", status_code=500)),
+            pytest.raises(VcsApiError),
+        ):
+            _use_case().execute(workspace_id=str(workspace.id), task_id=str(task.id), performed_by=str(owner.id))
+
     def test_ungrounded_patch_refused(self, workspace_factory, team_factory):
         workspace, owner, team, column = _board(workspace_factory, team_factory)
         task = _triaged_finding(workspace, owner, team, column)
@@ -357,6 +399,30 @@ class TestOpenDraftPrEndpoint:
         response = api_client.post(url, {}, format="json")
         assert response.status_code == 409
         assert response.data["reason"] == "no_github_connection"
+
+    def test_candidate_file_missing_maps_to_4xx_not_502(self, api_client, workspace_factory, team_factory):
+        # A finding whose derived file 404s in the repo must NOT surface as a generic 502
+        # vcs_api_error — it's a 4xx precondition the operator can act on.
+        from components.integrations.application.ports.vcs_port import VcsApiError
+
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _triaged_finding(workspace, owner, team, column)
+        _connection(workspace, owner)
+        _capability_agent(workspace, owner)
+        fake = _FakeGitHub()
+        api_client.force_authenticate(owner)
+        _get_file_path = (
+            "components.integrations.infrastructure.adapters.vcs.github_vcs_adapter.GitHubVcsAdapter.get_file"
+        )
+        url = f"/integrations/workspaces/{workspace.id}/findings/{task.id}/open-draft-pr/"
+        with (
+            mock.patch(_REQUESTS_PATH, new=fake),
+            mock.patch(_get_file_path, side_effect=VcsApiError("not found", status_code=404)),
+        ):
+            response = api_client.post(url, {}, format="json")
+        assert 400 <= response.status_code < 500, response.data
+        assert response.status_code != 502
+        assert response.data["reason"] == "candidate_file_not_in_repo"
 
     def test_unknown_finding_is_404(self, api_client, workspace_factory, team_factory):
         workspace, owner, _team, _column = _board(workspace_factory, team_factory)

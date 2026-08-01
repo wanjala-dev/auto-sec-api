@@ -135,3 +135,62 @@ class TestVcsConnectionVerify:
             resp = api_client.post(url, {}, format="json")
         assert resp.data["data"]["status"] == "error"
         assert "token invalid" in resp.data["data"]["last_error"]
+
+    def _create_multi(self, api_client, ws, allowlist):
+        return api_client.post(
+            _base(ws.id),
+            {"provider": "github", "repo_allowlist": allowlist, "token": "ghp_secret"},
+            format="json",
+        ).data["data"]
+
+    def test_verify_all_repos_accessible_marks_connected(self, api_client, owner_ws):
+        # A 2-repo allowlist where the token probe AND both repos are reachable → connected.
+        ws, owner = owner_ws
+        api_client.force_authenticate(owner)
+        created = self._create_multi(api_client, ws, ["acme/app", "acme/api"])
+
+        url = f"{_base(ws.id)}{created['id']}/verify/"
+        with mock.patch(f"{_ADAPTER}.verify", return_value=VcsHealth(ok=True)):
+            resp = api_client.post(url, {}, format="json")
+        assert resp.status_code == 200
+        assert resp.data["data"]["status"] == "connected"
+        assert resp.data["data"]["last_verified_at"] is not None
+
+    def test_verify_one_repo_inaccessible_names_it(self, api_client, owner_ws):
+        # Token is valid, but one of two repos 404s → error that NAMES the blocked repo,
+        # not a silent pass masked by the accessible sibling.
+        ws, owner = owner_ws
+        api_client.force_authenticate(owner)
+        created = self._create_multi(api_client, ws, ["acme/app", "acme/secret"])
+
+        def _verify(repo=None):
+            if repo == "acme/secret":
+                return VcsHealth(ok=False, detail="GitHub repo acme/secret not found or not granted to this token.")
+            return VcsHealth(ok=True)
+
+        url = f"{_base(ws.id)}{created['id']}/verify/"
+        with mock.patch(f"{_ADAPTER}.verify", side_effect=_verify):
+            resp = api_client.post(url, {}, format="json")
+        assert resp.data["data"]["status"] == "error"
+        last_error = resp.data["data"]["last_error"]
+        assert "acme/secret" in last_error
+        assert "no access to" in last_error
+        # The accessible repo is NOT listed as blocked.
+        assert "acme/app" not in last_error
+
+    def test_verify_invalid_token_reports_token_error(self, api_client, owner_ws):
+        # The token probe (repo=None) fails → single root-cause message, repos never probed.
+        ws, owner = owner_ws
+        api_client.force_authenticate(owner)
+        created = self._create_multi(api_client, ws, ["acme/app", "acme/api"])
+
+        def _verify(repo=None):
+            if repo is None:
+                return VcsHealth(ok=False, detail="GitHub token invalid, expired, or lacks permission.")
+            raise AssertionError("repos must not be probed when the token itself is invalid")
+
+        url = f"{_base(ws.id)}{created['id']}/verify/"
+        with mock.patch(f"{_ADAPTER}.verify", side_effect=_verify):
+            resp = api_client.post(url, {}, format="json")
+        assert resp.data["data"]["status"] == "error"
+        assert "token invalid" in resp.data["data"]["last_error"]

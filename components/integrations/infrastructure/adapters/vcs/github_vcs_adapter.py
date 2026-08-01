@@ -89,9 +89,15 @@ class GitHubVcsAdapter(VcsPort):
             self._request("GET", "/user")
             return VcsHealth(ok=True, detail="Reachable — token valid.")
         except VcsApiError as exc:
-            reason = "token invalid or missing scope" if exc.status_code in (401, 403) else "not reachable"
-            if repo and exc.status_code == 404:
-                reason = f"{repo} not found or not accessible to this token"
+            if exc.status_code in (401, 403):
+                reason = "token invalid, expired, or lacks permission"
+            elif repo and exc.status_code == 404:
+                reason = (
+                    f"repo {repo} not found or not granted to this token "
+                    "(fine-grained PATs must add the repo to their access list)"
+                )
+            else:
+                reason = "not reachable"
             return VcsHealth(ok=False, detail=f"GitHub {reason}.")
 
     def get_default_branch(self, repo: str) -> DefaultBranch:
