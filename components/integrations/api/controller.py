@@ -39,11 +39,16 @@ from components.integrations.api.requests.log_source_request import (
 from components.integrations.api.requests.open_draft_pr_request import (
     OpenDraftPrRequest,
 )
+from components.integrations.api.requests.vcs_connection_request import (
+    CreateVcsConnectionRequest,
+    UpdateVcsConnectionRequest,
+)
 from components.integrations.api.resources.aws_connection_resource import (
     AwsConnectionResource,
 )
 from components.integrations.api.resources.draft_pr_resource import DraftPrResource
 from components.integrations.api.resources.log_source_resource import LogSourceResource
+from components.integrations.api.resources.vcs_connection_resource import VcsConnectionResource
 from components.integrations.application.aws_connection_service import (
     OrgVerificationError,
 )
@@ -53,6 +58,9 @@ from components.integrations.application.providers.aws_connection_provider impor
 )
 from components.integrations.application.providers.log_source_provider import (
     get_log_source_service,
+)
+from components.integrations.application.providers.vcs_provider import (
+    get_vcs_connection_service,
 )
 from components.membership.api.permissions import has_workspace_permission
 
@@ -361,3 +369,79 @@ class WorkspaceLogSourceVerifyView(APIView):
             return Response({"success": False, "error": "Log source not found."}, status=404)
         source = service.verify_source(source)
         return Response({"success": True, "data": LogSourceResource.from_model(source).to_dict()})
+
+
+# ── VcsConnection CRUD (ADR 0010 Phase 3) — link one or many code-host connections
+#    (GitHub today; GitLab/Bitbucket as adapters land) for agent draft-PR remediation.
+
+
+class VcsConnectionListCreateView(APIView):
+    permission_classes = (permissions.IsAuthenticated, CanManageIntegrations)
+    name = "integrations-vcs-connections"
+
+    def get(self, request, workspace_id):
+        connections = get_vcs_connection_service().list_connections(workspace_id)
+        return Response({"success": True, "data": [VcsConnectionResource.from_model(c).to_dict() for c in connections]})
+
+    def post(self, request, workspace_id):
+        req = CreateVcsConnectionRequest.from_payload(request.data)
+        error = req.validation_error()
+        if error:
+            return Response({"success": False, "error": error}, status=status.HTTP_400_BAD_REQUEST)
+        connection = get_vcs_connection_service().create_connection(
+            workspace_id=workspace_id,
+            provider=req.provider,
+            name=req.name,
+            repo_allowlist=req.repo_allowlist,
+            base_url=req.base_url,
+            token=req.token,
+        )
+        return Response(
+            {"success": True, "data": VcsConnectionResource.from_model(connection).to_dict()},
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class VcsConnectionDetailView(APIView):
+    permission_classes = (permissions.IsAuthenticated, CanManageIntegrations)
+    name = "integrations-vcs-connection-detail"
+
+    def patch(self, request, workspace_id, connection_id):
+        service = get_vcs_connection_service()
+        connection = service.get_connection(workspace_id, connection_id)
+        if connection is None:
+            return Response({"success": False, "error": "VCS connection not found."}, status=404)
+        req = UpdateVcsConnectionRequest.from_payload(request.data)
+        error = req.validation_error()
+        if error:
+            return Response({"success": False, "error": error}, status=status.HTTP_400_BAD_REQUEST)
+        connection = service.update_connection(
+            connection,
+            name=req.name,
+            repo_allowlist=req.repo_allowlist,
+            base_url=req.base_url,
+            status=req.status,
+            token=req.token,
+        )
+        return Response({"success": True, "data": VcsConnectionResource.from_model(connection).to_dict()})
+
+    def delete(self, request, workspace_id, connection_id):
+        service = get_vcs_connection_service()
+        connection = service.get_connection(workspace_id, connection_id)
+        if connection is None:
+            return Response({"success": False, "error": "VCS connection not found."}, status=404)
+        service.delete_connection(connection)
+        return Response({"success": True, "deleted": True})
+
+
+class VcsConnectionVerifyView(APIView):
+    permission_classes = (permissions.IsAuthenticated, CanManageIntegrations)
+    name = "integrations-vcs-connection-verify"
+
+    def post(self, request, workspace_id, connection_id):
+        service = get_vcs_connection_service()
+        connection = service.get_connection(workspace_id, connection_id)
+        if connection is None:
+            return Response({"success": False, "error": "VCS connection not found."}, status=404)
+        connection = service.verify_connection(connection)
+        return Response({"success": True, "data": VcsConnectionResource.from_model(connection).to_dict()})

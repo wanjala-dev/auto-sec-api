@@ -1,0 +1,137 @@
+"""Integration tests for the VcsConnection CRUD + verify API (ADR 0010 Phase 3)."""
+
+from __future__ import annotations
+
+from unittest import mock
+
+import pytest
+
+from components.integrations.application.ports.vcs_port import VcsHealth
+
+_ADAPTER = "components.integrations.infrastructure.adapters.vcs.github_vcs_adapter.GitHubVcsAdapter"
+
+
+def _base(workspace_id):
+    return f"/integrations/workspaces/{workspace_id}/vcs-connections/"
+
+
+@pytest.fixture
+def owner_ws(workspace_factory):
+    ws = workspace_factory()
+    return ws, ws.workspace_owner
+
+
+@pytest.mark.django_db
+class TestVcsConnectionCrud:
+    def test_list_starts_empty(self, api_client, owner_ws):
+        ws, owner = owner_ws
+        api_client.force_authenticate(owner)
+        resp = api_client.get(_base(ws.id))
+        assert resp.status_code == 200
+        assert resp.data["data"] == []
+
+    def test_create_github_connection(self, api_client, owner_ws):
+        ws, owner = owner_ws
+        api_client.force_authenticate(owner)
+        resp = api_client.post(
+            _base(ws.id),
+            {"provider": "github", "name": "prod org", "repo_allowlist": ["acme/app"], "token": "ghp_secret"},
+            format="json",
+        )
+        assert resp.status_code == 201, resp.data
+        body = resp.data["data"]
+        assert body["provider"] == "github"
+        assert body["repo_allowlist"] == ["acme/app"]
+        assert body["status"] == "connected"
+        # The token is NEVER echoed back — only has_token.
+        assert body["has_token"] is True
+        assert "token" not in body
+
+    def test_create_rejects_missing_token(self, api_client, owner_ws):
+        ws, owner = owner_ws
+        api_client.force_authenticate(owner)
+        resp = api_client.post(_base(ws.id), {"provider": "github", "repo_allowlist": ["acme/app"]}, format="json")
+        assert resp.status_code == 400
+        assert "token" in resp.data["error"]
+
+    def test_create_rejects_unavailable_provider(self, api_client, owner_ws):
+        ws, owner = owner_ws
+        api_client.force_authenticate(owner)
+        resp = api_client.post(_base(ws.id), {"provider": "gitlab", "token": "glpat_x"}, format="json")
+        assert resp.status_code == 400
+        assert "not available" in resp.data["error"]
+
+    def test_patch_disable_then_enable_and_allowlist(self, api_client, owner_ws):
+        ws, owner = owner_ws
+        api_client.force_authenticate(owner)
+        created = api_client.post(
+            _base(ws.id),
+            {"provider": "github", "repo_allowlist": ["acme/app"], "token": "ghp_secret"},
+            format="json",
+        ).data["data"]
+        detail = f"{_base(ws.id)}{created['id']}/"
+
+        disabled = api_client.patch(detail, {"status": "disabled"}, format="json")
+        assert disabled.data["data"]["status"] == "disabled"
+        enabled = api_client.patch(
+            detail, {"status": "connected", "repo_allowlist": ["acme/app", "acme/api"]}, format="json"
+        )
+        assert enabled.data["data"]["status"] == "connected"
+        assert enabled.data["data"]["repo_allowlist"] == ["acme/app", "acme/api"]
+
+    def test_patch_rejects_system_owned_status(self, api_client, owner_ws):
+        ws, owner = owner_ws
+        api_client.force_authenticate(owner)
+        created = api_client.post(_base(ws.id), {"provider": "github", "token": "ghp_secret"}, format="json").data[
+            "data"
+        ]
+        resp = api_client.patch(f"{_base(ws.id)}{created['id']}/", {"status": "error"}, format="json")
+        assert resp.status_code == 400
+
+    def test_delete_removes_connection(self, api_client, owner_ws):
+        ws, owner = owner_ws
+        api_client.force_authenticate(owner)
+        created = api_client.post(_base(ws.id), {"provider": "github", "token": "ghp_secret"}, format="json").data[
+            "data"
+        ]
+        resp = api_client.delete(f"{_base(ws.id)}{created['id']}/")
+        assert resp.status_code == 200
+        assert api_client.get(_base(ws.id)).data["data"] == []
+
+    def test_anonymous_is_denied(self, api_client, owner_ws):
+        ws, _owner = owner_ws
+        resp = api_client.get(_base(ws.id))
+        assert resp.status_code in (401, 403)
+
+
+@pytest.mark.django_db
+class TestVcsConnectionVerify:
+    def _create(self, api_client, ws):
+        return api_client.post(
+            _base(ws.id),
+            {"provider": "github", "repo_allowlist": ["acme/app"], "token": "ghp_secret"},
+            format="json",
+        ).data["data"]
+
+    def test_verify_success_marks_connected(self, api_client, owner_ws):
+        ws, owner = owner_ws
+        api_client.force_authenticate(owner)
+        created = self._create(api_client, ws)
+
+        url = f"{_base(ws.id)}{created['id']}/verify/"
+        with mock.patch(f"{_ADAPTER}.verify", return_value=VcsHealth(ok=True)):
+            resp = api_client.post(url, {}, format="json")
+        assert resp.status_code == 200
+        assert resp.data["data"]["status"] == "connected"
+        assert resp.data["data"]["last_verified_at"] is not None
+
+    def test_verify_failure_marks_error(self, api_client, owner_ws):
+        ws, owner = owner_ws
+        api_client.force_authenticate(owner)
+        created = self._create(api_client, ws)
+
+        url = f"{_base(ws.id)}{created['id']}/verify/"
+        with mock.patch(f"{_ADAPTER}.verify", return_value=VcsHealth(ok=False, detail="token invalid")):
+            resp = api_client.post(url, {}, format="json")
+        assert resp.data["data"]["status"] == "error"
+        assert "token invalid" in resp.data["data"]["last_error"]

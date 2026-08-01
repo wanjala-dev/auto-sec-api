@@ -45,3 +45,24 @@ def get_open_draft_pr_use_case() -> OpenDraftPrUseCase:
     # The use case reads the VcsConnection and passes its ``provider``; the registry
     # resolves the matching adapter (Phase 2). ``get_vcs_adapter`` is ``(provider, token)``.
     return OpenDraftPrUseCase(adapter_factory=get_vcs_adapter)
+
+
+def get_vcs_connection_service():
+    """Composition root for the VcsConnection lifecycle service (ADR 0010 Phase 3) —
+    wires the repository, the adapter registry (for verify), and the secret envelope.
+    Controllers resolve this and stay ORM/SDK/crypto-free."""
+    from components.integrations.application.providers.secret_envelope_provider import (
+        decrypt_secret,
+        encrypt_secret,
+    )
+    from components.integrations.application.vcs_connection_service import VcsConnectionService
+    from components.integrations.infrastructure.repositories.vcs_connection_repository import (
+        VcsConnectionRepository,
+    )
+
+    return VcsConnectionService(
+        _repo=VcsConnectionRepository(),
+        _resolve_adapter=get_vcs_adapter,
+        _encrypt=encrypt_secret,
+        _decrypt=decrypt_secret,
+    )

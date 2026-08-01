@@ -9,6 +9,9 @@ from components.integrations.api.controller import (
     AwsConnectionTemplateView,
     AwsConnectionVerifyView,
     FindingOpenDraftPrView,
+    VcsConnectionDetailView,
+    VcsConnectionListCreateView,
+    VcsConnectionVerifyView,
     WorkspaceLogSourceDetailView,
     WorkspaceLogSourceListCreateView,
     WorkspaceLogSourceVerifyView,
@@ -63,5 +66,21 @@ urlpatterns = [
         "workspaces/<uuid:workspace_id>/log-sources/<uuid:source_id>/verify/",
         WorkspaceLogSourceVerifyView.as_view(),
         name=WorkspaceLogSourceVerifyView.name,
+    ),
+    # ── VCS connections (ADR 0010 Phase 3) ──
+    path(
+        "workspaces/<uuid:workspace_id>/vcs-connections/",
+        VcsConnectionListCreateView.as_view(),
+        name=VcsConnectionListCreateView.name,
+    ),
+    path(
+        "workspaces/<uuid:workspace_id>/vcs-connections/<uuid:connection_id>/",
+        VcsConnectionDetailView.as_view(),
+        name=VcsConnectionDetailView.name,
+    ),
+    path(
+        "workspaces/<uuid:workspace_id>/vcs-connections/<uuid:connection_id>/verify/",
+        VcsConnectionVerifyView.as_view(),
+        name=VcsConnectionVerifyView.name,
     ),
 ]
