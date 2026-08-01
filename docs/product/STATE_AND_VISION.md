@@ -25,10 +25,11 @@ Management, and the brand-new Agentic AI SOC category — and its **wedge is rea
 that _owns the cloud graph_.** Wiz/Orca have the graph but no analyst; Dropzone/Prophet have the analyst
 but no graph. Auto-Sec has both.
 
-The honest gaps: most of the CNAPP engine is **flag-gated dark by default**, ATT&CK / compliance tagging
-is **Prowler-only** (logs + containers untagged), the **red-team lens is cosmetic**, parts of the HUD
-show **hardcoded demo data**, and there is **no runtime visibility** (which Gartner now calls
-table-stakes).
+The honest gaps: the CNAPP engine is **flag-gated dark by default** (per-workspace opt-in — though the
+demo workspace already has cloud-posture + asset-graph un-darkened on real data), ATT&CK / compliance
+tagging is **Prowler-only** (logs + containers untagged), the **red-team lens is cosmetic**, and there is
+**no runtime visibility** (which Gartner now calls table-stakes). _(The hardcoded HUD demo cards were
+removed in FE #114 — see §4.)_
 
 ---
 
@@ -177,9 +178,13 @@ dormant scaffold — not an active liability.
 Full CNAPP card suite on real API data (risk-score ring, findings, cloud posture, attack coverage, asset
 graph, attack surface, compliance) with drillable lunar callouts, the threat map, kanban board, live log
 stream. Ring/chrome are production-grade. **But:** the **red-team flip is cosmetic** (red modes' panel
-lists are empty → cards vanish; red hex clicks dead-end); several cards are **hardcoded demo data**
-(OPERATIONS, RECON, INCIDENTS, EVENT VOLUME, SYSTEM telemetry); the recycle bin has no API; forecast is a
-stub. These erode trust in a demo and should be fixed before user testing.
+lists are empty → cards vanish; red hex clicks dead-end); the recycle bin has no API; forecast is a stub.
+
+_Update 2026-07-31 (FE #114):_ the fabricated demo cards are gone — OPERATIONS/RECON/INCIDENTS were
+removed (their real equivalents, ACTIVE SCANS + SIGNALS/FINDINGS, already render live), and
+SYSTEM/STATS/EVENT-VOLUME now read real facts (monitored regions, onboarding readiness, risk score) or
+show an honest "coming soon". No fabricated numbers remain on the main HUD; the red-team lens and the
+recycle-bin/forecast stubs are the remaining trust gaps.
 
 ---
 
@@ -233,8 +238,10 @@ it) — unified because it's built on one graph and one reproducible agent frame
    notes don't cite ATT&CK," and it's what makes the red-team lens complete.
 4. **Red team is a shell** — commit to making it functional (ATT&CK kill-chain lens + attack-path
    validation) or de-emphasize until it's real?
-5. **Demo data & flag-gating** — before user testing, replace hardcoded cards and decide what's on by
-   default (the CNAPP engine is currently dark).
+5. **Flag-gating policy** — ✅ hardcoded cards removed (FE #114) and the demo workspace un-darkened
+   (cloud-posture + asset-graph on real data; container-security left dark, no workload). Open decision:
+   what's on by default per-workspace for real customers, and the pillar-enable UX (workspace-scoped
+   `FeatureFlagRule`, never a global `default_enabled` flip).
 6. **Metrics not in API** — small backend lift to unlock the OBSERVABILITY pane.
 
 ---
@@ -243,8 +250,9 @@ it) — unified because it's built on one graph and one reproducible agent frame
 
 A rough, honest order — **all against sample-onboarding data first**:
 
-1. **Trust & clarity:** replace demo-data cards; un-dark the CNAPP engine for the sample workspace, so
-   what a user sees is real.
+1. **Trust & clarity:** ✅ _shipped 2026-07-31_ — fabricated demo cards removed/de-faked (FE #114);
+   CNAPP engine confirmed already un-darkened on the sample workspace (real data). What a user sees on
+   the main HUD is now real or an honest "coming soon".
 2. **ATT&CK everywhere:** tag log + container findings → a technique on every finding → cite it inline on
    alert notes / board cards (feeds both the OBSERVABILITY notes and the red lens).
 3. **OBSERVABILITY pane:** rename LOGS → OBSERVABILITY; expose metrics via API; tabbed
