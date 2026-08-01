@@ -29,7 +29,7 @@ from components.integrations.application.use_cases.open_draft_pr_use_case import
     DraftPrPreconditionError,
     OpenDraftPrUseCase,
 )
-from infrastructure.persistence.integrations.models import GitHubConnection
+from infrastructure.persistence.integrations.models import VcsConnection
 from infrastructure.persistence.project.models import Column, Task, TaskComment
 
 _REPO = "wanjala-dev/auto-sec-api"
@@ -124,9 +124,10 @@ def _triaged_finding(workspace, owner, team, column, *, needs_human=False, triag
     )
 
 
-def _connection(workspace, owner, *, allowlist=None, status=GitHubConnection.Status.CONNECTED):
-    return GitHubConnection.objects.create(
+def _connection(workspace, owner, *, allowlist=None, status=VcsConnection.Status.CONNECTED):
+    return VcsConnection.objects.create(
         workspace=workspace,
+        provider=VcsConnection.Provider.GITHUB,
         name="GitHub",
         repo_allowlist=allowlist if allowlist is not None else [_REPO],
         token_ciphertext=encrypt_secret("ghp_test_token"),
@@ -149,7 +150,7 @@ def _capability_agent(workspace, owner, *, enabled=True):
 def _use_case():
     from components.integrations.application.providers.vcs_provider import get_vcs_adapter
 
-    return OpenDraftPrUseCase(adapter_factory=lambda token: get_vcs_adapter("github", token))
+    return OpenDraftPrUseCase(adapter_factory=get_vcs_adapter)
 
 
 _REQUESTS_PATH = "components.integrations.infrastructure.adapters.vcs.github_vcs_adapter.requests.request"
@@ -243,7 +244,7 @@ class TestOpenDraftPrPreconditions:
     def test_disabled_connection(self, workspace_factory, team_factory):
         workspace, owner, team, column = _board(workspace_factory, team_factory)
         task = _triaged_finding(workspace, owner, team, column)
-        _connection(workspace, owner, status=GitHubConnection.Status.DISABLED)
+        _connection(workspace, owner, status=VcsConnection.Status.DISABLED)
         _capability_agent(workspace, owner)
         with pytest.raises(DraftPrPreconditionError) as exc:
             self._execute(workspace, task, owner)

@@ -295,6 +295,10 @@ class LogMetricBucket(models.Model):
 class GitHubConnection(models.Model):
     """Workspace-scoped GitHub access for agent draft-PR remediation.
 
+    **DEPRECATED (ADR 0010):** superseded by :class:`VcsConnection` (provider-tagged,
+    multi-provider). Kept transitionally as the data-migration source; the read path
+    now uses ``VcsConnection``. Dropped in a later phase once no code reads it.
+
     Phase A (dogfood): a fine-grained PAT, stored via the app-layer Fernet
     envelope (``components.integrations.application.providers.
     secret_envelope_provider``) — NEVER plaintext. ``repo_allowlist`` is the
@@ -329,6 +333,55 @@ class GitHubConnection(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.workspace_id})"
+
+
+class VcsConnection(models.Model):
+    """Workspace-scoped VCS access for agent draft-PR remediation (ADR 0010).
+
+    Generalizes :class:`GitHubConnection` across code hosts. **Many rows per
+    workspace** — an org can link GitHub *and* GitLab *and* Bitbucket at once, each
+    with its own ``repo_allowlist`` + secret. ``repo_allowlist`` is the consent
+    boundary: the agent may only open draft PRs against repos the operator listed.
+    The encrypted token is a fine-grained PAT (Phase A) via the app-layer Fernet
+    envelope (``secret_envelope_provider``) — NEVER plaintext. Phase B replaces it
+    with a provider App installation (short-lived, per-operation tokens).
+    """
+
+    class Provider(models.TextChoices):
+        GITHUB = "github", "GitHub"
+        GITLAB = "gitlab", "GitLab"
+        BITBUCKET = "bitbucket", "Bitbucket"
+
+    class Status(models.TextChoices):
+        CONNECTED = "connected", "Connected"
+        DISABLED = "disabled", "Disabled"
+        ERROR = "error", "Error"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name="vcs_connections")
+    provider = models.CharField(max_length=16, choices=Provider.choices, default=Provider.GITHUB)
+    name = models.CharField(max_length=120, default="GitHub")
+    # "owner/repo" (or project path) strings the agent may open draft PRs against —
+    # the consent boundary. A repo not on this list is rejected before any API call.
+    repo_allowlist = models.JSONField(default=list, blank=True)
+    # Optional self-hosted host (GitLab CE/EE, Bitbucket Server); blank = the SaaS host.
+    base_url = models.CharField(max_length=255, blank=True, default="")
+    # Encrypted fine-grained PAT — Fernet envelope at the application layer (same
+    # envelope as SinkConnector/GitHubConnection secrets); NEVER plaintext.
+    token_ciphertext = models.TextField(blank=True, default="")
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.CONNECTED)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+    last_verified_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.TextField(blank=True, default="")
+    created_by = models.ForeignKey("users.CustomUser", null=True, blank=True, on_delete=models.SET_NULL)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["workspace", "provider", "status"])]
+
+    def __str__(self):
+        return f"{self.name} [{self.provider}] ({self.workspace_id})"
 
 
 class SinkConnector(models.Model):

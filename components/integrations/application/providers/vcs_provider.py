@@ -42,7 +42,6 @@ def get_vcs_adapter(provider: str, token: str) -> VcsPort:
 
 
 def get_open_draft_pr_use_case() -> OpenDraftPrUseCase:
-    # Phase 1: GitHub is the only connection type, so the injected factory resolves the
-    # GitHub adapter through the registry. Phase 2 (``VcsConnection.provider``) threads
-    # the row's provider through instead of hard-coding "github".
-    return OpenDraftPrUseCase(adapter_factory=lambda token: get_vcs_adapter("github", token))
+    # The use case reads the VcsConnection and passes its ``provider``; the registry
+    # resolves the matching adapter (Phase 2). ``get_vcs_adapter`` is ``(provider, token)``.
+    return OpenDraftPrUseCase(adapter_factory=get_vcs_adapter)
