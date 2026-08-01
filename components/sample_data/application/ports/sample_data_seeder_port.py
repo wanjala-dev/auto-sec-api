@@ -27,11 +27,17 @@ class SampleDataSeederPort(ABC):
         completeness per context."""
 
     @abstractmethod
+    def has_real_data(self, workspace_id: UUID) -> bool:
+        """True if the workspace holds REAL (non-sample) data for this context. The facade
+        checks EVERY seeder before seeding ANY, so demo⇔live stays mutually exclusive
+        workspace-wide (ADR 0011 D4 — "never both"), not merely per context."""
+
+    @abstractmethod
     def seed(self, workspace_id: UUID, *, now: datetime) -> dict:
         """Seed this context's coherent sample rows for the workspace. Idempotent and
         guarded: skip if the workspace already holds REAL data for this context (the
-        mutual-exclusivity guard). Returns a small result dict (e.g.
-        ``{"seeded": 6, "skipped": False}``)."""
+        per-seeder defense-in-depth guard, behind the facade's workspace-wide pre-flight).
+        Returns a small result dict (e.g. ``{"seeded": 6, "skipped": False}``)."""
 
     @abstractmethod
     def clear(self, workspace_id: UUID) -> dict:

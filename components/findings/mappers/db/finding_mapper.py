@@ -27,13 +27,13 @@ def to_finding_entity(model) -> FindingEntity:
 
 
 def to_finding_defaults(finding: FindingEntity) -> dict:
-    """Field map for ``update_or_create(defaults=...)`` — everything except the
-    identity lookup keys (workspace, source, fingerprint). ``id`` + ``first_seen_at``
-    are included so a create uses the entity's values and an update is a no-op on them
-    (the entity carries the existing values on the update path).
+    """Field map for ``update_or_create(defaults=...)`` — the fields that a re-observation
+    is allowed to mutate. Excludes the identity lookup keys (workspace, source,
+    fingerprint) AND the insert-only fields (``id``, ``first_seen_at`` — see
+    ``to_finding_create_defaults``), so an update never tries to rewrite the matched
+    row's PK (which raises a UNIQUE violation) or reset when it was first observed.
     """
     return {
-        "id": finding.id,
         "asset_urn": finding.asset_urn,
         "severity": finding.severity.value,
         "status": finding.status.value,
@@ -42,7 +42,18 @@ def to_finding_defaults(finding: FindingEntity) -> dict:
         "remediation": finding.remediation,
         "compliance": finding.compliance,
         "attributes": finding.attributes,
-        "first_seen_at": finding.first_seen_at,
         "last_seen_at": finding.last_seen_at,
         "resolved_at": finding.resolved_at,
+    }
+
+
+def to_finding_create_defaults(finding: FindingEntity) -> dict:
+    """Insert-only fields for ``update_or_create(create_defaults=...)`` — the entity's
+    ``id`` and ``first_seen_at`` are applied ONLY when the row is created, never on an
+    update. This makes upsert genuinely idempotent: re-observing (or re-seeding) never
+    mutates the PK of the matched row."""
+    return {
+        **to_finding_defaults(finding),
+        "id": finding.id,
+        "first_seen_at": finding.first_seen_at,
     }

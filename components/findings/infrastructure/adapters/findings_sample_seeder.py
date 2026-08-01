@@ -12,17 +12,23 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
+from components.findings.application.ports.finding_store_port import FindingStorePort
+from components.findings.infrastructure.sample_findings import SAMPLE_SOURCE_PREFIX
 from components.sample_data.application.ports.sample_data_seeder_port import SampleDataSeederPort
 
 
 class FindingsSampleSeeder(SampleDataSeederPort):
-    def __init__(self, *, seed_use_case, clear_use_case) -> None:
+    def __init__(self, *, store: FindingStorePort, seed_use_case, clear_use_case) -> None:
+        self._store = store
         self._seed = seed_use_case
         self._clear = clear_use_case
 
     @property
     def context(self) -> str:
         return "findings"
+
+    def has_real_data(self, workspace_id: UUID) -> bool:
+        return self._store.has_real_findings(workspace_id, sample_prefix=SAMPLE_SOURCE_PREFIX)
 
     def seed(self, workspace_id: UUID, *, now: datetime) -> dict:
         return self._seed.execute(workspace_id, now=now)

@@ -70,13 +70,18 @@ class CloudAssetStorePort(ABC):
         ``FindingStorePort.has_real_findings``)."""
 
     @abstractmethod
-    def create_sample_asset(self, asset: CloudAssetEntity) -> CloudAssetEntity:
-        """Insert a tagged (``is_sample=True``) demo asset directly. Not idempotent on
-        identity like ``upsert_asset`` — the seeder is guarded and cleared as a whole set."""
-
-    @abstractmethod
-    def create_sample_edge(self, edge: CloudAssetEdgeEntity) -> CloudAssetEdgeEntity:
-        """Insert a tagged (``is_sample=True``) demo edge directly."""
+    def seed_sample_graph(
+        self,
+        workspace_id: UUID,
+        assets: list[CloudAssetEntity],
+        edges: list[CloudAssetEdgeEntity],
+    ) -> tuple[int, int]:
+        """Replace the workspace's sample graph atomically: clear existing
+        ``is_sample=True`` assets (and, by cascade, their edges) FIRST, then insert the
+        given tagged assets + edges. Idempotent — re-seeding yields the same set with no
+        UNIQUE violation on ``(workspace, arn)``. Real rows are untouched. Returns
+        ``(assets_created, edges_created)``. The caller supplies stable entity ids so the
+        edges can reference the asset ids without a round-trip."""
 
     @abstractmethod
     def clear_sample_assets(self, workspace_id: UUID) -> int:

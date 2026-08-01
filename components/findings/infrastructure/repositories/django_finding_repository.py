@@ -6,7 +6,11 @@ from uuid import UUID
 
 from components.findings.application.ports.finding_store_port import FindingStorePort
 from components.findings.domain.entities.finding_entity import FindingEntity
-from components.findings.mappers.db.finding_mapper import to_finding_defaults, to_finding_entity
+from components.findings.mappers.db.finding_mapper import (
+    to_finding_create_defaults,
+    to_finding_defaults,
+    to_finding_entity,
+)
 
 
 class DjangoFindingRepository(FindingStorePort):
@@ -102,6 +106,7 @@ class DjangoFindingRepository(FindingStorePort):
             source=finding.source,
             fingerprint=finding.fingerprint,
             defaults=to_finding_defaults(finding),
+            create_defaults=to_finding_create_defaults(finding),
         )
 
     def has_real_findings(self, workspace_id: UUID, *, sample_prefix: str) -> bool:

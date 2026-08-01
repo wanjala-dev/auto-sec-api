@@ -125,29 +125,41 @@ class DjangoCloudGraphRepository(CloudAssetStorePort):
 
         return CloudAsset.objects.filter(workspace_id=workspace_id, is_sample=False).exists()
 
-    def create_sample_asset(self, asset: CloudAssetEntity) -> CloudAssetEntity:
-        from infrastructure.persistence.cloud_graph.models import CloudAsset
+    def seed_sample_graph(
+        self,
+        workspace_id: UUID,
+        assets: list[CloudAssetEntity],
+        edges: list[CloudAssetEdgeEntity],
+    ) -> tuple[int, int]:
+        from django.db import transaction
 
-        obj = CloudAsset.objects.create(
-            id=asset.id,
-            workspace_id=asset.workspace_id,
-            arn=asset.arn,
-            first_seen_at=asset.first_seen_at,
-            **to_asset_update_defaults(asset),
-        )
-        return to_asset_entity(obj)
+        from infrastructure.persistence.cloud_graph.models import CloudAsset, CloudAssetEdge
 
-    def create_sample_edge(self, edge: CloudAssetEdgeEntity) -> CloudAssetEdgeEntity:
-        from infrastructure.persistence.cloud_graph.models import CloudAssetEdge
-
-        obj = CloudAssetEdge.objects.create(
-            id=edge.id,
-            src_asset_id=edge.src_asset_id,
-            dst_asset_id=edge.dst_asset_id,
-            relation=edge.relation.value,
-            **to_edge_defaults(edge),
-        )
-        return to_edge_entity(obj)
+        with transaction.atomic():
+            # Clear sample-first so re-seeding never collides on uniq_cloud_asset_identity
+            # (deleting the sample assets cascades their sample edges). Real rows untouched.
+            CloudAsset.objects.filter(workspace_id=workspace_id, is_sample=True).delete()
+            CloudAsset.objects.bulk_create(
+                CloudAsset(
+                    id=a.id,
+                    workspace_id=a.workspace_id,
+                    arn=a.arn,
+                    first_seen_at=a.first_seen_at,
+                    **to_asset_update_defaults(a),
+                )
+                for a in assets
+            )
+            CloudAssetEdge.objects.bulk_create(
+                CloudAssetEdge(
+                    id=e.id,
+                    src_asset_id=e.src_asset_id,
+                    dst_asset_id=e.dst_asset_id,
+                    relation=e.relation.value,
+                    **to_edge_defaults(e),
+                )
+                for e in edges
+            )
+        return len(assets), len(edges)
 
     def clear_sample_assets(self, workspace_id: UUID) -> int:
         from infrastructure.persistence.cloud_graph.models import CloudAsset

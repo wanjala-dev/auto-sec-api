@@ -47,62 +47,63 @@ class CloudGraphSampleSeeder(SampleDataSeederPort):
     def context(self) -> str:
         return "cloud_graph"
 
+    def has_real_data(self, workspace_id: UUID) -> bool:
+        return self._assets.has_real_assets(UUID(str(workspace_id)))
+
     def seed(self, workspace_id: UUID, *, now: datetime) -> dict:
         ws = UUID(str(workspace_id))
         if self._assets.has_real_assets(ws):
             logger.info("cloud_graph sample seed skipped — workspace has real assets ws=%s", ws)
             return {"seeded_assets": 0, "seeded_edges": 0, "seeded_paths": 0, "skipped": True}
 
-        # Assets first — keep a key → persisted entity map to wire edges + paths.
-        by_key: dict[str, CloudAssetEntity] = {}
-        for row in SAMPLE_ASSETS:
-            entity = self._assets.create_sample_asset(
-                CloudAssetEntity(
-                    id=uuid.uuid4(),
-                    workspace_id=ws,
-                    provider="aws",
-                    arn=row["arn"],
-                    asset_urn=row["asset_urn"],
-                    resource_type=row["resource_type"],
-                    exposure=Exposure.from_value(row["exposure"]),
-                    region=row["region"],
-                    name=row["name"],
-                    attributes=dict(row["attributes"]),
-                    first_seen_at=now,
-                    last_seen_at=now,
-                    is_sample=True,
-                )
+        # Build the assets in-memory (stable uuid4 ids) — keep a key → entity map so edges
+        # and attack paths can reference asset ids without a DB round-trip.
+        by_key: dict[str, CloudAssetEntity] = {
+            row["key"]: CloudAssetEntity(
+                id=uuid.uuid4(),
+                workspace_id=ws,
+                provider="aws",
+                arn=row["arn"],
+                asset_urn=row["asset_urn"],
+                resource_type=row["resource_type"],
+                exposure=Exposure.from_value(row["exposure"]),
+                region=row["region"],
+                name=row["name"],
+                attributes=dict(row["attributes"]),
+                first_seen_at=now,
+                last_seen_at=now,
+                is_sample=True,
             )
-            by_key[row["key"]] = entity
-
-        edges = 0
-        for src_key, relation, dst_key in SAMPLE_EDGES:
-            self._assets.create_sample_edge(
-                CloudAssetEdgeEntity(
-                    id=uuid.uuid4(),
-                    workspace_id=ws,
-                    src_asset_id=by_key[src_key].id,
-                    dst_asset_id=by_key[dst_key].id,
-                    relation=AssetRelation.from_value(relation),
-                    last_seen_at=now,
-                    is_sample=True,
-                )
+            for row in SAMPLE_ASSETS
+        }
+        edge_entities = [
+            CloudAssetEdgeEntity(
+                id=uuid.uuid4(),
+                workspace_id=ws,
+                src_asset_id=by_key[src_key].id,
+                dst_asset_id=by_key[dst_key].id,
+                relation=AssetRelation.from_value(relation),
+                last_seen_at=now,
+                is_sample=True,
             )
-            edges += 1
+            for src_key, relation, dst_key in SAMPLE_EDGES
+        ]
 
+        # One atomic, clear-sample-first write — idempotent on re-seed (no UNIQUE clash).
+        seeded_assets, seeded_edges = self._assets.seed_sample_graph(ws, list(by_key.values()), edge_entities)
         paths = [self._build_path(ws, spec, by_key, now) for spec in SAMPLE_ATTACK_PATHS]
         seeded_paths = self._paths.seed_sample_paths(ws, paths)
 
         logger.info(
             "cloud_graph sample seeded ws=%s assets=%s edges=%s paths=%s",
             ws,
-            len(by_key),
-            edges,
+            seeded_assets,
+            seeded_edges,
             seeded_paths,
         )
         return {
-            "seeded_assets": len(by_key),
-            "seeded_edges": edges,
+            "seeded_assets": seeded_assets,
+            "seeded_edges": seeded_edges,
             "seeded_paths": seeded_paths,
             "skipped": False,
         }

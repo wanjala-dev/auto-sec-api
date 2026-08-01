@@ -102,6 +102,7 @@ class FindingProvider:
         )
 
         return FindingsSampleSeeder(
+            store=FindingProvider.build_finding_store(),
             seed_use_case=FindingProvider.build_seed_sample_data_use_case(),
             clear_use_case=FindingProvider.build_clear_sample_data_use_case(),
         )
