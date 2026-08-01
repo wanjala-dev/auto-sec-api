@@ -78,6 +78,21 @@ class TestTriageCapabilityApi:
         assert api_client.patch(_url(ws.id), {"enabled": True}, format="json").status_code == 403
         assert not _triage_rows(ws).exists()
 
+    def test_other_workspace_owner_is_forbidden(self, api_client, workspace_factory):
+        """IDOR guard: Bob, a legitimate owner of workspace B, must NOT be able to
+        read or flip workspace A's triage capability. Owner-ness is per-workspace —
+        this is the exact failure mode a repo-write-granting endpoint must never
+        regress."""
+        ws_a = workspace_factory()  # owner Alice
+        ws_b = workspace_factory()  # owner Bob
+        bob = ws_b.workspace_owner
+        api_client.force_authenticate(bob)
+
+        assert api_client.get(_url(ws_a.id)).status_code == 403
+        assert api_client.patch(_url(ws_a.id), {"enabled": True}, format="json").status_code == 403
+        # And no side-effect: Bob's denied PATCH provisioned nothing for A.
+        assert not _triage_rows(ws_a).exists()
+
     def test_anonymous_is_unauthorized(self, api_client, owner_ws):
         ws, _ = owner_ws
         assert api_client.get(_url(ws.id)).status_code in (401, 403)
