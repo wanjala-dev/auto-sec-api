@@ -291,7 +291,7 @@ def open_draft_pr(agent, input_str: str) -> str:
     autonomous runs before this body executes; ``performed_by`` is therefore
     the approving human principal driving this run.
     """
-    from components.integrations.application.providers.github_pr_provider import get_open_draft_pr_use_case
+    from components.integrations.application.providers.vcs_provider import get_open_draft_pr_use_case
     from components.integrations.application.use_cases.open_draft_pr_use_case import DraftPrPreconditionError
 
     raw = (input_str or "").strip()
@@ -303,7 +303,7 @@ def open_draft_pr(agent, input_str: str) -> str:
     if not task_id:
         return "task_id is required to open a draft PR."
 
-    from components.integrations.application.ports.github_pr_port import GitHubApiError
+    from components.integrations.application.ports.vcs_port import VcsApiError
 
     try:
         result = get_open_draft_pr_use_case().execute(
@@ -314,9 +314,9 @@ def open_draft_pr(agent, input_str: str) -> str:
         )
     except DraftPrPreconditionError as exc:
         return f"Cannot open a draft PR ({exc.reason}): {exc}"
-    except GitHubApiError as exc:
-        logger.exception("open_draft_pr github api error task_id=%s", task_id)
-        return f"GitHub API error while opening the draft PR: {exc}"
+    except VcsApiError as exc:
+        logger.exception("open_draft_pr vcs api error task_id=%s", task_id)
+        return f"VCS API error while opening the draft PR: {exc}"
 
     if not result.created:
         return f"A draft PR already exists for this finding: {result.url}"

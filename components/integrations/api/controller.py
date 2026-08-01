@@ -201,8 +201,8 @@ class FindingOpenDraftPrView(APIView):
     }
 
     def post(self, request, workspace_id, task_id):
-        from components.integrations.application.ports.github_pr_port import GitHubApiError
-        from components.integrations.application.providers.github_pr_provider import (
+        from components.integrations.application.ports.vcs_port import VcsApiError
+        from components.integrations.application.providers.vcs_provider import (
             get_open_draft_pr_use_case,
         )
         from components.integrations.application.use_cases.open_draft_pr_use_case import (
@@ -222,10 +222,10 @@ class FindingOpenDraftPrView(APIView):
                 {"success": False, "reason": exc.reason, "error": str(exc)},
                 status=self._REASON_STATUS.get(exc.reason, status.HTTP_400_BAD_REQUEST),
             )
-        except GitHubApiError as exc:
-            logger.exception("open_draft_pr_endpoint github error workspace_id=%s task_id=%s", workspace_id, task_id)
+        except VcsApiError as exc:
+            logger.exception("open_draft_pr_endpoint vcs error workspace_id=%s task_id=%s", workspace_id, task_id)
             return Response(
-                {"success": False, "reason": "github_api_error", "error": str(exc)},
+                {"success": False, "reason": "vcs_api_error", "error": str(exc)},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 

@@ -15,7 +15,7 @@ callers, so neither path can skip a gate:
 Idempotent: a finding that already carries ``payload.draft_pr`` returns the
 existing PR without touching the GitHub API. Failures raise
 :class:`DraftPrPreconditionError` with a machine-readable ``reason`` — never
-silent. GitHub API failures propagate as ``GitHubApiError``.
+silent. VCS provider API failures propagate as ``VcsApiError``.
 
 Rung 1 (HITL): ``performed_by`` is the approving human's user id; the tool's
 ``irreversible`` risk tier denies autonomous runs before this code is reached.
@@ -32,7 +32,7 @@ from components.integrations.application.log_patch_advisor_service import (
     LogPatchAdvisor,
     derive_candidate_path,
 )
-from components.integrations.application.ports.github_pr_port import GitHubPrPort
+from components.integrations.application.ports.vcs_port import VcsPort
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +59,7 @@ class DraftPrResult:
 class OpenDraftPrUseCase:
     def __init__(
         self,
-        adapter_factory: Callable[[str], GitHubPrPort],
+        adapter_factory: Callable[[str], VcsPort],
         advisor: LogPatchAdvisor | None = None,
     ) -> None:
         self._adapter_factory = adapter_factory

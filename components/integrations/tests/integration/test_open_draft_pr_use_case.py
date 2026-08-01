@@ -147,12 +147,12 @@ def _capability_agent(workspace, owner, *, enabled=True):
 
 
 def _use_case():
-    from components.integrations.application.providers.github_pr_provider import get_github_pr_adapter
+    from components.integrations.application.providers.vcs_provider import get_vcs_adapter
 
-    return OpenDraftPrUseCase(adapter_factory=get_github_pr_adapter)
+    return OpenDraftPrUseCase(adapter_factory=lambda token: get_vcs_adapter("github", token))
 
 
-_REQUESTS_PATH = "components.integrations.infrastructure.adapters.github_pr_adapter.requests.request"
+_REQUESTS_PATH = "components.integrations.infrastructure.adapters.vcs.github_vcs_adapter.requests.request"
 _PROPOSE_PATH = "components.integrations.application.log_patch_advisor_service.LogPatchAdvisor.propose"
 
 
@@ -427,9 +427,7 @@ class TestOpenDraftPrNotifiesOwner:
                 workspace_id=str(workspace.id), task_id=str(task.id), performed_by=str(owner.id)
             )
 
-        row = Notification.objects.filter(
-            recipient=owner, metadata__kind="soc.draft_pr_opened"
-        ).first()
+        row = Notification.objects.filter(recipient=owner, metadata__kind="soc.draft_pr_opened").first()
         assert row is not None
         assert row.notification_type == Notification.NotificationType.AI_EVENT
         assert row.metadata["pr_url"] == result.url
