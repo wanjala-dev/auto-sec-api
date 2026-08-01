@@ -39,6 +39,9 @@ from components.integrations.api.requests.log_source_request import (
 from components.integrations.api.requests.open_draft_pr_request import (
     OpenDraftPrRequest,
 )
+from components.integrations.api.requests.triage_capability_request import (
+    SetTriageCapabilityRequest,
+)
 from components.integrations.api.requests.vcs_connection_request import (
     CreateVcsConnectionRequest,
     UpdateVcsConnectionRequest,
@@ -48,6 +51,9 @@ from components.integrations.api.resources.aws_connection_resource import (
 )
 from components.integrations.api.resources.draft_pr_resource import DraftPrResource
 from components.integrations.api.resources.log_source_resource import LogSourceResource
+from components.integrations.api.resources.triage_capability_resource import (
+    TriageCapabilityResource,
+)
 from components.integrations.api.resources.vcs_connection_resource import VcsConnectionResource
 from components.integrations.application.aws_connection_service import (
     OrgVerificationError,
@@ -62,7 +68,7 @@ from components.integrations.application.providers.log_source_provider import (
 from components.integrations.application.providers.vcs_provider import (
     get_vcs_connection_service,
 )
-from components.membership.api.permissions import has_workspace_permission
+from components.membership.api.permissions import IsWorkspaceOwner, has_workspace_permission
 
 logger = logging.getLogger(__name__)
 
@@ -445,3 +451,53 @@ class VcsConnectionVerifyView(APIView):
             return Response({"success": False, "error": "VCS connection not found."}, status=404)
         connection = service.verify_connection(connection)
         return Response({"success": True, "data": VcsConnectionResource.from_model(connection).to_dict()})
+
+
+# ── Triage-agent capability toggle (ADR 0010) — the last mile of the draft-PR
+#    loop: give an OWNER a way to turn ``open_draft_pr`` ON/OFF for this
+#    workspace's triage agent. Co-located with the VcsConnection consent
+#    boundary and OWNER-gated (stricter than manage_integrations) because
+#    granting an agent the power to open PRs is a high-privilege consent action.
+#    The mutation lives in the AGENTS context (it owns Agent.config); this thin
+#    controller calls that context's application service — never the Agent ORM.
+
+
+class TriageCapabilityView(APIView):
+    """GET/PATCH /integrations/workspaces/<ws>/triage-capabilities/
+
+    GET returns the current capability map (every allowlisted key → bool) so the
+    FE toggle can render its state without a write. PATCH flips one capability
+    (``open_draft_pr`` by default), ensuring the ``triage_agent`` row on a fresh
+    workspace so the toggle works day one. Idempotent — re-sending the same
+    value returns the same state and writes no duplicate audit row.
+    """
+
+    permission_classes = (permissions.IsAuthenticated, IsWorkspaceOwner)
+    name = "integrations-triage-capabilities"
+
+    def get(self, request, workspace_id):
+        from components.agents.application.service import AgentsService
+
+        result = AgentsService().workspace_agent_capabilities(workspace_id=str(workspace_id))
+        return Response({"success": True, "data": TriageCapabilityResource.from_result(result).to_dict()})
+
+    def patch(self, request, workspace_id):
+        from components.agents.application.service import AgentsService
+        from components.shared_kernel.domain.errors import NotFoundError, ValidationError
+
+        req = SetTriageCapabilityRequest.from_payload(request.data)
+        error = req.validation_error()
+        if error:
+            return Response({"success": False, "error": error}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            result = AgentsService().set_workspace_agent_capability(
+                workspace_id=str(workspace_id),
+                capability=req.capability,
+                enabled=req.enabled,
+                actor=request.user,
+            )
+        except ValidationError as exc:
+            return Response({"success": False, "error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except NotFoundError as exc:
+            return Response({"success": False, "error": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+        return Response({"success": True, "data": TriageCapabilityResource.from_result(result).to_dict()})

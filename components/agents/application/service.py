@@ -194,6 +194,20 @@ class AgentsService:
         use_case = self.provider.build_set_ai_kill_switch_use_case()
         return use_case.execute(workspace_id=workspace_id, enabled=enabled, actor=actor, reason=reason)
 
+    def set_workspace_agent_capability(self, *, workspace_id: str, capability: str, enabled: bool, actor: Any) -> Any:
+        """Enable/disable a gated capability on the workspace's triage agent
+        (owner-gated at the endpoint; ensures the row on a fresh org; audited)."""
+        use_case = self.provider.build_set_workspace_agent_capability_use_case()
+        return use_case.execute(workspace_id=workspace_id, capability=capability, enabled=enabled, actor=actor)
+
+    def workspace_agent_capabilities(self, *, workspace_id: str) -> Any:
+        """Read the current capability state for the workspace's triage agent."""
+        from components.agents.application.use_cases.set_workspace_agent_capability_use_case import (
+            get_workspace_capabilities,
+        )
+
+        return get_workspace_capabilities(str(workspace_id))
+
     def ai_kill_switch_status(self, *, workspace_id: str) -> Any:
         """Read the kill-switch status (workspace toggle + emergency flag)."""
         from components.agents.application.services import ai_governance_service
