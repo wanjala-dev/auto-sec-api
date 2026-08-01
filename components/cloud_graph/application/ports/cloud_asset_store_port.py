@@ -58,3 +58,32 @@ class CloudAssetStorePort(ABC):
     def list_all_edges(self, workspace_id: UUID, *, limit: int = 2000) -> list[CloudAssetEdgeEntity]:
         """Every edge in the workspace (capped) — the whole-graph read the HUD renders,
         distinct from the per-node ``list_edges_from`` traversal primitive."""
+
+    # ── Sample/demo data (ADR 0011) ───────────────────────────────────────────
+    # Sample rows are written DIRECTLY (no sync, no events) and torn down by tag, so
+    # demo data never mixes into real posture nor fires real side-effects.
+
+    @abstractmethod
+    def has_real_assets(self, workspace_id: UUID) -> bool:
+        """True if the workspace has ANY non-sample cloud asset — the mutual-exclusivity
+        guard that stops sample data seeding onto a live workspace (mirrors
+        ``FindingStorePort.has_real_findings``)."""
+
+    @abstractmethod
+    def seed_sample_graph(
+        self,
+        workspace_id: UUID,
+        assets: list[CloudAssetEntity],
+        edges: list[CloudAssetEdgeEntity],
+    ) -> tuple[int, int]:
+        """Replace the workspace's sample graph atomically: clear existing
+        ``is_sample=True`` assets (and, by cascade, their edges) FIRST, then insert the
+        given tagged assets + edges. Idempotent — re-seeding yields the same set with no
+        UNIQUE violation on ``(workspace, arn)``. Real rows are untouched. Returns
+        ``(assets_created, edges_created)``. The caller supplies stable entity ids so the
+        edges can reference the asset ids without a round-trip."""
+
+    @abstractmethod
+    def clear_sample_assets(self, workspace_id: UUID) -> int:
+        """Delete all ``is_sample=True`` assets (and, by cascade, their edges) for the
+        workspace. Returns the number of assets removed. Real rows are untouched."""

@@ -117,3 +117,55 @@ class DjangoCloudGraphRepository(CloudAssetStorePort):
 
         rows = CloudAssetEdge.objects.filter(workspace_id=workspace_id).order_by("-last_seen_at")[:limit]
         return [to_edge_entity(obj) for obj in rows]
+
+    # ── Sample/demo data (ADR 0011) ───────────────────────────────────────────
+
+    def has_real_assets(self, workspace_id: UUID) -> bool:
+        from infrastructure.persistence.cloud_graph.models import CloudAsset
+
+        return CloudAsset.objects.filter(workspace_id=workspace_id, is_sample=False).exists()
+
+    def seed_sample_graph(
+        self,
+        workspace_id: UUID,
+        assets: list[CloudAssetEntity],
+        edges: list[CloudAssetEdgeEntity],
+    ) -> tuple[int, int]:
+        from django.db import transaction
+
+        from infrastructure.persistence.cloud_graph.models import CloudAsset, CloudAssetEdge
+
+        with transaction.atomic():
+            # Clear sample-first so re-seeding never collides on uniq_cloud_asset_identity
+            # (deleting the sample assets cascades their sample edges). Real rows untouched.
+            CloudAsset.objects.filter(workspace_id=workspace_id, is_sample=True).delete()
+            CloudAsset.objects.bulk_create(
+                CloudAsset(
+                    id=a.id,
+                    workspace_id=a.workspace_id,
+                    arn=a.arn,
+                    first_seen_at=a.first_seen_at,
+                    **to_asset_update_defaults(a),
+                )
+                for a in assets
+            )
+            CloudAssetEdge.objects.bulk_create(
+                CloudAssetEdge(
+                    id=e.id,
+                    src_asset_id=e.src_asset_id,
+                    dst_asset_id=e.dst_asset_id,
+                    relation=e.relation.value,
+                    **to_edge_defaults(e),
+                )
+                for e in edges
+            )
+        return len(assets), len(edges)
+
+    def clear_sample_assets(self, workspace_id: UUID) -> int:
+        from infrastructure.persistence.cloud_graph.models import CloudAsset
+
+        # Edges FK-cascade off their assets, so deleting the sample assets removes the
+        # sample edges too; any sample edge whose endpoints were both sample assets is
+        # thus cleared without a second pass.
+        deleted, _ = CloudAsset.objects.filter(workspace_id=workspace_id, is_sample=True).delete()
+        return deleted
