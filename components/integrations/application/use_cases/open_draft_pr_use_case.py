@@ -30,9 +30,11 @@ from datetime import UTC, datetime
 
 from components.integrations.application.log_patch_advisor_service import (
     LogPatchAdvisor,
+    PatchValidationError,
     RepoPathResolutionError,
     derive_candidate_path,
     resolve_repo_path,
+    validate_patch,
 )
 from components.integrations.application.ports.vcs_port import VcsApiError, VcsPort
 
@@ -116,6 +118,19 @@ class OpenDraftPrUseCase:
                 "no_grounded_patch",
                 "No grounded patch could be generated from the finding's evidence.",
             )
+
+        # Verification above the model: FAIL CLOSED before any branch/commit/PR.
+        # A destructive or broken patch (e.g. the advisor gutting the file it was
+        # asked to fix) never reaches GitHub — it raises a typed precondition the
+        # controller maps to 422. Composes with no_grounded_patch above.
+        try:
+            validate_patch(
+                original_content=repo_file.content,
+                updated_content=proposal.updated_content,
+                path=proposal.path,
+            )
+        except PatchValidationError as exc:
+            raise DraftPrPreconditionError(exc.reason, str(exc)) from exc
 
         branch = f"autosec/finding-{task_id}"
         title = f"[Auto-Sec] {task.title[:180]}"

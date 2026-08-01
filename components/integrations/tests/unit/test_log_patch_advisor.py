@@ -13,7 +13,9 @@ import pytest
 
 from components.integrations.application.log_patch_advisor_service import (
     LogPatchAdvisor,
+    PatchValidationError,
     derive_candidate_path,
+    validate_patch,
 )
 
 
@@ -154,3 +156,124 @@ class TestPatchGroundedness:
         advisor = LogPatchAdvisor(llm_port=_Boom())
         payload = _payload("NameError: run_due_schedules")
         assert advisor.propose(payload=payload, path="a.py", current_content=_OLD_CONTENT) is None
+
+
+# The real #828 module (paraphrased): a ~50-line module whose class the advisor
+# deleted, replacing the whole file with a single self-referential import.
+_EMBEDDINGS_MODULE = (
+    '"""AI embeddings provider — resolves an embeddings port from the registry."""\n'
+    "from __future__ import annotations\n"
+    "\n"
+    "_REGISTRY: dict[str, object] = {}\n"
+    "\n"
+    "\n"
+    "class AIEmbeddingsProvider:\n"
+    '    """Factory that returns the configured embeddings adapter."""\n'
+    "\n"
+    "    def __init__(self, default: str = 'openai') -> None:\n"
+    "        self._default = default\n"
+    "\n"
+    "    def get_port(self, name: str | None = None):\n"
+    "        key = name or self._default\n"
+    "        adapter = _REGISTRY.get(key)\n"
+    "        if adapter is None:\n"
+    "            raise KeyError(f'no embeddings adapter registered for {key}')\n"
+    "        return adapter\n"
+    "\n"
+    "    def register(self, name: str, adapter: object) -> None:\n"
+    "        _REGISTRY[name] = adapter\n"
+    "\n"
+    "    @property\n"
+    "    def default(self) -> str:\n"
+    "        return self._default\n"
+)
+_EMBEDDINGS_PATH = "components/knowledge/application/providers/ai_embeddings_provider.py"
+
+
+@pytest.mark.unit
+class TestValidatePatch:
+    def test_828_destructive_self_import_is_rejected(self):
+        # The exact #828 shape: the whole module replaced by a self-referential
+        # import that DROPS class AIEmbeddingsProvider.
+        gutted = "from components.knowledge.application.providers.ai_embeddings_provider import AIEmbeddingsProvider\n"
+        with pytest.raises(PatchValidationError) as exc:
+            validate_patch(original_content=_EMBEDDINGS_MODULE, updated_content=gutted, path=_EMBEDDINGS_PATH)
+        assert exc.value.reason == "patch_removes_definitions"
+
+    def test_syntax_broken_patch_is_rejected(self):
+        broken = _EMBEDDINGS_MODULE + "\n\ndef f(:\n    pass\n"
+        with pytest.raises(PatchValidationError) as exc:
+            validate_patch(original_content=_EMBEDDINGS_MODULE, updated_content=broken, path=_EMBEDDINGS_PATH)
+        assert exc.value.reason == "patch_does_not_parse"
+
+    def test_whole_file_gutted_to_one_unrelated_line(self):
+        # A 50-line module reduced to a single UNRELATED line: symbols are dropped,
+        # so this is caught (removes_definitions fires before the size check).
+        with pytest.raises(PatchValidationError) as exc:
+            validate_patch(
+                original_content=_EMBEDDINGS_MODULE,
+                updated_content="x = 1\n",
+                path=_EMBEDDINGS_PATH,
+            )
+        assert exc.value.reason in ("patch_removes_definitions", "patch_too_destructive")
+
+    def test_size_check_fires_for_non_py_gutting(self):
+        # A non-.py config file gutted to a fraction of its size → the size check
+        # (the only structural guard for non-.py) rejects it.
+        original = "\n".join(f"line {i} = value{i}" for i in range(20)) + "\n"
+        with pytest.raises(PatchValidationError) as exc:
+            validate_patch(original_content=original, updated_content="line 0 = value0\n", path="config/app.yaml")
+        assert exc.value.reason == "patch_too_destructive"
+
+    def test_valid_minimal_alias_fix_passes(self):
+        # The CORRECT #828 fix: preserve the class, append a casing alias.
+        fixed = _EMBEDDINGS_MODULE + "\n\nAiEmbeddingsProvider = AIEmbeddingsProvider\n"
+        # Preserves the original class → alias adds a name, drops none. No raise.
+        assert validate_patch(original_content=_EMBEDDINGS_MODULE, updated_content=fixed, path=_EMBEDDINGS_PATH) is None
+
+    def test_empty_updated_content_is_rejected(self):
+        with pytest.raises(PatchValidationError) as exc:
+            validate_patch(original_content=_EMBEDDINGS_MODULE, updated_content="", path=_EMBEDDINGS_PATH)
+        assert exc.value.reason == "patch_empty_or_noop"
+
+    def test_identical_content_is_noop(self):
+        with pytest.raises(PatchValidationError) as exc:
+            validate_patch(
+                original_content=_EMBEDDINGS_MODULE,
+                updated_content=_EMBEDDINGS_MODULE,
+                path=_EMBEDDINGS_PATH,
+            )
+        assert exc.value.reason == "patch_empty_or_noop"
+
+    def test_non_py_file_skips_parse_and_symbol_checks(self):
+        # A .yaml file with "broken python" syntax but a benign real change passes
+        # the parse/symbol checks (skipped) and the size check (change is small).
+        original = "\n".join(f"key{i}: value{i}" for i in range(20)) + "\n"
+        updated = original.replace("key0: value0", "key0: value0-fixed")
+        assert validate_patch(original_content=original, updated_content=updated, path="k8s/deploy.yaml") is None
+
+    def test_small_file_shrink_is_allowed(self):
+        # A trivial file (< 10 non-blank lines) is exempt from the size check —
+        # a 3-line file legitimately becoming 1 line is not "destructive".
+        assert (
+            validate_patch(original_content="a = 1\nb = 2\nc = 3\n", updated_content="a = 1\n", path="tiny.txt") is None
+        )
+
+    def test_dropping_a_top_level_function_is_rejected(self):
+        original = "def keep():\n    return 1\n\n\ndef also_keep():\n    return 2\n"
+        # Drops also_keep — a fix must not delete a sibling top-level def.
+        updated = "def keep():\n    return 99\n"
+        with pytest.raises(PatchValidationError) as exc:
+            validate_patch(original_content=original, updated_content=updated, path="m.py")
+        assert exc.value.reason in ("patch_removes_definitions", "patch_too_destructive")
+
+    def test_renaming_a_method_inside_a_class_is_allowed(self):
+        # Method-level (non-top-level) changes are legitimate — only module-body
+        # symbols are protected. The class itself is preserved.
+        original = (
+            "class Widget:\n    def old_name(self):\n        return 1\n\n    def helper(self):\n        return 2\n"
+        )
+        updated = (
+            "class Widget:\n    def new_name(self):\n        return 1\n\n    def helper(self):\n        return 2\n"
+        )
+        assert validate_patch(original_content=original, updated_content=updated, path="w.py") is None
