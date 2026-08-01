@@ -1,8 +1,15 @@
 # Triage Agent → Draft PRs: GitHub Integration + Agent Capability Settings
 
-**Status:** researched design, not built. Prompted by Henry (2026-07-19): the triage agent
-finds issues and recommends fixes from logs — give it the power to push a **draft PR**, gated
-by **settings on agents**.
+**Status:** _superseded/updated 2026-07-31 by [ADR 0010](../adr/0010-multi-provider-vcs-integration.md)._
+The backend **is built** (contrary to the original "not built"): `GitHubPrPort` + `GitHubPrAdapter` +
+`OpenDraftPrUseCase` + `GitHubConnection` (repo-allowlist, encrypted PAT) + a real `triage_agent.open_draft_pr`
+tool. What remains is **productizing + generalizing** it — a CRUD API + Settings panel (it's admin-created
+today, which is why GitHub isn't in the Integrations UI) and generalizing the GitHub-specific port/model into
+a multi-provider `VcsPort` (GitHub/GitLab/Bitbucket), per ADR 0010. This doc stays as the original research;
+ADR 0010 is the authoritative spec for the work going forward.
+
+Prompted by Henry (2026-07-19): the triage agent finds issues and recommends fixes from logs — give it the
+power to push a **draft PR**, gated by **settings on agents**.
 
 ## 1. How the field does it (research, 2026)
 
