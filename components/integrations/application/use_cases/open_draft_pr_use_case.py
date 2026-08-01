@@ -59,7 +59,7 @@ class DraftPrResult:
 class OpenDraftPrUseCase:
     def __init__(
         self,
-        adapter_factory: Callable[[str], VcsPort],
+        adapter_factory: Callable[[str, str], VcsPort],  # (provider, token) -> adapter
         advisor: LogPatchAdvisor | None = None,
     ) -> None:
         self._adapter_factory = adapter_factory
@@ -98,7 +98,7 @@ class OpenDraftPrUseCase:
                 "The finding's evidence names no source file — cannot derive a patch target.",
             )
 
-        adapter = self._adapter_factory(token)
+        adapter = self._adapter_factory(connection.provider, token)
         default_branch = adapter.get_default_branch(target_repo)
         repo_file = adapter.get_file(target_repo, candidate_path, ref=default_branch.name)
 
@@ -191,18 +191,21 @@ class OpenDraftPrUseCase:
 
     @staticmethod
     def _require_connection(workspace_id: str):
-        from infrastructure.persistence.integrations.models import GitHubConnection
+        # ADR 0010 Phase 2: reads the provider-agnostic VcsConnection (seeded from any
+        # legacy GitHubConnection by migration 0008). Most-recent connection wins; a
+        # per-repo/provider resolution refinement lands with the CRUD API (Phase 3).
+        from infrastructure.persistence.integrations.models import VcsConnection
 
-        connection = GitHubConnection.objects.filter(workspace_id=workspace_id).order_by("-created_at").first()
+        connection = VcsConnection.objects.filter(workspace_id=workspace_id).order_by("-created_at").first()
         if connection is None:
             raise DraftPrPreconditionError(
                 "no_github_connection",
-                "No GitHub connection is installed for this workspace.",
+                "No VCS connection is linked for this workspace.",
             )
-        if connection.status != GitHubConnection.Status.CONNECTED:
+        if connection.status != VcsConnection.Status.CONNECTED:
             raise DraftPrPreconditionError(
                 "connection_not_connected",
-                f"The GitHub connection is '{connection.status}', not connected.",
+                f"The VCS connection is '{connection.status}', not connected.",
             )
         return connection
 
