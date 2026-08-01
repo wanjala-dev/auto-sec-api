@@ -96,13 +96,27 @@ DEFAULT_FLAGS = [
         "flip OFF to hide CloudWatch from the Log Sources API/UI. Datadog/Splunk follow "
         "the same per-adapter flag pattern. See docs/adr/0008-multi-source-log-ingestion-port.md.",
     ),
+    (
+        "feature.sample_data_mode",
+        False,
+        "Per-workspace demo/sample-data mode (ADR 0011): when ON for a workspace, the demo "
+        "banner shows and the workspace holds injected, tagged sample data so a trial can "
+        "explore a populated product; OFF tears it down so they set up live integrations. "
+        "The owner toggles it in Settings; the flag is the demo-mode SSOT + trial→paying lever. "
+        "Off by default; per-workspace opt-in.",
+    ),
 ]
 
 
 # Flags that should be globally disabled in production (DEBUG=False).
 # Dev/local (DEBUG=True) leaves them at their default_enabled value.
 # Add product feature-gate keys here as they are introduced.
-PROD_DISABLED_FLAGS = ("feature.provenance_graph", "feature.cloud_posture", "feature.container_security")
+PROD_DISABLED_FLAGS = (
+    "feature.provenance_graph",
+    "feature.cloud_posture",
+    "feature.container_security",
+    "feature.sample_data_mode",
+)
 
 
 # Flags that, while globally disabled in production, are kept enabled for a

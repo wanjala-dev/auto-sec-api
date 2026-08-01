@@ -12,11 +12,14 @@ from rest_framework import permissions
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from components.membership.api.permissions import IsWorkspaceOwner
+
 
 class SampleDataView(APIView):
-    """POST seeds / DELETE clears the never-empty-HUD sample findings for a workspace
-    (onboarding slice B). Sample rows are source-prefixed ``sample.`` and seeding is
-    guarded to workspaces with no real findings — the demo/real data is never touched."""
+    """DEPRECATED (ADR 0011): superseded by ``SampleDataModeView`` (owner-gated flag toggle).
+    Kept temporarily so the onboarding "explore with sample data" button keeps working until
+    the frontend is rewired; removed once it is. POST seeds / DELETE clears the sample findings;
+    rows are source-prefixed ``sample.`` and seeding is guarded to workspaces with no real findings."""
 
     permission_classes = (permissions.IsAuthenticated,)
     name = "findings-sample-data"
@@ -45,6 +48,30 @@ class SampleDataView(APIView):
             return Response({"success": False, "error": "forbidden"}, status=403)
         result = FindingProvider.build_clear_sample_data_use_case().execute(workspace_id, now=timezone.now())
         return Response({"success": True, "data": result})
+
+
+class SampleDataModeView(APIView):
+    """Owner-only toggle for per-workspace sample-data mode (ADR 0011). ``POST {enabled: bool}``
+    flips the ``feature.sample_data_mode`` flag (the demo-mode SSOT + lever) and seeds/clears the
+    sample dataset. This is the Settings control that replaces the member-accessible SampleDataView."""
+
+    permission_classes = (permissions.IsAuthenticated, IsWorkspaceOwner)
+    name = "findings-sample-data-mode"
+
+    def post(self, request, workspace_id):
+        from django.utils import timezone
+
+        from components.findings.application.sample_data_service import SampleDataService
+
+        enabled = bool((request.data or {}).get("enabled"))
+        actor_id = str(getattr(request.user, "id", "") or "") or None
+        service = SampleDataService()
+        result = (
+            service.enable(str(workspace_id), now=timezone.now(), actor_id=actor_id)
+            if enabled
+            else service.disable(str(workspace_id), now=timezone.now(), actor_id=actor_id)
+        )
+        return Response({"success": True, "enabled": enabled, "data": result})
 
 
 class FindingListView(APIView):

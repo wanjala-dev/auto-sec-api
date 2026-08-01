@@ -44,11 +44,13 @@ class OrmWorkspaceSetupQueryRepository:
 
     @staticmethod
     def _has_first_scan(workspace) -> bool:
-        # A completed scan run, OR any finding (findings only exist because a scan
+        # A completed scan run, OR any REAL finding (findings exist because a scan
         # produced them — covers workspaces whose findings predate ScanRun tracking).
+        # Sample findings (source ``sample.*``, ADR 0011) are excluded: demo mode must
+        # NOT falsely advance the live setup funnel.
         return (
             ScanRun.objects.filter(workspace=workspace, status=ScanRun.Status.COMPLETED).exists()
-            or Finding.objects.filter(workspace=workspace).exists()
+            or Finding.objects.filter(workspace=workspace).exclude(source__startswith="sample.").exists()
         )
 
     @staticmethod

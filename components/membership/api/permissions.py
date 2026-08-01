@@ -23,6 +23,7 @@ from rest_framework.exceptions import UnsupportedMediaType
 
 def _get_workspace_models():
     from components.workspace.application.providers.workspaces_models_provider import get_workspaces_models_provider
+
     _wsp = get_workspaces_models_provider()
     Workspace = _wsp.Workspace
     WorkspaceMembership = _wsp.WorkspaceMembership
@@ -32,6 +33,7 @@ def _get_workspace_models():
 
 def _get_team_models():
     from components.team.application.providers.team_models_provider import get_team_models_provider
+
     Team = get_team_models_provider().Team
     TeamMembership = get_team_models_provider().TeamMembership
 
@@ -56,7 +58,10 @@ def _safe_request_data(request):
 
 
 _WORKSPACE_LOOKUP_KEYS = (
-    "workspace_id", "workspace", "workspaceId", "workspace_pk",
+    "workspace_id",
+    "workspace",
+    "workspaceId",
+    "workspace_pk",
 )
 
 
@@ -71,9 +76,7 @@ def user_is_active_workspace_member(user, workspace_id) -> bool:
         return False
     Workspace, WorkspaceMembership = _get_workspace_models()
     try:
-        if Workspace.objects.filter(
-            id=workspace_id, workspace_owner_id=user.id
-        ).exists():
+        if Workspace.objects.filter(id=workspace_id, workspace_owner_id=user.id).exists():
             return True
         return WorkspaceMembership.objects.filter(
             workspace_id=workspace_id,
@@ -82,6 +85,29 @@ def user_is_active_workspace_member(user, workspace_id) -> bool:
         ).exists()
     except (ValueError, TypeError):
         return False
+
+
+def is_workspace_owner(user, workspace_id) -> bool:
+    """True if ``user`` is the OWNER of ``workspace_id`` (org owner) — stricter than
+    membership. Used to gate owner-only actions (e.g. the sample-data-mode toggle)."""
+    if not getattr(user, "is_authenticated", False) or not workspace_id:
+        return False
+    Workspace, _ = _get_workspace_models()
+    try:
+        return Workspace.objects.filter(id=workspace_id, workspace_owner_id=user.id).exists()
+    except (ValueError, TypeError):
+        return False
+
+
+class IsWorkspaceOwner(permissions.BasePermission):
+    """Allows ONLY the workspace owner. Resolves ``workspace_id`` from the URL kwargs."""
+
+    message = "Only the workspace owner may perform this action."
+
+    def has_permission(self, request, view) -> bool:
+        kwargs = getattr(view, "kwargs", None) or {}
+        workspace_id = kwargs.get("workspace_id") or kwargs.get("workspace")
+        return is_workspace_owner(getattr(request, "user", None), workspace_id)
 
 
 def _resolve_workspace(request, view):
@@ -215,8 +241,7 @@ class _HasWorkspacePermissionBase(permissions.BasePermission):
 
         _, WorkspaceMembership = _get_workspace_models()
         membership = (
-            WorkspaceMembership.objects
-            .filter(
+            WorkspaceMembership.objects.filter(
                 workspace=workspace,
                 user=user,
                 status=WorkspaceMembership.Status.ACTIVE,
@@ -228,6 +253,7 @@ class _HasWorkspacePermissionBase(permissions.BasePermission):
             from components.membership.application.services.membership_permission_service import (
                 membership_has_permission,
             )
+
             return membership_has_permission(membership, self.permission_key)
 
         return self._team_member_has_permission_via_member_role(user, workspace)
@@ -242,11 +268,11 @@ class _HasWorkspacePermissionBase(permissions.BasePermission):
             return False
 
         from components.workspace.application.providers.workspaces_models_provider import get_workspaces_models_provider
+
         WorkspaceRole = get_workspaces_models_provider().WorkspaceRole
 
         member_role = (
-            WorkspaceRole.objects
-            .filter(workspace__isnull=True, is_system=True, slug="member")
+            WorkspaceRole.objects.filter(workspace__isnull=True, is_system=True, slug="member")
             .only("permissions")
             .first()
         )

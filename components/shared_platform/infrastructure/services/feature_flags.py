@@ -6,12 +6,12 @@ from typing import Any
 from django.db.models import Q
 from django.utils import timezone
 
-from infrastructure.persistence.core.models import FeatureFlag, FeatureFlagRule
-from components.shared_platform.infrastructure.services.core_validators import ensure_uuid
 from components.shared_platform.application.config.tier_features import features_for_tier
 from components.shared_platform.infrastructure.adapters.django_cache_feature_flag_adapter import (
     DjangoCacheFeatureFlagAdapter,
 )
+from components.shared_platform.infrastructure.services.core_validators import ensure_uuid
+from infrastructure.persistence.core.models import FeatureFlag, FeatureFlagRule
 
 
 def _workspace_plan_tier(workspace_id, request=None) -> str | None:
@@ -34,16 +34,12 @@ def _workspace_plan_tier(workspace_id, request=None) -> str | None:
         memo = getattr(request, "_ff_plan_tier_cache", None)
         if memo is None:
             memo = {}
-            setattr(request, "_ff_plan_tier_cache", memo)
+            request._ff_plan_tier_cache = memo
         if workspace_id in memo:
             return memo[workspace_id]
     from infrastructure.persistence.workspaces.models import Workspace
 
-    tier = (
-        Workspace.objects.filter(id=workspace_id)
-        .values_list("plan__title", flat=True)
-        .first()
-    )
+    tier = Workspace.objects.filter(id=workspace_id).values_list("plan__title", flat=True).first()
     if memo is not None:
         memo[workspace_id] = tier
     return tier
@@ -73,13 +69,31 @@ def bump_feature_flags_version() -> int:
     return _cache_adapter.bump_version()
 
 
+def set_workspace_flag(flag_key: str, workspace_id, enabled: bool, *, updated_by_id=None, note: str = ""):
+    """Create/update the WORKSPACE-scoped rule for ``flag_key`` on ``workspace_id`` and
+    invalidate the cache. The single programmatic entry point for toggling a per-workspace
+    flag (used by the sample-data-mode owner toggle, ADR 0011). Idempotent."""
+    flag, _ = FeatureFlag.objects.get_or_create(
+        key=flag_key,
+        defaults={"default_enabled": False, "description": ""},
+    )
+    rule, _ = FeatureFlagRule.objects.update_or_create(
+        flag=flag,
+        scope=FeatureFlagRule.Scope.WORKSPACE,
+        workspace_id=workspace_id,
+        defaults={"enabled": enabled, "updated_by_id": updated_by_id, "note": note},
+    )
+    bump_feature_flags_version()
+    return rule
+
+
 def _request_cache(request) -> dict[tuple[str, str | None, str | None], FeatureFlagEvaluation]:
     if request is None:
         return {}
     storage = getattr(request, "_feature_flag_cache", None)
     if storage is None:
         storage = {}
-        setattr(request, "_feature_flag_cache", storage)
+        request._feature_flag_cache = storage
     return storage
 
 
@@ -313,15 +327,17 @@ def flags_for_context(
             continue
         if rule.scope == FeatureFlagRule.Scope.GLOBAL:
             global_rules[rule.flag_id] = rule
-        elif rule.scope == FeatureFlagRule.Scope.WORKSPACE and normalized_workspace_id and str(rule.workspace_id) == normalized_workspace_id:
+        elif (
+            rule.scope == FeatureFlagRule.Scope.WORKSPACE
+            and normalized_workspace_id
+            and str(rule.workspace_id) == normalized_workspace_id
+        ):
             workspace_rules[rule.flag_id] = rule
         elif rule.scope == FeatureFlagRule.Scope.USER and user_id and str(rule.user_id) == str(user_id):
             user_rules[rule.flag_id] = rule
 
     # Plan-tier unlock set for this workspace — one lookup for the whole map.
-    tier_unlocked = features_for_tier(
-        _workspace_plan_tier(normalized_workspace_id, request)
-    )
+    tier_unlocked = features_for_tier(_workspace_plan_tier(normalized_workspace_id, request))
 
     results: dict[str, Any] = {}
     for flag in flags:
