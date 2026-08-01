@@ -72,10 +72,53 @@ Three markets are **converging into one**, and Auto-Sec is natively at the cente
 - **Observability + security are converging**; OTel is the unified-telemetry standard
   (logs / metrics / traces). The OBSERVABILITY-pane direction is directly on-trend.
 
-**The wedge:** *the AI SOC analyst whose reasoning is grounded in a real cloud graph.* Differentiated from
-both incumbents (CNAPP-without-analyst) and startups (analyst-without-graph).
+**The wedge:** *the AI SOC analyst whose reasoning is grounded in a real cloud graph* — packaged as
+**"the security team you don't have to hire": a fleet of agents standing in for the infosec team a
+fast-shipping, AI-native team can't afford and doesn't want to staff.** Differentiated from both
+incumbents (CNAPP-without-analyst) and startups (analyst-without-graph). See §2.1 for the operator-founder
+signal behind this framing, and [§10 Sources](#10-sources).
 
-See [§10 Sources](#10-sources).
+### 2.1 First operator-founder signal (Tom, 2026-07-31)
+
+First real feedback session with a target operator: a technical founder (ex-Clio; ~15 years building AI
+eval/test suites; revived and recapitalized his own SaaS; ships daily with Claude Code). Close to ICP
+*and* deeply technical, so the signal is high-quality. Grounded takeaways:
+
+**The positioning reframe (his words).** *"You're essentially selling an infosec professional team to
+people that can't — or don't want to — have a whole one,"* plus *"code is not the problem now; it's **how
+do I know I'm shipping safely and at scale**."* This sharpens the ICP from "cloud-native SMB on AWS" to
+**AI-era builders / small teams shipping fast with AI-generated code, no security team, no budget for
+experts** — the security team you don't hire.
+
+**Double down (explicitly validated — treat as committed direction):**
+- **Single pane of glass / cockpit** — "stay in one place, never leave." The whole IA thesis, endorsed.
+- **Rearrangeable panels + role-based default templates (operator / red / blue) + saved custom views** —
+  strongly validated, and a personal scar for him ("people have role preferences about what's important;
+  can you change the ordering/view"). Action: make **saved views first-class and *persisted* per user**,
+  with role-preset templates.
+- **Per-workspace branding** — "people care about that logo." (Already shipped — keep.)
+- **Preventive posture** — "tighten yourself up *before* things get serious / before the bad guys get
+  in." Reinforces the CTEM/exposure lean.
+
+**Top validated build gaps (ranked by signal):**
+1. **Remediation → open a PR against their IaC (Terraform/CD).** Unprompted: "that should be a feature."
+   We have the response-action framework (propose→approve→execute→rollback) but not an *IaC-PR* action.
+2. **AI-introduced-vulnerability detection** — he lived it: a coding agent shipped broken tenant
+   isolation (cross-customer data access). New threat class we're uniquely placed for: *catch the
+   security regressions your coding agent introduces* (tenant leaks, secrets, over-permissive IaC in a PR).
+3. **Monitoring blind-spot advisor** — his DB fell over because they alerted on CPU/RAM, not disk IO;
+   "we weren't monitoring the right thing until we had the problem." Proactively flag *missing* coverage.
+4. **Right-remediation advice** — on a bot-scanner flood he first blocked User-Agents (a mistake: UAs
+   spoof) before switching to path/WAF blocking. Advisors should encode the *correct* control + reasoning.
+5. **LLM / agent-trace observability in the HUD** — his home turf; eval the whole agent *trace*, replay
+   provenance if something escapes the sandbox. Fits the OBSERVABILITY pane (an AI/agent tab); we already
+   use Langfuse. He cross-referenced Datadog LLM Observability + Langfuse.
+6. **Datadog / Splunk log sources + cross-source correlation** — he correlates Datadog + Slack + app +
+   traces by hand. Validates prioritizing the Datadog `LogSourcePort` adapter (ADR 0008, Phase 5).
+
+**Meta / founder advice heeded:** don't overbuild — validate with a manual/faked one-off in front of
+customers *before* building; trust agent output via golden-dataset eval + confidence values. Direct
+implication: **run more operator calls like this before building further.** He offered to test when ready.
 
 ---
 
@@ -214,10 +257,12 @@ graph, and AI agents close the loop from detection to reversible response.** It'
 **CNAPP** (see the exposure) + **CTEM** (prioritize & *validate* what matters) + **Agentic SOC** (handle
 it) — unified because it's built on one graph and one reproducible agent framework.
 
-- **The wedge (first real customer):** cloud-native startups & mid-market on AWS who have real exposure
-  (misconfigs, over-permissioned IAM, public data) and *no SOC* — drowning in GuardDuty/Prowler noise,
-  priced out of Wiz, and unable to adopt Dropzone (which assumes an existing SIEM/SOC). The pitch:
-  **"Your AI SOC analyst that actually understands your cloud."**
+- **The wedge (first real customer):** **AI-native teams shipping fast with AI-generated code**, on AWS,
+  with real exposure (misconfigs, over-permissioned IAM, public data — *and now AI-introduced bugs like
+  broken tenant isolation*) and *no SOC* — drowning in GuardDuty/Prowler noise, priced out of Wiz, and
+  unable to adopt Dropzone (which assumes an existing SIEM/SOC). The pitch: **"the security team you don't
+  have to hire — your AI SOC analyst that actually understands your cloud"** (validated framing, §2.1).
+  Their felt pain isn't writing code; it's *knowing they're shipping safely.*
 - **The moat:** (1) the **unified graph** makes triage *grounded* — agents reason over real
   asset/attack-path/ATT&CK context, not alert text — which is hard for analyst-only startups to
   replicate; (2) the **reproducible deep-agent arm** — each new "arm" (triage today; OSINT, recon,
