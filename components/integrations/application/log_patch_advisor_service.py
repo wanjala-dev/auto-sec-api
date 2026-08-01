@@ -59,6 +59,18 @@ _SYSTEM = (
 )
 
 
+class RepoPathResolutionError(Exception):
+    """Monorepo path resolution failed. ``reason`` is a stable machine code the use
+    case re-raises as a ``DraftPrPreconditionError`` (so the same reason reaches the
+    controller's status map). Kept here — not importing the use case's exception —
+    so this application service stays free of that dependency (the use case imports
+    THIS module, not the other way round)."""
+
+    def __init__(self, reason: str, message: str):
+        super().__init__(message)
+        self.reason = reason
+
+
 @dataclass(frozen=True)
 class PatchProposal:
     path: str
@@ -101,6 +113,57 @@ def derive_candidate_path(payload: dict) -> str | None:
         longest = max(modules, key=lambda m: m.count("."))
         return longest.replace(".", "/") + ".py"
     return None
+
+
+def resolve_repo_path(*, adapter, repo: str, ref: str, runtime_path: str, explicit_prefix: str | None = None) -> str:
+    """Resolve a runtime-relative source path to its actual path in ``repo``.
+
+    A monitored backend is often a MONOREPO: its runtime ``derive_candidate_path``
+    strips the ``/app/`` prefix (→ ``components/x/y.py``), but the app may live under
+    a subdirectory (→ ``api-v2.0/components/x/y.py``). This bridges the two.
+
+    Two modes:
+
+    * **explicit override** — if ``explicit_prefix`` is set (a per-connection
+      ``repo_root``), trust it: return ``"<prefix>/<runtime_path>"`` WITHOUT any API
+      call. A wrong override just 404s downstream (→ ``candidate_file_not_in_repo``).
+    * **auto-detect** — otherwise list the repo tree once and suffix-match. This is
+      called by the use case ONLY AFTER a direct ``get_file(runtime_path)`` 404s, so a
+      repo-root app never reaches here (it pays no tree fetch). Matches are entries
+      equal to ``runtime_path`` or ending in ``"/" + runtime_path``. On a unique
+      match, return it; on several, pick the shallowest prefix (fewest leading
+      segments — the single app root); on a remaining tie, raise
+      ``ambiguous_candidate_path``; on none, raise ``candidate_file_not_in_repo``.
+    """
+    runtime_path = (runtime_path or "").strip().lstrip("/")
+    if explicit_prefix:
+        return f"{explicit_prefix.strip('/')}/{runtime_path}"
+
+    tree = adapter.list_tree(repo, ref)
+    matches = [p for p in tree if p == runtime_path or p.endswith("/" + runtime_path)]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise RepoPathResolutionError(
+            "candidate_file_not_in_repo",
+            f"'{runtime_path}' isn't anywhere in {repo}@{ref} — this finding may reference a different codebase.",
+        )
+
+    # Multiple matches: the shallowest (fewest leading path segments before the
+    # runtime_path) is the most likely single app root.
+    def _prefix_depth(path: str) -> int:
+        # Segments preceding the runtime_path suffix. An exact match has depth 0.
+        prefix = path[: -len(runtime_path)].rstrip("/") if path != runtime_path else ""
+        return prefix.count("/") + 1 if prefix else 0
+
+    matches.sort(key=_prefix_depth)
+    if _prefix_depth(matches[0]) == _prefix_depth(matches[1]):
+        raise RepoPathResolutionError(
+            "ambiguous_candidate_path",
+            f"Multiple files in {repo} match '{runtime_path}': {matches}. "
+            "Set a repo_root on the connection to disambiguate.",
+        )
+    return matches[0]
 
 
 class LogPatchAdvisor:

@@ -124,12 +124,13 @@ def _triaged_finding(workspace, owner, team, column, *, needs_human=False, triag
     )
 
 
-def _connection(workspace, owner, *, allowlist=None, status=VcsConnection.Status.CONNECTED):
+def _connection(workspace, owner, *, allowlist=None, status=VcsConnection.Status.CONNECTED, repo_root=""):
     return VcsConnection.objects.create(
         workspace=workspace,
         provider=VcsConnection.Provider.GITHUB,
         name="GitHub",
         repo_allowlist=allowlist if allowlist is not None else [_REPO],
+        repo_root=repo_root,
         token_ciphertext=encrypt_secret("ghp_test_token"),
         status=status,
         created_by=owner,
@@ -313,8 +314,9 @@ class TestOpenDraftPrPreconditions:
         assert exc.value.reason == "finding_not_found"
 
     def test_candidate_file_not_in_repo_is_precondition(self, workspace_factory, team_factory):
-        # The derived source file 404s in the allowlisted repo → a typed precondition
-        # (candidate_file_not_in_repo), NOT a propagated VcsApiError. The advisor never runs.
+        # The derived source file 404s AND auto-detect finds it nowhere in the repo tree
+        # → a typed precondition (candidate_file_not_in_repo), NOT a propagated
+        # VcsApiError. The advisor never runs.
         from components.integrations.application.ports.vcs_port import VcsApiError
 
         workspace, owner, team, column = _board(workspace_factory, team_factory)
@@ -328,6 +330,7 @@ class TestOpenDraftPrPreconditions:
         with (
             mock.patch(_REQUESTS_PATH, new=fake),
             mock.patch(_get_file_path, side_effect=VcsApiError("not found", status_code=404)),
+            mock.patch(f"{_ADAPTER}.list_tree", return_value=["README.md", "src/other.py"]),
             mock.patch(_PROPOSE_PATH) as propose,
             pytest.raises(DraftPrPreconditionError) as exc,
         ):
@@ -418,6 +421,7 @@ class TestOpenDraftPrEndpoint:
         with (
             mock.patch(_REQUESTS_PATH, new=fake),
             mock.patch(_get_file_path, side_effect=VcsApiError("not found", status_code=404)),
+            mock.patch(f"{_ADAPTER}.list_tree", return_value=["README.md"]),
         ):
             response = api_client.post(url, {}, format="json")
         assert 400 <= response.status_code < 500, response.data
@@ -530,3 +534,177 @@ class TestOpenDraftPrNotifiesOwner:
 
         assert result.created is False
         assert Notification.objects.filter(metadata__kind="soc.draft_pr_opened").count() == 0
+
+
+# The runtime-relative path the finding derives (the deepest traceback frame).
+_RUNTIME_PATH = "components/workflow/application/service.py"
+_MONOREPO_PATH = f"api-v2.0/{_RUNTIME_PATH}"
+_ADAPTER = "components.integrations.infrastructure.adapters.vcs.github_vcs_adapter.GitHubVcsAdapter"
+
+
+def _echo_path_patch(*, payload, path, current_content):
+    """Advisor stub that echoes the path it is given — so the resolved (possibly
+    monorepo-prefixed) path is what flows into commit_file, letting the test assert
+    the branch/commit target the real repo path."""
+    return PatchProposal(
+        path=path,
+        updated_content=_OLD_FILE + "\n\ndef run_due_schedules():\n    return None\n",
+        change_summary="Add the missing run_due_schedules export.",
+    )
+
+
+@pytest.mark.django_db
+class TestOpenDraftPrMonorepoResolution:
+    """The finding derives a runtime path that lives under a monorepo subdirectory."""
+
+    def test_auto_detect_resolves_and_commits_prefixed_path(self, workspace_factory, team_factory):
+        from components.integrations.application.ports.vcs_port import RepoFile, VcsApiError
+
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _triaged_finding(workspace, owner, team, column)
+        _connection(workspace, owner)  # no repo_root → auto-detect
+        _capability_agent(workspace, owner)
+        fake = _FakeGitHub()
+
+        committed: dict = {}
+
+        def _get_file(self, repo, path, ref):
+            # The runtime path 404s at the root; the resolved (prefixed) path 200s.
+            if path == _RUNTIME_PATH:
+                raise VcsApiError("not found", status_code=404)
+            if path == _MONOREPO_PATH:
+                return RepoFile(path=path, content=_OLD_FILE, sha="filesha456")
+            raise VcsApiError("not found", status_code=404)
+
+        def _commit_file(self, repo, branch, path, new_content, message, file_sha):
+            from components.integrations.application.ports.vcs_port import CommittedFile
+
+            committed["path"] = path
+            return CommittedFile(path=path, commit_sha="commitsha789")
+
+        with (
+            mock.patch(_REQUESTS_PATH, new=fake),
+            mock.patch(f"{_ADAPTER}.get_file", new=_get_file),
+            mock.patch(f"{_ADAPTER}.list_tree", return_value=["README.md", _MONOREPO_PATH]),
+            mock.patch(f"{_ADAPTER}.commit_file", new=_commit_file),
+            mock.patch(_PROPOSE_PATH, side_effect=_echo_path_patch),
+        ):
+            result = _use_case().execute(
+                workspace_id=str(workspace.id), task_id=str(task.id), performed_by=str(owner.id)
+            )
+
+        assert result.created is True
+        # The commit — hence the whole PR — targets the resolved monorepo path.
+        assert committed["path"] == _MONOREPO_PATH
+
+    def test_explicit_repo_root_prefixes_without_tree_fetch(self, workspace_factory, team_factory):
+        from components.integrations.application.ports.vcs_port import RepoFile
+
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _triaged_finding(workspace, owner, team, column)
+        _connection(workspace, owner, repo_root="api-v2.0")
+        _capability_agent(workspace, owner)
+        fake = _FakeGitHub()
+
+        committed: dict = {}
+
+        def _get_file(self, repo, path, ref):
+            return RepoFile(path=path, content=_OLD_FILE, sha="filesha456")
+
+        def _commit_file(self, repo, branch, path, new_content, message, file_sha):
+            from components.integrations.application.ports.vcs_port import CommittedFile
+
+            committed["path"] = path
+            return CommittedFile(path=path, commit_sha="commitsha789")
+
+        with (
+            mock.patch(_REQUESTS_PATH, new=fake),
+            mock.patch(f"{_ADAPTER}.get_file", new=_get_file),
+            mock.patch(f"{_ADAPTER}.list_tree") as list_tree,
+            mock.patch(f"{_ADAPTER}.commit_file", new=_commit_file),
+            mock.patch(_PROPOSE_PATH, side_effect=_echo_path_patch),
+        ):
+            result = _use_case().execute(
+                workspace_id=str(workspace.id), task_id=str(task.id), performed_by=str(owner.id)
+            )
+
+        assert result.created is True
+        assert committed["path"] == _MONOREPO_PATH
+        list_tree.assert_not_called()  # explicit override skips auto-detect entirely
+
+    def test_ambiguous_match_is_precondition(self, workspace_factory, team_factory):
+        from components.integrations.application.ports.vcs_port import VcsApiError
+
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _triaged_finding(workspace, owner, team, column)
+        _connection(workspace, owner)
+        _capability_agent(workspace, owner)
+        fake = _FakeGitHub()
+
+        def _get_file(self, repo, path, ref):
+            raise VcsApiError("not found", status_code=404)
+
+        with (
+            mock.patch(_REQUESTS_PATH, new=fake),
+            mock.patch(f"{_ADAPTER}.get_file", new=_get_file),
+            mock.patch(
+                f"{_ADAPTER}.list_tree",
+                return_value=[f"backend/{_RUNTIME_PATH}", f"legacy/{_RUNTIME_PATH}"],
+            ),
+            mock.patch(_PROPOSE_PATH) as propose,
+            pytest.raises(DraftPrPreconditionError) as exc,
+        ):
+            _use_case().execute(workspace_id=str(workspace.id), task_id=str(task.id), performed_by=str(owner.id))
+        assert exc.value.reason == "ambiguous_candidate_path"
+        propose.assert_not_called()
+
+    def test_no_tree_match_is_candidate_file_not_in_repo(self, workspace_factory, team_factory):
+        from components.integrations.application.ports.vcs_port import VcsApiError
+
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _triaged_finding(workspace, owner, team, column)
+        _connection(workspace, owner)
+        _capability_agent(workspace, owner)
+        fake = _FakeGitHub()
+
+        def _get_file(self, repo, path, ref):
+            raise VcsApiError("not found", status_code=404)
+
+        with (
+            mock.patch(_REQUESTS_PATH, new=fake),
+            mock.patch(f"{_ADAPTER}.get_file", new=_get_file),
+            mock.patch(f"{_ADAPTER}.list_tree", return_value=["README.md", "src/other.py"]),
+            pytest.raises(DraftPrPreconditionError) as exc,
+        ):
+            _use_case().execute(workspace_id=str(workspace.id), task_id=str(task.id), performed_by=str(owner.id))
+        assert exc.value.reason == "candidate_file_not_in_repo"
+
+
+@pytest.mark.django_db
+class TestOpenDraftPrAmbiguousEndpoint:
+    def test_ambiguous_maps_to_4xx_not_502(self, api_client, workspace_factory, team_factory):
+        from components.integrations.application.ports.vcs_port import VcsApiError
+
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _triaged_finding(workspace, owner, team, column)
+        _connection(workspace, owner)
+        _capability_agent(workspace, owner)
+        fake = _FakeGitHub()
+        api_client.force_authenticate(owner)
+
+        def _get_file(self, repo, path, ref):
+            raise VcsApiError("not found", status_code=404)
+
+        url = f"/integrations/workspaces/{workspace.id}/findings/{task.id}/open-draft-pr/"
+        with (
+            mock.patch(_REQUESTS_PATH, new=fake),
+            mock.patch(f"{_ADAPTER}.get_file", new=_get_file),
+            mock.patch(
+                f"{_ADAPTER}.list_tree",
+                return_value=[f"backend/{_RUNTIME_PATH}", f"legacy/{_RUNTIME_PATH}"],
+            ),
+        ):
+            response = api_client.post(url, {}, format="json")
+        assert 400 <= response.status_code < 500, response.data
+        assert response.status_code != 502
+        assert response.data["reason"] == "ambiguous_candidate_path"

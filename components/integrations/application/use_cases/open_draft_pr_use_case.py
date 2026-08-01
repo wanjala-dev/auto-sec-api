@@ -30,7 +30,9 @@ from datetime import UTC, datetime
 
 from components.integrations.application.log_patch_advisor_service import (
     LogPatchAdvisor,
+    RepoPathResolutionError,
     derive_candidate_path,
+    resolve_repo_path,
 )
 from components.integrations.application.ports.vcs_port import VcsApiError, VcsPort
 
@@ -100,22 +102,15 @@ class OpenDraftPrUseCase:
 
         adapter = self._adapter_factory(connection.provider, token)
         default_branch = adapter.get_default_branch(target_repo)
-        try:
-            repo_file = adapter.get_file(target_repo, candidate_path, ref=default_branch.name)
-        except VcsApiError as exc:
-            if exc.status_code == 404:
-                # The finding derived a source path that isn't in the allowlisted repo — a
-                # common, expected case (the finding references a different codebase). Turn
-                # it into a 4xx precondition, not a 502; genuine API failures still propagate.
-                raise DraftPrPreconditionError(
-                    "candidate_file_not_in_repo",
-                    f"The file '{candidate_path}' derived from this finding does not exist in "
-                    f"{target_repo} (branch {default_branch.name}). This finding may reference a "
-                    "different codebase than the allowlisted repo — nothing to patch.",
-                ) from exc
-            raise
+        resolved_path, repo_file = self._resolve_and_fetch(
+            adapter=adapter,
+            target_repo=target_repo,
+            ref=default_branch.name,
+            candidate_path=candidate_path,
+            explicit_prefix=(getattr(connection, "repo_root", "") or "").strip(),
+        )
 
-        proposal = self._advisor.propose(payload=payload, path=candidate_path, current_content=repo_file.content)
+        proposal = self._advisor.propose(payload=payload, path=resolved_path, current_content=repo_file.content)
         if proposal is None:
             raise DraftPrPreconditionError(
                 "no_grounded_patch",
@@ -158,6 +153,56 @@ class OpenDraftPrUseCase:
             performed_by,
         )
         return DraftPrResult(url=pr.url, repo=target_repo, branch=branch, created=True)
+
+    def _resolve_and_fetch(self, *, adapter, target_repo, ref, candidate_path, explicit_prefix):
+        """Resolve ``candidate_path`` to its real repo path and fetch its content.
+
+        Fast path (repo-root apps): try ``get_file(candidate_path)`` FIRST — one call,
+        no tree fetch. Only when the runtime path 404s do we auto-detect via the repo
+        tree (monorepos = +1 tree call). An explicit ``repo_root`` override skips the
+        probe entirely and prefixes deterministically. #190's
+        ``candidate_file_not_in_repo`` stays the terminal when nothing resolves.
+        Returns ``(resolved_path, RepoFile)``.
+        """
+        if explicit_prefix:
+            resolved = resolve_repo_path(
+                adapter=adapter,
+                repo=target_repo,
+                ref=ref,
+                runtime_path=candidate_path,
+                explicit_prefix=explicit_prefix,
+            )
+            return resolved, self._get_file_or_precondition(adapter, target_repo, resolved, ref)
+
+        try:
+            return candidate_path, adapter.get_file(target_repo, candidate_path, ref=ref)
+        except VcsApiError as exc:
+            if exc.status_code != 404:
+                raise
+            # Runtime path isn't at the repo root — auto-detect via the tree. A
+            # RepoPathResolutionError (no match / ambiguous) becomes the typed
+            # precondition; a genuine tree-read API failure still propagates.
+            try:
+                resolved = resolve_repo_path(adapter=adapter, repo=target_repo, ref=ref, runtime_path=candidate_path)
+            except RepoPathResolutionError as res_exc:
+                raise DraftPrPreconditionError(res_exc.reason, str(res_exc)) from res_exc
+            return resolved, self._get_file_or_precondition(adapter, target_repo, resolved, ref)
+
+    @staticmethod
+    def _get_file_or_precondition(adapter, target_repo, path, ref):
+        """Fetch ``path``; a 404 on the RESOLVED path is a terminal
+        ``candidate_file_not_in_repo`` (compose with #190), other errors propagate."""
+        try:
+            return adapter.get_file(target_repo, path, ref=ref)
+        except VcsApiError as exc:
+            if exc.status_code == 404:
+                raise DraftPrPreconditionError(
+                    "candidate_file_not_in_repo",
+                    f"The file '{path}' does not exist in {target_repo} (branch {ref}). This "
+                    "finding may reference a different codebase than the allowlisted repo — "
+                    "nothing to patch.",
+                ) from exc
+            raise
 
     @staticmethod
     def _notify_draft_pr_opened(*, workspace_id, task, performed_by, pr_url, repo) -> None:

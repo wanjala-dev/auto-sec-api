@@ -47,6 +47,34 @@ class TestVcsConnectionCrud:
         assert body["has_token"] is True
         assert "token" not in body
 
+    def test_repo_root_round_trips_through_create_and_patch(self, api_client, owner_ws):
+        # The monorepo override (repo_root) is settable on create, exposed read-only on
+        # the resource, and updatable via PATCH — auto-detect works without it, but an
+        # operator can pin the subdirectory their app lives under.
+        ws, owner = owner_ws
+        api_client.force_authenticate(owner)
+        created = api_client.post(
+            _base(ws.id),
+            {"provider": "github", "repo_allowlist": ["acme/app"], "token": "ghp_secret", "repo_root": "api-v2.0"},
+            format="json",
+        )
+        assert created.status_code == 201, created.data
+        assert created.data["data"]["repo_root"] == "api-v2.0"
+
+        detail = f"{_base(ws.id)}{created.data['data']['id']}/"
+        patched = api_client.patch(detail, {"repo_root": "backend"}, format="json")
+        assert patched.data["data"]["repo_root"] == "backend"
+
+    def test_repo_root_defaults_empty(self, api_client, owner_ws):
+        ws, owner = owner_ws
+        api_client.force_authenticate(owner)
+        resp = api_client.post(
+            _base(ws.id),
+            {"provider": "github", "repo_allowlist": ["acme/app"], "token": "ghp_secret"},
+            format="json",
+        )
+        assert resp.data["data"]["repo_root"] == ""
+
     def test_create_rejects_missing_token(self, api_client, owner_ws):
         ws, owner = owner_ws
         api_client.force_authenticate(owner)

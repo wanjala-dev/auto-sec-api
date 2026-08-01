@@ -27,6 +27,7 @@ class CreateVcsConnectionRequest:
     token: str
     name: str = ""
     base_url: str = ""
+    repo_root: str = ""
     repo_allowlist: list = field(default_factory=list)
 
     @classmethod
@@ -37,6 +38,7 @@ class CreateVcsConnectionRequest:
             token=str(data.get("token") or "").strip(),
             name=str(data.get("name") or "").strip(),
             base_url=str(data.get("base_url") or "").strip(),
+            repo_root=str(data.get("repo_root") or "").strip(),
             repo_allowlist=_clean_allowlist(data.get("repo_allowlist")),
         )
 
@@ -56,6 +58,7 @@ class UpdateVcsConnectionRequest:
 
     name: str | None = None
     base_url: str | None = None
+    repo_root: str | None = None
     status: str | None = None
     token: str | None = None
     repo_allowlist: list | None = None
@@ -65,12 +68,14 @@ class UpdateVcsConnectionRequest:
         data = data or {}
         name = data.get("name")
         base_url = data.get("base_url")
+        repo_root = data.get("repo_root")
         status = data.get("status")
         token = data.get("token")
         allowlist = data.get("repo_allowlist")
         return cls(
             name=None if name is None else str(name).strip(),
             base_url=None if base_url is None else str(base_url).strip(),
+            repo_root=None if repo_root is None else str(repo_root).strip(),
             status=None if status is None else str(status).strip().lower(),
             token=None if token is None else str(token).strip(),
             repo_allowlist=None if allowlist is None else _clean_allowlist(allowlist),

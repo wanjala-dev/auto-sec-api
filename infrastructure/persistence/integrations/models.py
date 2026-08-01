@@ -366,6 +366,11 @@ class VcsConnection(models.Model):
     repo_allowlist = models.JSONField(default=list, blank=True)
     # Optional self-hosted host (GitLab CE/EE, Bitbucket Server); blank = the SaaS host.
     base_url = models.CharField(max_length=255, blank=True, default="")
+    # Optional monorepo subdirectory the app lives under (e.g. "api-v2.0"). When set,
+    # a finding's runtime-relative path is prefixed with this (deterministic, no tree
+    # fetch) instead of auto-detecting. Blank = auto-detect from the repo tree. Applies
+    # to all of this connection's allowlisted repos.
+    repo_root = models.CharField(max_length=200, blank=True, default="")
     # Encrypted fine-grained PAT — Fernet envelope at the application layer (same
     # envelope as SinkConnector/GitHubConnection secrets); NEVER plaintext.
     token_ciphertext = models.TextField(blank=True, default="")
