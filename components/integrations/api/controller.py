@@ -213,6 +213,7 @@ class FindingOpenDraftPrView(APIView):
         "no_candidate_path": status.HTTP_422_UNPROCESSABLE_ENTITY,
         "no_grounded_patch": status.HTTP_422_UNPROCESSABLE_ENTITY,
         "candidate_file_not_in_repo": status.HTTP_422_UNPROCESSABLE_ENTITY,
+        "ambiguous_candidate_path": status.HTTP_422_UNPROCESSABLE_ENTITY,
     }
 
     def post(self, request, workspace_id, task_id):
@@ -401,6 +402,7 @@ class VcsConnectionListCreateView(APIView):
             name=req.name,
             repo_allowlist=req.repo_allowlist,
             base_url=req.base_url,
+            repo_root=req.repo_root,
             token=req.token,
         )
         return Response(
@@ -427,6 +429,7 @@ class VcsConnectionDetailView(APIView):
             name=req.name,
             repo_allowlist=req.repo_allowlist,
             base_url=req.base_url,
+            repo_root=req.repo_root,
             status=req.status,
             token=req.token,
         )

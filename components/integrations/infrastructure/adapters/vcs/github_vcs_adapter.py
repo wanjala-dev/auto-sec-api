@@ -120,6 +120,28 @@ class GitHubVcsAdapter(VcsPort):
             raise VcsApiError(f"Could not decode {path} from {repo}", status_code=None) from exc
         return RepoFile(path=path, content=content, sha=data.get("sha") or "")
 
+    def list_tree(self, repo: str, ref: str) -> list[str]:
+        """List every blob path in ``repo`` at ``ref`` (recursive git-tree read).
+
+        Resolves ``ref`` (a branch name) to its head commit SHA, then reads the
+        recursive tree. Only ``type == 'blob'`` entries are returned (files, not
+        directories). If GitHub truncates the tree (very large repos, >100k
+        entries / >7MB) we log a WARNING — the returned list is then incomplete,
+        which the caller treats as "path may be missing", not a hard error.
+        """
+        ref_data = self._request("GET", f"/repos/{repo}/git/ref/heads/{ref}")
+        sha = (ref_data.get("object") or {}).get("sha") or ""
+        if not sha:
+            raise VcsApiError(f"Could not resolve tree SHA for {repo}@{ref}", status_code=None)
+        tree_data = self._request("GET", f"/repos/{repo}/git/trees/{sha}", params={"recursive": "1"})
+        if tree_data.get("truncated"):
+            logger.warning("github_tree_truncated repo=%s ref=%s — path resolution may be incomplete", repo, ref)
+        return [
+            entry["path"]
+            for entry in (tree_data.get("tree") or [])
+            if isinstance(entry, dict) and entry.get("type") == "blob" and entry.get("path")
+        ]
+
     def create_branch(self, repo: str, branch: str, from_sha: str) -> None:
         self._request(
             "POST",

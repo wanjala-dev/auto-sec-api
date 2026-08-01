@@ -87,6 +87,14 @@ class VcsPort(ABC):
         """Return the decoded content + blob SHA of ``path`` at ``ref``."""
 
     @abstractmethod
+    def list_tree(self, repo: str, ref: str) -> list[str]:
+        """Return every blob (file) path in ``repo`` at ``ref``, recursively.
+
+        Used by monorepo path resolution to locate a runtime-relative source file
+        that lives under a repo subdirectory. Directory/submodule entries are
+        excluded — only ``type == 'blob'`` paths are returned."""
+
+    @abstractmethod
     def create_branch(self, repo: str, branch: str, from_sha: str) -> None:
         """Create ``refs/heads/<branch>`` pointing at ``from_sha``."""
 

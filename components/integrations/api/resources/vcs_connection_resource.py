@@ -16,6 +16,7 @@ class VcsConnectionResource:
     name: str
     repo_allowlist: list
     base_url: str
+    repo_root: str
     status: str
     has_token: bool
     last_verified_at: str | None
@@ -31,6 +32,7 @@ class VcsConnectionResource:
             name=connection.name,
             repo_allowlist=connection.repo_allowlist or [],
             base_url=connection.base_url or "",
+            repo_root=connection.repo_root or "",
             status=connection.status,
             has_token=bool(connection.token_ciphertext),
             last_verified_at=(connection.last_verified_at.isoformat() if connection.last_verified_at else None),
@@ -46,6 +48,7 @@ class VcsConnectionResource:
             "name": self.name,
             "repo_allowlist": self.repo_allowlist,
             "base_url": self.base_url,
+            "repo_root": self.repo_root,
             "status": self.status,
             "has_token": self.has_token,
             "last_verified_at": self.last_verified_at,

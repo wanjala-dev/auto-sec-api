@@ -28,6 +28,7 @@ class VcsConnectionRepository:
         repo_allowlist: list,
         base_url: str,
         token_ciphertext: str,
+        repo_root: str = "",
         status: str = VcsConnection.Status.CONNECTED,
     ) -> VcsConnection:
         return VcsConnection.objects.create(
@@ -36,6 +37,7 @@ class VcsConnectionRepository:
             name=name,
             repo_allowlist=repo_allowlist or [],
             base_url=base_url or "",
+            repo_root=repo_root or "",
             token_ciphertext=token_ciphertext or "",
             status=status,
         )
@@ -47,6 +49,7 @@ class VcsConnectionRepository:
         name: str | None = None,
         repo_allowlist: list | None = None,
         base_url: str | None = None,
+        repo_root: str | None = None,
         status: str | None = None,
         token_ciphertext: str | None = None,
     ) -> VcsConnection:
@@ -61,6 +64,9 @@ class VcsConnectionRepository:
         if base_url is not None and base_url != connection.base_url:
             connection.base_url = base_url
             changed.append("base_url")
+        if repo_root is not None and repo_root != connection.repo_root:
+            connection.repo_root = repo_root
+            changed.append("repo_root")
         if status is not None and status != connection.status:
             connection.status = status
             changed.append("status")

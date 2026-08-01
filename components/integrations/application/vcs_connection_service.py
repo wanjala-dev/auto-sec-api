@@ -34,7 +34,15 @@ class VcsConnectionService:
     # ── Writes ───────────────────────────────────────────────────────────
 
     def create_connection(
-        self, *, workspace_id, provider: str, name: str, repo_allowlist: list, base_url: str, token: str
+        self,
+        *,
+        workspace_id,
+        provider: str,
+        name: str,
+        repo_allowlist: list,
+        base_url: str,
+        token: str,
+        repo_root: str = "",
     ):
         connection = self._repo.create(
             workspace_id=workspace_id,
@@ -42,6 +50,7 @@ class VcsConnectionService:
             name=name or f"{provider} connection",
             repo_allowlist=repo_allowlist,
             base_url=base_url,
+            repo_root=repo_root,
             token_ciphertext=self._encrypt(token),
         )
         logger.info(
@@ -52,7 +61,9 @@ class VcsConnectionService:
         )
         return connection
 
-    def update_connection(self, connection, *, name=None, repo_allowlist=None, base_url=None, status=None, token=None):
+    def update_connection(
+        self, connection, *, name=None, repo_allowlist=None, base_url=None, repo_root=None, status=None, token=None
+    ):
         # A supplied token is re-encrypted; an omitted token leaves the stored one untouched.
         token_ciphertext = self._encrypt(token) if token else None
         return self._repo.update(
@@ -60,6 +71,7 @@ class VcsConnectionService:
             name=name,
             repo_allowlist=repo_allowlist,
             base_url=base_url,
+            repo_root=repo_root,
             status=status,
             token_ciphertext=token_ciphertext,
         )
