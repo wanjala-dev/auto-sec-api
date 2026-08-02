@@ -5,11 +5,22 @@ Wires all ports to their ORM/adapter implementations.
 
 from __future__ import annotations
 
+from components.membership.application.ports.invitation_port import InvitationPort
+from components.membership.application.ports.membership_port import MembershipPort
+from components.membership.application.ports.role_permissions_read_port import (
+    RolePermissionsReadPort,
+)
 from components.membership.application.queries.membership_query import (
     MembershipQueryService,
 )
 from components.membership.application.use_cases.accept_invitation_use_case import (
     AcceptInvitationUseCase,
+)
+from components.membership.application.use_cases.establish_workspace_relationship_use_case import (
+    EstablishWorkspaceRelationshipUseCase,
+)
+from components.membership.application.use_cases.invitation_notification_use_case import (
+    InvitationNotificationUseCase,
 )
 from components.membership.application.use_cases.issue_invitation_use_case import (
     IssueInvitationUseCase,
@@ -20,12 +31,6 @@ from components.membership.application.use_cases.prepare_invitation_use_case imp
 from components.membership.application.use_cases.process_invitation_batch_use_case import (
     ProcessInvitationBatchUseCase,
 )
-from components.membership.application.use_cases.invitation_notification_use_case import (
-    InvitationNotificationUseCase,
-)
-from components.workspace.application.use_cases.register_invited_user_use_case import (
-    RegisterInvitedUserUseCase,
-)
 from components.membership.infrastructure.adapters.invitation_notification_adapter import (
     InvitationNotificationAdapter,
 )
@@ -35,28 +40,26 @@ from components.membership.infrastructure.adapters.invited_user_registration_ada
 from components.membership.infrastructure.repositories.invitation_repository import (
     OrmInvitationRepository,
 )
-from components.membership.infrastructure.repositories.team_membership_repository import (
-    OrmTeamMembershipRepository,
-)
 from components.membership.infrastructure.repositories.membership_query_repository import (
     OrmMembershipQueryRepository,
 )
 from components.membership.infrastructure.repositories.membership_repository import (
     OrmMembershipRepository,
 )
-from components.membership.application.use_cases.establish_workspace_relationship_use_case import (
-    EstablishWorkspaceRelationshipUseCase,
+from components.membership.infrastructure.repositories.team_membership_repository import (
+    OrmTeamMembershipRepository,
 )
 from components.membership.infrastructure.repositories.workspace_relationship_repository import (
     OrmWorkspaceRelationshipRepository,
 )
-from components.membership.application.ports.invitation_port import InvitationPort
-from components.membership.application.ports.membership_port import MembershipPort
-from components.workspace.domain.policies.contributor_enrollment_policy_service import (
-    ContributorEnrollmentPolicyService,
-)
 from components.team.domain.policies.team_membership_policy_service import (
     TeamMembershipPolicyService,
+)
+from components.workspace.application.use_cases.register_invited_user_use_case import (
+    RegisterInvitedUserUseCase,
+)
+from components.workspace.domain.policies.contributor_enrollment_policy_service import (
+    ContributorEnrollmentPolicyService,
 )
 
 
@@ -68,10 +71,22 @@ class MembershipProvider:
     def build_membership_port(self) -> MembershipPort:
         return OrmMembershipRepository()
 
-    def build_invitation_port(self) -> InvitationPort:
-        from components.membership.infrastructure.repositories.invitation_repository import (
-            OrmInvitationRepository as LegacyOrmInvitationRepository,
+    def build_role_permissions_reader(self) -> RolePermissionsReadPort:
+        """RBAC read-port for the membership permission resolver.
+
+        Wires the ORM adapter that reads the ``workspaces`` RBAC tables
+        (``WorkspaceRole`` / ``WorkspacePermissionGrant`` /
+        ``WorkspaceGroupMembership``) so ``membership_has_permission`` stays
+        ORM-free (architecture-manifesto Rule 2).
+        """
+        from components.membership.infrastructure.repositories.role_permissions_read_repository import (
+            OrmRolePermissionsReadRepository,
         )
+
+        return OrmRolePermissionsReadRepository()
+
+    def build_invitation_port(self) -> InvitationPort:
+
         # Legacy port — kept for backward compatibility with existing consumers
         return OrmMembershipRepository()
 

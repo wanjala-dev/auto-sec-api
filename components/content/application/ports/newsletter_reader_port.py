@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import datetime
-from typing import Protocol, Sequence
+from collections.abc import Sequence
+from typing import Protocol
 from uuid import UUID
 
 from components.content.domain.entities.newsletter_entity import NewsletterEntity
@@ -34,6 +35,20 @@ class NewsletterReaderPort(Protocol):
         """Return the existing cadence-driven newsletter row for the given
         period, or None. Used by the dispatch task to enforce idempotency
         on ``(workspace, range_start, range_end)``."""
+        ...
+
+    def list_due_scheduled(
+        self,
+        *,
+        now: datetime.datetime,
+        limit: int,
+    ) -> Sequence[UUID]:
+        """Return the ids of SCHEDULED newsletters whose ``scheduled_for``
+        has arrived (``<= now``), oldest first, capped at ``limit``.
+
+        Drives the 5-minute dispatch beat: the use case claims each id via
+        the store's atomic CAS before sending. Returns ids only (not full
+        entities) — the batch task only needs the keys to claim + send."""
         ...
 
     def count_workspace_dispatch_targets(

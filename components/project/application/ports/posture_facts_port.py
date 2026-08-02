@@ -23,6 +23,12 @@ board card (``ai.posture_report``) so the weekly report can never count itself:
    AI-finding cards were CREATED in a ``[since, until)`` half-open window (used
    for the this-week vs last-week creation delta).
 
+3. ``count_findings_created_by_date`` — the ``posture_dashboard_service``
+   read: AI-finding cards created since an instant, bucketed by their creation
+   calendar day (ISO date → count), for the dashboard's findings-per-day chart
+   series. Returns ``(by_date, present)`` — ``present`` distinguishes "no rows"
+   from "an all-zero calendar" so the dashboard's ``no_data`` honesty holds.
+
 Returning frozen DTOs (never ORM instances) keeps the ORM behind the seam; the
 DTO fields mirror the exact keys ``posture_service._finding_row`` builds today so
 the consumer swap is a straight substitution.
@@ -81,4 +87,13 @@ class PostureFactsPort(ABC):
         Half-open window: ``created_at >= since`` and, when ``until`` is given,
         ``created_at < until``. Excludes the posture report's own card.
         Workspace-scoped.
+        """
+
+    @abstractmethod
+    def count_findings_created_by_date(self, *, workspace_id: str, since: datetime) -> tuple[dict[str, int], bool]:
+        """AI-finding cards created ``>= since``, bucketed by creation ISO date.
+
+        Returns ``(by_date, present)`` where ``by_date`` maps ``YYYY-MM-DD`` →
+        count (only days that HAVE cards appear) and ``present`` is True iff any
+        card matched. Excludes the posture report's own card. Workspace-scoped.
         """

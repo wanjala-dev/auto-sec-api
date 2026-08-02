@@ -12,8 +12,12 @@ import datetime
 from decimal import Decimal
 from uuid import UUID
 
+from components.content.application.ports.donation_weekly_totals_read_port import (
+    DonationWeeklyTotalsReadPort,
+)
 
-class OrmDonationWeeklyTotalsAdapter:
+
+class OrmDonationWeeklyTotalsAdapter(DonationWeeklyTotalsReadPort):
     """No-op implementation of DonationWeeklyTotalsReadPort."""
 
     def fetch_weekly_totals(

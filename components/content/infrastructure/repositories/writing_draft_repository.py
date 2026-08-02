@@ -144,6 +144,23 @@ class WritingDraftRepository(WritingDraftStorePort, WritingDraftReaderPort):
         row.metadata = metadata
         row.save(update_fields=["metadata", "updated_at"])
 
+    def stamp_rag_indexed(
+        self,
+        *,
+        draft_id: UUID,
+        document_key: str,
+        indexed_at: datetime.datetime,
+    ) -> None:
+        from infrastructure.persistence.content.models import WritingDraft
+
+        row = WritingDraft.objects.filter(pk=draft_id).only("id", "metadata").first()
+        if row is None:
+            return
+        metadata = dict(row.metadata or {})
+        metadata["rag_indexed_at"] = indexed_at.isoformat()
+        metadata["rag_document_key"] = document_key
+        WritingDraft.objects.filter(pk=draft_id).update(metadata=metadata)
+
     def publish(self, *, draft_id: UUID) -> WritingDraftEntity:
         from infrastructure.persistence.content.models import WritingDraft
 
