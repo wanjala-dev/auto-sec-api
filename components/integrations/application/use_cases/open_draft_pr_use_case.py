@@ -26,7 +26,6 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
 from components.integrations.application.log_patch_advisor_service import (
     LogPatchAdvisor,
@@ -35,6 +34,13 @@ from components.integrations.application.log_patch_advisor_service import (
     derive_candidate_path,
     resolve_repo_path,
     validate_patch,
+)
+from components.integrations.application.ports.finding_facts_port import (
+    ActionableFinding,
+    FindingFactsPort,
+)
+from components.integrations.application.ports.finding_pr_recorder_port import (
+    FindingPrRecorderPort,
 )
 from components.integrations.application.ports.vcs_port import VcsApiError, VcsPort
 
@@ -65,9 +71,35 @@ class OpenDraftPrUseCase:
         self,
         adapter_factory: Callable[[str, str], VcsPort],  # (provider, token) -> adapter
         advisor: LogPatchAdvisor | None = None,
+        finding_facts: FindingFactsPort | None = None,
+        pr_recorder: FindingPrRecorderPort | None = None,
     ) -> None:
         self._adapter_factory = adapter_factory
         self._advisor = advisor or LogPatchAdvisor()
+        # Cross-context board access goes through ports (C2/C3). Defaults are
+        # resolved lazily from the provider so the application layer holds no
+        # direct infrastructure import (Rule 2); the provider is the composition
+        # root that wires the concrete adapters.
+        self._finding_facts = finding_facts
+        self._pr_recorder = pr_recorder
+
+    def _finding_facts_port(self) -> FindingFactsPort:
+        if self._finding_facts is None:
+            from components.integrations.application.providers.vcs_provider import (
+                get_finding_facts_reader,
+            )
+
+            self._finding_facts = get_finding_facts_reader()
+        return self._finding_facts
+
+    def _pr_recorder_port(self) -> FindingPrRecorderPort:
+        if self._pr_recorder is None:
+            from components.integrations.application.providers.vcs_provider import (
+                get_finding_pr_recorder,
+            )
+
+            self._pr_recorder = get_finding_pr_recorder()
+        return self._pr_recorder
 
     def execute(
         self,
@@ -153,7 +185,20 @@ class OpenDraftPrUseCase:
             body=self._build_pr_body(task, payload, proposal),
         )
 
-        self._record_on_finding(task_id, workspace_id, pr, branch, performed_by)
+        # C2: the finding-provenance write is ``project.Task`` data → delegate to
+        # ``project`` (which owns it) through the recorder port. Same contract as
+        # before: patches ``metadata.payload.draft_pr``, appends the provenance
+        # event, and adds the card comment — so the HUD still renders the PR on the
+        # card (every AI action shows on the board).
+        self._pr_recorder_port().record_draft_pr(
+            workspace_id=workspace_id,
+            task_id=task_id,
+            performed_by=performed_by,
+            acting_agent=_ACTING_AGENT,
+            pr_url=pr.url,
+            pr_repo=pr.repo,
+            branch=branch,
+        )
         self._notify_draft_pr_opened(
             workspace_id=workspace_id,
             task=task,
@@ -245,11 +290,11 @@ class OpenDraftPrUseCase:
                 "verb": f"opened a draft PR for review: {task.title[:180]}",
                 "notification_type": "ai_event",
                 "workspace_id": str(workspace_id),
-                "target_ref": ["project", "task", str(task.pk)],
+                "target_ref": ["project", "task", str(task.id)],
                 "allow_self_notify": True,
                 "metadata": {
                     "kind": "soc.draft_pr_opened",
-                    "task_id": str(task.pk),
+                    "task_id": str(task.id),
                     "pr_url": pr_url,
                     "repo": repo,
                 },
@@ -258,7 +303,7 @@ class OpenDraftPrUseCase:
         except Exception:
             logger.exception(
                 "draft_pr_notification_enqueue_failed task_id=%s workspace_id=%s",
-                getattr(task, "pk", None),
+                getattr(task, "id", None),
                 workspace_id,
             )
 
@@ -300,21 +345,17 @@ class OpenDraftPrUseCase:
             )
         return target
 
-    @staticmethod
-    def _require_actionable_finding(workspace_id: str, task_id: str):
-        from infrastructure.persistence.project.models import Task
-
-        try:
-            task = Task.objects.filter(id=task_id, workspace_id=workspace_id, source_type=_LOG_WATCH_SOURCE).first()
-        except (ValueError, TypeError):
-            # Malformed id (Task pks are integers) — same answer as absent.
-            task = None
-        if task is None:
+    def _require_actionable_finding(self, workspace_id: str, task_id: str) -> ActionableFinding:
+        # C3: the board Task belongs to ``project``; read it read-only through the
+        # finding-facts port (never ``project``'s ORM). The adapter applies the
+        # ``ai.log_watch`` source-type gate + workspace scope; a bad/absent id → None.
+        finding = self._finding_facts_port().get_actionable_finding(workspace_id=workspace_id, task_id=task_id)
+        if finding is None:
             raise DraftPrPreconditionError(
                 "finding_not_found",
                 f"No {_LOG_WATCH_SOURCE} finding {task_id} on this workspace's board.",
             )
-        meta = task.metadata or {}
+        meta = finding.metadata or {}
         triage = meta.get("triage") or {}
         payload = meta.get("payload") or {}
         if triage.get("status") != "triaged":
@@ -328,7 +369,7 @@ class OpenDraftPrUseCase:
                 "The finding's suggestion is flagged needs_human (ungrounded) — a human must "
                 "resolve it; it never becomes an automatic PR.",
             )
-        return task
+        return finding
 
     @staticmethod
     def _require_capability(workspace_id: str) -> None:
@@ -415,55 +456,3 @@ class OpenDraftPrUseCase:
             f"---\nProvenance: Auto-Sec finding `{task.id}` — patch approved by a workspace operator. "
             f"This is a DRAFT; review and merge remain human decisions.\n"
         )
-
-    @staticmethod
-    def _record_on_finding(task_id: str, workspace_id: str, pr, branch: str, performed_by: str) -> None:
-        """Write the PR link + provenance + a card comment onto the finding.
-
-        Re-checks ``draft_pr`` right before writing so a concurrent open (two
-        operators clicking at once) keeps the first PR's record.
-        """
-        from infrastructure.persistence.project.models import Task, TaskComment
-        from infrastructure.persistence.users.models import CustomUser
-
-        task = Task.objects.filter(id=task_id, workspace_id=workspace_id).first()
-        if task is None:  # deleted between the precondition check and now
-            return
-        meta = task.metadata or {}
-        payload = meta.get("payload") or {}
-        if (payload.get("draft_pr") or {}).get("url"):
-            return
-
-        opened_at = datetime.now(UTC).isoformat()
-        payload["draft_pr"] = {
-            "url": pr.url,
-            "repo": pr.repo,
-            "branch": branch,
-            "opened_by": str(performed_by),
-            "opened_at": opened_at,
-        }
-        meta["payload"] = payload
-
-        # Same growable provenance shape the detector/triage pipeline appends to.
-        provenance = meta.get("provenance") or {"events": []}
-        provenance.setdefault("events", [])
-        provenance["events"].append(
-            {
-                "actor": f"agent:{_ACTING_AGENT} via user:{performed_by}",
-                "action": f"opened draft PR {pr.url}",
-                "at": opened_at,
-            }
-        )
-        provenance["last_handled_by"] = _ACTING_AGENT
-        provenance["last_handled_at"] = opened_at
-        meta["provenance"] = provenance
-        task.metadata = meta
-        task.save(update_fields=["metadata", "updated_at"])
-
-        author = CustomUser.objects.filter(id=performed_by).first()
-        if author is not None:
-            TaskComment.objects.create(
-                task=task,
-                author=author,
-                comment=(f"🔧 Draft PR opened for this finding: {pr.url} (branch `{branch}`, repo `{pr.repo}`)."),
-            )
