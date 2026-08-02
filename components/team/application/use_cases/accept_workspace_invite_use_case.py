@@ -8,39 +8,51 @@ the persona's dashboard.
 
 Permissions: this endpoint is intentionally unauthenticated — the magic-link
 token IS the credential. The token is single-use and time-bound (24h).
+
+Ownership boundaries (architecture-manifesto Rule 2 / architecture-skill C2):
+the ``CustomUser``/``UserProfile`` write is owned by ``identity`` (via
+``InviteUserProvisioningPort``); the ``WorkspaceMembership``/``WorkspaceRole``/
+``WorkspaceGroup*`` write is owned by ``workspace`` (via
+``WorkspaceMembershipWritePort``); the ``Invitation`` write is own-context (via
+``InvitationStorePort``). This use case orchestrates them under one ``atomic()``
+and holds no ORM. (Team enrollment is a documented no-op — see the note in
+``execute`` — so it is byte-for-byte behaviour-preserving vs. ``main``.)
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
 from components.shared_kernel.application.transactional import atomic
+from components.team.application.ports.invitation_store_port import InvitationStorePort
+from components.team.application.ports.invite_token_port import InviteTokenPort
+from components.team.application.ports.invite_user_provisioning_port import (
+    InviteUserProvisioningPort,
+)
+from components.team.application.ports.workspace_membership_write_port import (
+    WorkspaceMembershipWritePort,
+)
+
 
 def _utc_now():
     """Stdlib replacement for ``django.utils.timezone.now`` (UTC, tz-aware)."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _ensure_aware(value):
     """Stdlib replacement for ``django.utils.timezone.make_aware``."""
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
+        return value.replace(tzinfo=UTC)
     return value
-
-
-def _is_aware(value):
-    """Stdlib replacement for ``django.utils.timezone.is_aware``."""
-    return value.tzinfo is not None
-
-
 
 
 @dataclass(frozen=True)
 class AcceptWorkspaceInviteCommand:
     token: str
     password: str = ""
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
+    first_name: str | None = None
+    last_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -52,36 +64,31 @@ class AcceptWorkspaceInviteResult:
 
 @dataclass
 class AcceptWorkspaceInviteUseCase:
-    def execute(self, command: AcceptWorkspaceInviteCommand) -> AcceptWorkspaceInviteResult:
-        from infrastructure.persistence.team.models import Invitation
-        from infrastructure.persistence.users.models import CustomUser, UserProfile
-        from infrastructure.persistence.workspaces.models import WorkspaceMembership
+    invitations: InvitationStorePort
+    user_provisioning: InviteUserProvisioningPort
+    membership_write: WorkspaceMembershipWritePort
+    tokens: InviteTokenPort
 
+    def execute(self, command: AcceptWorkspaceInviteCommand) -> AcceptWorkspaceInviteResult:
         if not command.token:
             return AcceptWorkspaceInviteResult(
                 error="token is required.",
                 status_code=400,
             )
 
-        invitation = Invitation.objects.select_related("workspace", "team").filter(
-            token=command.token
-        ).first()
+        invitation = self.invitations.find_by_token(token=command.token)
         if invitation is None:
             return AcceptWorkspaceInviteResult(
                 error="Invalid or expired invitation link.",
                 status_code=404,
             )
 
-        # Look up the user up-front so we can decide whether a password
-        # is required. Established users (already have a usable password)
-        # can accept by clicking the link — they keep their existing
-        # password. Brand-new placeholders MUST set one as part of accept.
-        existing_user = CustomUser.objects.filter(
-            email=invitation.email
-        ).first()
-        is_existing_user = (
-            existing_user is not None and existing_user.has_usable_password()
-        )
+        # Look up the user up-front so we can decide whether a password is
+        # required. Established users (already have a usable password) can accept
+        # by clicking the link — they keep their existing password. Brand-new
+        # placeholders MUST set one as part of accept.
+        probe = self.user_provisioning.probe(email=invitation.email)
+        is_existing_user = probe.established
 
         if not is_existing_user:
             # New user → password is required (this is their signup).
@@ -96,220 +103,113 @@ class AcceptWorkspaceInviteUseCase:
                     status_code=400,
                 )
         elif command.password and len(command.password) < 8:
-            # Existing user supplied a password — only enforce length so
-            # an empty / blank field still routes to the no-password
-            # branch (single-source-of-truth: the established password).
+            # Existing user supplied a password — only enforce length so an
+            # empty / blank field still routes to the no-password branch
+            # (single-source-of-truth: the established password).
             return AcceptWorkspaceInviteResult(
                 error="Password must be at least 8 characters.",
                 status_code=400,
             )
 
-        # _utc_now() is tz-aware, but with USE_TZ=False the ORM hands back
-        # NAIVE datetimes (TIME_ZONE='UTC', so naive == UTC). Normalize the
-        # stored expiry through _ensure_aware before comparing — a bare
-        # `expires_at < now` raises "can't compare offset-naive and
-        # offset-aware datetimes" and 500s every invite accept.
         now = _utc_now()
-        if invitation.status != Invitation.INVITED:
+        if invitation.status != InvitationStorePort.STATUS_INVITED:
             return AcceptWorkspaceInviteResult(
                 error="This invitation has already been used or revoked.",
                 status_code=409,
             )
+        # _utc_now() is tz-aware, but with USE_TZ=False the ORM hands back NAIVE
+        # datetimes (TIME_ZONE='UTC', so naive == UTC). Normalize the stored
+        # expiry through _ensure_aware before comparing — a bare `expires_at <
+        # now` raises "can't compare offset-naive and offset-aware datetimes".
         if invitation.expires_at and _ensure_aware(invitation.expires_at) < now:
-            invitation.status = Invitation.EXPIRED
-            invitation.save(update_fields=["status"])
+            self.invitations.mark_expired(invitation_id=invitation.id)
             return AcceptWorkspaceInviteResult(
                 error="This invitation has expired. Ask the inviter for a new link.",
                 status_code=410,
             )
 
         with atomic():
-            # ``is_contributor`` is only seeded True when this invitation
-            # actually carries the contributor persona. For admin /
-            # sponsor / auditor invites, leaving the flag at its default
-            # (False) keeps the global signal honest.
+            # ``seed_is_contributor`` is only True when this invitation actually
+            # carries the contributor persona. For admin / sponsor / auditor
+            # invites, leaving it False keeps the global signal honest.
             seed_is_contributor = invitation.persona == "contributor"
-            user, created = CustomUser.objects.get_or_create(
+
+            # Provision (get-or-create + activate) the user — identity owns the
+            # write. is_contributor promotion happens AFTER the membership
+            # decision below (preserving the original guard order).
+            provisioned = self.user_provisioning.provision_for_accept(
                 email=invitation.email,
-                defaults={
-                    "username": invitation.email,
-                    "is_active": True,
-                    "is_verified": True,
-                    "is_onboard_complete": True,
-                    "is_contributor": seed_is_contributor,
-                },
+                seed_is_contributor=seed_is_contributor,
+                password=command.password,
+                first_name=command.first_name,
+                last_name=command.last_name,
+                active_workspace_id=invitation.workspace_id,
+                active_team_id=invitation.team_id,
             )
-            # Resolve the existing-membership guard up-front so the
-            # user-flag write below knows whether we're attaching a new
-            # membership or preserving an existing one. If the user is
-            # already an active member of this workspace, the new
-            # invitation is a no-op — no role/persona/is_contributor
-            # touching, just consume the token.
-            existing_membership = (
-                WorkspaceMembership.objects
-                .filter(
-                    workspace_id=invitation.workspace_id,
-                    user_id=user.id,
-                )
-                .first()
+            user_id = provisioned.user_id
+
+            # If the user is already an active member of this workspace, the new
+            # invitation is a no-op for role/persona — just consume the token and
+            # never touch their existing (possibly stronger) membership. This is
+            # what stops an owner being downgraded by accepting a stray invite.
+            membership_probe = self.membership_write.probe_membership(
+                workspace_id=invitation.workspace_id,
+                user_id=user_id,
             )
-            preserving_existing_membership = bool(
-                existing_membership
-                and existing_membership.status
-                == WorkspaceMembership.Status.ACTIVE
+            preserving_existing_membership = membership_probe.active
+
+            # Promote is_contributor to True ONLY for contributor invites, and
+            # only when attaching a NEW membership. When preserving an existing
+            # membership the global flag stays untouched (the promotion adapter
+            # is itself idempotent + a no-op when already set).
+            if seed_is_contributor and not preserving_existing_membership:
+                self.user_provisioning.promote_contributor(user_id=user_id)
+
+            # Write the persona + role membership row (or refresh accepted_at
+            # when preserving) + enroll into permission groups — workspace owns
+            # these models.
+            self.membership_write.write_membership(
+                workspace_id=invitation.workspace_id,
+                user_id=user_id,
+                persona=invitation.persona,
+                role=invitation.role,
+                invited_by_id=invitation.invited_by_id,
+                accepted_at=now,
+                preserving_existing_membership=preserving_existing_membership,
+                permission_group_ids=list(invitation.permission_group_ids or []),
             )
 
-            # Only set a password when one was actually supplied. For an
-            # existing established user accepting via the new "Accept
-            # Invite" button, password is empty and we must NOT clobber
-            # their existing credential. For a new user signing up via
-            # the magic link, password is mandatory (validated above).
-            if command.password:
-                user.set_password(command.password)
-            user.is_active = True
-            user.is_verified = True
-            user.is_onboard_complete = True
-            # Promote ``is_contributor`` to True ONLY for contributor
-            # invites, and only when we're actually attaching a NEW
-            # membership. If we're preserving an existing membership
-            # (e.g. an owner accepting a stray contributor invite), the
-            # global flag stays untouched — the user's existing state
-            # on this workspace is what counts.
-            if (
-                seed_is_contributor
-                and not preserving_existing_membership
-                and not user.is_contributor
-            ):
-                user.is_contributor = True
-            if command.first_name and not user.first_name:
-                user.first_name = command.first_name.strip()
-            if command.last_name and not user.last_name:
-                user.last_name = command.last_name.strip()
-            user.save()
+            # NOTE — team enrollment is intentionally NOT performed here.
+            # On `main` the original inline enrollment imported a class name that
+            # no longer exists (``TeamMembershipRepository`` — the class was
+            # renamed to ``OrmTeamMembershipRepository``), so the call raised
+            # ImportError and was silently swallowed by a bare ``except
+            # Exception: pass``. Persona-invite team enrollment has therefore
+            # been a dead no-op in production. This refactor is behaviour-
+            # preserving, so it faithfully reproduces that no-op rather than
+            # resurrecting enrollment — doing so would change behaviour (e.g.
+            # flip volunteer ``is_contributor`` via the enrollment policy and
+            # start writing team-member rows) and belongs in its own reviewed
+            # PR. The active-team context the flow relied on is still parked on
+            # the profile by the identity provisioning step above. A follow-up
+            # PR should reintroduce real enrollment behind a team-owned port +
+            # a behaviour test.
 
-            # Display name and photo (when supplied during invite) were
-            # already written to the CustomUser + UserProfile by the
-            # create-invite use case — they live on the user model where
-            # they belong. We just ensure the profile parks the active
-            # workspace context so the first dashboard render lands on
-            # the right org.
-            profile, _ = UserProfile.objects.get_or_create(user=user)
-            profile.active_workspace_id = invitation.workspace_id
-            if invitation.team_id:
-                profile.active_team_id = invitation.team_id
-            profile.save()
+            # Issue JWT tokens INSIDE the atomic block so any failure here rolls
+            # back the user/membership/invitation writes together.
+            issued = self.tokens.issue_for_user(user_id=user_id)
 
-            # Write the persona + role membership row. Double-write the
-            # new workspace_role FK so RBAC readers can migrate to the
-            # FK once Phase 2 lands. System-role lookup is a single
-            # query scoped to the seeded templates.
-            #
-            # Critical: if the user already has an active membership in
-            # this workspace, we MUST NOT clobber their persona/role/
-            # workspace_role with the invitation's values. Doing so
-            # silently demotes existing owners and admins (this is what
-            # broke when Henry self-invited as a contributor — his
-            # OWNER row got rewritten to MEMBER). The invitation in
-            # that case is a no-op for role/persona; we just mark it
-            # accepted so the token is consumed. (The membership lookup
-            # itself happened up-front so the user-flag write above
-            # could decide whether to touch ``is_contributor``.)
-            from infrastructure.persistence.workspaces.models import WorkspaceRole
-
-            if preserving_existing_membership:
-                # Preserve role/persona/workspace_role/invited_by; only
-                # refresh accepted_at so audit trails stay accurate.
-                existing_membership.accepted_at = now
-                existing_membership.save(update_fields=["accepted_at"])
-            else:
-                system_role = (
-                    WorkspaceRole.objects
-                    .filter(
-                        workspace__isnull=True,
-                        is_system=True,
-                        slug=invitation.role,
-                    )
-                    .first()
-                )
-                WorkspaceMembership.objects.update_or_create(
-                    workspace_id=invitation.workspace_id,
-                    user_id=user.id,
-                    defaults={
-                        "persona": invitation.persona,
-                        "role": invitation.role,
-                        "workspace_role": system_role,
-                        "status": WorkspaceMembership.Status.ACTIVE,
-                        "invited_by_id": invitation.invited_by_id,
-                        "accepted_at": now,
-                    },
-                )
-
-            # For team-attached personas, also enroll in the team. We use
-            # the existing repository helper so we don't reinvent that
-            # logic here.
-            if invitation.team_id:
-                try:
-                    from components.team.infrastructure.repositories.team_membership_repository import (
-                        TeamMembershipRepository,
-                    )
-                    repo = TeamMembershipRepository()
-                    repo.enroll_user_in_team(
-                        user,
-                        invitation.workspace,
-                        invitation.team,
-                        update_active_context=True,
-                    )
-                except Exception:
-                    # Team enrollment failure shouldn't block accept; the
-                    # WorkspaceMembership row is already written.
-                    pass
-
-            # Enroll the user into any permission groups the inviter
-            # selected. WorkspaceGroupMembership has a unique_together
-            # constraint so we use get_or_create to stay idempotent.
-            permission_group_ids = list(
-                getattr(invitation, "permission_group_ids", []) or []
-            )
-            if permission_group_ids:
-                from infrastructure.persistence.workspaces.models import (
-                    WorkspaceGroup,
-                    WorkspaceGroupMembership,
-                )
-                groups = WorkspaceGroup.objects.filter(
-                    workspace_id=invitation.workspace_id,
-                    id__in=permission_group_ids,
-                )
-                for group in groups:
-                    WorkspaceGroupMembership.objects.get_or_create(
-                        group=group,
-                        user=user,
-                        defaults={"added_by_id": invitation.invited_by_id},
-                    )
-
-            # Issue JWT tokens INSIDE the atomic block so any failure here
-            # rolls back the user/membership/invitation writes together.
-            # Previously the invitation was marked ACCEPTED before token
-            # issuance, and a crash on the (broken) legacy CustomUser
-            # .tokens() helper left the DB in a half-committed state where
-            # the invite couldn't be retried. We use simplejwt directly
-            # because the legacy helper imports a module that doesn't
-            # exist in this codebase.
-            from rest_framework_simplejwt.tokens import RefreshToken
-            refresh = RefreshToken.for_user(user)
-
-            invitation.status = Invitation.ACCEPTED
-            invitation.accepted_at = now
-            invitation.save(update_fields=["status", "accepted_at"])
+            self.invitations.mark_accepted(invitation_id=invitation.id, accepted_at=now)
 
         return AcceptWorkspaceInviteResult(
             payload={
-                "user_id": str(user.id),
-                "email": user.email,
+                "user_id": user_id,
+                "email": invitation.email,
                 "persona": invitation.persona,
                 "role": invitation.role,
-                "workspace_id": str(invitation.workspace_id),
-                "access": str(refresh.access_token),
-                "refresh": str(refresh),
+                "workspace_id": invitation.workspace_id,
+                "access": issued.access,
+                "refresh": issued.refresh,
                 "is_existing_user": is_existing_user,
             },
             status_code=200,

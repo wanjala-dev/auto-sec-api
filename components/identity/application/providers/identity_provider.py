@@ -77,6 +77,20 @@ class IdentityProvider:
         return OrmUserQueryRepository()
 
     @staticmethod
+    def build_provision_invited_user_use_case():
+        """Owner-side surface for invited-user provisioning (identity owns the
+        ``CustomUser``/``UserProfile`` write). The team persona-invite flow
+        delegates here through its ``InviteUserProvisioningPort`` adapter."""
+        from components.identity.application.use_cases.provision_invited_user_use_case import (
+            ProvisionInvitedUserUseCase,
+        )
+        from components.identity.infrastructure.repositories.invited_user_provisioning_repository import (
+            OrmInvitedUserProvisioningRepository,
+        )
+
+        return ProvisionInvitedUserUseCase(store=OrmInvitedUserProvisioningRepository())
+
+    @staticmethod
     def build_token_adapter() -> JWTTokenAdapter:
         return JWTTokenAdapter()
 
