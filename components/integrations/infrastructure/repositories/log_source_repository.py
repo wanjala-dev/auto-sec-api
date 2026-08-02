@@ -18,6 +18,34 @@ class LogSourceRepository:
     def get(self, workspace_id, source_id) -> WorkspaceLogSource | None:
         return WorkspaceLogSource.objects.filter(id=source_id, workspace_id=workspace_id).first()
 
+    def active_s3_source_for_connection(self, connection) -> WorkspaceLogSource | None:
+        """The active S3 log source a connection reads through (ADR 0008 D7).
+
+        The S3 *location* lives on this owned row, so a connection re-verify can no
+        longer blank where logs are read from (the "logs silently stopped"
+        regression). Oldest-first is stable when a workspace has more than one."""
+        return (
+            WorkspaceLogSource.objects.filter(
+                workspace_id=connection.workspace_id,
+                kind=WorkspaceLogSource.Kind.S3,
+                status=WorkspaceLogSource.Status.ACTIVE,
+                config__aws_connection_id=str(connection.id),
+            )
+            .order_by("created_at")
+            .first()
+        )
+
+    def find_connection_for_source(self, source):
+        """Resolve the AWS connection an S3/CloudWatch source reads through — the
+        assume-role identity referenced by ``config['aws_connection_id']``. Returns
+        ``None`` when the source references no / a missing connection."""
+        from infrastructure.persistence.integrations.models import AwsOrganizationConnection
+
+        conn_id = str((source.config or {}).get("aws_connection_id") or "")
+        if not conn_id:
+            return None
+        return AwsOrganizationConnection.objects.filter(id=conn_id, workspace_id=source.workspace_id).first()
+
     def create(
         self,
         *,

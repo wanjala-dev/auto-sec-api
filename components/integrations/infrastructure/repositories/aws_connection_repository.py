@@ -30,6 +30,19 @@ class AwsConnectionRepository:
     def get(self, workspace_id, connection_id) -> AwsOrganizationConnection | None:
         return AwsOrganizationConnection.objects.filter(id=connection_id, workspace_id=workspace_id).first()
 
+    def latest_connected_for_workspace(self, workspace_id) -> AwsOrganizationConnection | None:
+        """The workspace's most recent *connected* AWS source — the one the log
+        readers (error scan + temporal aggregator) ingest from. Returns ``None``
+        when the workspace has no connected integration."""
+        return (
+            AwsOrganizationConnection.objects.filter(
+                workspace_id=workspace_id,
+                status=AwsOrganizationConnection.Status.CONNECTED,
+            )
+            .order_by("-created_at")
+            .first()
+        )
+
     def get_or_create(
         self,
         *,

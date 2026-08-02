@@ -15,6 +15,12 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# Source-kind identifiers (mirror ``WorkspaceLogSource.Kind`` values, which are the
+# same strings the ``LogSourcePort`` adapters register under). Kept as plain
+# constants here so this application service never imports the ORM enum.
+_KIND_S3 = "s3"
+_KIND_CLOUDWATCH = "cloudwatch"
+
 
 class LogSourceConfigError(Exception):
     """The source's config can't be resolved into an adapter config (e.g. an S3
@@ -82,14 +88,12 @@ class LogSourceService:
         (S3, CloudWatch) take their assume-role identity from the referenced AWS
         connection; other kinds carry self-contained config (3P secrets resolved via
         ``secret_ref`` in a later phase)."""
-        from infrastructure.persistence.integrations.models import WorkspaceLogSource
-
-        if source.kind == WorkspaceLogSource.Kind.S3:
+        if source.kind == _KIND_S3:
             from components.integrations.application.log_ingest_service import s3_adapter_config
 
             return s3_adapter_config(self._connection_for(source), source)
 
-        if source.kind == WorkspaceLogSource.Kind.CLOUDWATCH:
+        if source.kind == _KIND_CLOUDWATCH:
             conn = self._connection_for(source)
             config = dict(source.config or {})
             config.update(
@@ -106,18 +110,11 @@ class LogSourceService:
         config["source_id"] = str(source.id)
         return config
 
-    @staticmethod
-    def _connection_for(source):
+    def _connection_for(self, source):
         """Resolve the AWS connection an S3/CloudWatch source reads through — the
-        one place this lookup lives (DRY)."""
-        from infrastructure.persistence.integrations.models import AwsOrganizationConnection
-
-        conn_id = str((source.config or {}).get("aws_connection_id") or "")
-        conn = (
-            AwsOrganizationConnection.objects.filter(id=conn_id, workspace_id=source.workspace_id).first()
-            if conn_id
-            else None
-        )
+        one place this lookup lives (DRY). The ORM lookup goes through the
+        ``LogSourceRepository`` so this service stays ORM-free."""
+        conn = self._repo.find_connection_for_source(source)
         if conn is None:
             raise LogSourceConfigError(f"{source.kind} log source references a missing AWS connection.")
         return conn
