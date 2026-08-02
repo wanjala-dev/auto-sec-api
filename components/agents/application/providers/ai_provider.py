@@ -542,8 +542,11 @@ class AIProvider:
         from components.agents.application.use_cases.set_ai_kill_switch_use_case import (
             SetAiKillSwitchUseCase,
         )
+        from components.agents.infrastructure.adapters.workspace_ai_toggle_adapter import (
+            WorkspaceAiToggleAdapter,
+        )
 
-        return SetAiKillSwitchUseCase()
+        return SetAiKillSwitchUseCase(workspace_ai_toggle=WorkspaceAiToggleAdapter())
 
     @staticmethod
     def build_set_workspace_agent_capability_use_case():

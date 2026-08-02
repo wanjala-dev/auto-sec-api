@@ -100,7 +100,6 @@ _ORM_FREE_ALLOWLIST: set[tuple[str, str]] = {
     ("agents", "application/services/posture_dashboard_service.py"),
     ("agents", "application/services/posture_service.py"),
     ("agents", "application/use_cases/agent_chat_use_case.py"),
-    ("agents", "application/use_cases/set_ai_kill_switch_use_case.py"),
     ("agents", "application/use_cases/set_workspace_agent_capability_use_case.py"),
     # content — RAG index handlers + newsletter use cases read Newsletter/
     # WritingDraft/Workspace ORM inline; pending port extraction.
