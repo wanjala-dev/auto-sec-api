@@ -643,11 +643,143 @@ class TaskDetailView(APIView):
 
         return Response({"success": True, "task": result.task}, status=status.HTTP_200_OK)
 
+    def delete(self, request, uuid=None, task_id=None, **kwargs):
+        """Soft-delete a task INTO the recycle bin (never a hard delete).
+
+        A board card is a Task; deleting it must tombstone it into the
+        recycle bin — it drops off the active board (board queries exclude
+        ``status=ARCHIVED``), appears in the recycle-bin listing, and is
+        restorable via the existing recycle-bin restore flow. This reuses the
+        recycle_bin application surface (``get_recycle_bin_service().trash``) —
+        the same path ``content``'s draft delete uses — instead of hand-rolling
+        tombstoning. Idempotent: an already-trashed task returns 204.
+        """
+        from components.project.application.providers.project_repository_provider import (
+            get_project_repository_provider,
+        )
+        from components.recycle_bin.application.commands.trash_command import TrashCommand
+        from components.recycle_bin.application.providers.recycle_bin_provider import (
+            get_recycle_bin_service,
+        )
+        from components.shared_kernel.domain.errors import ConflictError
+
+        if uuid:
+            _require_self(request, uuid)
+
+        repo = get_project_repository_provider().get_repository()
+        try:
+            task = repo.get_task_by_id(task_id)
+        except Exception:
+            return Response({"success": False, "message": "Task not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Only someone who can mutate the task/board may trash it — mirror the
+        # existing task-mutation permission (workspace member + team member,
+        # admins/owners bypass team per ADR 0002).
+        _require_workspace_member(request, task.workspace)
+        _require_team_member(request, task.team)
+
+        try:
+            get_recycle_bin_service().trash(
+                TrashCommand(
+                    workspace_id=task.workspace_id,
+                    entity_type="task",
+                    entity_id=str(task.id),
+                    deleted_by=request.user.id,
+                    reason=str(request.data.get("reason") or ""),
+                )
+            )
+        except ConflictError:
+            # Already in the bin (race with a concurrent delete) — the
+            # outcome the caller asked for already holds.
+            pass
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
 
 class TaskUpdateView(TaskDetailView):
-    """Patch-only task updates by task ID."""
+    """Patch + delete task operations by task ID (the kanban card callout)."""
 
-    http_method_names = ["patch"]
+    http_method_names = ["patch", "delete"]
+
+
+class MoveTaskToBoardView(APIView):
+    """POST /project/tasks/<task_id>/move-board/
+
+    Move a single task to a DIFFERENT board — atomically reassigning its
+    team + project + target column. Unlike batch-move (which only touches the
+    ``column`` FK), this keeps ``team`` / ``project`` consistent when a card
+    crosses boards. The destination board is derived from the target column, so
+    the three FKs can never disagree.
+
+    Body: { "column": <target_column_id>, "order": <int, optional> }
+    """
+
+    permission_classes = (permissions.IsAuthenticated,)
+    name = "task-move-board"
+
+    def post(self, request, task_id=None, *args, **kwargs):
+        from components.project.application.ports.move_task_to_board_port import (
+            MoveTaskToBoardCommand,
+        )
+        from components.project.domain.errors import (
+            TaskNotFoundError,
+            TaskValidationError,
+            TeamMembershipRequiredError,
+            WorkspaceMembershipRequiredError,
+        )
+
+        target_column_id = request.data.get("column") or request.data.get("target_column")
+        if not target_column_id:
+            return Response(
+                {"success": False, "message": "A target 'column' is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        order_raw = request.data.get("order")
+        order = None
+        if order_raw is not None:
+            try:
+                order = int(order_raw)
+            except (TypeError, ValueError):
+                return Response(
+                    {"success": False, "message": "'order' must be an integer."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        try:
+            command = MoveTaskToBoardCommand(
+                task_id=str(task_id),
+                target_column_id=str(target_column_id),
+                user_id=str(request.user.id),
+                order=order,
+            )
+            result = _project_service.move_task_to_board(command=command)
+        except TaskNotFoundError as exc:
+            return Response({"success": False, "message": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+        except WorkspaceMembershipRequiredError:
+            raise PermissionDenied("You must belong to the organization to perform this action.")
+        except TeamMembershipRequiredError:
+            return Response(
+                {"success": False, "message": "You must be a member of the destination board's team."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        except TaskValidationError as exc:
+            return Response({"success": False, "message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(
+            {
+                "success": True,
+                "message": "Task moved to the destination board.",
+                "data": {
+                    "task_id": result.task_id,
+                    "team_id": result.team_id,
+                    "project_id": result.project_id,
+                    "column_id": result.column_id,
+                    "order": result.order,
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class BatchMoveTasksView(APIView):
