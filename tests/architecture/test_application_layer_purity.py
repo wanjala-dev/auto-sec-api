@@ -93,9 +93,6 @@ _ORM_FREE_ALLOWLIST: set[tuple[str, str]] = {
     # Workspace/AITeammateProfile ORM inline; pending port extraction.
     # TRANSITIONAL: app-layer ORM — see architecture audit 2026-08; burn down.
     ("agents", "application/facades/ai_teammate_facade.py"),
-    ("agents", "application/handlers/finding_raised_board_handler.py"),
-    ("agents", "application/handlers/project_at_risk_specialist_handler.py"),
-    ("agents", "application/handlers/project_specialist_handler.py"),
     ("agents", "application/handlers/specialist_persistence_service.py"),
     ("agents", "application/services/ai_governance_service.py"),
     ("agents", "application/services/detector_cycle.py"),

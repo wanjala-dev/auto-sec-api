@@ -54,10 +54,10 @@ def handle_project_created(event: ProjectCreated) -> None:
     from components.agents.application.facades.ai_teammate_facade import (
         ensure_agents_board,
     )
+    from components.agents.application.providers.ai_provider import AIProvider
     from components.agents.infrastructure.services.agents_board_service import (
         SUGGESTED,
     )
-    from infrastructure.persistence.workspaces.models import Workspace
 
     if event.workspace_id is None:
         logger.info(
@@ -66,7 +66,7 @@ def handle_project_created(event: ProjectCreated) -> None:
         )
         return
 
-    workspace = Workspace.objects.filter(id=event.workspace_id).first()
+    workspace = AIProvider.build_workspace_query().get_by_id(event.workspace_id)
     if workspace is None:
         logger.warning(
             "project_specialist_workspace_missing project_id=%s workspace_id=%s",

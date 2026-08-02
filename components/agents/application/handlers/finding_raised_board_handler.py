@@ -269,11 +269,11 @@ def handle_finding_raised_board(event: FindingRaised) -> None:
     from components.agents.application.handlers.specialist_persistence_service import (
         persist_finding_as_task,
     )
+    from components.agents.application.providers.ai_provider import AIProvider
     from components.agents.infrastructure.services.agents_board_service import SUGGESTED
     from components.findings.application.providers.finding_provider import FindingProvider
-    from infrastructure.persistence.workspaces.models import Workspace
 
-    workspace = Workspace.objects.filter(id=event.workspace_id).first()
+    workspace = AIProvider.build_workspace_query().get_by_id(event.workspace_id)
     if workspace is None:
         logger.warning(
             "finding_raised_board_workspace_missing workspace_id=%s finding_id=%s",
