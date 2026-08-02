@@ -235,27 +235,17 @@ def _collect_log_lines_by_date(workspace_id: str, window_days: int) -> tuple[dic
 
 def _collect_findings_created_by_date(workspace_id: str, window_days: int) -> tuple[dict[str, int], bool]:
     """Findings filed per day — board cards, the posture report's own
-    card excluded so the weekly report can never count itself."""
-    from infrastructure.persistence.project.models import Task
+    card excluded so the weekly report can never count itself.
+
+    Read through the ``project`` context's ``PostureFactsPort`` (Rule 2 /
+    architecture-skill C3): the ``agents`` dashboard depends on a ``project``
+    interface, never ``project``'s ORM."""
+    from components.project.application.providers.project_provider import ProjectProvider
 
     since = datetime.now(UTC) - timedelta(days=window_days)
-    created_rows = (
-        Task.objects.filter(
-            workspace_id=workspace_id,
-            source_type__startswith="ai.",
-            created_at__gte=since,
-        )
-        .exclude(source_type=posture_service.POSTURE_REPORT_SOURCE_TYPE)
-        .values_list("created_at", flat=True)
-        .iterator(chunk_size=500)
+    return ProjectProvider.build_posture_facts_port().count_findings_created_by_date(
+        workspace_id=workspace_id, since=since
     )
-    by_date: dict[str, int] = {}
-    present = False
-    for created_at in created_rows:
-        present = True
-        iso = created_at.date().isoformat()
-        by_date[iso] = by_date.get(iso, 0) + 1
-    return by_date, present
 
 
 def _collect_rollup_series(workspace_id: str, window_days: int) -> tuple[dict[str, int], dict[str, float], bool]:

@@ -212,3 +212,43 @@ class TestPostureFactsCollector:
         since = datetime.now(UTC) - timedelta(days=7)
         assert port.count_findings_created(workspace_id=str(ws_b.id), since=since) == 0
         assert port.count_findings_created(workspace_id=str(ws_a.id), since=since) == 1
+
+    def test_count_findings_created_by_date_buckets_and_excludes(self, workspace_factory, team_factory):
+        from infrastructure.persistence.project.models import Task
+
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        now = datetime.now(UTC)
+        since = now - timedelta(days=7)
+
+        # Two cards created on the same day, one on an earlier day, plus the
+        # report card (always excluded) and one older than the window.
+        today_a = _finding(workspace, owner, team, column)
+        today_b = _finding(workspace, owner, team, column)
+        three_days = _finding(workspace, owner, team, column)
+        report_card = _finding(workspace, owner, team, column, source_type="ai.posture_report")
+        too_old = _finding(workspace, owner, team, column)
+        Task.objects.filter(id=three_days.id).update(created_at=now - timedelta(days=3))
+        Task.objects.filter(id=report_card.id).update(created_at=now - timedelta(days=1))
+        Task.objects.filter(id=too_old.id).update(created_at=now - timedelta(days=30))
+
+        port = ProjectProvider.build_posture_facts_port()
+        by_date, present = port.count_findings_created_by_date(workspace_id=str(workspace.id), since=since)
+
+        assert present is True
+        assert by_date[now.date().isoformat()] == 2  # today_a + today_b
+        assert by_date[(now - timedelta(days=3)).date().isoformat()] == 1
+        # report card + out-of-window card contribute nothing.
+        assert sum(by_date.values()) == 3
+        _ = (today_a, today_b)
+
+    def test_count_findings_created_by_date_empty_is_absent(self, workspace_factory, team_factory):
+        ws_a, owner_a, team_a, column_a = _board(workspace_factory, team_factory)
+        ws_b, _, _, _ = _board(workspace_factory, team_factory)
+        _finding(ws_a, owner_a, team_a, column_a)
+
+        port = ProjectProvider.build_posture_facts_port()
+        since = datetime.now(UTC) - timedelta(days=7)
+        # Workspace B has no findings → empty mapping + present False.
+        by_date, present = port.count_findings_created_by_date(workspace_id=str(ws_b.id), since=since)
+        assert by_date == {}
+        assert present is False

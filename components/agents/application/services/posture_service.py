@@ -487,53 +487,37 @@ def compose_posture_report(
 # ── ORM-backed collectors (lazy imports, per detector_cycle conventions) ────
 
 
-def _finding_row(task) -> dict[str, Any]:
-    meta = task.metadata or {}
-    triage = meta.get("triage") or {}
-    telemetry = meta.get("run_telemetry") if isinstance(meta.get("run_telemetry"), dict) else {}
-    rubric = telemetry.get("rubric_verdicts") if isinstance(telemetry.get("rubric_verdicts"), dict) else None
-
-    # Acknowledgment proxy: the first provenance event AFTER the filing event
-    # (an agent/human acted on the card). Filing itself is not an ack.
-    first_action_at = None
-    events = ((meta.get("provenance") or {}).get("events") or [])[1:]
-    if events and isinstance(events[0], dict):
-        first_action_at = events[0].get("at")
-
+def _finding_row(finding) -> dict[str, Any]:
+    """Map a project ``PostureFinding`` DTO into the dict the pure ``compute_*``
+    functions consume. Field-for-field the same keys — the DTO was designed to
+    mirror this row, so this is a mechanical translation, not logic."""
     return {
-        "id": str(task.id),
-        "severity": meta.get("severity") or "",
-        "kind": task.source_type,
-        "status": task.status,
-        "created_at": task.created_at,
-        "triage_status": triage.get("status"),
-        "triaged_at": triage.get("triaged_at"),
-        "needs_human": bool(triage.get("needs_human")),
-        "agent": triage.get("agent") or "",
-        "rubric_verdict": rubric.get("verdict") if rubric else None,
-        "first_action_at": first_action_at,
+        "id": finding.id,
+        "severity": finding.severity,
+        "kind": finding.kind,
+        "status": finding.status,
+        "created_at": finding.created_at,
+        "triage_status": finding.triage_status,
+        "triaged_at": finding.triaged_at,
+        "needs_human": finding.needs_human,
+        "agent": finding.agent,
+        "rubric_verdict": finding.rubric_verdict,
+        "first_action_at": finding.first_action_at,
     }
 
 
 def _collect_finding_rows(workspace_id: str, window_start: datetime) -> list[dict[str, Any]]:
     """Board findings relevant to posture: every open card (stock) plus every
-    card touched inside the window (flow candidates). Two querysets deduped by
-    id — keeps this application module free of ``django.db.models`` imports
-    (the purity rule bans framework imports here, even lazy ones); the pure
-    functions do the precise classification off the triage stamp itself."""
-    from infrastructure.persistence.project.models import Task
+    card touched inside the window (flow candidates), deduped by id.
 
-    base = (
-        Task.objects.filter(workspace_id=workspace_id, source_type__startswith="ai.")
-        .exclude(source_type=POSTURE_REPORT_SOURCE_TYPE)
-        .only("id", "status", "source_type", "created_at", "metadata")
-    )
-    rows: dict[str, dict[str, Any]] = {}
-    for queryset in (base.filter(status="todo"), base.filter(updated_at__gte=window_start)):
-        for task in queryset.iterator(chunk_size=500):
-            row = _finding_row(task)
-            rows[row["id"]] = row
-    return list(rows.values())
+    Read through the ``project`` context's ``PostureFactsPort`` (Rule 2 /
+    architecture-skill C3: read another context's data through a port, not its
+    ORM). The pure ``compute_*`` functions do the precise classification off
+    the returned rows."""
+    from components.project.application.providers.project_provider import ProjectProvider
+
+    port = ProjectProvider.build_posture_facts_port()
+    return [_finding_row(f) for f in port.collect_finding_facts(workspace_id=workspace_id, window_start=window_start)]
 
 
 def _triaged_in_window(rows: list[dict[str, Any]], window_start: datetime) -> list[dict[str, Any]]:
@@ -600,17 +584,20 @@ def fleet_health(workspace_id: str, window_days: int = 7) -> dict[str, Any]:
 
 def forward_outlook(workspace_id: str) -> dict[str, Any]:
     """This-week vs last-week deltas: finding creation + needs-human growth."""
-    from infrastructure.persistence.project.models import Task
+    from components.project.application.providers.project_provider import ProjectProvider
 
     now = _utc_now()
     week_ago = now - timedelta(days=7)
     two_weeks_ago = now - timedelta(days=14)
 
-    base = Task.objects.filter(workspace_id=workspace_id, source_type__startswith="ai.").exclude(
-        source_type=POSTURE_REPORT_SOURCE_TYPE
+    # Creation counts through the project read seam (Rule 2 / C3): this-week
+    # is the half-open window [week_ago, now); last-week is [two_weeks_ago,
+    # week_ago). The port excludes the posture report's own card.
+    facts = ProjectProvider.build_posture_facts_port()
+    findings_this_week = facts.count_findings_created(workspace_id=str(workspace_id), since=week_ago)
+    findings_last_week = facts.count_findings_created(
+        workspace_id=str(workspace_id), since=two_weeks_ago, until=week_ago
     )
-    findings_this_week = base.filter(created_at__gte=week_ago).count()
-    findings_last_week = base.filter(created_at__gte=two_weeks_ago, created_at__lt=week_ago).count()
 
     rows = _collect_finding_rows(str(workspace_id), two_weeks_ago)
     escalations_this_week = 0
