@@ -65,7 +65,7 @@ class BoardFindingFactsRepository(FindingRemediationFactsPort):
         # exists=False and never leaks its finding (tenant isolation).
         row = (
             Task.objects.filter(id=finding_task_id, workspace_id=workspace_id)
-            .only("id", "workspace_id", "source_type", "metadata")
+            .only("id", "workspace_id", "source_type", "title", "metadata")
             .first()
         )
         if row is None:
@@ -77,6 +77,7 @@ class BoardFindingFactsRepository(FindingRemediationFactsPort):
                 finding_kind="",
                 finding_fingerprint="",
                 draft_pr_url=None,
+                draft_pr_repo=None,
                 finding_resolved=False,
                 provenance_event_ref="",
             )
@@ -94,6 +95,13 @@ class BoardFindingFactsRepository(FindingRemediationFactsPort):
             finding_kind=_derive_kind(source_type),
             finding_fingerprint=str(payload.get("fingerprint") or metadata.get("fingerprint") or ""),
             draft_pr_url=(draft_pr.get("url") or None),
+            draft_pr_repo=(draft_pr.get("repo") or None),
             finding_resolved=_is_resolved(metadata),
             provenance_event_ref=_newest_provenance_ref(metadata),
+            # The corpus records the finding's suggested fix (raw text, D3). The
+            # applied patch body lives only in the PR; the durable fix text on the
+            # board is ``payload.suggested_fix`` — that is what we ground on.
+            fix_code=str(payload.get("suggested_fix") or ""),
+            title=str(row.title or ""),
+            summary=str(payload.get("probable_cause") or ""),
         )

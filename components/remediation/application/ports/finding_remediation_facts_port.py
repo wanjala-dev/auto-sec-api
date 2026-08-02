@@ -38,10 +38,19 @@ class FindingRemediationFacts:
     finding_fingerprint: str
     # (1) The draft PR opened for the fix, if any: {url, repo, branch, ...}.
     draft_pr_url: str | None
+    # (1b) The repo the draft PR was opened against (``owner/name``) — needed by
+    # the merge-detection reconciler (P4a) to call ``VcsPort.get_pull_request``.
+    draft_pr_repo: str | None
     # (2) Whether the finding is observed resolved (board triage + finding SSOT).
     finding_resolved: bool
     # (3) A reference to the newest provenance event (link, don't copy).
     provenance_event_ref: str
+    # (4) The fix content carried on the finding — what the reconciler records
+    # into the corpus (P4a). ``fix_code`` is the raw suggested-fix text (D3: never
+    # rendered HTML); ``title`` / ``summary`` are the human-readable labels.
+    fix_code: str = ""
+    title: str = ""
+    summary: str = ""
 
 
 class FindingRemediationFactsPort(ABC):

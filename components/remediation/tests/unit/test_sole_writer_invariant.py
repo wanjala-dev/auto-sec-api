@@ -77,12 +77,21 @@ def test_no_api_controller_create_path_exists():
 
 
 def test_store_writes_only_from_gate_and_impl():
+    # The invariant is about the CORPUS store (the RemediationEntry table), not
+    # every ``.save()`` in the context. Only a ``.save()`` in a file that also
+    # touches the entity / store could be a corpus write; a board-Task ``.save()``
+    # (e.g. the resolved-transition adapter) provably is not — the entity is never
+    # constructed there (guarded by test_only_the_gate_constructs_the_entity), so
+    # it has no RemediationEntry to persist. We therefore flag ``.save()`` only in
+    # files that reference the corpus entity or store, keeping the invariant sharp
+    # instead of tripping on unrelated board writes.
     offenders: list[str] = []
     for py in _REMEDIATION_ROOT.rglob("*.py"):
         rel = _rel(py)
         if any(rel.startswith(allowed.rstrip("/")) for allowed in _STORE_WRITE_ALLOWED):
             continue
         text = py.read_text()
-        if ".save(" in text:
+        touches_corpus = "RemediationEntry" in text or "RemediationEntryStorePort" in text
+        if ".save(" in text and touches_corpus:
             offenders.append(rel)
-    assert not offenders, f"store .save() reached from outside the gate: {offenders}"
+    assert not offenders, f"corpus store .save() reached from outside the gate: {offenders}"

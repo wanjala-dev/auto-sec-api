@@ -68,6 +68,24 @@ class DraftPullRequest:
     base: str
 
 
+@dataclass(frozen=True)
+class PullRequestState:
+    """The *current* state of a pull request read back from the host — the
+    un-forgeable "was the fix actually applied?" signal the Remediation Memory
+    entry-gate (ADR 0012 D1) needs.
+
+    ``merged`` is the truth: a host only sets it ``True`` once the PR's commits
+    are actually in the base branch. ``state`` is the host's lifecycle string
+    (``"open"`` / ``"closed"``); a PR can be ``closed`` *without* being merged
+    (rejected), so ``merged`` — never ``state`` — is what decides "applied"."""
+
+    number: int
+    repo: str
+    state: str  # host lifecycle: "open" | "closed"
+    merged: bool  # THE applied signal — only True once commits reached base
+    merged_at: str | None = None  # ISO8601 when merged, else None
+
+
 class VcsPort(ABC):
     """Driving-side contract for opening a draft PR against an allowlisted repo on a
     code host (GitHub / GitLab / Bitbucket)."""
@@ -118,3 +136,14 @@ class VcsPort(ABC):
     @abstractmethod
     def open_draft_pr(self, repo: str, head: str, base: str, title: str, body: str) -> DraftPullRequest:
         """Open a DRAFT pull request ``head`` → ``base``."""
+
+    @abstractmethod
+    def get_pull_request(self, repo: str, pr_ref: str) -> PullRequestState:
+        """Read back the current state of a pull request (ADR 0012 Phase 4a).
+
+        ``pr_ref`` is the PR number (``"7"``) or a full PR URL
+        (``https://github.com/owner/repo/pull/7``) — the adapter extracts the
+        number. Returns a :class:`PullRequestState` whose ``merged`` boolean is
+        the un-forgeable "the fix was applied" signal the Remediation Memory
+        entry-gate reconciler checks. Raises :class:`VcsApiError` on an API
+        failure (a missing PR / 404 included) — never swallowed, never guessed."""

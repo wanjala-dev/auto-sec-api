@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import re
 
 import requests
 from django.views.decorators.debug import sensitive_variables
@@ -19,6 +20,7 @@ from components.integrations.application.ports.vcs_port import (
     CommittedFile,
     DefaultBranch,
     DraftPullRequest,
+    PullRequestState,
     RepoFile,
     VcsApiError,
     VcsHealth,
@@ -26,6 +28,24 @@ from components.integrations.application.ports.vcs_port import (
 )
 
 logger = logging.getLogger(__name__)
+
+# The number after "/pull/" in a GitHub PR URL (tolerating a trailing "/files",
+# "#discussion", "?query", or a bare trailing slash).
+_PR_URL_NUMBER_RE = re.compile(r"/pull/(\d+)")
+
+
+def _parse_pr_number(pr_ref: str) -> int:
+    """Extract the PR number from a bare number ("7") or a PR URL
+    (".../pull/7"). Raises :class:`VcsApiError` when no number can be found —
+    an un-parseable ref must fail loudly, never silently resolve to PR 0."""
+    ref = (pr_ref or "").strip()
+    match = _PR_URL_NUMBER_RE.search(ref)
+    if match:
+        return int(match.group(1))
+    if ref.isdigit():
+        return int(ref)
+    raise VcsApiError(f"Could not parse a PR number from '{pr_ref}'.", status_code=None)
+
 
 _BASE_URL = "https://api.github.com"
 _TIMEOUT_SECONDS = 20
@@ -192,3 +212,20 @@ class GitHubVcsAdapter(VcsPort):
         if not url:
             raise VcsApiError(f"GitHub created a PR on {repo} but returned no URL", status_code=None)
         return DraftPullRequest(url=url, number=number, repo=repo, head=head, base=base)
+
+    def get_pull_request(self, repo: str, pr_ref: str) -> PullRequestState:
+        """Read a PR's current state via ``GET /repos/{repo}/pulls/{number}``.
+
+        The response's ``merged`` boolean is GitHub's authoritative "the commits
+        reached the base branch" signal — the un-forgeable "applied" fact the
+        Remediation Memory entry-gate reconciler needs. A 404 (deleted / wrong
+        repo) propagates as :class:`VcsApiError`, never a silent "not merged"."""
+        number = _parse_pr_number(pr_ref)
+        data = self._request("GET", f"/repos/{repo}/pulls/{number}")
+        return PullRequestState(
+            number=int(data.get("number") or number),
+            repo=repo,
+            state=str(data.get("state") or ""),
+            merged=bool(data.get("merged")),
+            merged_at=(data.get("merged_at") or None),
+        )

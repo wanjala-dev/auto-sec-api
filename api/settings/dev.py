@@ -390,6 +390,15 @@ CELERY_BEAT_SCHEDULE = {
         "task": "ai.rollup_ai_action_daily",
         "schedule": crontab(minute=20, hour=0),
     },
+    # Remediation Memory reconciler (ADR 0012 P4a) — sweeps findings carrying an
+    # open draft PR, verifies each PR's merge via the integrations VcsPort, and on
+    # a verified merge resolves the finding + offers the fix to the D1 entry-gate.
+    # Hourly: draft PRs merge on human-review timescales, the sweep is fail-closed
+    # + idempotent, and each check is a lightweight PR-state read.
+    "remediation_reconcile_merged": {
+        "task": "remediation.reconcile_merged_remediations",
+        "schedule": crontab(minute=15),
+    },
     "workspace_embeddings_hourly": {
         # Refresh embeddings for AI-enabled workspaces every hour in dev.
         # Only workspaces with ai_teammate_enabled=True are processed.

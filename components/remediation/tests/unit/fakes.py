@@ -69,8 +69,12 @@ def make_facts(
     finding_kind: str = "log_watch",
     finding_fingerprint: str = "fp-1",
     draft_pr_url: str | None = "https://github.com/acme/repo/pull/7",
+    draft_pr_repo: str | None = "acme/repo",
     finding_resolved: bool = True,
     provenance_event_ref: str = "agent:triage@t1",
+    fix_code: str = "the fix",
+    title: str = "Fix casing import",
+    summary: str = "casing import",
 ) -> FindingRemediationFacts:
     return FindingRemediationFacts(
         finding_task_id=finding_task_id,
@@ -80,6 +84,10 @@ def make_facts(
         finding_kind=finding_kind,
         finding_fingerprint=finding_fingerprint,
         draft_pr_url=draft_pr_url,
+        draft_pr_repo=draft_pr_repo,
         finding_resolved=finding_resolved,
         provenance_event_ref=provenance_event_ref,
+        fix_code=fix_code,
+        title=title,
+        summary=summary,
     )

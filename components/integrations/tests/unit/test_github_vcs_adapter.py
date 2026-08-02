@@ -124,3 +124,69 @@ class TestGitHubVcsAdapterListTree:
 
         with mock.patch(_REQUESTS_PATH, new=_no_sha), pytest.raises(VcsApiError):
             adapter.list_tree("acme/app", "main")
+
+
+@pytest.mark.unit
+class TestGitHubVcsAdapterGetPullRequest:
+    """ADR 0012 P4a: the un-forgeable "was the fix applied?" merge signal."""
+
+    def test_merged_true_parsed(self):
+        adapter = GitHubVcsAdapter("ghp_secret_token")
+        payload = {"number": 7, "state": "closed", "merged": True, "merged_at": "2026-08-01T10:00:00Z"}
+        with mock.patch(_REQUESTS_PATH, return_value=_resp(200, payload)) as req:
+            state = adapter.get_pull_request("acme/repo", "7")
+        assert state.merged is True
+        assert state.state == "closed"
+        assert state.merged_at == "2026-08-01T10:00:00Z"
+        assert state.number == 7
+        # It hit the pulls endpoint with the parsed number.
+        assert "/repos/acme/repo/pulls/7" in req.call_args.args[1]
+
+    def test_open_unmerged_parsed(self):
+        adapter = GitHubVcsAdapter("ghp_secret_token")
+        payload = {"number": 7, "state": "open", "merged": False, "merged_at": None}
+        with mock.patch(_REQUESTS_PATH, return_value=_resp(200, payload)):
+            state = adapter.get_pull_request("acme/repo", "7")
+        assert state.merged is False
+        assert state.state == "open"
+        assert state.merged_at is None
+
+    def test_closed_but_not_merged_is_not_applied(self):
+        # A rejected PR is closed WITHOUT merged=True — state must never be mistaken
+        # for the applied signal.
+        adapter = GitHubVcsAdapter("ghp_secret_token")
+        payload = {"number": 9, "state": "closed", "merged": False}
+        with mock.patch(_REQUESTS_PATH, return_value=_resp(200, payload)):
+            state = adapter.get_pull_request("acme/repo", "9")
+        assert state.state == "closed"
+        assert state.merged is False
+
+    def test_parses_number_from_full_url(self):
+        adapter = GitHubVcsAdapter("ghp_secret_token")
+        payload = {"number": 42, "state": "closed", "merged": True}
+        url = "https://github.com/acme/repo/pull/42"
+        with mock.patch(_REQUESTS_PATH, return_value=_resp(200, payload)) as req:
+            state = adapter.get_pull_request("acme/repo", url)
+        assert state.merged is True
+        assert "/repos/acme/repo/pulls/42" in req.call_args.args[1]
+
+    def test_parses_number_from_url_with_trailing_segment(self):
+        adapter = GitHubVcsAdapter("ghp_secret_token")
+        payload = {"number": 42, "state": "open", "merged": False}
+        url = "https://github.com/acme/repo/pull/42/files"
+        with mock.patch(_REQUESTS_PATH, return_value=_resp(200, payload)) as req:
+            adapter.get_pull_request("acme/repo", url)
+        assert "/repos/acme/repo/pulls/42" in req.call_args.args[1]
+
+    def test_404_raises_vcs_api_error(self):
+        adapter = GitHubVcsAdapter("ghp_secret_token")
+        with mock.patch(_REQUESTS_PATH, return_value=_resp(404, {"message": "Not Found"})):
+            with pytest.raises(VcsApiError) as exc:
+                adapter.get_pull_request("acme/repo", "7")
+        assert exc.value.status_code == 404
+
+    def test_unparseable_ref_raises_without_api_call(self):
+        adapter = GitHubVcsAdapter("ghp_secret_token")
+        with mock.patch(_REQUESTS_PATH) as req, pytest.raises(VcsApiError):
+            adapter.get_pull_request("acme/repo", "not-a-pr")
+        req.assert_not_called()
