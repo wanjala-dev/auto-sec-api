@@ -62,3 +62,11 @@ class ProjectService:
         """
         use_case = self.project_provider.build_batch_move_tasks_use_case()
         return use_case.execute(command=command)
+
+    def move_task_to_board(self, *, command):
+        """Orchestrate moving a task to a different board.
+
+        Delegates to MoveTaskToBoardUseCase (reassigns team + project + column).
+        """
+        use_case = self.project_provider.build_move_task_to_board_use_case()
+        return use_case.execute(command=command)
