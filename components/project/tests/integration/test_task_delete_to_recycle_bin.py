@@ -156,3 +156,59 @@ def test_delete_missing_task_returns_404():
     response = client.delete(url)
 
     assert response.status_code == status.HTTP_404_NOT_FOUND
+
+
+def test_delete_from_different_workspace_is_forbidden_and_leaves_task_untouched():
+    """Cross-workspace IDOR guard: a member of workspace B cannot delete a task
+    in workspace A. Explicitly locks the isolation guarantee at the route."""
+    owner_a = _user("owner_a")
+    workspace_a = _workspace(owner_a, "Workspace A")
+    team_a = _team(workspace_a, owner_a, "Team A")
+    task = _task(workspace_a, team_a, owner_a, title="A's task")
+
+    # ``attacker`` is a legitimate member of a DIFFERENT workspace.
+    owner_b = _user("owner_b")
+    workspace_b = _workspace(owner_b, "Workspace B")
+    attacker = _user("attacker")
+    _team(workspace_b, owner_b, "Team B", members=[attacker])
+
+    client = APIClient()
+    client.force_authenticate(user=attacker)
+    url = reverse("project:task-update-by-id", kwargs={"task_id": task.pk})
+    response = client.delete(url)
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    task.refresh_from_db()
+    assert task.status == Task.TODO  # untouched
+    assert not get_recycle_bin_service().list_bin(workspace_id=workspace_a.id, entity_type="task")
+
+
+def test_delete_verb_not_accepted_on_base_task_detail_route():
+    """The soft-delete DELETE handler lives on ``TaskUpdateView`` only, so the
+    base ``TaskDetailView`` routes must NOT accept DELETE (405) — a regression
+    guard proving the delete verb didn't leak onto unrelated task routes."""
+    owner = _user("owner")
+    workspace = _workspace(owner, "Primary")
+    team = _team(workspace, owner, "Team A")
+    project = _project_for(workspace, team, owner)
+    task = _task(workspace, team, owner, title="Delta")
+
+    client = APIClient()
+    client.force_authenticate(user=owner)
+    # Base TaskDetailView route (name "user-tasks"): task/<project_id>/<uuid>/<task_id>
+    url = reverse(
+        "project:user-tasks",
+        kwargs={"project_id": project.pk, "uuid": str(owner.id), "task_id": task.pk},
+    )
+    response = client.delete(url)
+
+    assert response.status_code == status.HTTP_405_METHOD_NOT_ALLOWED
+    # The task was NOT trashed.
+    task.refresh_from_db()
+    assert task.status == Task.TODO
+
+
+def _project_for(workspace, team, owner):
+    from infrastructure.persistence.project.models import Project
+
+    return Project.objects.create(workspace=workspace, team=team, title="P", created_by=owner)

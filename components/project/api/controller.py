@@ -643,6 +643,17 @@ class TaskDetailView(APIView):
 
         return Response({"success": True, "task": result.task}, status=status.HTTP_200_OK)
 
+
+class TaskUpdateView(TaskDetailView):
+    """Patch + delete task operations by task ID (the kanban card callout).
+
+    ``delete`` lives HERE, not on the base ``TaskDetailView``, so it only
+    applies to the ``tasks/<task_id>/`` route — the base view's other routes
+    (``task/<project_id>/<uuid>/<task_id>`` etc.) do NOT gain a DELETE verb.
+    """
+
+    http_method_names = ["patch", "delete"]
+
     def delete(self, request, uuid=None, task_id=None, **kwargs):
         """Soft-delete a task INTO the recycle bin (never a hard delete).
 
@@ -662,6 +673,7 @@ class TaskDetailView(APIView):
             get_recycle_bin_service,
         )
         from components.shared_kernel.domain.errors import ConflictError
+        from infrastructure.persistence.project.models import Task
 
         if uuid:
             _require_self(request, uuid)
@@ -669,7 +681,9 @@ class TaskDetailView(APIView):
         repo = get_project_repository_provider().get_repository()
         try:
             task = repo.get_task_by_id(task_id)
-        except Exception:
+        except Task.DoesNotExist:
+            # Only a genuinely missing task is a 404 — a real DB fault must
+            # surface, not be masked as "not found" (logging.md §7).
             return Response({"success": False, "message": "Task not found."}, status=status.HTTP_404_NOT_FOUND)
 
         # Only someone who can mutate the task/board may trash it — mirror the
@@ -694,12 +708,6 @@ class TaskDetailView(APIView):
             pass
 
         return Response(status=status.HTTP_204_NO_CONTENT)
-
-
-class TaskUpdateView(TaskDetailView):
-    """Patch + delete task operations by task ID (the kanban card callout)."""
-
-    http_method_names = ["patch", "delete"]
 
 
 class MoveTaskToBoardView(APIView):

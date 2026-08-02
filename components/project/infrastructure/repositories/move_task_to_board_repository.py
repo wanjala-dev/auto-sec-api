@@ -49,6 +49,12 @@ class OrmMoveTaskToBoardRepository(MoveTaskToBoardPort):
         if task is None:
             raise TaskNotFoundError(f"Task not found: {command.task_id}")
 
+        # A trashed (ARCHIVED) task sits under a live recycle-bin tombstone;
+        # reassigning it would silently mutate the trashed row out from under
+        # the bin. Restore it first, then move it.
+        if task.status == Task.ARCHIVED:
+            raise TaskValidationError("This task is in the recycle bin. Restore it before moving it to another board.")
+
         target_column = (
             Column.objects.select_related("team", "workspace", "project")
             .filter(pk=command.target_column_id, is_deleted=False)
@@ -66,12 +72,19 @@ class OrmMoveTaskToBoardRepository(MoveTaskToBoardPort):
         if str(target_column.workspace_id) != str(task.workspace_id):
             raise TaskValidationError("The destination column belongs to a different workspace.")
 
-        # ── Validate membership against the DESTINATION board ───────
+        # ── Validate membership against BOTH boards ─────────────────
+        # A cross-board move mutates the SOURCE board (the card leaves it) and
+        # the DESTINATION board (the card lands on it), so the caller must be
+        # able to mutate both — mirroring ``OrmBatchMoveTasksRepository`` which
+        # validates the source task's team. Workspace admins/owners bypass team
+        # membership (ADR 0002); same workspace for both (cross-workspace was
+        # already rejected above).
         if not is_privileged:
             if not user_is_workspace_member(user, target_column.workspace):
                 raise WorkspaceMembershipRequiredError("You must belong to the organization to perform this action.")
-            # Workspace admins/owners bypass team membership (ADR 0002).
             if not user_is_workspace_admin_or_owner(user, target_column.workspace):
+                if not task.team.members.filter(id=user.id).exists():
+                    raise TeamMembershipRequiredError("You must be a member of the task's current board team.")
                 if not dest_team.members.filter(id=user.id).exists():
                     raise TeamMembershipRequiredError("You must be a member of the destination board's team.")
 

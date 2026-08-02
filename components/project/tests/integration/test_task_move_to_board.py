@@ -191,3 +191,55 @@ def test_move_enforces_permission_on_destination_board():
     task.refresh_from_db()
     assert task.team_id == src_team.id  # unchanged
     assert task.column_id == src_column.id
+
+
+def test_move_enforces_permission_on_source_board():
+    # ``mover`` belongs to the DESTINATION team but NOT the source team — they
+    # must not be able to move a card OUT of a board they can't mutate
+    # (mirrors the batch-move source-team check).
+    owner = _user("owner")
+    mover = _user("mover")
+    workspace = _workspace(owner, "Primary")
+
+    src_team = _team(workspace, owner, "Source Team")  # mover is NOT a member
+    src_column = _column(workspace, src_team, owner, "Src")
+    task = _task(workspace, src_team, owner, src_column)
+
+    dest_team = _team(workspace, owner, "Dest Team", members=[mover])
+    dest_column = _column(workspace, dest_team, owner, "Dest")
+
+    client = APIClient()
+    client.force_authenticate(user=mover)
+    url = reverse("project:task-move-board", kwargs={"task_id": task.pk})
+    response = client.post(url, {"column": dest_column.pk}, format="json")
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    task.refresh_from_db()
+    assert task.team_id == src_team.id  # unchanged
+    assert task.column_id == src_column.id
+
+
+def test_move_rejects_archived_trashed_task():
+    # A task sitting in the recycle bin (ARCHIVED) must not be reassigned under
+    # a live tombstone — moving it is a 400 with a clear message.
+    owner = _user("owner")
+    workspace = _workspace(owner, "Primary")
+
+    src_team = _team(workspace, owner, "Source Team")
+    src_column = _column(workspace, src_team, owner, "Src")
+    task = _task(workspace, src_team, owner, src_column)
+    task.status = Task.ARCHIVED
+    task.save(update_fields=["status"])
+
+    dest_team = _team(workspace, owner, "Dest Team")
+    dest_column = _column(workspace, dest_team, owner, "Dest")
+
+    client = APIClient()
+    client.force_authenticate(user=owner)
+    url = reverse("project:task-move-board", kwargs={"task_id": task.pk})
+    response = client.post(url, {"column": dest_column.pk}, format="json")
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    task.refresh_from_db()
+    assert task.team_id == src_team.id  # unchanged
+    assert task.status == Task.ARCHIVED
