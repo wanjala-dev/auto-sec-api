@@ -82,13 +82,6 @@ _ORM_FREE_ALLOWLIST: set[tuple[str, str]] = {
     # TRANSITIONAL: cross-context/app-layer ORM — see architecture audit
     # 2026-08; burn down (task #45 for open_draft_pr).
     ("integrations", "application/use_cases/open_draft_pr_use_case.py"),
-    # integrations — log ingestion/source/pattern services read their own
-    # context's ORM (WorkspaceLogSource / AwsOrganizationConnection / rollups)
-    # inline; pending repository/port extraction (LogSource subsystem).
-    # TRANSITIONAL: app-layer ORM — see architecture audit 2026-08; burn down.
-    ("integrations", "application/log_source_service.py"),
-    ("integrations", "application/log_ingest_service.py"),
-    ("integrations", "application/log_pattern_analyzer_service.py"),
     # agents — orchestrator/services/handlers read Agent/DeepRun/Task/
     # Workspace/AITeammateProfile ORM inline; pending port extraction.
     # TRANSITIONAL: app-layer ORM — see architecture audit 2026-08; burn down.

@@ -71,19 +71,15 @@ def _s3_config_from_connection(connection) -> dict:
     assume-role identity (management account / role / ExternalId). A transitional
     fallback to the deprecated ``trail_s3_*`` fields keeps envs that predate the
     seed migration working; it is removed once every env is migrated.
-    """
-    from infrastructure.persistence.integrations.models import WorkspaceLogSource
 
-    source = (
-        WorkspaceLogSource.objects.filter(
-            workspace_id=connection.workspace_id,
-            kind=WorkspaceLogSource.Kind.S3,
-            status=WorkspaceLogSource.Status.ACTIVE,
-            config__aws_connection_id=str(connection.id),
-        )
-        .order_by("created_at")
-        .first()
+    The active-source lookup goes through the ``LogSourceRepository`` so this
+    application service stays ORM-free (the repository is the only ORM slot).
+    """
+    from components.integrations.infrastructure.repositories.log_source_repository import (
+        LogSourceRepository,
     )
+
+    source = LogSourceRepository().active_s3_source_for_connection(connection)
     return s3_adapter_config(connection, source)
 
 
@@ -136,15 +132,15 @@ def scan_connection(connection, *, max_objects: int = 20, only_new: bool = True)
 
     ``only_new`` advances the IngestCheckpoint so subsequent runs skip already-
     processed keys (the Celery path). Set False for an ad-hoc full re-scan.
+    The cursor is read/advanced through the ``IngestCheckpointRepository`` so
+    this service stays ORM-free.
     """
-    from infrastructure.persistence.integrations.models import IngestCheckpoint
-
-    checkpoint, _ = IngestCheckpoint.objects.get_or_create(
-        connection=connection,
-        account_id=connection.management_account_id,
-        region="",
-        channel=IngestCheckpoint.Channel.S3_LIST,
+    from components.integrations.infrastructure.repositories.ingest_checkpoint_repository import (
+        IngestCheckpointRepository,
     )
+
+    checkpoint_repo = IngestCheckpointRepository()
+    checkpoint = checkpoint_repo.get_or_create_s3_list(connection)
     after = checkpoint.last_object_key if only_new else ""
 
     window = read_source_window(connection, max_objects=max_objects, after=after)
@@ -181,10 +177,12 @@ def scan_connection(connection, *, max_objects: int = 20, only_new: bool = True)
             logger.exception("log_metrics_aggregation_failed connection_id=%s", connection.id)
 
     if only_new and result.newest_key:
-        checkpoint.last_object_key = result.newest_key
-        checkpoint.objects_processed += result.objects_scanned
-        checkpoint.events_processed += result.records_parsed
-        checkpoint.save()
+        checkpoint_repo.advance(
+            checkpoint,
+            last_object_key=result.newest_key,
+            objects_processed=result.objects_scanned,
+            events_processed=result.records_parsed,
+        )
 
     logger.info(
         "logwatch_scan connection_id=%s objects=%s records=%s errors=%s",
@@ -245,15 +243,14 @@ def scan_workspace_for_errors(workspace_id, *, max_objects: int = 20, only_new: 
     agents-context detector importing only ``integrations.application`` (never
     integrations persistence), respecting the bounded-context boundary. Returns
     ``[]`` when no source is connected (a workspace with no integration simply
-    has nothing to detect).
+    has nothing to detect). The connection is resolved through the
+    ``AwsConnectionRepository`` so this service stays ORM-free.
     """
-    from infrastructure.persistence.integrations.models import AwsOrganizationConnection
-
-    conn = (
-        AwsOrganizationConnection.objects.filter(workspace_id=workspace_id, status="connected")
-        .order_by("-created_at")
-        .first()
+    from components.integrations.infrastructure.repositories.aws_connection_repository import (
+        AwsConnectionRepository,
     )
+
+    conn = AwsConnectionRepository().latest_connected_for_workspace(workspace_id)
     if conn is None:
         return []
 

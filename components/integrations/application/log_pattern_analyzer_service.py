@@ -26,7 +26,6 @@ import hashlib
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 
 from components.integrations.application.log_ingest_service import read_source_window
 
@@ -177,15 +176,18 @@ def aggregate_workspace_log_patterns(
     dedupes repeat cards for the same over-scheduled task.
     """
 
-    from infrastructure.persistence.integrations.models import AwsOrganizationConnection, LogPatternRollup
-
-    conn = (
-        AwsOrganizationConnection.objects.filter(workspace_id=workspace_id, status="connected")
-        .order_by("-created_at")
-        .first()
+    from components.integrations.infrastructure.repositories.aws_connection_repository import (
+        AwsConnectionRepository,
     )
+    from components.integrations.infrastructure.repositories.log_pattern_rollup_repository import (
+        LogPatternRollupRepository,
+    )
+
+    conn = AwsConnectionRepository().latest_connected_for_workspace(workspace_id)
     if conn is None:
         return []
+
+    rollup_repo = LogPatternRollupRepository()
 
     # 1) Deterministically count this window's signatures.
     counts: dict[str, int] = {}
@@ -204,30 +206,29 @@ def aggregate_workspace_log_patterns(
     findings: list[OptimizationFinding] = []
     for sig, window_count in counts.items():
         m = meta[sig]
-        rollup, _created = LogPatternRollup.objects.get_or_create(
+        rollup = rollup_repo.get_or_create(
             connection=conn,
             signature=sig,
-            defaults={
-                "workspace_id": workspace_id,
-                "service": m["service"],
-                "kind": m["kind"],
-                "sample_message": m["sample"],
-            },
+            workspace_id=workspace_id,
+            service=m["service"],
+            kind=m["kind"],
+            sample_message=m["sample"],
         )
-        rollup.total_count += window_count
-        rollup.last_window_count = window_count
-        rollup.peak_window_count = max(rollup.peak_window_count, window_count)
-        rollup.runs_observed += 1
-        rollup.kind = m["kind"]
-        rollup.service = m["service"]
-        if not rollup.sample_message:
-            rollup.sample_message = m["sample"]
-
+        # Project the post-fold ``runs_observed`` (record_window increments it) so
+        # the "sustained across runs" decision is made before the write, exactly
+        # as before — then hand the decision back to the repository to persist.
+        runs_after = rollup.runs_observed + 1
         threshold = _threshold_for(m["kind"])
-        is_candidate = window_count >= threshold and rollup.runs_observed >= min_runs
-        if is_candidate:
-            rollup.last_flagged_at = datetime.now(UTC)
-        rollup.save()
+        is_candidate = window_count >= threshold and runs_after >= min_runs
+
+        rollup = rollup_repo.record_window(
+            rollup,
+            window_count=window_count,
+            kind=m["kind"],
+            service=m["service"],
+            sample_message=m["sample"],
+            flagged=is_candidate,
+        )
 
         if not is_candidate:
             continue
