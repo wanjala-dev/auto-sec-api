@@ -64,3 +64,19 @@ class ProjectProvider:
         )
 
         return RecordFindingDraftPrUseCase(port=OrmRecordFindingDraftPrRepository())
+
+    @staticmethod
+    def build_task_lookup_port() -> TaskLookupPort:
+        from components.project.infrastructure.repositories.task_lookup_repository import (
+            OrmTaskLookupRepository,
+        )
+
+        return OrmTaskLookupRepository()
+
+    @staticmethod
+    def build_posture_facts_port() -> PostureFactsPort:
+        from components.project.infrastructure.repositories.posture_facts_repository import (
+            OrmPostureFactsRepository,
+        )
+
+        return OrmPostureFactsRepository()
