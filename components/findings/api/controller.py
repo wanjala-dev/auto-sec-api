@@ -15,45 +15,10 @@ from rest_framework.views import APIView
 from components.membership.api.permissions import IsWorkspaceOwner
 
 
-class SampleDataView(APIView):
-    """DEPRECATED (ADR 0011): superseded by ``SampleDataModeView`` (owner-gated flag toggle).
-    Kept temporarily so the onboarding "explore with sample data" button keeps working until
-    the frontend is rewired; removed once it is. POST seeds / DELETE clears the sample findings;
-    rows are source-prefixed ``sample.`` and seeding is guarded to workspaces with no real findings."""
-
-    permission_classes = (permissions.IsAuthenticated,)
-    name = "findings-sample-data"
-
-    def _guard(self, request, workspace_id):
-        from components.findings.infrastructure.services.workspace_access import is_workspace_member
-
-        return is_workspace_member(user=request.user, workspace_id=workspace_id)
-
-    def post(self, request, workspace_id):
-        from django.utils import timezone
-
-        from components.findings.application.providers.finding_provider import FindingProvider
-
-        if not self._guard(request, workspace_id):
-            return Response({"success": False, "error": "forbidden"}, status=403)
-        result = FindingProvider.build_seed_sample_data_use_case().execute(workspace_id, now=timezone.now())
-        return Response({"success": True, "data": result})
-
-    def delete(self, request, workspace_id):
-        from django.utils import timezone
-
-        from components.findings.application.providers.finding_provider import FindingProvider
-
-        if not self._guard(request, workspace_id):
-            return Response({"success": False, "error": "forbidden"}, status=403)
-        result = FindingProvider.build_clear_sample_data_use_case().execute(workspace_id, now=timezone.now())
-        return Response({"success": True, "data": result})
-
-
 class SampleDataModeView(APIView):
     """Owner-only toggle for per-workspace sample-data mode (ADR 0011). ``POST {enabled: bool}``
     flips the ``feature.sample_data_mode`` flag (the demo-mode SSOT + lever) and seeds/clears the
-    sample dataset. This is the Settings control that replaces the member-accessible SampleDataView."""
+    sample dataset. This is the Settings control for sample-data mode."""
 
     permission_classes = (permissions.IsAuthenticated, IsWorkspaceOwner)
     name = "findings-sample-data-mode"
