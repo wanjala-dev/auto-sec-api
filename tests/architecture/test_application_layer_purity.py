@@ -86,6 +86,11 @@ _ORM_FREE_ALLOWLIST: set[tuple[str, str]] = {
     # Workspace/AITeammateProfile ORM inline; pending port extraction.
     # TRANSITIONAL: app-layer ORM — see architecture audit 2026-08; burn down.
     ("agents", "application/facades/ai_teammate_facade.py"),
+    # ai_governance_service: the CROSS-context reads (project.Task HITL ledger,
+    # integrations.GitHubConnection credential surface, workspaces.Workspace
+    # kill-switch toggle) are now routed through ports (PR-6). Only its OWN
+    # context's ai.* reads (DeepRun/DeepRunLog/Agent/AITeammateProfile) remain —
+    # the type-C same-context burndown tracked under PR-10. Entry kept for those.
     ("agents", "application/services/ai_governance_service.py"),
     ("agents", "application/services/detector_cycle.py"),
     ("agents", "application/services/execution_cost_tracker.py"),
@@ -99,10 +104,6 @@ _ORM_FREE_ALLOWLIST: set[tuple[str, str]] = {
     # 2026-08.
     ("agents", "application/services/posture_dashboard_service.py"),
     ("agents", "application/services/posture_service.py"),
-    # workflow — findings facade reads workflow ORM inline; pending port
-    # extraction.
-    # TRANSITIONAL: app-layer ORM — see architecture audit 2026-08; burn down.
-    ("workflow", "application/facades/ai_findings_workflow_facade.py"),
 }
 
 
