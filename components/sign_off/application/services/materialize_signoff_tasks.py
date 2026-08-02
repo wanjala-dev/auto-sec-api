@@ -27,21 +27,31 @@ sign-off endpoint the artifact leaves the pending set, and the next
 materializer cycle moves its task. The periodic reconcile is the safety
 net.
 
-Architecture note: this is a sign-off *application service*. Reuse is the
-rule — it calls the sanctioned agents entry points
-(``ensure_agents_board``, ``persist_finding_as_task``) and the kernel
-query (``list_pending_sign_offs``) + registry (``get_state``). It reads
-the ``project.Task`` ORM directly for the reconcile move (there is no
-sanctioned "move task" use case to reuse); ORM access from the agents
-application layer is the established pattern here (see
-``components/agents/application/services/detector_cycle.py``). It never
-imports another context's *infrastructure adapters*.
+Architecture note: this is a sign-off *application service* and stays
+ORM-free. Reuse is the rule — it calls the sanctioned agents entry
+points (``ensure_agents_board``, ``persist_finding_as_task``), the kernel
+query (``list_pending_sign_offs``) + registry (``get_state``), and — for
+the reconcile move — ``project``'s own ``UpdateTaskUseCase`` (via
+``ProjectProvider``), which sets the terminal column + status stamp in a
+single sanctioned call (same-board column move + status). The three
+cross-context READS it needs (the ``Workspace`` row, the AI-agents
+workspace ids, and the existing sign-off ``Task`` rows) go through the
+sign-off-owned :class:`SignOffBoardPort` (ORM adapter in
+``infrastructure/adapters/``), so this service never imports another
+context's persistence models or infrastructure adapters.
 """
 
 from __future__ import annotations
 
 import logging
 
+from components.sign_off.application.ports.sign_off_board_port import (
+    SignOffBoardPort,
+    SignOffTaskRef,
+)
+from components.sign_off.application.providers.sign_off_board_provider import (
+    get_sign_off_board_port,
+)
 from components.sign_off.application.providers.sign_off_registry_provider import (
     SignOffRegistry,
     get_sign_off_registry,
@@ -61,6 +71,13 @@ logger = logging.getLogger(__name__)
 SIGN_OFF_SOURCE_TYPE = "ai.sign_off_pending"
 AGENT_TYPE = "sign_off_reviewer"
 DETECTOR_KEY = "sign_off_queue"
+
+# Terminal task statuses mirrored from ``project.Task`` (DONE / ARCHIVED).
+# Kept as string literals so this application service never imports the
+# ``project`` ORM — the update is applied via ``UpdateTaskUseCase``, whose
+# serializer validates these against ``Task.CHOICES_STATUS``.
+_STATUS_DONE = "done"
+_STATUS_ARCHIVED = "archived"
 
 # Risk band → 0-100 impact score. RED items sort to the top of the board.
 _BAND_IMPACT: dict[RiskBand, int] = {
@@ -113,6 +130,7 @@ def materialize_workspace_signoff_tasks(
     workspace_id: str,
     *,
     registry: SignOffRegistry | None = None,
+    board_port: SignOffBoardPort | None = None,
 ) -> dict[str, int]:
     """Sync one workspace's pending-sign-off queue onto its Agents board.
 
@@ -120,8 +138,6 @@ def materialize_workspace_signoff_tasks(
     idempotent replays are not counted), ``reconciled_accepted``,
     ``reconciled_dismissed``, and ``reconcile_skipped``.
     """
-    from infrastructure.persistence.workspaces.models import Workspace
-
     from components.agents.application.facades.ai_teammate_facade import (
         SUGGESTED,
         ensure_agents_board,
@@ -131,12 +147,11 @@ def materialize_workspace_signoff_tasks(
     )
 
     registry = registry or get_sign_off_registry()
+    board_port = board_port or get_sign_off_board_port()
 
-    workspace = Workspace.objects.filter(id=workspace_id).first()
+    workspace = board_port.get_workspace(workspace_id)
     if workspace is None:
-        logger.warning(
-            "signoff_materialize_workspace_missing workspace_id=%s", workspace_id
-        )
+        logger.warning("signoff_materialize_workspace_missing workspace_id=%s", workspace_id)
         return {
             "created": 0,
             "reconciled_accepted": 0,
@@ -150,9 +165,7 @@ def materialize_workspace_signoff_tasks(
     owner_id = str(workspace.workspace_owner_id) if workspace.workspace_owner_id else None
 
     pending = list_pending_sign_offs(str(workspace_id), registry=registry)
-    pending_refs: set[tuple[str, str]] = {
-        (item.artifact_type, str(item.artifact_id)) for item in pending
-    }
+    pending_refs: set[tuple[str, str]] = {(item.artifact_type, str(item.artifact_id)) for item in pending}
 
     # ── Upsert: pending item → Suggested-column card ────────────────────
     created = 0
@@ -188,9 +201,10 @@ def materialize_workspace_signoff_tasks(
         except Exception:
             # One bad item must not blank the rest of this workspace's sweep.
             logger.exception(
-                "signoff_materialize_upsert_failed workspace_id=%s "
-                "artifact_type=%s artifact_id=%s",
-                workspace_id, item.artifact_type, item.artifact_id,
+                "signoff_materialize_upsert_failed workspace_id=%s artifact_type=%s artifact_id=%s",
+                workspace_id,
+                item.artifact_type,
+                item.artifact_id,
             )
             continue
         if task_id is not None:
@@ -201,15 +215,20 @@ def materialize_workspace_signoff_tasks(
         workspace_id=str(workspace_id),
         board=board,
         registry=registry,
+        board_port=board_port,
         pending_refs=pending_refs,
+        ai_user_id=ai_user_id,
     )
 
     result = {"created": created, **reconciled}
     logger.info(
         "signoff_materialize_workspace_done workspace_id=%s created=%s "
         "reconciled_accepted=%s reconciled_dismissed=%s reconcile_skipped=%s",
-        workspace_id, created, result["reconciled_accepted"],
-        result["reconciled_dismissed"], result["reconcile_skipped"],
+        workspace_id,
+        created,
+        result["reconciled_accepted"],
+        result["reconciled_dismissed"],
+        result["reconcile_skipped"],
     )
     return result
 
@@ -219,33 +238,43 @@ def _reconcile_terminal_tasks(
     workspace_id: str,
     board,
     registry: SignOffRegistry,
+    board_port: SignOffBoardPort,
     pending_refs: set[tuple[str, str]],
+    ai_user_id: str,
 ) -> dict[str, int]:
     """Move sign-off tasks whose artifact left the pending set to a terminal
-    column matching the artifact's final review state. Idempotent."""
-    from infrastructure.persistence.project.models import Task
+    column matching the artifact's final review state. Idempotent.
 
+    The move + status stamp go through ``project``'s ``UpdateTaskUseCase`` —
+    a same-board column move (Suggested → Accepted/Dismissed on this workspace's
+    own Agents board) plus the terminal status — so the sign-off service never
+    writes ``project.Task`` directly. Existing tasks are read through the
+    sign-off board port. The AI user (the Agents team's creator, ``ai_user_id``)
+    is the actor, so the use case's membership check passes.
+    """
     from components.agents.application.facades.ai_teammate_facade import (
         ACCEPTED,
         DISMISSED,
     )
+    from components.project.application.ports.update_task_port import UpdateTaskCommand
+    from components.project.application.providers.project_provider import ProjectProvider
 
     accepted_col = board.column(ACCEPTED)
     dismissed_col = board.column(DISMISSED)
+    update_task = ProjectProvider.build_update_task_use_case()
 
     reconciled_accepted = 0
     reconciled_dismissed = 0
     reconcile_skipped = 0
 
-    existing = Task.objects.filter(
+    existing: list[SignOffTaskRef] = board_port.list_signoff_tasks(
         workspace_id=workspace_id,
         source_type=SIGN_OFF_SOURCE_TYPE,
-    ).select_related("column")
+    )
 
-    for task in existing.iterator(chunk_size=500):
-        context = (task.metadata or {}).get("context") or {}
-        artifact_type = context.get("artifact_type")
-        artifact_id = context.get("artifact_id")
+    for task in existing:
+        artifact_type = task.artifact_type
+        artifact_id = task.artifact_id
         if not artifact_type or not artifact_id:
             reconcile_skipped += 1
             continue
@@ -259,38 +288,59 @@ def _reconcile_terminal_tasks(
         except Exception:
             # Artifact deleted / adapter error — don't thrash the card.
             logger.exception(
-                "signoff_reconcile_state_lookup_failed workspace_id=%s "
-                "artifact_type=%s artifact_id=%s",
-                workspace_id, artifact_type, artifact_id,
+                "signoff_reconcile_state_lookup_failed workspace_id=%s artifact_type=%s artifact_id=%s",
+                workspace_id,
+                artifact_type,
+                artifact_id,
             )
             reconcile_skipped += 1
             continue
 
         if state == ReviewState.APPROVED:
-            target_col, target_status = accepted_col, Task.DONE
+            target_col, target_status = accepted_col, _STATUS_DONE
         elif state == ReviewState.REJECTED:
-            target_col, target_status = dismissed_col, Task.ARCHIVED
+            target_col, target_status = dismissed_col, _STATUS_ARCHIVED
         else:
             # PENDING / CHANGES_REQUESTED but not in the pending set (e.g.
             # a transient adapter hiccup during list_pending). Leave it.
             reconcile_skipped += 1
             continue
 
-        # Idempotent: already in the right column → no write.
-        if task.column_id == target_col.id and task.status == target_status:
+        # Idempotent: already in the right column + status → no write.
+        if task.column_id == str(target_col.id) and task.status == target_status:
             continue
 
-        task.column = target_col
-        task.status = target_status
-        task.save(update_fields=["column", "status", "updated_at"])
+        try:
+            update_task.execute(
+                command=UpdateTaskCommand(
+                    task_id=task.task_id,
+                    user_id=ai_user_id,
+                    data={"column": str(target_col.id), "status": target_status},
+                )
+            )
+        except Exception:
+            # One bad card must not blank the rest of this workspace's sweep.
+            logger.exception(
+                "signoff_reconcile_move_failed workspace_id=%s task_id=%s artifact_type=%s artifact_id=%s",
+                workspace_id,
+                task.task_id,
+                artifact_type,
+                artifact_id,
+            )
+            reconcile_skipped += 1
+            continue
+
         if state == ReviewState.APPROVED:
             reconciled_accepted += 1
         else:
             reconciled_dismissed += 1
         logger.info(
-            "signoff_reconcile_task_moved workspace_id=%s task_id=%s "
-            "artifact_type=%s artifact_id=%s state=%s",
-            workspace_id, task.id, artifact_type, artifact_id, state.value,
+            "signoff_reconcile_task_moved workspace_id=%s task_id=%s artifact_type=%s artifact_id=%s state=%s",
+            workspace_id,
+            task.task_id,
+            artifact_type,
+            artifact_id,
+            state.value,
         )
 
     return {
@@ -303,6 +353,7 @@ def _reconcile_terminal_tasks(
 def materialize_all_pending_signoff_tasks(
     *,
     registry: SignOffRegistry | None = None,
+    board_port: SignOffBoardPort | None = None,
 ) -> dict[str, int]:
     """Sweep every workspace that has an Agents team, materializing its
     pending-sign-off queue onto the board.
@@ -310,9 +361,8 @@ def materialize_all_pending_signoff_tasks(
     Per-workspace failures are caught and logged — one broken workspace
     never halts the sweep (the one legitimate log-and-continue).
     """
-    from infrastructure.persistence.team.models import Team
-
     registry = registry or get_sign_off_registry()
+    board_port = board_port or get_sign_off_board_port()
 
     totals = {
         "workspaces": 0,
@@ -323,19 +373,12 @@ def materialize_all_pending_signoff_tasks(
         "errors": 0,
     }
 
-    workspace_ids = (
-        Team.objects.filter(kind=Team.Kind.AI_AGENTS, status=Team.ACTIVE)
-        .values_list("workspace_id", flat=True)
-        .distinct()
-    )
-    for workspace_id in workspace_ids.iterator(chunk_size=500):
+    for workspace_id in board_port.list_agents_workspace_ids():
         if workspace_id is None:
             continue
         totals["workspaces"] += 1
         try:
-            result = materialize_workspace_signoff_tasks(
-                str(workspace_id), registry=registry
-            )
+            result = materialize_workspace_signoff_tasks(str(workspace_id), registry=registry, board_port=board_port)
         except Exception:
             totals["errors"] += 1
             logger.exception(
@@ -352,7 +395,11 @@ def materialize_all_pending_signoff_tasks(
         "signoff_materialize_sweep_done workspaces=%s created=%s "
         "reconciled_accepted=%s reconciled_dismissed=%s reconcile_skipped=%s "
         "errors=%s",
-        totals["workspaces"], totals["created"], totals["reconciled_accepted"],
-        totals["reconciled_dismissed"], totals["reconcile_skipped"], totals["errors"],
+        totals["workspaces"],
+        totals["created"],
+        totals["reconciled_accepted"],
+        totals["reconciled_dismissed"],
+        totals["reconcile_skipped"],
+        totals["errors"],
     )
     return totals
