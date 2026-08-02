@@ -5,8 +5,14 @@ toggle stops the scheduled detector fan-out (``iter_enabled_seeds``), the
 entitlement gate (``resolve_agent_entitlement`` → ``workspace_ai_disabled``)
 and therefore chat, deep runs and async specialist dispatch. This use case
 makes the flip first-class: owner/admin-gated at the endpoint, a mandatory
-typed reason, and an immutable audit entry (actor + reason + timestamp)
-written through the audit context's application provider.
+typed reason, and an immutable audit entry (actor + reason + timestamp).
+
+``Workspace`` is the *workspace* context's data, so agents does not write it
+here (architecture-manifesto Rule 2 / architecture-skill C2 — a component never
+changes data it does not own). The flip + its field-change audit are delegated
+through :class:`WorkspaceAiTogglePort` to the workspace context, which owns the
+write. This use case keeps the governance policy — the mandatory reason, the
+boolean guard, and the kill-switch-status read the endpoint returns.
 
 Deliberately NOT an agent tool — an AI that can disable or re-enable its own
 containment control defeats the control. The read side lives in
@@ -18,7 +24,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from components.shared_kernel.domain.errors import NotFoundError, ValidationError
+from components.agents.application.ports.workspace_ai_toggle_port import WorkspaceAiTogglePort
+from components.shared_kernel.domain.errors import ValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +35,9 @@ _MAX_REASON_LENGTH = 500
 class SetAiKillSwitchUseCase:
     """Flip the workspace AI kill switch, audited, and return the new status."""
 
+    def __init__(self, workspace_ai_toggle: WorkspaceAiTogglePort) -> None:
+        self._workspace_ai_toggle = workspace_ai_toggle
+
     def execute(
         self,
         *,
@@ -36,8 +46,6 @@ class SetAiKillSwitchUseCase:
         actor: Any,
         reason: str,
     ) -> dict[str, Any]:
-        from infrastructure.persistence.workspaces.models import Workspace
-
         reason = (reason or "").strip()
         if not reason:
             raise ValidationError("A reason is required to flip the AI kill switch.")
@@ -46,48 +54,22 @@ class SetAiKillSwitchUseCase:
         if not isinstance(enabled, bool):
             raise ValidationError("enabled must be a boolean.")
 
-        queryset = getattr(Workspace, "_base_manager", None) or Workspace.objects
-        workspace = queryset.filter(id=str(workspace_id)).first()
-        if workspace is None:
-            raise NotFoundError(f"Workspace {workspace_id} not found")
-
-        previous = bool(workspace.ai_teammate_enabled)
-        if previous != enabled:
-            workspace.ai_teammate_enabled = enabled
-            workspace.save(update_fields=["ai_teammate_enabled"])
-
-        # Audit through the audit context's application provider (never its
-        # infrastructure directly). Written even for a no-op request? No —
-        # the audit facade suppresses identical-value writes itself, so a
-        # repeat click never fabricates a second "flip" in the record.
-        try:
-            from components.audit.application.providers.audit_log_provider import (
-                get_audit_log_provider,
-            )
-
-            get_audit_log_provider().log_field_change(
-                instance=workspace,
-                field_name="ai_teammate_enabled",
-                previous_value=previous,
-                new_value=enabled,
-                actor=actor,
-                reason=reason,
-            )
-        except Exception:
-            # The flip itself must not be lost to an audit hiccup, but a
-            # silent audit gap is a governance defect — log loudly.
-            logger.exception(
-                "ai_kill_switch audit write failed workspace_id=%s enabled=%s actor_id=%s",
-                workspace_id,
-                enabled,
-                getattr(actor, "id", None),
-            )
+        # Delegate the flip + its field-change audit to the owning (workspace)
+        # context. Raises NotFoundError when the workspace does not exist. The
+        # audit facade suppresses identical-value writes itself, so a repeat
+        # click never fabricates a second "flip" in the record.
+        outcome = self._workspace_ai_toggle.set_ai_enabled(
+            workspace_id=str(workspace_id),
+            enabled=enabled,
+            actor=actor,
+            reason=reason,
+        )
 
         logger.info(
             "ai_kill_switch flipped workspace_id=%s enabled=%s previous=%s actor_id=%s",
             workspace_id,
             enabled,
-            previous,
+            outcome.previous,
             getattr(actor, "id", None),
         )
 
