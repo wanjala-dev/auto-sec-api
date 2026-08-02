@@ -68,6 +68,23 @@ class DraftPullRequest:
     base: str
 
 
+@dataclass(frozen=True)
+class PullRequestState:
+    """The live state of a pull request, read back from the host (ADR 0012 P4a).
+
+    Shaped to the remediation-reconciler's single question — *did this fix actually
+    land?* — not to any one host's PR object. ``merged`` is the load-bearing fact:
+    the remediation entry-gate treats "applied" as *merged*, never merely "open" or
+    "closed-without-merge". ``state`` is the host's coarse lifecycle token
+    (``"open"`` / ``"closed"``) surfaced for logging/branching; ``merged_at`` is the
+    ISO-8601 merge timestamp (empty when unmerged). A closed-but-unmerged PR is
+    ``merged=False`` — the fix was abandoned, so nothing is captured."""
+
+    merged: bool
+    state: str
+    merged_at: str = ""
+
+
 class VcsPort(ABC):
     """Driving-side contract for opening a draft PR against an allowlisted repo on a
     code host (GitHub / GitLab / Bitbucket)."""
@@ -118,3 +135,15 @@ class VcsPort(ABC):
     @abstractmethod
     def open_draft_pr(self, repo: str, head: str, base: str, title: str, body: str) -> DraftPullRequest:
         """Open a DRAFT pull request ``head`` → ``base``."""
+
+    @abstractmethod
+    def get_pull_request(self, repo: str, pr_ref: int | str) -> PullRequestState:
+        """Read back the live state of pull request ``pr_ref`` in ``repo``.
+
+        ``pr_ref`` is the host's PR number (an ``int`` or its string form). Returns
+        a :class:`PullRequestState` whose ``merged`` flag is verified against the
+        host (a real read, not a stored/blind flag) — the remediation reconciler
+        (ADR 0012 P4a) uses it to confirm a remediation draft PR actually *merged*
+        before its finding may enter the vetted corpus. Raises :class:`VcsApiError`
+        on an API failure (never swallowed); a missing PR (404) surfaces as such so
+        the caller can treat it as "cannot confirm merged" and skip."""

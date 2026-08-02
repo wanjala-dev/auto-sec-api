@@ -7,6 +7,7 @@ from components.project.application.use_cases.create_project_use_case import Cre
 from components.project.application.use_cases.create_task_use_case import CreateTaskUseCase
 from components.project.application.use_cases.move_task_to_board_use_case import MoveTaskToBoardUseCase
 from components.project.application.use_cases.record_finding_draft_pr_use_case import RecordFindingDraftPrUseCase
+from components.project.application.use_cases.resolve_finding_task_use_case import ResolveFindingTaskUseCase
 from components.project.application.use_cases.update_task_use_case import UpdateTaskUseCase
 
 
@@ -80,3 +81,11 @@ class ProjectProvider:
         )
 
         return OrmPostureFactsRepository()
+
+    @staticmethod
+    def build_resolve_finding_task_use_case() -> ResolveFindingTaskUseCase:
+        from components.project.infrastructure.repositories.resolve_finding_task_repository import (
+            OrmResolveFindingTaskRepository,
+        )
+
+        return ResolveFindingTaskUseCase(port=OrmResolveFindingTaskRepository())

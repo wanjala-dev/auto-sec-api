@@ -73,6 +73,34 @@ def get_open_draft_pr_use_case() -> OpenDraftPrUseCase:
     )
 
 
+def get_check_pr_merged_use_case():
+    """Composition root for the PR-merge check (ADR 0012 P4a) — wires the connection
+    resolver, the secret envelope, and the adapter registry. The remediation
+    reconciler resolves this through the integrations *application* layer and stays
+    free of any VCS infra/SDK import."""
+    from components.integrations.application.providers.secret_envelope_provider import decrypt_secret
+    from components.integrations.application.use_cases.check_pull_request_merged_use_case import (
+        CheckPullRequestMergedUseCase,
+    )
+
+    def _resolve_connection(workspace_id: str):
+        # Most-recent connected VcsConnection for the workspace wins — same
+        # resolution the draft-PR use case uses (a per-repo refinement is future work).
+        from infrastructure.persistence.integrations.models import VcsConnection
+
+        return (
+            VcsConnection.objects.filter(workspace_id=workspace_id, status=VcsConnection.Status.CONNECTED)
+            .order_by("-created_at")
+            .first()
+        )
+
+    return CheckPullRequestMergedUseCase(
+        resolve_connection=_resolve_connection,
+        decrypt=decrypt_secret,
+        resolve_adapter=get_vcs_adapter,
+    )
+
+
 def get_vcs_connection_service():
     """Composition root for the VcsConnection lifecycle service (ADR 0010 Phase 3) —
     wires the repository, the adapter registry (for verify), and the secret envelope.
