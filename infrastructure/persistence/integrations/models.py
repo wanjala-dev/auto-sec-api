@@ -357,6 +357,12 @@ class VcsConnection(models.Model):
         DISABLED = "disabled", "Disabled"
         ERROR = "error", "Error"
 
+    class CommitIdentity(models.TextChoices):
+        # Who the draft-PR commit is attributed to on the code host.
+        PAT_OWNER = "pat_owner", "PAT owner (default — no author/committer sent)"
+        OPERATOR = "operator", "The approving operator (their name + email)"
+        CUSTOM = "custom", "A fixed custom name + email"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name="vcs_connections")
     provider = models.CharField(max_length=16, choices=Provider.choices, default=Provider.GITHUB)
@@ -371,6 +377,13 @@ class VcsConnection(models.Model):
     # fetch) instead of auto-detecting. Blank = auto-detect from the repo tree. Applies
     # to all of this connection's allowlisted repos.
     repo_root = models.CharField(max_length=200, blank=True, default="")
+    # Who the draft-PR commit is attributed to. Default ``pat_owner`` preserves the
+    # historical behavior (no author/committer sent → GitHub attributes it to the PAT
+    # owner). ``operator`` stamps the approving human; ``custom`` uses the pinned
+    # name/email below. The name/email columns apply ONLY when ``custom``.
+    commit_identity = models.CharField(max_length=16, choices=CommitIdentity.choices, default=CommitIdentity.PAT_OWNER)
+    commit_author_name = models.CharField(max_length=120, blank=True, default="")
+    commit_author_email = models.EmailField(blank=True, default="")
     # Encrypted fine-grained PAT — Fernet envelope at the application layer (same
     # envelope as SinkConnector/GitHubConnection secrets); NEVER plaintext.
     token_ciphertext = models.TextField(blank=True, default="")

@@ -409,6 +409,9 @@ class VcsConnectionListCreateView(APIView):
             repo_allowlist=req.repo_allowlist,
             base_url=req.base_url,
             repo_root=req.repo_root,
+            commit_identity=req.commit_identity,
+            commit_author_name=req.commit_author_name,
+            commit_author_email=req.commit_author_email,
             token=req.token,
         )
         return Response(
@@ -436,6 +439,9 @@ class VcsConnectionDetailView(APIView):
             repo_allowlist=req.repo_allowlist,
             base_url=req.base_url,
             repo_root=req.repo_root,
+            commit_identity=req.commit_identity,
+            commit_author_name=req.commit_author_name,
+            commit_author_email=req.commit_author_email,
             status=req.status,
             token=req.token,
         )

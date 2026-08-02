@@ -102,6 +102,88 @@ class TestVcsConnectionCrud:
         )
         assert resp.data["data"]["repo_root"] == ""
 
+    def test_commit_identity_defaults_pat_owner(self, api_client, owner_ws):
+        # An unspecified commit_identity defaults to pat_owner (unchanged behavior).
+        ws, owner = owner_ws
+        api_client.force_authenticate(owner)
+        resp = api_client.post(
+            _base(ws.id),
+            {"provider": "github", "repo_allowlist": ["acme/app"], "token": "ghp_secret"},
+            format="json",
+        )
+        assert resp.status_code == 201, resp.data
+        assert resp.data["data"]["commit_identity"] == "pat_owner"
+        assert resp.data["data"]["commit_author_name"] == ""
+        assert resp.data["data"]["commit_author_email"] == ""
+
+    def test_commit_identity_custom_round_trips(self, api_client, owner_ws):
+        ws, owner = owner_ws
+        api_client.force_authenticate(owner)
+        created = api_client.post(
+            _base(ws.id),
+            {
+                "provider": "github",
+                "repo_allowlist": ["acme/app"],
+                "token": "ghp_secret",
+                "commit_identity": "custom",
+                "commit_author_name": "Auto-Sec Bot",
+                "commit_author_email": "bot@autosec.example",
+            },
+            format="json",
+        )
+        assert created.status_code == 201, created.data
+        body = created.data["data"]
+        assert body["commit_identity"] == "custom"
+        assert body["commit_author_name"] == "Auto-Sec Bot"
+        assert body["commit_author_email"] == "bot@autosec.example"
+
+        detail = f"{_base(ws.id)}{body['id']}/"
+        patched = api_client.patch(detail, {"commit_identity": "operator"}, format="json")
+        assert patched.status_code == 200, patched.data
+        assert patched.data["data"]["commit_identity"] == "operator"
+
+    def test_commit_identity_custom_requires_name_and_email(self, api_client, owner_ws):
+        ws, owner = owner_ws
+        api_client.force_authenticate(owner)
+        resp = api_client.post(
+            _base(ws.id),
+            {
+                "provider": "github",
+                "repo_allowlist": ["acme/app"],
+                "token": "ghp_secret",
+                "commit_identity": "custom",
+                "commit_author_name": "Auto-Sec Bot",
+                # email intentionally omitted
+            },
+            format="json",
+        )
+        assert resp.status_code == 400
+        assert "commit_identity" in resp.data["error"]
+
+    def test_commit_identity_rejects_unknown_value(self, api_client, owner_ws):
+        ws, owner = owner_ws
+        api_client.force_authenticate(owner)
+        resp = api_client.post(
+            _base(ws.id),
+            {"provider": "github", "token": "ghp_secret", "commit_identity": "bogus"},
+            format="json",
+        )
+        assert resp.status_code == 400
+        assert "commit_identity" in resp.data["error"]
+
+    def test_patch_to_custom_without_email_is_rejected(self, api_client, owner_ws):
+        ws, owner = owner_ws
+        api_client.force_authenticate(owner)
+        created = api_client.post(
+            _base(ws.id),
+            {"provider": "github", "repo_allowlist": ["acme/app"], "token": "ghp_secret"},
+            format="json",
+        ).data["data"]
+        detail = f"{_base(ws.id)}{created['id']}/"
+        resp = api_client.patch(detail, {"commit_identity": "custom"}, format="json")
+        assert resp.status_code == 400
+        assert "commit_identity" in resp.data["error"]
+
     def test_create_rejects_missing_token(self, api_client, owner_ws):
         ws, owner = owner_ws
         api_client.force_authenticate(owner)
@@ -229,7 +311,7 @@ class TestVcsConnectionVerify:
         assert resp.data["data"]["status"] == "error"
         last_error = resp.data["data"]["last_error"]
         assert "acme/secret" in last_error
-        assert "no access to" in last_error
+        assert "no access or unreachable" in last_error
         # The accessible repo is NOT listed as blocked.
         assert "acme/app" not in last_error
 

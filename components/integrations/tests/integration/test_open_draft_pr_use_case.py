@@ -124,13 +124,26 @@ def _triaged_finding(workspace, owner, team, column, *, needs_human=False, triag
     )
 
 
-def _connection(workspace, owner, *, allowlist=None, status=VcsConnection.Status.CONNECTED, repo_root=""):
+def _connection(
+    workspace,
+    owner,
+    *,
+    allowlist=None,
+    status=VcsConnection.Status.CONNECTED,
+    repo_root="",
+    commit_identity=VcsConnection.CommitIdentity.PAT_OWNER,
+    commit_author_name="",
+    commit_author_email="",
+):
     return VcsConnection.objects.create(
         workspace=workspace,
         provider=VcsConnection.Provider.GITHUB,
         name="GitHub",
         repo_allowlist=allowlist if allowlist is not None else [_REPO],
         repo_root=repo_root,
+        commit_identity=commit_identity,
+        commit_author_name=commit_author_name,
+        commit_author_email=commit_author_email,
         token_ciphertext=encrypt_secret("ghp_test_token"),
         status=status,
         created_by=owner,
@@ -225,6 +238,95 @@ class TestOpenDraftPrHappyPath:
         assert result.url == existing["url"]
         assert fake.calls == []  # ZERO GitHub API calls
         assert TaskComment.objects.filter(task=task).count() == 0  # no duplicate side effects
+
+
+class _BodyCapturingGitHub(_FakeGitHub):
+    """Like ``_FakeGitHub`` but also records the PUT-contents commit body so a test
+    can assert whether ``author``/``committer`` were sent."""
+
+    def __init__(self):
+        super().__init__()
+        self.commit_body: dict | None = None
+
+    def __call__(self, method, url, headers=None, json=None, params=None, timeout=None):
+        path = url.split("api.github.com")[-1]
+        if method == "PUT" and "/contents/" in path:
+            self.commit_body = json
+        return super().__call__(method, url, headers=headers, json=json, params=params, timeout=timeout)
+
+
+@pytest.mark.django_db
+class TestOpenDraftPrCommitIdentity:
+    """The commit's author/committer follows the connection's ``commit_identity``.
+
+    Default (``pat_owner``) sends NO author (GitHub → PAT owner); ``operator`` stamps
+    the approving user; ``custom`` stamps the stored name/email; an ``operator`` with
+    no email falls back to no author rather than failing the PR."""
+
+    def _run(self, workspace, owner, task):
+        fake = _BodyCapturingGitHub()
+        with mock.patch(_REQUESTS_PATH, new=fake), mock.patch(_PROPOSE_PATH, return_value=_PATCH):
+            _use_case().execute(workspace_id=str(workspace.id), task_id=str(task.id), performed_by=str(owner.id))
+        return fake
+
+    def test_pat_owner_sends_no_author(self, workspace_factory, team_factory):
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _triaged_finding(workspace, owner, team, column)
+        _connection(workspace, owner)  # default commit_identity = pat_owner
+        _capability_agent(workspace, owner)
+
+        fake = self._run(workspace, owner, task)
+        assert fake.commit_body is not None
+        assert "author" not in fake.commit_body
+        assert "committer" not in fake.commit_body
+
+    def test_custom_uses_stored_name_and_email(self, workspace_factory, team_factory):
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _triaged_finding(workspace, owner, team, column)
+        _connection(
+            workspace,
+            owner,
+            commit_identity=VcsConnection.CommitIdentity.CUSTOM,
+            commit_author_name="Auto-Sec Bot",
+            commit_author_email="bot@autosec.example",
+        )
+        _capability_agent(workspace, owner)
+
+        fake = self._run(workspace, owner, task)
+        assert fake.commit_body["author"] == {"name": "Auto-Sec Bot", "email": "bot@autosec.example"}
+        assert fake.commit_body["committer"] == {"name": "Auto-Sec Bot", "email": "bot@autosec.example"}
+
+    def test_operator_uses_performed_by_identity(self, workspace_factory, team_factory):
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _triaged_finding(workspace, owner, team, column)
+        _connection(workspace, owner, commit_identity=VcsConnection.CommitIdentity.OPERATOR)
+        _capability_agent(workspace, owner)
+
+        fake = self._run(workspace, owner, task)
+        author = fake.commit_body["author"]
+        expected_name = owner.get_full_name() or owner.username or owner.email
+        assert author["name"] == expected_name
+        assert author["email"] == owner.email
+        assert fake.commit_body["committer"] == author
+
+    def test_operator_missing_email_falls_back_to_no_author(self, workspace_factory, team_factory):
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _triaged_finding(workspace, owner, team, column)
+        _connection(workspace, owner, commit_identity=VcsConnection.CommitIdentity.OPERATOR)
+        _capability_agent(workspace, owner)
+
+        # The approving user's email is blank → attribution falls back to the PAT
+        # owner; the PR still opens (attribution never fails a PR).
+        with mock.patch(
+            "infrastructure.persistence.users.models.CustomUser.get_full_name", return_value="No Email User"
+        ):
+            owner.email = ""
+            owner.save(update_fields=["email"])
+            fake = self._run(workspace, owner, task)
+
+        assert fake.commit_body is not None
+        assert "author" not in fake.commit_body
+        assert "committer" not in fake.commit_body
 
 
 @pytest.mark.django_db
@@ -651,7 +753,7 @@ class TestOpenDraftPrMonorepoResolution:
                 return RepoFile(path=path, content=_OLD_FILE, sha="filesha456")
             raise VcsApiError("not found", status_code=404)
 
-        def _commit_file(self, repo, branch, path, new_content, message, file_sha):
+        def _commit_file(self, repo, branch, path, new_content, message, file_sha, author=None):
             from components.integrations.application.ports.vcs_port import CommittedFile
 
             committed["path"] = path
@@ -686,7 +788,7 @@ class TestOpenDraftPrMonorepoResolution:
         def _get_file(self, repo, path, ref):
             return RepoFile(path=path, content=_OLD_FILE, sha="filesha456")
 
-        def _commit_file(self, repo, branch, path, new_content, message, file_sha):
+        def _commit_file(self, repo, branch, path, new_content, message, file_sha, author=None):
             from components.integrations.application.ports.vcs_port import CommittedFile
 
             committed["path"] = path

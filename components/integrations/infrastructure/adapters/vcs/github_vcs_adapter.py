@@ -150,18 +150,33 @@ class GitHubVcsAdapter(VcsPort):
         )
 
     def commit_file(
-        self, repo: str, branch: str, path: str, new_content: str, message: str, file_sha: str
+        self,
+        repo: str,
+        branch: str,
+        path: str,
+        new_content: str,
+        message: str,
+        file_sha: str,
+        author: dict | None = None,
     ) -> CommittedFile:
         encoded = base64.b64encode(new_content.encode("utf-8")).decode("ascii")
+        body = {
+            "message": message,
+            "content": encoded,
+            "branch": branch,
+            "sha": file_sha,
+        }
+        # When an explicit identity is supplied, stamp BOTH author and committer so
+        # GitHub attributes the commit to it; when omitted, GitHub defaults to the
+        # PAT owner (the historical behavior). ``author`` is ``{"name", "email"}``.
+        if author and author.get("name") and author.get("email"):
+            identity = {"name": author["name"], "email": author["email"]}
+            body["author"] = identity
+            body["committer"] = identity
         data = self._request(
             "PUT",
             f"/repos/{repo}/contents/{path}",
-            json_body={
-                "message": message,
-                "content": encoded,
-                "branch": branch,
-                "sha": file_sha,
-            },
+            json_body=body,
         )
         commit_sha = (data.get("commit") or {}).get("sha") or ""
         return CommittedFile(path=path, commit_sha=commit_sha)

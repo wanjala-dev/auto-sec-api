@@ -17,6 +17,9 @@ class VcsConnectionResource:
     repo_allowlist: list
     base_url: str
     repo_root: str
+    commit_identity: str
+    commit_author_name: str
+    commit_author_email: str
     status: str
     has_token: bool
     last_verified_at: str | None
@@ -33,6 +36,10 @@ class VcsConnectionResource:
             repo_allowlist=connection.repo_allowlist or [],
             base_url=connection.base_url or "",
             repo_root=connection.repo_root or "",
+            # Commit-attribution config — name/email are NOT secret, safe to return.
+            commit_identity=connection.commit_identity,
+            commit_author_name=connection.commit_author_name or "",
+            commit_author_email=connection.commit_author_email or "",
             status=connection.status,
             has_token=bool(connection.token_ciphertext),
             last_verified_at=(connection.last_verified_at.isoformat() if connection.last_verified_at else None),
@@ -49,6 +56,9 @@ class VcsConnectionResource:
             "repo_allowlist": self.repo_allowlist,
             "base_url": self.base_url,
             "repo_root": self.repo_root,
+            "commit_identity": self.commit_identity,
+            "commit_author_name": self.commit_author_name,
+            "commit_author_email": self.commit_author_email,
             "status": self.status,
             "has_token": self.has_token,
             "last_verified_at": self.last_verified_at,
