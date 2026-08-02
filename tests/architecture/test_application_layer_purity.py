@@ -108,10 +108,6 @@ _ORM_FREE_ALLOWLIST: set[tuple[str, str]] = {
     ("content", "application/handlers/rag_index_writing_draft_handler.py"),
     ("content", "application/use_cases/dispatch_due_scheduled_newsletters_use_case.py"),
     ("content", "application/use_cases/generate_newsletter_use_case.py"),
-    # membership — permission service reads WorkspaceRole ORM inline; pending
-    # port extraction.
-    # TRANSITIONAL: app-layer ORM — see architecture audit 2026-08; burn down.
-    ("membership", "application/services/membership_permission_service.py"),
     # team — invite use cases read/write Invitation/CustomUser/Workspace-
     # Membership ORM inline; pending port extraction.
     # TRANSITIONAL: app-layer ORM — see architecture audit 2026-08; burn down.
