@@ -83,6 +83,20 @@ class RemediationEntry(models.Model):
             # idempotency / one-entry-per-fix lookups keyed on the source finding.
             models.Index(fields=["workspace", "finding_task_id"]),
         ]
+        constraints = [
+            # STRUCTURAL idempotency (ADR 0012 "one entry per fix"): the DB — not a
+            # check-then-save window — is the source of truth. At most ONE ACTIVE
+            # (non-revoked) entry per (workspace, finding_task_id). A concurrent
+            # second insert violates this and is caught as an idempotent no-op in
+            # the repository. Partial (condition=is_deleted=False) so revocation +
+            # re-capture of the same finding stays possible: a soft-deleted row does
+            # not block a fresh active one.
+            models.UniqueConstraint(
+                fields=["workspace", "finding_task_id"],
+                condition=models.Q(is_deleted=False),
+                name="uniq_active_remediation_per_finding",
+            ),
+        ]
         ordering = ["-created_at"]
 
     def __str__(self) -> str:

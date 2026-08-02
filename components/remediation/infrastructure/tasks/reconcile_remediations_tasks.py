@@ -27,21 +27,29 @@ from celery import shared_task
 
 logger = logging.getLogger(__name__)
 
-_LOG_WATCH_SOURCE = "ai.log_watch"
 _CHUNK = 200
 
 
 def _iter_candidate_tasks(workspace_id: str | None):
     """Yield board Tasks with an open remediation draft PR that are not yet resolved.
 
+    The candidate predicate is "**carries an open ``payload.draft_pr``**", regardless
+    of ``source_type`` — a draft PR is only ever opened on a routed finding
+    (``open_draft_pr`` stamps it), so "has a draft_pr" is the precise, COMPLETE set
+    of remediation candidates. Scoping to one source type (e.g. ``ai.log_watch``)
+    would silently drop cloud_posture / Trivy / container_security draft-PRs from
+    reconciliation — the completeness gap this generalization closes. It is also
+    boundary-clean: it needs no cross-context import of ``agents``' routable list.
+
     A persistence read of the ``project`` model (allowed — reading another context's
-    persistence is not importing its infrastructure). Filters in the DB where
-    possible (draft_pr present) and screens the resolved marker in Python (it lives
-    under two possible JSON keys), so a resolved finding is never re-processed.
+    persistence is not importing its infrastructure). The ``draft_pr`` presence is
+    filtered in the DB (a candidate-narrowing query, never a whole-table scan); the
+    resolved marker is screened in Python (it lives under two possible JSON keys),
+    so a resolved finding is never re-processed.
     """
     from infrastructure.persistence.project.models import Task
 
-    qs = Task.objects.filter(source_type=_LOG_WATCH_SOURCE, metadata__payload__draft_pr__isnull=False)
+    qs = Task.objects.filter(metadata__payload__draft_pr__isnull=False)
     if workspace_id is not None:
         qs = qs.filter(workspace_id=workspace_id)
     qs = qs.only("id", "workspace_id", "title", "metadata").order_by("id")

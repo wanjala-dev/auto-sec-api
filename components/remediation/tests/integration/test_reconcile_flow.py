@@ -51,8 +51,12 @@ def _board(workspace_factory, team_factory):
     return workspace, owner, team, column
 
 
-def _finding_task(workspace, owner, team, column):
-    """A triaged log-watch finding carrying an OPEN draft PR — not yet resolved."""
+def _finding_task(workspace, owner, team, column, *, source_type="ai.log_watch"):
+    """A triaged finding carrying an OPEN draft PR — not yet resolved.
+
+    ``source_type`` is parametrizable so we can prove the scan reconciles ANY
+    finding with a draft PR (cloud_posture / container_security / …), not only
+    log_watch (the completeness fix, review item 3)."""
     from infrastructure.persistence.project.models import Task
 
     metadata = {
@@ -76,7 +80,7 @@ def _finding_task(workspace, owner, team, column):
         column=column,
         created_by=owner,
         title="[FINDING] casing ImportError",
-        source_type="ai.log_watch",
+        source_type=source_type,
         metadata=metadata,
     )
 
@@ -198,3 +202,48 @@ class TestGateRefusalStillResolves:
         task.refresh_from_db()
         assert task.metadata["triage"]["status"] == "resolved"  # still resolved
         assert Row.objects.filter(workspace_id=ws.id).count() == 0  # but nothing admitted
+
+
+class TestCandidateScanIsSourceTypeAgnostic:
+    """Review item 3: the scan reconciles ANY finding with an open draft PR, not
+    only ``ai.log_watch`` — driving the REAL scan helper (``_candidates``), not an
+    injected candidate, so the query change itself is under test."""
+
+    def test_non_log_watch_finding_with_merged_pr_is_reconciled_and_captured(self, workspace_factory, team_factory):
+        from components.remediation.infrastructure.tasks.reconcile_remediations_tasks import _candidates
+        from infrastructure.persistence.remediation.models import RemediationEntry as Row
+
+        ws, owner, team, column = _board(workspace_factory, team_factory)
+        # A cloud_posture finding (NOT log_watch) carrying a draft PR — the class of
+        # finding the old source_type-scoped scan silently dropped.
+        task = _finding_task(ws, owner, team, column, source_type="ai.cloud_exposure")
+
+        # Drive the real scan → real reconcile use case (merge + sign-off faked).
+        result = _wire(merged=True, approved=True).execute(_candidates(str(ws.id)))
+
+        assert result.scanned == 1  # the scan SAW the non-log_watch finding
+        assert result.captured == 1
+        task.refresh_from_db()
+        assert task.metadata["triage"]["status"] == "resolved"
+        rows = list(Row.active.filter(workspace_id=ws.id))
+        assert len(rows) == 1
+        # The gate derives the entry's kind from the finding's real source_type.
+        assert rows[0].finding_kind == "cloud_exposure"
+        assert rows[0].source_type == "ai.cloud_exposure"
+
+    def test_scan_skips_findings_without_a_draft_pr(self, workspace_factory, team_factory):
+        # A finding with NO draft PR is not a remediation candidate → never scanned.
+        from components.remediation.infrastructure.tasks.reconcile_remediations_tasks import _candidates
+        from infrastructure.persistence.project.models import Task
+
+        ws, owner, team, column = _board(workspace_factory, team_factory)
+        Task.objects.create(
+            team=team,
+            workspace=ws,
+            column=column,
+            created_by=owner,
+            title="[FINDING] no PR yet",
+            source_type="ai.cloud_exposure",
+            metadata={"triage": {"status": "triaged"}, "payload": {"fingerprint": "fp"}},
+        )
+        assert list(_candidates(str(ws.id))) == []
