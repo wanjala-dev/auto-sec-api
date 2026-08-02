@@ -32,6 +32,23 @@ class NewsletterStorePort(Protocol):
         the document — server-written keys (``ai_provenance``) use this."""
         ...
 
+    def stamp_rag_indexed(
+        self,
+        *,
+        newsletter_id: UUID,
+        document_key: str,
+        indexed_at: datetime.datetime,
+    ) -> None:
+        """Record that this newsletter was indexed into the knowledge vector
+        store — stamps ``rag_indexed_at`` + ``rag_document_key`` on the
+        metadata JSON without touching the rest of the document.
+
+        Used by the ``on_newsletter_sent_index_rag`` handler; the RAG
+        backfill command reads the stamp to skip already-indexed rows.
+        No-op if the row is gone (indexing must not resurrect a deleted
+        newsletter)."""
+        ...
+
     def update_body(
         self,
         *,
