@@ -106,10 +106,6 @@ _ORM_FREE_ALLOWLIST: set[tuple[str, str]] = {
     # 2026-08.
     ("agents", "application/services/posture_dashboard_service.py"),
     ("agents", "application/services/posture_service.py"),
-    # workflow — findings facade reads workflow ORM inline; pending port
-    # extraction.
-    # TRANSITIONAL: app-layer ORM — see architecture audit 2026-08; burn down.
-    ("workflow", "application/facades/ai_findings_workflow_facade.py"),
 }
 
 
