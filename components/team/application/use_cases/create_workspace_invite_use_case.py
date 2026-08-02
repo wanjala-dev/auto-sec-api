@@ -15,6 +15,13 @@ a password, then activates the membership.
 
 Permission: only workspace owner or admin (RBAC role check). Persona is
 not consulted for permissions — see ADR 0002.
+
+Ownership boundaries (architecture-manifesto Rule 2 / architecture-skill C2/C3):
+the ``CustomUser``/``UserProfile`` write is owned by ``identity`` (via
+``InviteUserProvisioningPort``); the workspace validation + authorization +
+group-ownership reads are owned by ``workspace`` (via
+``WorkspaceInviteContextPort``); the ``Invitation`` write is own-context (via
+``InvitationStorePort``). This use case orchestrates them and holds no ORM.
 """
 
 from __future__ import annotations
@@ -24,23 +31,19 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from components.shared_kernel.application.transactional import atomic
+from components.team.application.ports.invitation_store_port import InvitationStorePort
+from components.team.application.ports.invite_notifier_port import InviteNotifierPort
+from components.team.application.ports.invite_user_provisioning_port import (
+    InviteUserProvisioningPort,
+)
+from components.team.application.ports.workspace_invite_context_port import (
+    WorkspaceInviteContextPort,
+)
 
 
 def _utc_now():
     """Stdlib replacement for ``django.utils.timezone.now`` (UTC, tz-aware)."""
     return datetime.now(UTC)
-
-
-def _ensure_aware(value):
-    """Stdlib replacement for ``django.utils.timezone.make_aware``."""
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value
-
-
-def _is_aware(value):
-    """Stdlib replacement for ``django.utils.timezone.is_aware``."""
-    return value.tzinfo is not None
 
 
 TEAM_ATTACHED_PERSONAS = frozenset({"contributor", "volunteer"})
@@ -91,16 +94,12 @@ class CreateWorkspaceInviteResult:
 class CreateWorkspaceInviteUseCase:
     """Create a magic-link invitation row for a workspace persona."""
 
-    def execute(self, command: CreateWorkspaceInviteCommand) -> CreateWorkspaceInviteResult:
-        # Local imports keep the use case Django-free at module load time.
-        from infrastructure.persistence.team.models import Invitation, Team
-        from infrastructure.persistence.users.models import CustomUser, UserProfile
-        from infrastructure.persistence.workspaces.models import (
-            Workspace,
-            WorkspaceGroup,
-            WorkspaceMembership,
-        )
+    invitations: InvitationStorePort
+    user_provisioning: InviteUserProvisioningPort
+    invite_context: WorkspaceInviteContextPort
+    notifier: InviteNotifierPort
 
+    def execute(self, command: CreateWorkspaceInviteCommand) -> CreateWorkspaceInviteResult:
         # Validate persona.
         if command.persona not in INVITABLE_PERSONAS:
             return CreateWorkspaceInviteResult(
@@ -121,42 +120,12 @@ class CreateWorkspaceInviteUseCase:
         # invitation carried — silently demoting workspace owners to
         # contributors. Reject up front so it never reaches accept.
         if command.inviter_user_id:
-            inviter = CustomUser.objects.filter(id=command.inviter_user_id).first()
-            inviter_email = (getattr(inviter, "email", "") or "").strip().lower()
+            inviter_email = self.invite_context.get_inviter_email(inviter_user_id=str(command.inviter_user_id))
             if inviter_email and inviter_email == email:
                 return CreateWorkspaceInviteResult(
                     error="You can't invite yourself to a workspace.",
                     status_code=400,
                 )
-
-        # Validate workspace.
-        workspace = Workspace.objects.filter(id=command.workspace_id).first()
-        if workspace is None:
-            return CreateWorkspaceInviteResult(
-                error="Workspace not found.",
-                status_code=404,
-            )
-
-        # Permission check — RBAC role only. Owner or admin (or staff/superuser).
-        is_authorized = command.inviter_is_staff or command.inviter_is_superuser
-        if not is_authorized:
-            if str(workspace.workspace_owner_id) == str(command.inviter_user_id):
-                is_authorized = True
-            else:
-                is_authorized = WorkspaceMembership.objects.filter(
-                    workspace_id=workspace.id,
-                    user_id=command.inviter_user_id,
-                    status=WorkspaceMembership.Status.ACTIVE,
-                    role__in=(
-                        WorkspaceMembership.Role.OWNER,
-                        WorkspaceMembership.Role.ADMIN,
-                    ),
-                ).exists()
-        if not is_authorized:
-            return CreateWorkspaceInviteResult(
-                error="Only workspace owners or admins can invite people.",
-                status_code=403,
-            )
 
         # The recipient should land on the experience matching the
         # access tier the inviter granted. When the inviter granted
@@ -175,183 +144,104 @@ class CreateWorkspaceInviteUseCase:
         if role in ("admin", "owner"):
             persona = "admin"
 
-        # Resolve team for team-attached personas. Uses the coerced
-        # persona so admin-coerced invites skip the team requirement.
-        team = None
-        if persona in TEAM_ATTACHED_PERSONAS:
-            if not command.team_id:
-                return CreateWorkspaceInviteResult(
-                    error=f"team_id is required for persona '{persona}'.",
-                    status_code=400,
-                )
-            team = Team.objects.filter(id=command.team_id, workspace=workspace).first()
-            if team is None:
-                return CreateWorkspaceInviteResult(
-                    error="Team not found in this workspace.",
-                    status_code=404,
-                )
+        team_required = persona in TEAM_ATTACHED_PERSONAS
+
+        # Validate the workspace, authorize the inviter, resolve the team (when
+        # a team_id was supplied), and validate permission-group ownership — all
+        # workspace-owned reads, delegated to the workspace context. The adapter
+        # returns raw facts only; the ORDERING of the resulting checks lives HERE
+        # and must match main exactly: workspace-404 → auth-403 → team_id-400 →
+        # team-not-found-404. (Moving the team_id/400 gate before auth would let
+        # an unauthorized caller — or one targeting a nonexistent workspace —
+        # get 400 instead of 403/404, an auth-path behaviour change.)
+        context = self.invite_context.resolve_invite_context(
+            workspace_id=str(command.workspace_id),
+            inviter_user_id=str(command.inviter_user_id) if command.inviter_user_id else None,
+            inviter_is_staff=command.inviter_is_staff,
+            inviter_is_superuser=command.inviter_is_superuser,
+            persona=persona,
+            team_required=team_required,
+            team_id=str(command.team_id) if command.team_id else None,
+            permission_group_ids=command.permission_group_ids,
+        )
+        if not context.workspace_found:
+            return CreateWorkspaceInviteResult(
+                error="Workspace not found.",
+                status_code=404,
+            )
+        if not context.authorized:
+            return CreateWorkspaceInviteResult(
+                error="Only workspace owners or admins can invite people.",
+                status_code=403,
+            )
+        if team_required and not command.team_id:
+            return CreateWorkspaceInviteResult(
+                error=f"team_id is required for persona '{persona}'.",
+                status_code=400,
+            )
+        if team_required and not context.team_found:
+            return CreateWorkspaceInviteResult(
+                error="Team not found in this workspace.",
+                status_code=404,
+            )
 
         token = secrets.token_hex(32)
-        # django.utils.timezone.now respects USE_TZ so the value we
-        # persist matches whatever shape Django expects on read-back.
         expires_at = _utc_now() + timedelta(hours=max(command.expires_in_hours, 1))
 
-        # Optional inviter-supplied profile data. We write these straight
-        # to the CustomUser + UserProfile (where they belong) rather than
-        # duplicating them on the Invitation row. The user record acts as
-        # the canonical home for display name + photo; the invitation just
-        # carries the magic-link token + workspace/persona/role context.
+        # Optional inviter-supplied profile data. Written to the CustomUser +
+        # UserProfile by the identity provisioning surface (where they belong).
         display_name = (command.display_name or "").strip()
         photo_url = (command.photo_url or "").strip()
 
-        # Optional permission groups to enroll the invitee into on accept.
-        # Validate they belong to the target workspace before parking them
-        # on the invitation row — otherwise the inviter could attach groups
-        # from another workspace they happen to know the IDs of.
-        validated_group_ids = []
-        if command.permission_group_ids:
-            valid_ids = set(
-                str(gid)
-                for gid in WorkspaceGroup.objects.filter(
-                    workspace_id=workspace.id,
-                    id__in=[str(gid) for gid in command.permission_group_ids],
-                ).values_list("id", flat=True)
-            )
-            validated_group_ids = [str(gid) for gid in command.permission_group_ids if str(gid) in valid_ids]
+        validated_group_ids = list(context.validated_group_ids or [])
 
         with atomic():
-            # Get-or-create a pending CustomUser for this email so the
-            # display name and photo land on the user record immediately.
-            # If the user already exists we never overwrite their existing
-            # name/photo — only fill blanks.
-            #
-            # ``is_contributor`` is only seeded True when the invitation
-            # actually carries the contributor persona. Previously this
-            # was hard-coded True, which silently flagged every admin /
-            # sponsor / auditor invite as a contributor and put them on
-            # the contributor sidebar after accept. The flag now means
-            # what it says: "this user has a contributor membership
-            # somewhere."
-            user, user_created = CustomUser.objects.get_or_create(
+            # Get-or-create the placeholder/established user (identity owns the
+            # write). ``is_contributor`` seeds True only for contributor
+            # invites so the flag stays honest.
+            provisioned = self.user_provisioning.provision_for_create(
                 email=email,
-                defaults={
-                    "username": email,
-                    "is_active": True,
-                    "is_verified": False,
-                    "is_onboard_complete": True,
-                    "is_contributor": persona == "contributor",
-                },
+                seed_is_contributor=persona == "contributor",
+                display_name=display_name,
+                photo_url=photo_url,
             )
-            # Brand-new placeholders must have an unusable password so
-            # ``has_usable_password()`` is a reliable signal for "this
-            # person already has an account they can log into". Django's
-            # default empty-string password counts as usable, which
-            # would otherwise misclassify every fresh invitee as an
-            # established user.
-            if user_created:
-                user.set_unusable_password()
-                user.save(update_fields=["password"])
-            # An "established" user is one that already has a usable
-            # password set — i.e. they signed up the normal way (or
-            # accepted a prior invite and chose a password). A user we
-            # just created, or one created by an earlier never-accepted
-            # invite, has an unusable password and counts as new. This
-            # signal drives the email template branch ("Accept invite"
-            # vs "Set password & sign in") and the in-app notification.
-            is_existing_user = (not user_created) and user.has_usable_password()
-            user_dirty_fields = []
-            if display_name:
-                pieces = display_name.split(maxsplit=1)
-                first = pieces[0]
-                last = pieces[1] if len(pieces) > 1 else ""
-                if not user.first_name:
-                    user.first_name = first
-                    user_dirty_fields.append("first_name")
-                if last and not user.last_name:
-                    user.last_name = last
-                    user_dirty_fields.append("last_name")
-            if user_dirty_fields:
-                user.save(update_fields=user_dirty_fields)
+            is_existing_user = provisioned.established
 
-            if photo_url:
-                profile, _ = UserProfile.objects.get_or_create(user=user)
-                if not profile.photo_url:
-                    profile.photo_url = photo_url[:120]
-                    profile.save(update_fields=["photo_url"])
-
-            invitation = Invitation.objects.create(
-                workspace=workspace,
-                team=team,
+            invitation = self.invitations.create(
+                workspace_id=str(command.workspace_id),
+                team_id=str(command.team_id) if (team_required and command.team_id) else None,
                 email=email,
                 code=token[:20],  # legacy short code mirrors the token prefix
                 token=token,
                 persona=persona,
                 role=role,
-                invited_by_id=command.inviter_user_id,
+                invited_by_id=str(command.inviter_user_id) if command.inviter_user_id else None,
                 expires_at=expires_at,
-                status=Invitation.INVITED,
                 permission_group_ids=validated_group_ids,
             )
 
         # Send the magic-link email. Best-effort — if SMTP is down or the
-        # template render fails we still return the token in the payload
-        # so admins can copy a link manually from the invitations tab.
-        inviter_user = None
-        if command.inviter_user_id:
-            inviter_user = CustomUser.objects.filter(id=command.inviter_user_id).first()
-        try:
-            from components.team.infrastructure.adapters.utilities import (
-                send_persona_invitation,
+        # template render fails we still return the token in the payload so
+        # admins can copy a link manually from the invitations tab.
+        self.notifier.send_invitation_email(
+            invitation_id=invitation.id,
+            inviter_user_id=str(command.inviter_user_id) if command.inviter_user_id else None,
+            is_existing_user=is_existing_user,
+        )
+
+        # In-app notification for established users. New users haven't got an
+        # account to land on yet; they only need the email.
+        if is_existing_user:
+            self.notifier.notify_existing_user(
+                invitation_id=invitation.id,
+                inviter_user_id=str(command.inviter_user_id) if command.inviter_user_id else None,
+                recipient_user_id=provisioned.user_id,
+                token=token,
             )
-
-            send_persona_invitation(
-                invitation,
-                inviter_user=inviter_user,
-                is_existing_user=is_existing_user,
-            )
-        except Exception:
-            import logging
-
-            logging.getLogger("invitations").exception(
-                "persona invite email failed for %s",
-                invitation.email,
-            )
-
-        # In-app notification for established users. New users haven't
-        # got an account to land on yet; they only need the email. We
-        # swallow notification failures because the email is the
-        # primary channel — bell-icon ping is just a nicety.
-        if is_existing_user and inviter_user is not None:
-            try:
-                from components.notifications.application.providers.notification_factory_provider import (
-                    get_notification_factory_provider,
-                )
-
-                get_notification_factory_provider().dispatch(
-                    actor=inviter_user,
-                    workspace=workspace,
-                    verb=f"invited you to join {workspace.workspace_name or 'a workspace'}",
-                    notification_type="workspace_invitation",
-                    recipients=[user],
-                    target=invitation,
-                    metadata={
-                        "invitation_id": str(invitation.id),
-                        "persona": invitation.persona,
-                        "role": invitation.role,
-                        "token": token,
-                    },
-                )
-            except Exception:
-                import logging
-
-                logging.getLogger("invitations").exception(
-                    "persona invite in-app notification failed for %s",
-                    invitation.email,
-                )
 
         return CreateWorkspaceInviteResult(
             payload={
-                "invitation_id": str(invitation.id),
+                "invitation_id": invitation.id,
                 "email": invitation.email,
                 "persona": invitation.persona,
                 "role": invitation.role,

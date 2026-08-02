@@ -42,6 +42,22 @@ class WritingDraftStorePort(Protocol):
         so they can't race a concurrent full-metadata save."""
         ...
 
+    def stamp_rag_indexed(
+        self,
+        *,
+        draft_id: UUID,
+        document_key: str,
+        indexed_at: datetime.datetime,
+    ) -> None:
+        """Record that this draft was indexed into the knowledge vector
+        store — stamps ``rag_indexed_at`` + ``rag_document_key`` on the
+        metadata JSON without touching the rest of the document.
+
+        Used by the ``on_writing_draft_published_index_rag`` handler; the
+        RAG backfill command reads the stamp to skip already-indexed rows.
+        No-op if the row is gone."""
+        ...
+
     def publish(self, *, draft_id: UUID) -> WritingDraftEntity: ...
 
     def archive(self, *, draft_id: UUID) -> WritingDraftEntity: ...

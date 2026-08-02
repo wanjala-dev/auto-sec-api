@@ -106,22 +106,6 @@ _ORM_FREE_ALLOWLIST: set[tuple[str, str]] = {
     # 2026-08.
     ("agents", "application/services/posture_dashboard_service.py"),
     ("agents", "application/services/posture_service.py"),
-    # content — RAG index handlers + newsletter use cases read Newsletter/
-    # WritingDraft/Workspace ORM inline; pending port extraction.
-    # TRANSITIONAL: app-layer ORM — see architecture audit 2026-08; burn down.
-    ("content", "application/handlers/rag_index_newsletter_handler.py"),
-    ("content", "application/handlers/rag_index_writing_draft_handler.py"),
-    ("content", "application/use_cases/dispatch_due_scheduled_newsletters_use_case.py"),
-    ("content", "application/use_cases/generate_newsletter_use_case.py"),
-    # membership — permission service reads WorkspaceRole ORM inline; pending
-    # port extraction.
-    # TRANSITIONAL: app-layer ORM — see architecture audit 2026-08; burn down.
-    ("membership", "application/services/membership_permission_service.py"),
-    # team — invite use cases read/write Invitation/CustomUser/Workspace-
-    # Membership ORM inline; pending port extraction.
-    # TRANSITIONAL: app-layer ORM — see architecture audit 2026-08; burn down.
-    ("team", "application/use_cases/accept_workspace_invite_use_case.py"),
-    ("team", "application/use_cases/create_workspace_invite_use_case.py"),
     # workflow — findings facade reads workflow ORM inline; pending port
     # extraction.
     # TRANSITIONAL: app-layer ORM — see architecture audit 2026-08; burn down.

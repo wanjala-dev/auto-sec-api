@@ -32,7 +32,6 @@ from components.content.application.ports.newsletter_store_port import (
 from components.content.application.use_cases.send_newsletter_use_case import (
     SendNewsletterUseCase,
 )
-from components.content.domain.enums import NewsletterStatus
 from components.content.domain.errors import NewsletterUnverifiedFiguresError
 
 logger = logging.getLogger(__name__)
@@ -57,16 +56,7 @@ class DispatchDueScheduledNewslettersUseCase:
         figures) — marked SEND_FAILED for human review, never auto-sent.
         """
 
-        from infrastructure.persistence.content.models import Newsletter
-
-        due_ids = list(
-            Newsletter.objects.filter(
-                status=NewsletterStatus.SCHEDULED,
-                scheduled_for__lte=now,
-            )
-            .order_by("scheduled_for")
-            .values_list("id", flat=True)[:_BATCH_LIMIT]
-        )
+        due_ids = list(self.newsletter_reader.list_due_scheduled(now=now, limit=_BATCH_LIMIT))
 
         claimed = 0
         sent = 0
@@ -95,8 +85,7 @@ class DispatchDueScheduledNewslettersUseCase:
                 # Skip + flag: surface SEND_FAILED with the unverified figures
                 # so a human can review + send (or override) from the editor.
                 logger.warning(
-                    "scheduled_newsletter_blocked_unverified newsletter_id=%s "
-                    "unsupported_count=%s",
+                    "scheduled_newsletter_blocked_unverified newsletter_id=%s unsupported_count=%s",
                     newsletter_id,
                     len(exc.result.unsupported_numbers),
                 )
@@ -105,13 +94,13 @@ class DispatchDueScheduledNewslettersUseCase:
                         newsletter_id=newsletter_id,
                         error_message=str(exc),
                     )
-                except Exception:  # noqa: BLE001 — don't mask the block
+                except Exception:
                     logger.exception(
                         "scheduled_newsletter_mark_blocked_failed newsletter_id=%s",
                         newsletter_id,
                     )
                 blocked += 1
-            except Exception as exc:  # noqa: BLE001 — mark failed + continue batch
+            except Exception as exc:
                 logger.exception(
                     "scheduled_newsletter_send_failed newsletter_id=%s",
                     newsletter_id,
@@ -121,7 +110,7 @@ class DispatchDueScheduledNewslettersUseCase:
                         newsletter_id=newsletter_id,
                         error_message=str(exc),
                     )
-                except Exception:  # noqa: BLE001 — don't mask original failure
+                except Exception:
                     logger.exception(
                         "scheduled_newsletter_mark_failed_failed newsletter_id=%s",
                         newsletter_id,

@@ -137,6 +137,12 @@ class WritingProvider:
         from components.content.infrastructure.adapters.langchain_newsletter_ai_adapter import (
             LangchainNewsletterAiAdapter,
         )
+        from components.content.infrastructure.adapters.orm_donation_weekly_totals_adapter import (
+            OrmDonationWeeklyTotalsAdapter,
+        )
+        from components.content.infrastructure.adapters.orm_workspace_profile_adapter import (
+            OrmWorkspaceProfileAdapter,
+        )
         from components.content.infrastructure.adapters.workspace_brand_voice_adapter import (
             WorkspaceBrandVoiceAdapter,
         )
@@ -155,6 +161,8 @@ class WritingProvider:
             newsletter_reader=NewsletterReadRepository(),
             newsletter_ai=LangchainNewsletterAiAdapter(),
             event_publisher=CeleryEventPublisher(),
+            workspace_profile=OrmWorkspaceProfileAdapter(),
+            donation_weekly_totals=OrmDonationWeeklyTotalsAdapter(),
             brand_voice=WorkspaceBrandVoiceAdapter(),
         )
 
