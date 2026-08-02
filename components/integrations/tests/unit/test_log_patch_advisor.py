@@ -207,15 +207,16 @@ class TestValidatePatch:
         assert exc.value.reason == "patch_does_not_parse"
 
     def test_whole_file_gutted_to_one_unrelated_line(self):
-        # A 50-line module reduced to a single UNRELATED line: symbols are dropped,
-        # so this is caught (removes_definitions fires before the size check).
+        # A 50-line module reduced to a single UNRELATED line drops the class, so
+        # the symbol check (which runs BEFORE the size gate) fires first. Assert the
+        # exact reason — a future check-reordering must not pass for the wrong one.
         with pytest.raises(PatchValidationError) as exc:
             validate_patch(
                 original_content=_EMBEDDINGS_MODULE,
                 updated_content="x = 1\n",
                 path=_EMBEDDINGS_PATH,
             )
-        assert exc.value.reason in ("patch_removes_definitions", "patch_too_destructive")
+        assert exc.value.reason == "patch_removes_definitions"
 
     def test_size_check_fires_for_non_py_gutting(self):
         # A non-.py config file gutted to a fraction of its size → the size check
@@ -261,11 +262,33 @@ class TestValidatePatch:
 
     def test_dropping_a_top_level_function_is_rejected(self):
         original = "def keep():\n    return 1\n\n\ndef also_keep():\n    return 2\n"
-        # Drops also_keep — a fix must not delete a sibling top-level def.
+        # Drops also_keep — a fix must not delete a sibling top-level def. The file
+        # is trivial (< 10 non-blank lines) so the size gate is exempt anyway; only
+        # the symbol check can fire. Assert the exact reason.
         updated = "def keep():\n    return 99\n"
         with pytest.raises(PatchValidationError) as exc:
             validate_patch(original_content=original, updated_content=updated, path="m.py")
-        assert exc.value.reason in ("patch_removes_definitions", "patch_too_destructive")
+        assert exc.value.reason == "patch_removes_definitions"
+
+    def test_body_gutted_but_symbol_kept_PASSES_this_is_the_floor(self):
+        # DELIBERATE floor limitation, locked into the suite: a patch that KEEPS the
+        # top-level class name but replaces its body with `pass` PASSES validate_patch.
+        # validate_patch is a STRUCTURAL floor (parses + preserves top-level symbols
+        # + not gutted), NOT a semantic proof that the fix is correct. The semantic
+        # backstop is the scanner re-check + the human draft-PR gate — a draft PR is
+        # never auto-merged. This test exists so the contract is explicit: if we ever
+        # want to catch body-hollowing, that is a NEW check, not a regression here.
+        original = (
+            "class AIEmbeddingsProvider:\n"
+            "    def get_port(self, name=None):\n"
+            "        return _REGISTRY[name]\n\n"
+            "    def register(self, name, adapter):\n"
+            "        _REGISTRY[name] = adapter\n"
+        )
+        hollowed = "class AIEmbeddingsProvider:\n    pass\n"
+        # Small file (< 10 non-blank lines) so the size gate is exempt; the class
+        # name survives so the symbol check passes → validate_patch returns None.
+        assert validate_patch(original_content=original, updated_content=hollowed, path="p.py") is None
 
     def test_renaming_a_method_inside_a_class_is_allowed(self):
         # Method-level (non-top-level) changes are legitimate — only module-body

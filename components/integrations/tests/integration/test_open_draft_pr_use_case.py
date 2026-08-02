@@ -391,7 +391,8 @@ class TestOpenDraftPrPatchValidation:
             mock.patch(_REQUESTS_PATH, new=fake),
             mock.patch(_PROPOSE_PATH, return_value=bad),
             mock.patch(f"{_ADAPTER}.commit_file") as commit,
-            mock.patch(f"{_ADAPTER}.open_draft_pr") as open_pr,pytest.raises(DraftPrPreconditionError) as exc
+            mock.patch(f"{_ADAPTER}.open_draft_pr") as open_pr,
+            pytest.raises(DraftPrPreconditionError) as exc,
         ):
             _use_case().execute(workspace_id=str(workspace.id), task_id=str(task.id), performed_by=str(owner.id))
         return exc.value, fake, commit, open_pr

@@ -110,12 +110,18 @@ class PatchValidationError(Exception):
 
 
 def _top_level_symbols(tree: ast.Module) -> set[str]:
-    """Names of top-level (module-body) class/function/async-function defs.
+    """Names of UNCONDITIONAL module-body class/function/async-function defs.
 
-    Only the module body — a method inside a class or a nested function is NOT a
-    top-level symbol; renaming/moving those is a legitimate minimal fix. The
-    aggregate root symbols (the class/function the finding is about) are what a
-    remediation must never silently delete."""
+    Only direct children of the module body — a method inside a class or a nested
+    function is NOT a top-level symbol; renaming/moving those is a legitimate
+    minimal fix. The aggregate-root symbols (the class/function the finding is
+    about) are what a remediation must never silently delete.
+
+    Note: a def/class wrapped in a top-level ``if``/``try`` is NOT counted (it is
+    not a direct body child). So a symbol MOVED under a version/feature guard reads
+    as "dropped" and the patch fails CLOSED (rejected, no PR) — intended: we prefer
+    a false-reject a human can wave through over letting a possibly-destructive
+    restructure open a PR unreviewed."""
     return {node.name for node in tree.body if isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef)}
 
 
