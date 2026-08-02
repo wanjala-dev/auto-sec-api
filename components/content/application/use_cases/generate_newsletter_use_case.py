@@ -18,6 +18,9 @@ from uuid import UUID
 from components.content.application.ports.brand_voice_port import (
     BrandVoicePort,
 )
+from components.content.application.ports.donation_weekly_totals_read_port import (
+    DonationWeeklyTotalsReadPort,
+)
 from components.content.application.ports.newsletter_ai_port import (
     NewsletterAiPort,
 )
@@ -26,6 +29,9 @@ from components.content.application.ports.newsletter_reader_port import (
 )
 from components.content.application.ports.newsletter_store_port import (
     NewsletterStorePort,
+)
+from components.content.application.ports.workspace_profile_port import (
+    WorkspaceProfilePort,
 )
 from components.content.domain.entities.newsletter_entity import NewsletterEntity
 from components.content.domain.enums import NewsletterStatus
