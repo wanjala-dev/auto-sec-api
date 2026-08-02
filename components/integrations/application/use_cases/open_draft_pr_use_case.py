@@ -35,6 +35,13 @@ from components.integrations.application.log_patch_advisor_service import (
     resolve_repo_path,
     validate_patch,
 )
+from components.integrations.application.ports.finding_facts_port import (
+    ActionableFinding,
+    FindingFactsPort,
+)
+from components.integrations.application.ports.finding_pr_recorder_port import (
+    FindingPrRecorderPort,
+)
 from components.integrations.application.ports.vcs_port import VcsApiError, VcsPort
 
 logger = logging.getLogger(__name__)
