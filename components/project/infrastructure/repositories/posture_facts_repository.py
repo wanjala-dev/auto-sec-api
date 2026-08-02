@@ -87,3 +87,24 @@ class OrmPostureFactsRepository(PostureFactsPort):
         if until is not None:
             queryset = queryset.filter(created_at__lt=until)
         return queryset.count()
+
+    def count_findings_created_by_date(self, *, workspace_id: str, since: datetime) -> tuple[dict[str, int], bool]:
+        from infrastructure.persistence.project.models import Task
+
+        created_rows = (
+            Task.objects.filter(
+                workspace_id=str(workspace_id),
+                source_type__startswith="ai.",
+                created_at__gte=since,
+            )
+            .exclude(source_type=_POSTURE_REPORT_SOURCE_TYPE)
+            .values_list("created_at", flat=True)
+            .iterator(chunk_size=500)
+        )
+        by_date: dict[str, int] = {}
+        present = False
+        for created_at in created_rows:
+            present = True
+            iso = created_at.date().isoformat()
+            by_date[iso] = by_date.get(iso, 0) + 1
+        return by_date, present

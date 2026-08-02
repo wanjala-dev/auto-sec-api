@@ -96,10 +96,16 @@ _ORM_FREE_ALLOWLIST: set[tuple[str, str]] = {
     ("agents", "application/services/ai_governance_service.py"),
     ("agents", "application/services/detector_cycle.py"),
     ("agents", "application/services/execution_cost_tracker.py"),
-    ("agents", "application/services/posture_dashboard_service.py"),
-    ("agents", "application/services/posture_service.py"),
     ("agents", "application/use_cases/agent_chat_use_case.py"),
     ("agents", "application/use_cases/set_workspace_agent_capability_use_case.py"),
+    # agents posture services — the cross-context ``project.Task`` reads were
+    # routed through the project ``PostureFactsPort`` in PR-5; these entries
+    # STAY only for the remaining SAME-context ``ai.*`` reads (DeepRun /
+    # AgentResponseFeedback / AiActionDailyRollup), a type-C offender burned
+    # down in PR-10. TRANSITIONAL: app-layer ORM — see architecture audit
+    # 2026-08.
+    ("agents", "application/services/posture_dashboard_service.py"),
+    ("agents", "application/services/posture_service.py"),
     # content — RAG index handlers + newsletter use cases read Newsletter/
     # WritingDraft/Workspace ORM inline; pending port extraction.
     # TRANSITIONAL: app-layer ORM — see architecture audit 2026-08; burn down.
