@@ -59,7 +59,7 @@ def capture_remediation_if_gated(
     title: str = "",
     summary: str = "",
     tags: tuple[str, ...] = (),
-    pr_applied: bool = True,
+    pr_applied: bool = False,
     service=None,
 ) -> RemediationEntry | None:
     """Offer a candidate fix to the entry-gate.
@@ -67,6 +67,12 @@ def capture_remediation_if_gated(
     Returns the admitted :class:`RemediationEntry` when the gate's three
     conditions all hold, or ``None`` when the gate refuses (the refusal is logged;
     no entry is written). ``service`` is injectable for tests.
+
+    ``pr_applied`` defaults to ``False`` (fail-closed): the "a human confirms this
+    merged" flag must be affirmatively set by the caller — a forgotten kwarg must
+    never admit an entry. It is still cross-checked against the finding's real
+    opened draft-PR URL in the gate, so this is defense-in-depth, not the only
+    guard.
     """
     service = service or build_remediation_service()
     command = RecordRemediationEntryCommand(

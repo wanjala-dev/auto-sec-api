@@ -129,6 +129,27 @@ class TestGateRefuses:
         assert REASON_NOT_RESOLVED in exc.value.unmet
         assert store.saved == []
 
+    def test_sign_off_lookup_error_fails_closed_no_entry(self, monkeypatch):
+        # End-to-end through the REAL sign-off adapter: an unexpected sign-off
+        # lookup error must fail closed (is_approved=False) ⇒ the gate refuses ⇒
+        # NO entry is written, and the crash never propagates out of the gate.
+        from components.remediation.infrastructure.adapters import sign_off_gate_adapter as soa
+
+        def boom(at, aid):
+            raise RuntimeError("sign-off backend exploded")
+
+        monkeypatch.setattr(soa, "require_approved", boom)
+        store = FakeStore()
+        uc = RecordRemediationEntryUseCase(
+            store=store,
+            sign_off_gate=soa.SignOffGateAdapter(),
+            finding_facts=FakeFindingFacts(make_facts(draft_pr_url=_PR_URL)),
+        )
+        with pytest.raises(EntryGateNotSatisfiedError) as exc:
+            uc.execute(_command())
+        assert REASON_NOT_APPROVED in exc.value.unmet
+        assert store.saved == []
+
 
 class TestProvenanceAndRawCode:
     def test_entry_links_provenance_and_stores_raw_code(self):

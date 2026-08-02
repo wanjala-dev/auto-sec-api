@@ -19,5 +19,14 @@ class RemediationEntryAdmin(admin.ModelAdmin):
     search_fields = ("finding_task_id", "finding_fingerprint", "applied_pr_url")
     readonly_fields = tuple(f.name for f in RemediationEntry._meta.fields)
 
-    def has_add_permission(self, request) -> bool:  # gate-only creation
+    # Read-only by design: creation is gate-only (D1) and mutation/deletion via
+    # admin would bypass the gate + the soft-delete revocation semantics. Admin
+    # is an inspection surface, never a write path into the corpus.
+    def has_add_permission(self, request) -> bool:
+        return False
+
+    def has_change_permission(self, request, obj=None) -> bool:
+        return False
+
+    def has_delete_permission(self, request, obj=None) -> bool:
         return False

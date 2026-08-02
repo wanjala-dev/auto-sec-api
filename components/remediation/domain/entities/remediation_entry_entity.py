@@ -46,6 +46,8 @@ class RemediationEntry:
     is_deleted: bool = False
 
     def __post_init__(self) -> None:
+        if not self.workspace_id:
+            raise ValueError("RemediationEntry.workspace_id is required (D4: tenant boundary)")
         if not self.finding_kind:
             raise ValueError("RemediationEntry.finding_kind is required")
         if not self.code:
