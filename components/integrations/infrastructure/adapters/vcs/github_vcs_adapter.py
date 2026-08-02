@@ -19,6 +19,7 @@ from components.integrations.application.ports.vcs_port import (
     CommittedFile,
     DefaultBranch,
     DraftPullRequest,
+    PullRequestState,
     RepoFile,
     VcsApiError,
     VcsHealth,
@@ -192,3 +193,18 @@ class GitHubVcsAdapter(VcsPort):
         if not url:
             raise VcsApiError(f"GitHub created a PR on {repo} but returned no URL", status_code=None)
         return DraftPullRequest(url=url, number=number, repo=repo, head=head, base=base)
+
+    def get_pull_request(self, repo: str, pr_ref: int | str) -> PullRequestState:
+        """Read a PR's live merge state via ``GET /repos/{repo}/pulls/{number}``.
+
+        GitHub's PR object carries a boolean ``merged`` (true ONLY when the PR was
+        actually merged — distinct from ``state == "closed"``, which also covers a
+        close-without-merge) plus ``merged_at``. We trust ``merged`` over inferring
+        from ``state``, so a closed-but-unmerged remediation PR correctly reports
+        ``merged=False`` and its finding is never captured."""
+        data = self._request("GET", f"/repos/{repo}/pulls/{pr_ref}")
+        return PullRequestState(
+            merged=bool(data.get("merged")),
+            state=str(data.get("state") or ""),
+            merged_at=str(data.get("merged_at") or ""),
+        )

@@ -124,3 +124,38 @@ class TestGitHubVcsAdapterListTree:
 
         with mock.patch(_REQUESTS_PATH, new=_no_sha), pytest.raises(VcsApiError):
             adapter.list_tree("acme/app", "main")
+
+
+@pytest.mark.unit
+class TestGitHubVcsAdapterGetPullRequest:
+    """get_pull_request reads the live merge state (ADR 0012 P4a)."""
+
+    def test_merged_pr_reports_merged(self):
+        adapter = GitHubVcsAdapter("ghp_secret_token")
+        payload = {"merged": True, "state": "closed", "merged_at": "2026-08-01T10:00:00Z"}
+        with mock.patch(_REQUESTS_PATH, return_value=_resp(200, payload)) as req:
+            state = adapter.get_pull_request("acme/app", 7)
+        assert state.merged is True
+        assert state.state == "closed"
+        assert state.merged_at == "2026-08-01T10:00:00Z"
+        # It reads the PR endpoint by number.
+        assert "/repos/acme/app/pulls/7" in req.call_args.args[1]
+
+    def test_open_pr_is_not_merged(self):
+        adapter = GitHubVcsAdapter("ghp_secret_token")
+        with mock.patch(_REQUESTS_PATH, return_value=_resp(200, {"merged": False, "state": "open"})):
+            state = adapter.get_pull_request("acme/app", 7)
+        assert state.merged is False
+        assert state.state == "open"
+
+    def test_closed_without_merge_is_not_merged(self):
+        # The load-bearing distinction: closed != merged. We trust the boolean.
+        adapter = GitHubVcsAdapter("ghp_secret_token")
+        with mock.patch(_REQUESTS_PATH, return_value=_resp(200, {"merged": False, "state": "closed"})):
+            state = adapter.get_pull_request("acme/app", 7)
+        assert state.merged is False
+
+    def test_missing_pr_raises(self):
+        adapter = GitHubVcsAdapter("ghp_secret_token")
+        with mock.patch(_REQUESTS_PATH, return_value=_resp(404)), pytest.raises(VcsApiError):
+            adapter.get_pull_request("acme/app", 999)
