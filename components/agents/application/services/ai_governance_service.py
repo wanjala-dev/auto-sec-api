@@ -12,6 +12,14 @@ Every number is computed from rows that already exist — ``DeepRun`` /
 calls a model; the LLM in ``ai_governance_agent`` only narrates what these
 functions return.
 
+The three CROSS-context reads are routed through ports (app-layer ORM
+burndown PR-6), never their persistence models: the HITL draft-PR ledger via
+``project.TaskLookupPort``, the workspace kill-switch toggle via the agents
+``WorkspaceQueryPort``, and the ``GitHubConnection`` credential surface via the
+integrations ``GitHubConnectionStatusReadPort`` (which reduces the encrypted
+token to a presence boolean INSIDE its adapter — the ciphertext never crosses
+the port). Only this context's own ``ai.*`` reads remain inline (PR-10).
+
 Hard rules (mirrors ``posture_service``, enforced by tests):
 
 * **Read-only** — this module never writes. The kill-switch *actor* lives in
@@ -519,57 +527,63 @@ def capability_grants(workspace_id: str) -> dict[str, Any]:
 
 
 def hitl_ledger(workspace_id: str, window_days: int = 30) -> dict[str, Any]:
-    """Draft PRs opened by explicit human approval in the window."""
-    from infrastructure.persistence.project.models import Task
+    """Draft PRs opened by explicit human approval in the window.
+
+    The ``project`` context owns the board ``Task``; the draft-PR findings are
+    read through its inbound seam (``TaskLookupPort.list_draft_pr_findings``)
+    instead of reaching into ``project``'s ORM from this application-layer
+    service (Rule 2 / architecture-skill C3).
+    """
+    from components.project.application.providers.project_provider import ProjectProvider
 
     now = _utc_now()
-    pr_rows: list[dict[str, Any]] = []
-    tasks = Task.objects.filter(workspace_id=str(workspace_id), source_type__startswith="ai.").only(
-        "id", "title", "metadata"
-    )
-    for task in tasks.iterator(chunk_size=500):
-        meta = task.metadata if isinstance(task.metadata, dict) else {}
-        payload = meta.get("payload") if isinstance(meta.get("payload"), dict) else {}
-        draft_pr = payload.get("draft_pr") if isinstance(payload.get("draft_pr"), dict) else {}
-        if not draft_pr.get("url"):
-            continue
-        pr_rows.append(
-            {
-                "task_id": str(task.id),
-                "title": task.title,
-                "url": draft_pr.get("url"),
-                "repo": draft_pr.get("repo"),
-                "branch": draft_pr.get("branch"),
-                "opened_by": draft_pr.get("opened_by"),
-                "opened_at": draft_pr.get("opened_at"),
-            }
-        )
+    findings = ProjectProvider.build_task_lookup_port().list_draft_pr_findings(workspace_id=str(workspace_id))
+    pr_rows = [
+        {
+            "task_id": str(finding.task_id),
+            "title": finding.title,
+            "url": finding.url,
+            "repo": finding.repo,
+            "branch": finding.branch,
+            "opened_by": finding.opened_by,
+            "opened_at": finding.opened_at,
+        }
+        for finding in findings
+    ]
 
     return compute_hitl_ledger(pr_rows, now=now, window_days=window_days)
 
 
 def credential_inventory(workspace_id: str) -> dict[str, Any]:
-    """GitHub credential surface: presence, allowlist, dates. NO secrets."""
-    from infrastructure.persistence.integrations.models import GitHubConnection
+    """GitHub credential surface: presence, allowlist, dates. NO secrets.
+
+    The ``integrations`` context owns ``GitHubConnection`` (which holds the
+    encrypted PAT). Its credential surface is read through the integrations
+    inbound seam (``GitHubConnectionStatusReadPort``) rather than this service
+    reaching into ``integrations``' ORM (Rule 2 / architecture-skill C3). The
+    adapter reduces ``token_ciphertext`` to a ``has_token`` boolean before it ever
+    returns — the ciphertext is structurally unreachable from here.
+    """
+    from components.integrations.application.providers.github_connection_status_provider import (
+        get_github_connection_status_reader,
+    )
 
     now = _utc_now()
-    conn_rows: list[dict[str, Any]] = []
-    connections = GitHubConnection.objects.filter(workspace_id=str(workspace_id)).order_by("-created_at")
-    for conn in connections.iterator(chunk_size=100):
-        conn_rows.append(
-            {
-                "id": str(conn.id),
-                "name": conn.name,
-                "status": conn.status,
-                "repo_allowlist": conn.repo_allowlist,
-                # Reduced to a presence boolean HERE — ciphertext never
-                # travels past this line (and is never logged).
-                "has_token": bool(conn.token_ciphertext),
-                "created_at": conn.created_at,
-                "updated_at": conn.updated_at,
-                "last_used_at": conn.last_used_at,
-            }
-        )
+    statuses = get_github_connection_status_reader().list_statuses(workspace_id=str(workspace_id))
+    conn_rows = [
+        {
+            "id": status.id,
+            "name": status.name,
+            "status": status.status,
+            "repo_allowlist": status.repo_allowlist,
+            # The port DTO carries only the presence boolean — never the token.
+            "has_token": status.has_token,
+            "created_at": status.created_at,
+            "updated_at": status.updated_at,
+            "last_used_at": status.last_used_at,
+        }
+        for status in statuses
+    ]
 
     return compute_credential_inventory(conn_rows, now=now)
 
@@ -582,14 +596,13 @@ def kill_switch_status(workspace_id: str) -> dict[str, Any]:
     now = _utc_now()
     workspace_id = str(workspace_id)
 
-    workspace = None
-    try:
-        from infrastructure.persistence.workspaces.models import Workspace
+    # Workspace read routed through the agents context's cross-context port. The
+    # port resolves the row via the model's base manager (unfiltered) so an
+    # inactive/soft-deleted workspace is still found — the same semantics the
+    # prior inline ``_base_manager`` read had.
+    from components.agents.application.providers.ai_provider import AIProvider
 
-        queryset = getattr(Workspace, "_base_manager", None) or Workspace.objects
-        workspace = queryset.filter(id=workspace_id).first()
-    except Exception:
-        logger.exception("kill_switch_status workspace read failed workspace_id=%s", workspace_id)
+    workspace_status = AIProvider.build_workspace_query().get_ai_toggle_status(workspace_id)
 
     from components.agents.application.policies.ai_kill_switch import is_ai_killed
 
@@ -610,8 +623,8 @@ def kill_switch_status(workspace_id: str) -> dict[str, Any]:
 
     return compute_kill_switch_status(
         now=now,
-        workspace_found=workspace is not None,
-        ai_teammate_enabled=bool(getattr(workspace, "ai_teammate_enabled", False)),
+        workspace_found=workspace_status.found,
+        ai_teammate_enabled=workspace_status.ai_teammate_enabled,
         emergency_flag_engaged=bool(is_ai_killed(workspace_id)),
         teammate_profile=teammate_profile,
         agent_rows=agent_rows,
