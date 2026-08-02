@@ -21,6 +21,7 @@ Grounded + honest by construction:
 
 from __future__ import annotations
 
+import ast
 import difflib
 import json
 import logging
@@ -36,6 +37,17 @@ _TEMPERATURE = 0.1
 # Files larger than this cannot be round-tripped safely through the model
 # (truncation would silently mangle the committed file) — degrade to None.
 _MAX_FILE_CHARS = 24_000
+
+# ── Patch verification ("verification above the model") ────────────────────
+# A file with at least this many non-blank lines is "non-trivial" — the size
+# check only guards these (a 1-line __init__ shrinking is not destructive).
+_SIZE_CHECK_MIN_LINES = 10
+# A patch may not shrink a non-trivial file below this fraction of its
+# original non-blank line count. 0.40 rejects a ~50-line module gutted to a
+# handful of lines while tolerating a legitimate large deletion (e.g. removing
+# a dead helper) that keeps most of the file. Tunable; belt-and-suspenders
+# behind the top-level-definition check, which catches the sharper case.
+_MIN_RETAINED_LINE_FRACTION = 0.40
 
 # Traceback frames: File "/app/components/x/y.py", line 12 — capture the
 # repo-relative path. Also tolerates paths without the /app prefix.
@@ -83,6 +95,122 @@ class PatchProposal:
             "updated_content": self.updated_content,
             "change_summary": self.change_summary,
         }
+
+
+class PatchValidationError(Exception):
+    """A generated patch failed the pre-commit verification pass. ``reason`` is a
+    stable machine code the use case re-raises as a ``DraftPrPreconditionError`` (so
+    the same reason reaches the controller's status map → 422). Kept here — not
+    importing the use case's exception — so this application service stays free of
+    that dependency (the use case imports THIS module, not the other way round)."""
+
+    def __init__(self, reason: str, message: str):
+        super().__init__(message)
+        self.reason = reason
+
+
+def _top_level_symbols(tree: ast.Module) -> set[str]:
+    """Names of UNCONDITIONAL module-body class/function/async-function defs.
+
+    Only direct children of the module body — a method inside a class or a nested
+    function is NOT a top-level symbol; renaming/moving those is a legitimate
+    minimal fix. The aggregate-root symbols (the class/function the finding is
+    about) are what a remediation must never silently delete.
+
+    Note: a def/class wrapped in a top-level ``if``/``try`` is NOT counted (it is
+    not a direct body child). So a symbol MOVED under a version/feature guard reads
+    as "dropped" and the patch fails CLOSED (rejected, no PR) — intended: we prefer
+    a false-reject a human can wave through over letting a possibly-destructive
+    restructure open a PR unreviewed."""
+    return {node.name for node in tree.body if isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef)}
+
+
+def _non_blank_line_count(text: str) -> int:
+    return sum(1 for line in text.splitlines() if line.strip())
+
+
+def validate_patch(*, original_content: str, updated_content: str, path: str) -> None:
+    """Verification-above-the-model gate — FAIL CLOSED before a patch reaches a PR.
+
+    Runs AFTER the advisor produces a full-file rewrite and BEFORE the use case
+    commits it. Its one job is to stop a DESTRUCTIVE or broken patch from ever
+    opening a PR (the #828 dogfood incident: the advisor DELETED a whole 50-line
+    module and replaced it with a self-referential import). It does NOT try to
+    repair or improve the patch — it only accepts or rejects.
+
+    Returns ``None`` when the patch is safe to commit; otherwise raises
+    :class:`PatchValidationError` with a stable ``reason``. Checks (in order):
+
+    1. ``patch_empty_or_noop`` — updated is empty or identical to the original
+       (nothing to do).
+    2. ``patch_does_not_parse`` — a ``.py`` patch that ``ast.parse`` rejects
+       (would ship a file that won't import). Non-``.py`` files skip this.
+    3. ``patch_removes_definitions`` — a ``.py`` patch that drops a top-level
+       class/function present in the original (a fix must not delete the very
+       symbol it is fixing). This is the check that catches #828.
+    4. ``patch_too_destructive`` — a patch that shrinks a non-trivial file
+       (≥ ``_SIZE_CHECK_MIN_LINES`` non-blank lines) below
+       ``_MIN_RETAINED_LINE_FRACTION`` of its original non-blank line count.
+       Applies to ALL files (belt-and-suspenders behind the symbol check, and
+       the only structural guard for non-``.py`` files).
+    """
+    # 1. Non-empty & changed.
+    if not (updated_content or "").strip():
+        raise PatchValidationError(
+            "patch_empty_or_noop",
+            f"The generated patch for '{path}' is empty — nothing to commit.",
+        )
+    if updated_content == original_content:
+        raise PatchValidationError(
+            "patch_empty_or_noop",
+            f"The generated patch for '{path}' is identical to the current file — no change.",
+        )
+
+    is_python = path.endswith(".py")
+
+    # 2 & 3 (Python only): parse both, then require top-level symbol preservation.
+    if is_python:
+        try:
+            updated_tree = ast.parse(updated_content)
+        except SyntaxError as exc:
+            raise PatchValidationError(
+                "patch_does_not_parse",
+                f"The generated patch for '{path}' does not parse as Python "
+                f"(line {exc.lineno}: {exc.msg}) — refusing to open a PR with a broken file.",
+            ) from exc
+
+        try:
+            original_tree = ast.parse(original_content)
+        except SyntaxError:
+            # The ORIGINAL doesn't parse (rare — a file already broken on disk).
+            # We cannot compute a trustworthy symbol set to compare against, so
+            # the symbol-preservation check is skipped; the size check below
+            # still guards against wholesale deletion.
+            original_tree = None
+
+        if original_tree is not None:
+            original_symbols = _top_level_symbols(original_tree)
+            updated_symbols = _top_level_symbols(updated_tree)
+            dropped = original_symbols - updated_symbols
+            if dropped:
+                raise PatchValidationError(
+                    "patch_removes_definitions",
+                    f"The generated patch for '{path}' deletes top-level "
+                    f"definition(s) {sorted(dropped)} present in the original — a remediation "
+                    "must not remove the class/function it is meant to fix. Refusing.",
+                )
+
+    # 4. Size sanity (all files) — a non-trivial file must not be gutted.
+    original_lines = _non_blank_line_count(original_content)
+    if original_lines >= _SIZE_CHECK_MIN_LINES:
+        updated_lines = _non_blank_line_count(updated_content)
+        if updated_lines < original_lines * _MIN_RETAINED_LINE_FRACTION:
+            raise PatchValidationError(
+                "patch_too_destructive",
+                f"The generated patch for '{path}' shrinks the file from {original_lines} to "
+                f"{updated_lines} non-blank lines (< {int(_MIN_RETAINED_LINE_FRACTION * 100)}% "
+                "retained) — too destructive to open as a PR. Refusing.",
+            )
 
 
 def derive_candidate_path(payload: dict) -> str | None:

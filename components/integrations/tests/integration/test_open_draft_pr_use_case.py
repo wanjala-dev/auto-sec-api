@@ -375,6 +375,81 @@ class TestOpenDraftPrPreconditions:
 
 
 @pytest.mark.django_db
+class TestOpenDraftPrPatchValidation:
+    """Verification-above-the-model: a destructive/broken patch opens NO PR.
+
+    The advisor is stubbed to return a garbage patch (the #828 shape and
+    variants). The use case must raise a typed precondition BEFORE any
+    branch/commit/PR call — the fake GitHub records only the read calls.
+    """
+
+    def _run_with_patch(self, workspace, task, owner, updated_content, *, summary="bad patch"):
+        fake = _FakeGitHub()
+        bad = PatchProposal(path=_PATCH.path, updated_content=updated_content, change_summary=summary)
+        # commit_file / open_draft_pr are spied so we can assert they never fire.
+        with (
+            mock.patch(_REQUESTS_PATH, new=fake),
+            mock.patch(_PROPOSE_PATH, return_value=bad),
+            mock.patch(f"{_ADAPTER}.commit_file") as commit,
+            mock.patch(f"{_ADAPTER}.open_draft_pr") as open_pr,
+            pytest.raises(DraftPrPreconditionError) as exc,
+        ):
+            _use_case().execute(workspace_id=str(workspace.id), task_id=str(task.id), performed_by=str(owner.id))
+        return exc.value, fake, commit, open_pr
+
+    def test_828_destructive_delete_opens_no_pr(self, workspace_factory, team_factory):
+        # _OLD_FILE defines def handler(); the advisor "fixes" it by replacing the
+        # whole file with a self-import that DELETES handler → removes_definitions.
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _triaged_finding(workspace, owner, team, column)
+        _connection(workspace, owner)
+        _capability_agent(workspace, owner)
+
+        gutted = "from components.workflow.application.service import handler\n"
+        reason, fake, commit, open_pr = self._run_with_patch(workspace, task, owner, gutted)
+
+        assert reason.reason == "patch_removes_definitions"
+        # It read the repo/file but NEVER wrote — no branch, no commit, no PR.
+        assert all(m == "GET" for m, _ in fake.calls)
+        commit.assert_not_called()
+        open_pr.assert_not_called()
+
+    def test_syntax_broken_patch_opens_no_pr(self, workspace_factory, team_factory):
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _triaged_finding(workspace, owner, team, column)
+        _connection(workspace, owner)
+        _capability_agent(workspace, owner)
+
+        broken = _OLD_FILE + "\n\ndef f(:\n    pass\n"
+        reason, fake, commit, open_pr = self._run_with_patch(workspace, task, owner, broken)
+
+        assert reason.reason == "patch_does_not_parse"
+        commit.assert_not_called()
+        open_pr.assert_not_called()
+
+    def test_endpoint_maps_destructive_patch_to_4xx_not_502(self, api_client, workspace_factory, team_factory):
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _triaged_finding(workspace, owner, team, column)
+        _connection(workspace, owner)
+        _capability_agent(workspace, owner)
+        api_client.force_authenticate(owner)
+
+        gutted = "from components.workflow.application.service import handler\n"
+        bad = PatchProposal(path=_PATCH.path, updated_content=gutted, change_summary="bad")
+        fake = _FakeGitHub()
+        url = f"/integrations/workspaces/{workspace.id}/findings/{task.id}/open-draft-pr/"
+        with mock.patch(_REQUESTS_PATH, new=fake), mock.patch(_PROPOSE_PATH, return_value=bad):
+            response = api_client.post(url, {}, format="json")
+
+        assert 400 <= response.status_code < 500, response.data
+        assert response.status_code != 502
+        assert response.data["reason"] == "patch_removes_definitions"
+        # No draft PR was recorded on the finding.
+        task.refresh_from_db()
+        assert "draft_pr" not in (task.metadata.get("payload") or {})
+
+
+@pytest.mark.django_db
 class TestOpenDraftPrEndpoint:
     def test_owner_opens_draft_pr(self, api_client, workspace_factory, team_factory):
         workspace, owner, team, column = _board(workspace_factory, team_factory)

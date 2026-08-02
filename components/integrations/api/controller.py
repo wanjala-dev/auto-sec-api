@@ -214,6 +214,12 @@ class FindingOpenDraftPrView(APIView):
         "no_grounded_patch": status.HTTP_422_UNPROCESSABLE_ENTITY,
         "candidate_file_not_in_repo": status.HTTP_422_UNPROCESSABLE_ENTITY,
         "ambiguous_candidate_path": status.HTTP_422_UNPROCESSABLE_ENTITY,
+        # Verification-above-the-model rejections — a destructive/broken patch
+        # never opens a PR (fail closed). 4xx, not 502: the operator can act.
+        "patch_empty_or_noop": status.HTTP_422_UNPROCESSABLE_ENTITY,
+        "patch_does_not_parse": status.HTTP_422_UNPROCESSABLE_ENTITY,
+        "patch_removes_definitions": status.HTTP_422_UNPROCESSABLE_ENTITY,
+        "patch_too_destructive": status.HTTP_422_UNPROCESSABLE_ENTITY,
     }
 
     def post(self, request, workspace_id, task_id):
