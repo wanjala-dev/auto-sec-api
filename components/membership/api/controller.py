@@ -18,13 +18,13 @@ from components.membership.application.commands import (
     AcceptInvitationCommand,
     ProcessInvitationBatchCommand,
 )
+from components.membership.application.service import MembershipService
 from components.membership.mappers.rest.membership_serializers import (
     InvitationAcceptSerializer,
     InvitationRequestSerializer,
     MembershipSummarySerializer,
     PendingInvitationSerializer,
 )
-from components.membership.application.service import MembershipService
 
 membership_service = MembershipService()
 
@@ -45,10 +45,7 @@ class InvitationView(APIView):
         """List pending invitations for a workspace (delegates to query service)."""
         try:
             pending_invitations = membership_service.query_membership().list_workspace_pending_invitations(
-                workspace_id=(
-                    request.query_params.get("workspace_id")
-                    or kwargs.get("workspace_id")
-                ),
+                workspace_id=(request.query_params.get("workspace_id") or kwargs.get("workspace_id")),
                 actor_id=request.user.id,
                 is_staff=getattr(request.user, "is_staff", False),
                 is_superuser=getattr(request.user, "is_superuser", False),
@@ -114,9 +111,7 @@ class InvitationView(APIView):
 
         except PermissionError as exc:
             status_code = (
-                status.HTTP_401_UNAUTHORIZED
-                if str(exc) == "Authentication required."
-                else status.HTTP_403_FORBIDDEN
+                status.HTTP_401_UNAUTHORIZED if str(exc) == "Authentication required." else status.HTTP_403_FORBIDDEN
             )
             return error_response(str(exc), status_code)
         except ObjectDoesNotExist as exc:
@@ -152,9 +147,7 @@ class AcceptInvitationView(APIView):
             )
         except PermissionError as exc:
             status_code = (
-                status.HTTP_401_UNAUTHORIZED
-                if str(exc) == "Authentication required."
-                else status.HTTP_403_FORBIDDEN
+                status.HTTP_401_UNAUTHORIZED if str(exc) == "Authentication required." else status.HTTP_403_FORBIDDEN
             )
             return Response(
                 {"status": "error", "message": str(exc)},
@@ -180,11 +173,7 @@ class AcceptInvitationView(APIView):
                 "data": [
                     {
                         "team_id": team.id,
-                        "joined_at": (
-                            invitation.accepted_at.isoformat()
-                            if invitation.accepted_at
-                            else None
-                        ),
+                        "joined_at": (invitation.accepted_at.isoformat() if invitation.accepted_at else None),
                     }
                 ],
             },
@@ -208,10 +197,7 @@ class MembersView(APIView):
     def get(self, request, *args, **kwargs):
         try:
             members, team_lookup = membership_service.query_membership().list_workspace_team_members(
-                workspace_id=(
-                    request.query_params.get("workspace_id")
-                    or kwargs.get("workspace_id")
-                ),
+                workspace_id=(request.query_params.get("workspace_id") or kwargs.get("workspace_id")),
                 actor_id=request.user.id,
                 is_staff=getattr(request.user, "is_staff", False),
                 is_superuser=getattr(request.user, "is_superuser", False),
@@ -264,10 +250,7 @@ class PendingInvitationsView(APIView):
     def get(self, request, *args, **kwargs):
         try:
             pending_invitations = membership_service.query_membership().list_workspace_pending_invitations(
-                workspace_id=(
-                    request.query_params.get("workspace_id")
-                    or kwargs.get("workspace_id")
-                ),
+                workspace_id=(request.query_params.get("workspace_id") or kwargs.get("workspace_id")),
                 actor_id=request.user.id,
                 is_staff=getattr(request.user, "is_staff", False),
                 is_superuser=getattr(request.user, "is_superuser", False),
@@ -321,9 +304,11 @@ class PersonaInviteView(APIView):
     name = "membership-persona-invite"
 
     def post(self, request, *args, **kwargs):
+        from components.team.application.providers.workspace_invite_provider import (
+            get_workspace_invite_provider,
+        )
         from components.team.application.use_cases.create_workspace_invite_use_case import (
             CreateWorkspaceInviteCommand,
-            CreateWorkspaceInviteUseCase,
         )
 
         user = request.user
@@ -340,7 +325,7 @@ class PersonaInviteView(APIView):
             photo_url=request.data.get("photo_url"),
             permission_group_ids=request.data.get("permission_group_ids") or [],
         )
-        use_case = CreateWorkspaceInviteUseCase()
+        use_case = get_workspace_invite_provider().build_create_use_case()
         result = use_case.execute(command)
         if result.error is not None:
             return Response({"error": result.error}, status=result.status_code)
@@ -369,15 +354,19 @@ class PersonaInviteManageView(APIView):
     def post(self, request, invitation_id=None, action=None, *args, **kwargs):
         import secrets
         from datetime import timedelta
+
         from django.utils import timezone
+
         from components.team.application.providers.team_models_provider import (
             get_team_models_provider,
         )
+
         _pkg_models = get_team_models_provider()
         Invitation = _pkg_models.Invitation
         from components.workspace.application.providers.workspaces_models_provider import (
             get_workspaces_models_provider,
         )
+
         _pkg_models = get_workspaces_models_provider()
         Workspace = _pkg_models.Workspace
         WorkspaceMembership = _pkg_models.WorkspaceMembership
@@ -400,9 +389,7 @@ class PersonaInviteManageView(APIView):
         is_authorized = (
             getattr(user, "is_staff", False)
             or getattr(user, "is_superuser", False)
-            or Workspace.objects.filter(
-                id=invitation.workspace_id, workspace_owner_id=user.id
-            ).exists()
+            or Workspace.objects.filter(id=invitation.workspace_id, workspace_owner_id=user.id).exists()
             or WorkspaceMembership.objects.filter(
                 workspace_id=invitation.workspace_id,
                 user_id=user.id,
@@ -452,10 +439,12 @@ class PersonaInviteManageView(APIView):
             from components.team.application.providers.invitation_email_provider import (
                 get_invitation_email_provider,
             )
+
             send_persona_invitation = get_invitation_email_provider().send_persona_invitation
             send_persona_invitation(invitation, inviter_user=user)
-        except Exception:  # noqa: BLE001
+        except Exception:
             import logging
+
             logging.getLogger("invitations").exception(
                 "persona invite resend email failed for %s",
                 invitation.email,
@@ -490,9 +479,11 @@ class PersonaInviteAcceptView(APIView):
     name = "membership-persona-invite-accept"
 
     def post(self, request, *args, **kwargs):
+        from components.team.application.providers.workspace_invite_provider import (
+            get_workspace_invite_provider,
+        )
         from components.team.application.use_cases.accept_workspace_invite_use_case import (
             AcceptWorkspaceInviteCommand,
-            AcceptWorkspaceInviteUseCase,
         )
 
         command = AcceptWorkspaceInviteCommand(
@@ -501,7 +492,7 @@ class PersonaInviteAcceptView(APIView):
             first_name=request.data.get("first_name"),
             last_name=request.data.get("last_name"),
         )
-        result = AcceptWorkspaceInviteUseCase().execute(command)
+        result = get_workspace_invite_provider().build_accept_use_case().execute(command)
         if result.error is not None:
             return Response({"error": result.error}, status=result.status_code)
         return Response(result.payload, status=result.status_code)
@@ -534,16 +525,19 @@ class WorkspaceUserSearchView(APIView):
         from components.shared_kernel.application.providers.django_orm_provider import (
             get_django_orm_provider as _get_django_orm_provider,
         )
+
         _django_orm = _get_django_orm_provider()
         Q = _django_orm.Q
         from components.identity.application.providers.users_models_provider import (
             get_users_models_provider,
         )
+
         _pkg_models = get_users_models_provider()
         CustomUser = _pkg_models.CustomUser
         from components.workspace.application.providers.workspaces_models_provider import (
             get_workspaces_models_provider,
         )
+
         _pkg_models = get_workspaces_models_provider()
         WorkspaceMembership = _pkg_models.WorkspaceMembership
 
@@ -587,21 +581,19 @@ class WorkspaceUserSearchView(APIView):
 
         results = []
         for user in users:
-            full_name = (
-                f"{user.first_name} {user.last_name}".strip()
-                or user.username
-                or user.email
-            )
+            full_name = f"{user.first_name} {user.last_name}".strip() or user.username or user.email
             photo_url = ""
             profile = getattr(user, "profile", None)
             if profile is not None:
                 photo_url = getattr(profile, "photo_url", "") or ""
-            results.append({
-                "id": str(user.id),
-                "email": user.email,
-                "display_name": full_name,
-                "photo_url": photo_url,
-            })
+            results.append(
+                {
+                    "id": str(user.id),
+                    "email": user.email,
+                    "display_name": full_name,
+                    "photo_url": photo_url,
+                }
+            )
         return Response({"results": results}, status=status.HTTP_200_OK)
 
 
@@ -623,14 +615,17 @@ class PersonaInviteInfoView(APIView):
 
     def get(self, request, *args, **kwargs):
         from django.utils import timezone
+
         from components.team.application.providers.team_models_provider import (
             get_team_models_provider,
         )
+
         _pkg_models = get_team_models_provider()
         Invitation = _pkg_models.Invitation
         from components.identity.application.providers.users_models_provider import (
             get_users_models_provider,
         )
+
         _pkg_models = get_users_models_provider()
         CustomUser = _pkg_models.CustomUser
 
@@ -641,12 +636,7 @@ class PersonaInviteInfoView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        invitation = (
-            Invitation.objects
-            .select_related("workspace")
-            .filter(token=token)
-            .first()
-        )
+        invitation = Invitation.objects.select_related("workspace").filter(token=token).first()
         if invitation is None:
             return Response(
                 {"error": "Invalid or expired invitation link."},
@@ -675,15 +665,9 @@ class PersonaInviteInfoView(APIView):
                 "persona": invitation.persona,
                 "role": invitation.role,
                 "workspace_id": str(invitation.workspace_id),
-                "workspace_name": (
-                    getattr(workspace, "workspace_name", "") or ""
-                ),
+                "workspace_name": (getattr(workspace, "workspace_name", "") or ""),
                 "is_existing_user": is_existing_user,
-                "expires_at": (
-                    invitation.expires_at.isoformat()
-                    if invitation.expires_at
-                    else None
-                ),
+                "expires_at": (invitation.expires_at.isoformat() if invitation.expires_at else None),
             },
             status=status.HTTP_200_OK,
         )
