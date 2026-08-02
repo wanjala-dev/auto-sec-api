@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import datetime
-from typing import Sequence
+from collections.abc import Sequence
 from uuid import UUID
 
 from django.db.models import Exists, OuterRef, Q
@@ -32,8 +32,8 @@ def _active_non_suppressed_subscribers_qs(workspace_id: UUID):
     """
 
     from infrastructure.persistence.content.models import (
-        SuppressedAddress,
         Subscriber,
+        SuppressedAddress,
     )
 
     suppression_match = SuppressedAddress.objects.filter(
@@ -42,8 +42,7 @@ def _active_non_suppressed_subscribers_qs(workspace_id: UUID):
         Q(workspace_id=workspace_id) | Q(workspace__isnull=True),
     )
     return (
-        Subscriber.objects
-        .filter(workspace_id=workspace_id, is_active=True)
+        Subscriber.objects.filter(workspace_id=workspace_id, is_active=True)
         .annotate(_is_suppressed=Exists(suppression_match))
         .filter(_is_suppressed=False)
     )
@@ -91,6 +90,24 @@ class NewsletterReadRepository(NewsletterReaderPort):
         )
         return _to_entity(row) if row else None
 
+    def list_due_scheduled(
+        self,
+        *,
+        now: datetime.datetime,
+        limit: int,
+    ) -> Sequence[UUID]:
+        from components.content.domain.enums import NewsletterStatus
+        from infrastructure.persistence.content.models import Newsletter
+
+        return list(
+            Newsletter.objects.filter(
+                status=NewsletterStatus.SCHEDULED,
+                scheduled_for__lte=now,
+            )
+            .order_by("scheduled_for")
+            .values_list("id", flat=True)[:limit]
+        )
+
     def count_workspace_dispatch_targets(self, *, workspace_id: UUID) -> int:
         return _active_non_suppressed_subscribers_qs(workspace_id).count()
 
@@ -128,11 +145,7 @@ class NewsletterReadRepository(NewsletterReaderPort):
         normalised = self._normalise_emails(emails)
         if not normalised:
             return 0
-        return (
-            _active_non_suppressed_subscribers_qs(workspace_id)
-            .filter(email__in=normalised)
-            .count()
-        )
+        return _active_non_suppressed_subscribers_qs(workspace_id).filter(email__in=normalised).count()
 
     def list_dispatch_targets_for_emails(
         self,

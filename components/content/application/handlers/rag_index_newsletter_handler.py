@@ -18,7 +18,7 @@ paying workspace.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from components.content.domain.events.newsletter_sent_event import NewsletterSent
 
@@ -35,6 +35,7 @@ def on_newsletter_sent_index_rag(event: NewsletterSent) -> None:
     from components.shared_platform.application.providers.feature_flags_provider import (
         get_feature_flags_provider,
     )
+
     is_feature_enabled = get_feature_flags_provider().is_feature_enabled
 
     workspace_id = str(event.workspace_id)
@@ -46,32 +47,23 @@ def on_newsletter_sent_index_rag(event: NewsletterSent) -> None:
         )
         return
 
-    # Lazy imports — keep the module light at app boot.
-    from infrastructure.persistence.content.models import Newsletter
+    # Resolve collaborators through providers — the handler reads the
+    # newsletter + stamps its indexed marker through the content ports,
+    # never the ORM (the application layer stays ORM-free).
+    from components.content.application.providers.newsletter_read_repository_provider import (
+        get_newsletter_read_repository_provider,
+    )
+    from components.content.application.providers.newsletter_store_repository_provider import (
+        get_newsletter_store_repository_provider,
+    )
     from components.knowledge.application.providers.knowledge_text_ingest_provider import (
         KnowledgeTextIngestProvider,
     )
 
-    row = (
-        Newsletter.objects.filter(pk=event.newsletter_id)
-        .only(
-            "id",
-            "workspace_id",
-            "title",
-            "subject",
-            "preheader",
-            "content_html",
-            "period_start",
-            "period_end",
-            "sent_at",
-            "metadata",
-        )
-        .first()
-    )
+    reader = get_newsletter_read_repository_provider().repository()
+    row = reader.get(newsletter_id=event.newsletter_id)
     if row is None:
-        logger.warning(
-            "newsletter.rag_index_missing_row newsletter_id=%s", event.newsletter_id
-        )
+        logger.warning("newsletter.rag_index_missing_row newsletter_id=%s", event.newsletter_id)
         return
 
     corpus = _build_corpus(row)
@@ -100,20 +92,19 @@ def on_newsletter_sent_index_rag(event: NewsletterSent) -> None:
             document_key=document_key,
             metadata=metadata,
         )
-    except Exception:  # noqa: BLE001 — embedding outage must not fail the send
+    except Exception:
         logger.exception("newsletter.rag_index_failed newsletter_id=%s", row.id)
         return
 
     # Stamp the indexed-at timestamp on the row's metadata JSONField. The
     # newsletter table has no dedicated column — the backfill command
     # uses this stamp to skip already-indexed rows.
-    stamped_metadata = dict(row.metadata or {})
-    stamped_metadata["rag_indexed_at"] = datetime.now(timezone.utc).isoformat()
-    stamped_metadata["rag_document_key"] = document_key
-    Newsletter.objects.filter(pk=row.pk).update(metadata=stamped_metadata)
-    logger.info(
-        "newsletter.rag_indexed newsletter_id=%s chunks=%d", row.id, chunks
+    get_newsletter_store_repository_provider().repository().stamp_rag_indexed(
+        newsletter_id=row.id,
+        document_key=document_key,
+        indexed_at=datetime.now(UTC),
     )
+    logger.info("newsletter.rag_indexed newsletter_id=%s chunks=%d", row.id, chunks)
 
 
 def _document_key(row) -> str:
@@ -150,9 +141,7 @@ def _build_corpus(row) -> str:
     if preheader:
         parts.append(f"Preheader: {preheader}")
     if row.period_start and row.period_end:
-        parts.append(
-            f"Period: {row.period_start.isoformat()} to {row.period_end.isoformat()}"
-        )
+        parts.append(f"Period: {row.period_start.isoformat()} to {row.period_end.isoformat()}")
     if body:
         parts.append(f"Body:\n{body}")
     return "\n\n".join(parts)
