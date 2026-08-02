@@ -100,10 +100,6 @@ _ORM_FREE_ALLOWLIST: set[tuple[str, str]] = {
     ("agents", "application/services/posture_service.py"),
     ("agents", "application/use_cases/agent_chat_use_case.py"),
     ("agents", "application/use_cases/set_workspace_agent_capability_use_case.py"),
-    # membership — permission service reads WorkspaceRole ORM inline; pending
-    # port extraction.
-    # TRANSITIONAL: app-layer ORM — see architecture audit 2026-08; burn down.
-    ("membership", "application/services/membership_permission_service.py"),
     # workflow — findings facade reads workflow ORM inline; pending port
     # extraction.
     # TRANSITIONAL: app-layer ORM — see architecture audit 2026-08; burn down.
