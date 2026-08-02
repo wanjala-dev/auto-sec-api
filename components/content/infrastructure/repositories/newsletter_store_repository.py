@@ -100,6 +100,24 @@ class NewsletterStoreRepository(NewsletterStorePort):
         row.metadata = metadata
         row.save(update_fields=["metadata", "updated_at"])
 
+    def stamp_rag_indexed(
+        self,
+        *,
+        newsletter_id: UUID,
+        document_key: str,
+        indexed_at: datetime.datetime,
+    ) -> None:
+        from infrastructure.persistence.content.models import Newsletter
+
+        row = Newsletter.objects.filter(pk=newsletter_id).only("id", "metadata").first()
+        if row is None:
+            # Indexing must not resurrect a deleted newsletter — no-op.
+            return
+        metadata = dict(row.metadata or {})
+        metadata["rag_indexed_at"] = indexed_at.isoformat()
+        metadata["rag_document_key"] = document_key
+        Newsletter.objects.filter(pk=newsletter_id).update(metadata=metadata)
+
     def update_body(
         self,
         *,
