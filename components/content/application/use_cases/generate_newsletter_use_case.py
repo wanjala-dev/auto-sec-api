@@ -36,7 +36,6 @@ from components.shared_kernel.infrastructure.adapters.celery_event_publisher imp
     CeleryEventPublisher,
 )
 
-
 # Curated, warm, nonprofit/community/education stock photos (Unsplash CDN —
 # hotlinkable). Used as the hero image ONLY when a workspace hasn't set its own
 # cover/logo, so a newsletter is never a bare text hero. Direct ``images.
@@ -159,7 +158,7 @@ def _workspace_donate_url(workspace_id: UUID) -> str:
         base = (DjangoSettingsAdapter().get("FRONTEND_URL", "") or "").rstrip("/")
         if base:
             return f"{base}/donate/workspace/{workspace_id}"
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     return ""
 
@@ -170,6 +169,13 @@ class GenerateNewsletterUseCase:
     newsletter_reader: NewsletterReaderPort
     newsletter_ai: NewsletterAiPort
     event_publisher: CeleryEventPublisher
+    # Read the workspace's newsletter-relevant brand fields through a
+    # content-owned port (the sanctioned cross-context read) rather than
+    # touching ``workspaces`` persistence from the application layer.
+    workspace_profile: WorkspaceProfilePort
+    # Weekly donation totals for the chart block, injected so the use case
+    # never imports the infra adapter directly (provider-wired composition).
+    donation_weekly_totals: DonationWeeklyTotalsReadPort
     # Canonical brand voice (tone + guidelines) from the workspace brand kit.
     # Optional so legacy constructions keep working; the adapter is
     # failure-safe, so a blank/missing voice simply means no steering.
@@ -205,14 +211,14 @@ class GenerateNewsletterUseCase:
 
         # Resolve workspace fields up-front — needed both for the grounded
         # deterministic fallback (org name in the prose) and for the hero
-        # + footer layout blocks below.
-        (
-            workspace_name,
-            workspace_contact_email,
-            workspace_mission,
-            workspace_cover_photo_url,
-            workspace_photo_url,
-        ) = self._load_workspace_fields(workspace_id)
+        # + footer layout blocks below. Read through the content-owned
+        # WorkspaceProfilePort (failure-safe: a blank profile on error).
+        profile = self.workspace_profile.get_profile(workspace_id=workspace_id)
+        workspace_name = profile.name
+        workspace_contact_email = profile.contact_email
+        workspace_mission = profile.mission
+        workspace_cover_photo_url = profile.cover_photo_url
+        workspace_photo_url = profile.photo_url
 
         ai_configured = self.newsletter_ai.is_configured()
         ai_payload: dict[str, Any] = {}
@@ -241,9 +247,7 @@ class GenerateNewsletterUseCase:
         # straight from the enriched period metrics — never persist an empty
         # body. The summary's figures all come from ``metrics`` so they pass
         # the faithfulness verifier by construction.
-        has_prose = bool((ai_payload.get("content_html") or "").strip()) or bool(
-            ai_payload.get("sections")
-        )
+        has_prose = bool((ai_payload.get("content_html") or "").strip()) or bool(ai_payload.get("sections"))
         used_fallback = False
         thin_data = False
         if not has_prose:
@@ -275,20 +279,18 @@ class GenerateNewsletterUseCase:
         )
 
         # (workspace_name / contact_email / mission resolved up-front.)
-
         # Resolve workspace-backed chart series. None if we can't compute
-        # data — the composer drops the chart block from the tree.
+        # data — the composer drops the chart block from the tree. The weekly
+        # totals come from the injected port (provider-wired), never an infra
+        # adapter imported here.
         from components.content.domain.services.newsletter_chart_data import (
             donations_over_time,
-        )
-        from components.content.infrastructure.adapters.orm_donation_weekly_totals_adapter import (
-            OrmDonationWeeklyTotalsAdapter,
         )
 
         chart_series = donations_over_time(
             workspace_id=workspace_id,
             period_end=period_end,
-            repository=OrmDonationWeeklyTotalsAdapter(),
+            repository=self.donation_weekly_totals,
         )
 
         # The first sentence of the mission lands as the footer tagline
@@ -314,11 +316,7 @@ class GenerateNewsletterUseCase:
         # cards (the reference design) rather than a wall of prose: promote
         # 'Thank you' to a two-column image card, turn 'Get involved' into the
         # CTA pill, and drop the prose that just restates the KPI cards.
-        workspace_donate_url = (
-            ai_payload.get("workspace_donate_url")
-            or _workspace_donate_url(workspace_id)
-            or None
-        )
+        workspace_donate_url = ai_payload.get("workspace_donate_url") or _workspace_donate_url(workspace_id) or None
         thanks_image_url = workspace_photo_url or _fallback_thanks_image(workspace_id)
         cardified_sections, derived_cta_supporting = _cardify_sections(
             ai_payload.get("sections", []) or [],
@@ -340,27 +338,17 @@ class GenerateNewsletterUseCase:
             image_blocks=ai_payload.get("image_blocks") or [],
             hero_accent_word=ai_payload.get("hero_accent_word", "") or "",
             cta_label=ai_payload.get("cta_label") or "Get Involved",
-            cta_supporting=ai_payload.get("cta_supporting")
-            or derived_cta_supporting
-            or "",
+            cta_supporting=ai_payload.get("cta_supporting") or derived_cta_supporting or "",
             cta_tone=ai_payload.get("cta_tone") or "dark",
             footer_email=workspace_contact_email,
             footer_phone=ai_payload.get("footer_phone", "") or "",
             footer_website=ai_payload.get("footer_website", "") or "",
-            footer_tagline=ai_payload.get("footer_tagline")
-            or mission_first_sentence
-            or "",
+            footer_tagline=ai_payload.get("footer_tagline") or mission_first_sentence or "",
             footer_accent_tagline=ai_payload.get("footer_accent_tagline", "") or "",
-            icon_divider_caption_html=ai_payload.get(
-                "icon_divider_caption_html", ""
-            )
-            or "",
+            icon_divider_caption_html=ai_payload.get("icon_divider_caption_html", "") or "",
         )
 
-        title = (
-            ai_payload.get("title")
-            or f"Newsletter — {period_start} to {period_end}"
-        )
+        title = ai_payload.get("title") or f"Newsletter — {period_start} to {period_end}"
         content_html = ai_payload.get("content_html", "")
         # When the grounded summary fallback produced the body, there is no
         # authoring agent — record an empty agent so the editor labels it as
@@ -423,41 +411,6 @@ class GenerateNewsletterUseCase:
             )
         self._emit_drafted(row, via_ai=not used_fallback)
         return row
-
-    @staticmethod
-    def _load_workspace_fields(workspace_id: UUID) -> tuple[str, str, str, str, str]:
-        """Resolve (name, contact_email, mission, cover_photo_url, photo_url).
-
-        Best-effort — a missing workspace or read error degrades to empty
-        strings (the composer drops blocks it can't populate, the grounded
-        summary falls back to a generic org label, and the hero falls back to
-        a curated stock photo).
-        """
-        try:
-            from infrastructure.persistence.workspaces.models import Workspace
-
-            workspace = (
-                Workspace.objects.filter(pk=workspace_id)
-                .only(
-                    "workspace_name",
-                    "contact_email",
-                    "mission",
-                    "cover_photo_url",
-                    "photo_url",
-                )
-                .first()
-            )
-            if workspace is not None:
-                return (
-                    workspace.workspace_name or "",
-                    workspace.contact_email or "",
-                    workspace.mission or "",
-                    workspace.cover_photo_url or "",
-                    workspace.photo_url or "",
-                )
-        except Exception:  # noqa: BLE001
-            pass
-        return "", "", "", "", ""
 
     def _emit_drafted(self, row: NewsletterEntity, *, via_ai: bool) -> None:
         self.event_publisher.publish(
