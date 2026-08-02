@@ -6,6 +6,7 @@ from components.project.application.use_cases.batch_move_tasks_use_case import B
 from components.project.application.use_cases.create_project_use_case import CreateProjectUseCase
 from components.project.application.use_cases.create_task_use_case import CreateTaskUseCase
 from components.project.application.use_cases.move_task_to_board_use_case import MoveTaskToBoardUseCase
+from components.project.application.use_cases.record_finding_draft_pr_use_case import RecordFindingDraftPrUseCase
 from components.project.application.use_cases.update_task_use_case import UpdateTaskUseCase
 
 
@@ -55,3 +56,11 @@ class ProjectProvider:
         )
 
         return MoveTaskToBoardUseCase(port=OrmMoveTaskToBoardRepository())
+
+    @staticmethod
+    def build_record_finding_draft_pr_use_case() -> RecordFindingDraftPrUseCase:
+        from components.project.infrastructure.repositories.record_finding_draft_pr_repository import (
+            OrmRecordFindingDraftPrRepository,
+        )
+
+        return RecordFindingDraftPrUseCase(port=OrmRecordFindingDraftPrRepository())

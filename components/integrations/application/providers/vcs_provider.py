@@ -41,10 +41,36 @@ def get_vcs_adapter(provider: str, token: str) -> VcsPort:
     return factory(token)
 
 
+def get_finding_facts_reader():
+    """Composition root for the read-side board access (C3): the use case reads a
+    finding's board Task through this port, never ``project``'s ORM."""
+    from components.integrations.infrastructure.adapters.board_finding_facts_reader import (
+        BoardFindingFactsReader,
+    )
+
+    return BoardFindingFactsReader()
+
+
+def get_finding_pr_recorder():
+    """Composition root for the write-side board access (C2): the draft-PR record
+    is ``project.Task`` data, so this adapter delegates the write to ``project``."""
+    from components.integrations.infrastructure.adapters.project_finding_pr_recorder import (
+        ProjectFindingPrRecorder,
+    )
+
+    return ProjectFindingPrRecorder()
+
+
 def get_open_draft_pr_use_case() -> OpenDraftPrUseCase:
     # The use case reads the VcsConnection and passes its ``provider``; the registry
     # resolves the matching adapter (Phase 2). ``get_vcs_adapter`` is ``(provider, token)``.
-    return OpenDraftPrUseCase(adapter_factory=get_vcs_adapter)
+    # The board read/write ports are wired here (C2/C3) so the application layer holds
+    # no direct infrastructure import.
+    return OpenDraftPrUseCase(
+        adapter_factory=get_vcs_adapter,
+        finding_facts=get_finding_facts_reader(),
+        pr_recorder=get_finding_pr_recorder(),
+    )
 
 
 def get_vcs_connection_service():
