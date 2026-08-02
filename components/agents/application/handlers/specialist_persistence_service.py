@@ -118,17 +118,15 @@ def persist_finding_as_task(
     from components.project.application.providers.project_provider import (
         ProjectProvider,
     )
-    from infrastructure.persistence.project.models import Task
 
     if idempotency_key:
-        existing = (
-            Task.objects.filter(
-                workspace_id=workspace.id,
-                source_type=source_type,
-                metadata__idempotency_key=idempotency_key,
-            )
-            .values_list("id", flat=True)
-            .first()
+        # Read the replay short-circuit through the project context's inbound
+        # read seam (TaskLookupPort) instead of reaching into project's ORM from
+        # this application-layer handler (Rule 2 / architecture-skill C3).
+        existing = ProjectProvider.build_task_lookup_port().find_by_idempotency(
+            workspace_id=str(workspace.id),
+            source_type=source_type,
+            key=idempotency_key,
         )
         if existing is not None:
             logger.info(
