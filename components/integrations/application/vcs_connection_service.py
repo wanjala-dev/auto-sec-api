@@ -43,6 +43,9 @@ class VcsConnectionService:
         base_url: str,
         token: str,
         repo_root: str = "",
+        commit_identity: str = "pat_owner",
+        commit_author_name: str = "",
+        commit_author_email: str = "",
     ):
         connection = self._repo.create(
             workspace_id=workspace_id,
@@ -51,6 +54,9 @@ class VcsConnectionService:
             repo_allowlist=repo_allowlist,
             base_url=base_url,
             repo_root=repo_root,
+            commit_identity=commit_identity,
+            commit_author_name=commit_author_name,
+            commit_author_email=commit_author_email,
             token_ciphertext=self._encrypt(token),
         )
         logger.info(
@@ -62,7 +68,18 @@ class VcsConnectionService:
         return connection
 
     def update_connection(
-        self, connection, *, name=None, repo_allowlist=None, base_url=None, repo_root=None, status=None, token=None
+        self,
+        connection,
+        *,
+        name=None,
+        repo_allowlist=None,
+        base_url=None,
+        repo_root=None,
+        commit_identity=None,
+        commit_author_name=None,
+        commit_author_email=None,
+        status=None,
+        token=None,
     ):
         # A supplied token is re-encrypted; an omitted token leaves the stored one untouched.
         token_ciphertext = self._encrypt(token) if token else None
@@ -72,6 +89,9 @@ class VcsConnectionService:
             repo_allowlist=repo_allowlist,
             base_url=base_url,
             repo_root=repo_root,
+            commit_identity=commit_identity,
+            commit_author_name=commit_author_name,
+            commit_author_email=commit_author_email,
             status=status,
             token_ciphertext=token_ciphertext,
         )
@@ -105,10 +125,15 @@ class VcsConnectionService:
             return self._repo.mark_error(connection, token_health.detail or "token invalid or missing scope")
 
         # 2) Per-repo probe — one call per repo (allowlists are small). Aggregate the
-        #    inaccessible ones so the operator sees WHICH repos are blocked.
+        #    unreachable ones so the operator sees WHICH repos are blocked. A repo can
+        #    fail here for a permission reason (401/403/404) OR a transient one (500 /
+        #    timeout → "not reachable"); we don't claim a hard "no access" for the
+        #    latter, hence "no access or unreachable".
         allowlist = [r for r in (connection.repo_allowlist or []) if isinstance(r, str) and r.strip()]
         inaccessible = [repo for repo in allowlist if not adapter.verify(repo).ok]
         if inaccessible:
-            return self._repo.mark_error(connection, f"connected, but no access to: {', '.join(inaccessible)}")
+            return self._repo.mark_error(
+                connection, f"connected, but no access or unreachable: {', '.join(inaccessible)}"
+            )
 
         return self._repo.mark_verified(connection)

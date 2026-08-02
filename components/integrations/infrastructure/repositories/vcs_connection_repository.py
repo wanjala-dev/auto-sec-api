@@ -29,6 +29,9 @@ class VcsConnectionRepository:
         base_url: str,
         token_ciphertext: str,
         repo_root: str = "",
+        commit_identity: str = VcsConnection.CommitIdentity.PAT_OWNER,
+        commit_author_name: str = "",
+        commit_author_email: str = "",
         status: str = VcsConnection.Status.CONNECTED,
     ) -> VcsConnection:
         return VcsConnection.objects.create(
@@ -38,6 +41,9 @@ class VcsConnectionRepository:
             repo_allowlist=repo_allowlist or [],
             base_url=base_url or "",
             repo_root=repo_root or "",
+            commit_identity=commit_identity or VcsConnection.CommitIdentity.PAT_OWNER,
+            commit_author_name=commit_author_name or "",
+            commit_author_email=commit_author_email or "",
             token_ciphertext=token_ciphertext or "",
             status=status,
         )
@@ -50,6 +56,9 @@ class VcsConnectionRepository:
         repo_allowlist: list | None = None,
         base_url: str | None = None,
         repo_root: str | None = None,
+        commit_identity: str | None = None,
+        commit_author_name: str | None = None,
+        commit_author_email: str | None = None,
         status: str | None = None,
         token_ciphertext: str | None = None,
     ) -> VcsConnection:
@@ -67,6 +76,15 @@ class VcsConnectionRepository:
         if repo_root is not None and repo_root != connection.repo_root:
             connection.repo_root = repo_root
             changed.append("repo_root")
+        if commit_identity is not None and commit_identity != connection.commit_identity:
+            connection.commit_identity = commit_identity
+            changed.append("commit_identity")
+        if commit_author_name is not None and commit_author_name != connection.commit_author_name:
+            connection.commit_author_name = commit_author_name
+            changed.append("commit_author_name")
+        if commit_author_email is not None and commit_author_email != connection.commit_author_email:
+            connection.commit_author_email = commit_author_email
+            changed.append("commit_author_email")
         if status is not None and status != connection.status:
             connection.status = status
             changed.append("status")

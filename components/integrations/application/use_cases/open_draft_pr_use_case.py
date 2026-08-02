@@ -134,6 +134,7 @@ class OpenDraftPrUseCase:
 
         branch = f"autosec/finding-{task_id}"
         title = f"[Auto-Sec] {task.title[:180]}"
+        commit_author = self._resolve_commit_author(connection, performed_by)
         adapter.create_branch(target_repo, branch, from_sha=default_branch.head_sha)
         adapter.commit_file(
             target_repo,
@@ -142,6 +143,7 @@ class OpenDraftPrUseCase:
             proposal.updated_content,
             message=title,
             file_sha=repo_file.sha,
+            author=commit_author,
         )
         pr = adapter.open_draft_pr(
             target_repo,
@@ -354,6 +356,43 @@ class OpenDraftPrUseCase:
                 "The GitHub connection has no stored token.",
             )
         return token
+
+    @staticmethod
+    def _resolve_commit_author(connection, performed_by: str) -> dict | None:
+        """Resolve the commit author/committer identity from the connection's
+        ``commit_identity`` policy. Returns ``{"name", "email"}`` or ``None`` (→ the
+        adapter omits author/committer, so the host attributes the commit to the PAT
+        owner — the default).
+
+        - ``pat_owner`` (default) → ``None``.
+        - ``operator`` → the approving user's name + email. If the user or their email
+          is missing, fall back to ``None`` — attribution never fails the PR.
+        - ``custom`` → the stored ``commit_author_name`` / ``commit_author_email``
+          (both required; the DTO validates that on write, so a half-set row falls
+          back to ``None`` rather than sending a malformed identity).
+        """
+        from infrastructure.persistence.integrations.models import VcsConnection
+
+        mode = getattr(connection, "commit_identity", VcsConnection.CommitIdentity.PAT_OWNER)
+
+        if mode == VcsConnection.CommitIdentity.OPERATOR:
+            from infrastructure.persistence.users.models import CustomUser
+
+            user = CustomUser.objects.filter(id=performed_by).first()
+            email = (getattr(user, "email", "") or "").strip() if user else ""
+            if not user or not email:
+                return None
+            name = (user.get_full_name() or "").strip() or (user.username or "").strip() or email
+            return {"name": name, "email": email}
+
+        if mode == VcsConnection.CommitIdentity.CUSTOM:
+            name = (getattr(connection, "commit_author_name", "") or "").strip()
+            email = (getattr(connection, "commit_author_email", "") or "").strip()
+            if name and email:
+                return {"name": name, "email": email}
+            return None
+
+        return None
 
     # ── Output ────────────────────────────────────────────────────────
 

@@ -11,6 +11,19 @@ _ENABLED_PROVIDERS = {"github"}
 # Statuses a workspace may set via the API. ``error`` is system-owned (set by verify);
 # ``connected`` re-enables, ``disabled`` pauses a connection.
 _VALID_STATUSES = {"connected", "disabled"}
+# Who the draft-PR commit is attributed to. ``pat_owner`` is the default (unchanged
+# behavior). ``custom`` requires both a name and an email.
+_VALID_COMMIT_IDENTITIES = {"pat_owner", "operator", "custom"}
+
+
+def _commit_identity_error(commit_identity: str, name: str, email: str) -> str | None:
+    """Validate the commit-identity trio. ``custom`` requires both name and email;
+    the other modes ignore them. Returns an error string, or ``None`` when valid."""
+    if commit_identity not in _VALID_COMMIT_IDENTITIES:
+        return f"commit_identity must be one of {sorted(_VALID_COMMIT_IDENTITIES)}."
+    if commit_identity == "custom" and not (name.strip() and email.strip()):
+        return "commit_identity 'custom' requires both commit_author_name and commit_author_email."
+    return None
 
 
 def _clean_allowlist(raw) -> list[str]:
@@ -48,6 +61,9 @@ class CreateVcsConnectionRequest:
     name: str = ""
     base_url: str = ""
     repo_root: str = ""
+    commit_identity: str = "pat_owner"
+    commit_author_name: str = ""
+    commit_author_email: str = ""
     repo_allowlist: list = field(default_factory=list)
 
     @classmethod
@@ -59,6 +75,9 @@ class CreateVcsConnectionRequest:
             name=str(data.get("name") or "").strip(),
             base_url=str(data.get("base_url") or "").strip(),
             repo_root=str(data.get("repo_root") or "").strip(),
+            commit_identity=str(data.get("commit_identity") or "pat_owner").strip().lower(),
+            commit_author_name=str(data.get("commit_author_name") or "").strip(),
+            commit_author_email=str(data.get("commit_author_email") or "").strip(),
             repo_allowlist=_clean_allowlist(data.get("repo_allowlist")),
         )
 
@@ -69,7 +88,10 @@ class CreateVcsConnectionRequest:
             return f"The {self.provider} provider is not available yet."
         if not self.token:
             return "A token is required to create a VCS connection."
-        return _repo_root_error(self.repo_root)
+        root_error = _repo_root_error(self.repo_root)
+        if root_error:
+            return root_error
+        return _commit_identity_error(self.commit_identity, self.commit_author_name, self.commit_author_email)
 
 
 @dataclass(frozen=True)
@@ -79,6 +101,9 @@ class UpdateVcsConnectionRequest:
     name: str | None = None
     base_url: str | None = None
     repo_root: str | None = None
+    commit_identity: str | None = None
+    commit_author_name: str | None = None
+    commit_author_email: str | None = None
     status: str | None = None
     token: str | None = None
     repo_allowlist: list | None = None
@@ -89,6 +114,9 @@ class UpdateVcsConnectionRequest:
         name = data.get("name")
         base_url = data.get("base_url")
         repo_root = data.get("repo_root")
+        commit_identity = data.get("commit_identity")
+        commit_author_name = data.get("commit_author_name")
+        commit_author_email = data.get("commit_author_email")
         status = data.get("status")
         token = data.get("token")
         allowlist = data.get("repo_allowlist")
@@ -96,6 +124,9 @@ class UpdateVcsConnectionRequest:
             name=None if name is None else str(name).strip(),
             base_url=None if base_url is None else str(base_url).strip(),
             repo_root=None if repo_root is None else str(repo_root).strip(),
+            commit_identity=None if commit_identity is None else str(commit_identity).strip().lower(),
+            commit_author_name=None if commit_author_name is None else str(commit_author_name).strip(),
+            commit_author_email=None if commit_author_email is None else str(commit_author_email).strip(),
             status=None if status is None else str(status).strip().lower(),
             token=None if token is None else str(token).strip(),
             repo_allowlist=None if allowlist is None else _clean_allowlist(allowlist),
@@ -105,5 +136,16 @@ class UpdateVcsConnectionRequest:
         if self.status is not None and self.status not in _VALID_STATUSES:
             return "status can only be set to 'connected' or 'disabled' via the API."
         if self.repo_root is not None:
-            return _repo_root_error(self.repo_root)
+            root_error = _repo_root_error(self.repo_root)
+            if root_error:
+                return root_error
+        if self.commit_identity is not None:
+            # On a partial update we can't see stored name/email; setting
+            # ``custom`` therefore requires the name+email to be supplied in the
+            # SAME request (both non-empty) so the row is never left half-set.
+            return _commit_identity_error(
+                self.commit_identity,
+                self.commit_author_name or "",
+                self.commit_author_email or "",
+            )
         return None

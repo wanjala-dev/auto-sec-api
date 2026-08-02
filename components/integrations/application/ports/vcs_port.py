@@ -100,9 +100,20 @@ class VcsPort(ABC):
 
     @abstractmethod
     def commit_file(
-        self, repo: str, branch: str, path: str, new_content: str, message: str, file_sha: str
+        self,
+        repo: str,
+        branch: str,
+        path: str,
+        new_content: str,
+        message: str,
+        file_sha: str,
+        author: dict | None = None,
     ) -> CommittedFile:
-        """Commit ``new_content`` to ``path`` on ``branch`` (contents API)."""
+        """Commit ``new_content`` to ``path`` on ``branch`` (contents API).
+
+        ``author`` — optional ``{"name", "email"}``. When supplied, the adapter stamps
+        both author and committer so the host attributes the commit to that identity;
+        when ``None`` (default), the host attributes it to the token/PAT owner."""
 
     @abstractmethod
     def open_draft_pr(self, repo: str, head: str, base: str, title: str, body: str) -> DraftPullRequest:
