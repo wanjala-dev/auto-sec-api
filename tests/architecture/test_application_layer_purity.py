@@ -111,11 +111,6 @@ _ORM_FREE_ALLOWLIST: set[tuple[str, str]] = {
     # port extraction.
     # TRANSITIONAL: app-layer ORM — see architecture audit 2026-08; burn down.
     ("membership", "application/services/membership_permission_service.py"),
-    # team — invite use cases read/write Invitation/CustomUser/Workspace-
-    # Membership ORM inline; pending port extraction.
-    # TRANSITIONAL: app-layer ORM — see architecture audit 2026-08; burn down.
-    ("team", "application/use_cases/accept_workspace_invite_use_case.py"),
-    ("team", "application/use_cases/create_workspace_invite_use_case.py"),
     # workflow — findings facade reads workflow ORM inline; pending port
     # extraction.
     # TRANSITIONAL: app-layer ORM — see architecture audit 2026-08; burn down.
