@@ -112,10 +112,6 @@ _ORM_FREE_ALLOWLIST: set[tuple[str, str]] = {
     # port extraction.
     # TRANSITIONAL: app-layer ORM — see architecture audit 2026-08; burn down.
     ("membership", "application/services/membership_permission_service.py"),
-    # sign_off — materialize service reads Workspace/Task/Team ORM inline;
-    # pending port extraction.
-    # TRANSITIONAL: app-layer ORM — see architecture audit 2026-08; burn down.
-    ("sign_off", "application/services/materialize_signoff_tasks.py"),
     # team — invite use cases read/write Invitation/CustomUser/Workspace-
     # Membership ORM inline; pending port extraction.
     # TRANSITIONAL: app-layer ORM — see architecture audit 2026-08; burn down.
