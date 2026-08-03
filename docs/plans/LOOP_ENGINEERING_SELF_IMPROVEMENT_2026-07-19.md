@@ -1,7 +1,14 @@
 # Loop Engineering & Self-Improvement — Mapping onto the Auto-Sec Deep Pipeline
 
-**Status:** Research + design (no code yet). Ticket: #48.
-**Date:** 2026-07-19.
+**Status:** Research + design. Ticket: #48.
+**Date:** 2026-07-19. **Last updated:** 2026-07-23.
+
+> **2026-07-23 update:** Phase 1 (L2 verification) has since **shipped** — see the status
+> corrections in §2 and the Phase 1 header. A companion review reconciling this design with the
+> LangChain *loop-engineering* webinar (precise `RubricMiddleware` runtime semantics, HITL-per-loop,
+> eval-engineering, memory split, context-rot) and carrying the **current-state gap list** lives in
+> [`LOOP_ENGINEERING_REVIEW_2026-07-23.md`](./LOOP_ENGINEERING_REVIEW_2026-07-23.md). This doc keeps
+> the phased design; the review carries what's true today and what to action next.
 
 This maps two bodies of work — LangChain's *loop engineering* ("loopcraft") and the
 *Reflexion / evaluator-optimizer* self-improvement patterns — onto Auto-Sec's existing
@@ -50,7 +57,7 @@ there are clear evaluation criteria and (b) responses demonstrably improve with 
 | Loop level | Status | Where |
 |---|---|---|
 | **L1 Agent loop** | ✅ Have | ReAct workers via `create_agent_executor`; LangGraph orchestrator (`deep/orchestrator.py`) |
-| **L2 Verification** | 🟡 Partial | **Honesty guard** (`_is_agent_failure_summary`, `_format_honest_failure_answer`) is a *deterministic* fabrication check; **synthesizer replan** (`replan_requested: yes`, `max_replans=1`) is a coarse plan-level retry. **No per-output rubric grader.** |
+| **L2 Verification** | ✅ Have *(shipped since 2026-07-19)* | Two impls, exactly one active per run (`runner.py:365`): **`deepagents.RubricMiddleware`** (`deep/rubric.py`, deepagents 0.6.12 — grader on the cheap tier, ≤2 iters, grounded via `verify_suggestion_grounded`) and the hand-rolled **`WorkerCritic` + `reflective_worker`** fallback (`deep/critic.py`), running an A/B. Gated to `CRITIC_ENABLED_AGENTS = {triage, optimization}`. Verdicts stamped to `run_metadata` → `DeepRun.state`. Underneath: the **honesty guard** (`_is_agent_failure_summary`) is the cheap deterministic first gate; **synthesizer replan** (`max_replans=1`) is the plan-level retry. PRs #3 / #12 / #17. |
 | **L3 Event-driven** | ✅ Have (strength) | The detector cycle (`run_detector_cycle`, beat-scheduled) + `AiFindingRouterDetector`. Most systems bolt L3 on last; ours is native. |
 | **L4 Hill-climbing** | 🟡 Substrate only | Prompt registry (`infrastructure/prompts/registry.py`, versioned YAML), offline evaluators (`run_planner_eval` / `run_feedback_eval` / `run_writing_eval`), `promote_feedback_to_dataset`, Langfuse tracing (`tracing/langfuse.py`), `replay_conversation`. **No closing loop** that reads traces → proposes a change → gates promotion. |
 
@@ -84,7 +91,15 @@ a new specialist + one `ROUTABLE_SOURCE_TYPES` entry (the #47 scale proof, reuse
 Ordered by value-per-unit-complexity. Each phase is independently shippable and independently
 useful — no phase is a throwaway stepping stone (per `no-shortcuts.md`).
 
-### Phase 1 — Verification loop (L2): a bounded critic node — *highest near-term value*
+### Phase 1 — Verification loop (L2): a bounded critic node — ✅ SHIPPED (PRs #3 / #12 / #17)
+
+> **Shipped as designed, then upgraded.** The bounded critic landed as `deep/critic.py`
+> (`WorkerCritic` + `reflective_worker`, `max_reflections=1`, honesty-guard cheap gate, per-agent
+> `RUBRICS`, `CRITIC_ENABLED_AGENTS = {triage, optimization}`). The LangChain 1.x migration (#3) then
+> wired the real `deepagents.RubricMiddleware` (`deep/rubric.py`) as the target implementation, and #12
+> / #17 added verdict telemetry + merge-safe persistence so the two run as a **production A/B**. The
+> ship criterion below (eval A/B) is now the live comparison. Remaining design below (Phases 2–4)
+> stands. The original Phase 1 design text is retained for provenance:
 
 Add an **optional** `critic_fn` to `build_orchestrator`, evaluated after a worker completes and
 before the result is accepted. It grades the `WorkerResult` against a **per-agent rubric**
