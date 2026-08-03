@@ -24,6 +24,13 @@ class VulnSnapshotStorePort(ABC):
         the number of entry rows persisted."""
 
     @abstractmethod
+    def prune_snapshots(self, *, keep: int = 7) -> int:
+        """Retain the ``keep`` most-recent EPSS + KEV snapshots, deleting older ones (and
+        their child rows, by cascade). Bounds unbounded growth — EPSS lands ~280k child
+        rows/day and the reader only ever uses the latest snapshot. Idempotent; returns the
+        number of snapshot rows deleted."""
+
+    @abstractmethod
     def latest_epss_score_date(self) -> str | None:
         """ISO ``score_date`` of the newest EPSS snapshot, or None if none ingested yet."""
 
