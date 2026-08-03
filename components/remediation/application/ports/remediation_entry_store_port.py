@@ -71,6 +71,29 @@ class RemediationEntryStorePort(ABC):
         the (now lower) score. Workspace-scoped; ``None`` if absent/revoked."""
 
     @abstractmethod
+    def iter_reindex_candidate_ids(
+        self, *, workspace_id: UUID | None = None, limit: int = 1000
+    ) -> list[tuple[str, str]]:
+        """Return ``(entry_id, workspace_id)`` string pairs for ACTIVE entries that are
+        ORPHANED (never embedded — ``embedded_at IS NULL``) or rating-STALE (embedded
+        before their last outcome) — the P6 re-index-sweep candidates.
+
+        ``workspace_id=None`` spans all workspaces: this is the ONE maintenance read that
+        may, because each returned pair re-embeds in ITS OWN workspace (retrieval-time D4
+        is untouched). It lives on the sole-writer repository so the RemediationEntry ORM
+        model import stays confined there (the D1 model-locality guard)."""
+
+    @abstractmethod
+    def mark_embedded(self, *, entry_id: UUID, workspace_id: UUID) -> None:
+        """Stamp ``embedded_at = now`` after a successful (re-)embed (P6 bookkeeping).
+
+        A retrievability marker, not corpus content or membership — so it does not
+        weaken the D1 sole-writer invariant (it neither creates an entry nor sets its
+        gate facts/rating). Workspace-scoped (D4): a foreign id stamps nothing. The
+        ``reindex_remediation_corpus`` sweep uses the stamp to tell an embedded entry
+        from an orphaned one (``embedded_at IS NULL``) or a stale one."""
+
+    @abstractmethod
     def revoke(
         self,
         *,

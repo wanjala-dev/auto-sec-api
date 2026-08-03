@@ -102,6 +102,16 @@ def resolve_operator_identity(user_id: str) -> dict | None:
     return {"name": name, "email": email}
 
 
+def get_finding_preview_recorder():
+    """Composition root for the preview board write (C2, ADR 0012 P6): the proposed-fix
+    preview is ``project.Task`` data, so this adapter delegates the write to ``project``."""
+    from components.integrations.infrastructure.adapters.project_finding_preview_recorder import (
+        ProjectFindingPreviewRecorder,
+    )
+
+    return ProjectFindingPreviewRecorder()
+
+
 def get_open_draft_pr_use_case() -> OpenDraftPrUseCase:
     # The use case reads the VcsConnection and passes its ``provider``; the registry
     # resolves the matching adapter (Phase 2). ``get_vcs_adapter`` is ``(provider, token)``.
@@ -124,6 +134,9 @@ def get_open_draft_pr_use_case() -> OpenDraftPrUseCase:
         capability_port=AIProvider.build_agent_capability_port(),
         resolve_workspace_owner_id=resolve_workspace_owner_id,
         resolve_operator_identity=resolve_operator_identity,
+        preview_recorder=get_finding_preview_recorder(),
+        # grounding_retrieval defaults to None → resolved lazily via the remediation
+        # provider inside retrieve_grounding_sources (P6 preview display).
     )
 
 

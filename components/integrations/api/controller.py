@@ -257,6 +257,52 @@ class FindingOpenDraftPrView(APIView):
         )
 
 
+class FindingPreviewDraftPrView(APIView):
+    """POST /integrations/workspaces/<ws>/findings/<task_id>/preview-draft-pr/
+
+    Preview-before-commit (ADR 0012 P6): returns the grounded proposed patch (as a
+    unified diff) + the vetted priors that grounded it, WITHOUT opening a PR. It runs
+    the SAME preconditions and the SAME ``validate_patch`` guardrail as the open path
+    (a destructive/broken patch yields the same ``patch_*`` 422 here — a preview can
+    never present an unsafe patch as ready), and it posts the preview to the finding's
+    board card as provenance. Opening a PR still goes through the separate open
+    endpoint + its sign-off/approval — preview grounds, it never authorises (D2)."""
+
+    permission_classes = (permissions.IsAuthenticated, CanManageIntegrations)
+    name = "integrations-finding-preview-draft-pr"
+
+    def post(self, request, workspace_id, task_id):
+        from components.integrations.application.ports.vcs_port import VcsApiError
+        from components.integrations.application.providers.vcs_provider import (
+            get_open_draft_pr_use_case,
+        )
+        from components.integrations.application.use_cases.open_draft_pr_use_case import (
+            DraftPrPreconditionError,
+        )
+
+        req = OpenDraftPrRequest.from_payload(request.data)
+        try:
+            result = get_open_draft_pr_use_case().preview(
+                workspace_id=str(workspace_id),
+                task_id=str(task_id),
+                performed_by=str(request.user.id),
+                repo=req.repo,
+            )
+        except DraftPrPreconditionError as exc:
+            return Response(
+                {"success": False, "reason": exc.reason, "error": str(exc)},
+                status=FindingOpenDraftPrView._REASON_STATUS.get(exc.reason, status.HTTP_400_BAD_REQUEST),
+            )
+        except VcsApiError as exc:
+            logger.exception("preview_draft_pr_endpoint vcs error workspace_id=%s task_id=%s", workspace_id, task_id)
+            return Response(
+                {"success": False, "reason": "vcs_api_error", "error": str(exc)},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        return Response({"success": True, "data": DraftPrPreviewResource.from_result(result).to_dict()})
+
+
 class AwsConnectionLogStreamView(APIView):
     """GET /integrations/workspaces/<ws>/aws/<id>/logstream/
 
