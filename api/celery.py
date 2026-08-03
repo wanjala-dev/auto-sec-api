@@ -43,6 +43,7 @@ import components.notifications.workers.tasks
 import components.payments.workers.tasks
 import components.project.infrastructure.tasks.at_risk_detector_tasks
 import components.recycle_bin.workers.tasks
+import components.remediation.infrastructure.tasks.embed_remediation_entry_tasks
 import components.remediation.infrastructure.tasks.reconcile_remediations_tasks
 import components.report.workers.tasks
 import components.scanning.infrastructure.tasks.scan_tasks

@@ -63,7 +63,17 @@ def triage_finding(agent, input_str: str) -> str:
         service = payload.get("service") or "unknown"
         level = payload.get("level") or "ERROR"
         message = (payload.get("message") or payload.get("signal") or "")[:1600]
-        return LogFixAdvisor().suggest(service=service, level=level, message=message, feedback=feedback)
+        # ADR 0012 P4: ground the suggestion in the workspace's vetted prior fixes
+        # for this finding class. Grounding never authorizes — the grounded verifier
+        # (verify_suggestion) still runs on the result in process_pending_finding (D2).
+        return LogFixAdvisor().suggest(
+            service=service,
+            level=level,
+            message=message,
+            feedback=feedback,
+            workspace_id=str(agent.workspace_id),
+            source_type=_LOG_WATCH_SOURCE,
+        )
 
     def suggestion_text(suggestion):
         # The full grounding surface the verifier checks against the error evidence.

@@ -46,6 +46,30 @@ def build_finding_facts() -> FindingRemediationFactsPort:
     return BoardFindingFactsRepository()
 
 
+def build_remediation_retrieval() -> RemediationRetrievalPort:
+    """The read side of Remediation Memory (ADR 0012 P4) — the triage advisor
+    resolves this to ground a suggestion in the workspace's vetted prior fixes."""
+    from components.remediation.infrastructure.adapters.pgvector_remediation_retrieval_adapter import (
+        PgVectorRemediationRetrievalAdapter,
+    )
+
+    return PgVectorRemediationRetrievalAdapter()
+
+
+def build_embed_remediation_entry_use_case() -> EmbedRemediationEntryUseCase:
+    """Wire the embed-on-capture use case to the knowledge-owned write door.
+
+    The knowledge ``CorpusChunkIndexPort`` is resolved through knowledge's OWN
+    application provider (cross-context via the application surface, never a
+    knowledge-infrastructure import) — knowledge stays the sole writer of its store.
+    """
+    from components.knowledge.application.providers.corpus_chunk_index_provider import (
+        build_corpus_chunk_index_port,
+    )
+
+    return EmbedRemediationEntryUseCase(index=build_corpus_chunk_index_port())
+
+
 def build_remediation_service(
     *,
     store: RemediationEntryStorePort | None = None,

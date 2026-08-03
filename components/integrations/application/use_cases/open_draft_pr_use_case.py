@@ -212,7 +212,16 @@ class OpenDraftPrUseCase:
             explicit_prefix=(getattr(connection, "repo_root", "") or "").strip(),
         )
 
-        proposal = self._advisor.propose(payload=payload, path=resolved_path, current_content=repo_file.content)
+        # ADR 0012 P4: ground the patch in the team's vetted prior fixes for this
+        # class of finding BEFORE the advisor proposes. Grounding never authorizes —
+        # ``validate_patch`` below still runs on whatever comes back (D2).
+        proposal = self._advisor.propose(
+            payload=payload,
+            path=resolved_path,
+            current_content=repo_file.content,
+            workspace_id=str(workspace_id),
+            source_type=_LOG_WATCH_SOURCE,
+        )
         if proposal is None:
             raise DraftPrPreconditionError(
                 "no_grounded_patch",

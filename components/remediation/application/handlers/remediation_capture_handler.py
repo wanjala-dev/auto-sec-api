@@ -89,7 +89,7 @@ def capture_remediation_if_gated(
         tags=tuple(tags),
     )
     try:
-        return service.record(command)
+        entry = service.record(command)
     except EntryGateNotSatisfiedError as exc:
         logger.info(
             "remediation_capture_skipped workspace_id=%s finding_task_id=%s unmet=%s",
@@ -98,3 +98,41 @@ def capture_remediation_if_gated(
             ",".join(exc.unmet),
         )
         return None
+
+    # The gate ADMITTED the entry (D1) — now make it retrievable (P4). Embedding is
+    # the slow part (an LLM/embeddings call), so it is dispatched to Celery AFTER the
+    # entry's transaction commits, passing only the ids (never the object). Idempotent
+    # by entry id, so a retry or a re-capture re-embeds in place. A dispatch hiccup
+    # must never fail the capture — the entry is already safely admitted — so this is
+    # loss-tolerant (logged, not raised). This is the sanctioned application-handler
+    # role: trigger a side effect after a use case completes.
+    _dispatch_embed(entry)
+    return entry
+
+
+def _dispatch_embed(entry: RemediationEntry) -> None:
+    """Enqueue embed-on-capture after commit (P4). Loss-tolerant by design.
+
+    The Celery task module is imported lazily inside the body so the application
+    handler carries no eager infrastructure/celery import at module load, and the
+    dispatch is deferred to ``on_commit`` so the worker never races the entry's own
+    transaction. Any dispatch failure is logged, never raised — the entry is already
+    admitted; embedding is an enhancement, not a gate.
+    """
+    try:
+        from components.remediation.infrastructure.tasks.embed_remediation_entry_tasks import (
+            embed_remediation_entry,
+        )
+        from components.shared_kernel.application.transactional import on_commit
+
+        entry_id = str(entry.id)
+        workspace_id = str(entry.workspace_id)
+        on_commit(
+            lambda: embed_remediation_entry.apply_async(kwargs={"entry_id": entry_id, "workspace_id": workspace_id})
+        )
+    except Exception:
+        logger.exception(
+            "remediation_embed_dispatch_failed entry_id=%s workspace_id=%s",
+            getattr(entry, "id", None),
+            getattr(entry, "workspace_id", None),
+        )
