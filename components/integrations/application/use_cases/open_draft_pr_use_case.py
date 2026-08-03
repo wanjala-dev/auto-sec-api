@@ -23,12 +23,14 @@ Rung 1 (HITL): ``performed_by`` is the approving human's user id; the tool's
 
 from __future__ import annotations
 
+import difflib
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 
 from components.integrations.application.log_patch_advisor_service import (
     LogPatchAdvisor,
+    PatchProposal,
     PatchValidationError,
     RepoPathResolutionError,
     derive_candidate_path,
@@ -73,6 +75,38 @@ class DraftPrResult:
     created: bool  # False → idempotent hit (PR already existed)
 
 
+@dataclass(frozen=True)
+class _PreparedPatch:
+    """The validated proposal + the context needed to open a PR from it. Produced by
+    the choreography SHARED by ``execute`` and ``preview`` (dry-reuse) so both run the
+    identical precondition → advisor → ``validate_patch`` path (D2 — the guardrail runs
+    for a preview exactly as for an open)."""
+
+    adapter: VcsPort
+    default_branch: object  # has .name, .head_sha
+    repo_file: object  # has .content, .sha
+    proposal: PatchProposal
+    payload: dict
+
+
+@dataclass(frozen=True)
+class DraftPrPreviewResult:
+    """What the operator sees BEFORE any commit (ADR 0012 P6 preview-before-commit):
+    the grounded proposed patch (as a unified diff) + the vetted priors that grounded
+    it. ``already_opened`` short-circuits when a draft PR already exists (nothing left
+    to preview); ``pr_url`` carries that existing PR. The preview NEVER opens a PR and
+    only reaches this result AFTER ``validate_patch`` passed — grounding never
+    authorises (D2)."""
+
+    path: str
+    diff: str
+    change_summary: str
+    grounding: tuple[dict, ...]
+    repo: str
+    already_opened: bool = False
+    pr_url: str = ""
+
+
 class OpenDraftPrUseCase:
     def __init__(
         self,
@@ -85,6 +119,8 @@ class OpenDraftPrUseCase:
         capability_port: AgentCapabilityPort | None = None,
         resolve_workspace_owner_id: Callable[[str], str | None] | None = None,
         resolve_operator_identity: Callable[[str], dict | None] | None = None,
+        preview_recorder: FindingPreviewRecorderPort | None = None,
+        grounding_retrieval: object | None = None,
     ) -> None:
         self._adapter_factory = adapter_factory
         self._advisor = advisor or LogPatchAdvisor()
@@ -100,6 +136,8 @@ class OpenDraftPrUseCase:
         #   * triage capability   → AgentCapabilityPort (#216, agents context)
         #   * workspace owner id  → resolve_workspace_owner_id
         #   * operator identity   → resolve_operator_identity (name/email only)
+        #   * preview board write → FindingPreviewRecorderPort (P6, project-owned)
+        #   * grounding sources    → a RemediationRetrievalPort (P6 preview display)
         self._finding_facts = finding_facts
         self._pr_recorder = pr_recorder
         self._resolve_connection = resolve_connection
@@ -107,6 +145,8 @@ class OpenDraftPrUseCase:
         self._capability_port = capability_port
         self._resolve_workspace_owner_id = resolve_workspace_owner_id
         self._resolve_operator_identity = resolve_operator_identity
+        self._preview_recorder = preview_recorder
+        self._grounding_retrieval = grounding_retrieval
 
     def _finding_facts_port(self) -> FindingFactsPort:
         if self._finding_facts is None:
@@ -125,6 +165,15 @@ class OpenDraftPrUseCase:
 
             self._pr_recorder = get_finding_pr_recorder()
         return self._pr_recorder
+
+    def _preview_recorder_port(self) -> FindingPreviewRecorderPort:
+        if self._preview_recorder is None:
+            from components.integrations.application.providers.vcs_provider import (
+                get_finding_preview_recorder,
+            )
+
+            self._preview_recorder = get_finding_preview_recorder()
+        return self._preview_recorder
 
     def _resolve_connection_fn(self) -> Callable[[str], object | None]:
         if self._resolve_connection is None:
@@ -194,52 +243,16 @@ class OpenDraftPrUseCase:
 
         self._require_capability(workspace_id)
 
-        token = self._decrypt_token(connection)
-        candidate_path = derive_candidate_path(payload)
-        if not candidate_path:
-            raise DraftPrPreconditionError(
-                "no_candidate_path",
-                "The finding's evidence names no source file — cannot derive a patch target.",
-            )
-
-        adapter = self._adapter_factory(getattr(connection, "provider", ""), token)
-        default_branch = adapter.get_default_branch(target_repo)
-        resolved_path, repo_file = self._resolve_and_fetch(
-            adapter=adapter,
-            target_repo=target_repo,
-            ref=default_branch.name,
-            candidate_path=candidate_path,
-            explicit_prefix=(getattr(connection, "repo_root", "") or "").strip(),
+        # Shared choreography (dry-reuse): resolve the file, run the grounded advisor,
+        # and FAIL CLOSED on validate_patch — identical to what ``preview`` runs, so an
+        # open and a preview always agree on the patch and its safety.
+        prepared = self._prepare_validated_proposal(
+            connection=connection, target_repo=target_repo, task=task, task_id=task_id, workspace_id=workspace_id
         )
-
-        # ADR 0012 P4: ground the patch in the team's vetted prior fixes for this
-        # class of finding BEFORE the advisor proposes. Grounding never authorizes —
-        # ``validate_patch`` below still runs on whatever comes back (D2).
-        proposal = self._advisor.propose(
-            payload=payload,
-            path=resolved_path,
-            current_content=repo_file.content,
-            workspace_id=str(workspace_id),
-            source_type=_LOG_WATCH_SOURCE,
-        )
-        if proposal is None:
-            raise DraftPrPreconditionError(
-                "no_grounded_patch",
-                "No grounded patch could be generated from the finding's evidence.",
-            )
-
-        # Verification above the model: FAIL CLOSED before any branch/commit/PR.
-        # A destructive or broken patch (e.g. the advisor gutting the file it was
-        # asked to fix) never reaches GitHub — it raises a typed precondition the
-        # controller maps to 422. Composes with no_grounded_patch above.
-        try:
-            validate_patch(
-                original_content=repo_file.content,
-                updated_content=proposal.updated_content,
-                path=proposal.path,
-            )
-        except PatchValidationError as exc:
-            raise DraftPrPreconditionError(exc.reason, str(exc)) from exc
+        adapter = prepared.adapter
+        default_branch = prepared.default_branch
+        repo_file = prepared.repo_file
+        proposal = prepared.proposal
 
         branch = f"autosec/finding-{task_id}"
         title = f"[Auto-Sec] {task.title[:180]}"
@@ -259,7 +272,7 @@ class OpenDraftPrUseCase:
             head=branch,
             base=default_branch.name,
             title=title,
-            body=self._build_pr_body(task, payload, proposal),
+            body=self._build_pr_body(task, prepared.payload, proposal),
         )
 
         # C2: the finding-provenance write is ``project.Task`` data → delegate to
@@ -292,6 +305,204 @@ class OpenDraftPrUseCase:
             performed_by,
         )
         return DraftPrResult(url=pr.url, repo=target_repo, branch=branch, created=True)
+
+    def preview(
+        self,
+        *,
+        workspace_id: str,
+        task_id: str,
+        performed_by: str,
+        repo: str | None = None,
+    ) -> DraftPrPreviewResult:
+        """Preview-before-commit (ADR 0012 P6): show the operator the grounded proposed
+        patch + the vetted priors that grounded it, BEFORE any draft PR is opened.
+
+        Runs the SAME preconditions and the SAME advisor → ``validate_patch`` guardrail
+        as ``execute`` (D2 — grounds/preview never authorises: a destructive or broken
+        patch raises the identical ``patch_*`` precondition here, so a preview cannot
+        surface an unsafe patch as "ready"). It does NOT create a branch, commit, or
+        PR, and it does NOT bypass the sign-off gate — opening still requires the human
+        approval path. It posts the preview to the board as provenance (every AI action
+        shows on the card)."""
+        connection = self._require_connection(workspace_id)
+        target_repo = self._require_allowlisted_repo(connection, repo)
+        task = self._require_actionable_finding(workspace_id, task_id)
+
+        payload = (task.metadata or {}).get("payload") or {}
+        existing = payload.get("draft_pr") or {}
+        if existing.get("url"):
+            # A draft PR already exists — nothing left to preview; surface it.
+            return DraftPrPreviewResult(
+                path="",
+                diff="",
+                change_summary="",
+                grounding=(),
+                repo=existing.get("repo") or target_repo,
+                already_opened=True,
+                pr_url=existing["url"],
+            )
+
+        self._require_capability(workspace_id)
+
+        prepared = self._prepare_validated_proposal(
+            connection=connection, target_repo=target_repo, task=task, task_id=task_id, workspace_id=workspace_id
+        )
+        proposal = prepared.proposal
+        diff = self._unified_diff(prepared.repo_file.content, proposal.updated_content, proposal.path)
+        grounding = self._preview_grounding_sources(workspace_id, prepared.payload)
+
+        # Post the preview + the AI action to the board (provenance) — never the PR.
+        self._preview_recorder_port().record_preview(
+            workspace_id=str(workspace_id),
+            task_id=str(task_id),
+            performed_by=str(performed_by),
+            acting_agent=_ACTING_AGENT,
+            path=proposal.path,
+            code=proposal.updated_content,
+            language="",
+            change_summary=proposal.change_summary,
+            grounding=grounding,
+        )
+        logger.info(
+            "open_draft_pr previewed task_id=%s workspace_id=%s repo=%s path=%s grounded=%d performed_by=%s",
+            task_id,
+            workspace_id,
+            target_repo,
+            proposal.path,
+            len(grounding),
+            performed_by,
+        )
+        return DraftPrPreviewResult(
+            path=proposal.path,
+            diff=diff,
+            change_summary=proposal.change_summary,
+            grounding=grounding,
+            repo=target_repo,
+        )
+
+    def _prepare_validated_proposal(
+        self,
+        *,
+        connection,
+        target_repo: str,
+        task,
+        task_id: str,
+        workspace_id: str,
+    ) -> _PreparedPatch:
+        """Resolve the implicated file, run the grounded advisor, and FAIL CLOSED on
+        ``validate_patch`` — the choreography SHARED by ``execute`` and ``preview``.
+
+        Grounding never authorises (D2): ADR 0012 P4 folds the team's vetted priors
+        into the advisor's prompt, but whatever it returns STILL runs ``validate_patch``
+        here before it can reach a commit or a preview surface. Raises a typed
+        ``DraftPrPreconditionError`` (``no_candidate_path`` / ``no_grounded_patch`` /
+        the ``patch_*`` verification reasons) on any failure — the controller maps each
+        to a status."""
+        payload = (task.metadata or {}).get("payload") or {}
+        token = self._decrypt_token(connection)
+        candidate_path = derive_candidate_path(payload)
+        if not candidate_path:
+            raise DraftPrPreconditionError(
+                "no_candidate_path",
+                "The finding's evidence names no source file — cannot derive a patch target.",
+            )
+
+        adapter = self._adapter_factory(getattr(connection, "provider", ""), token)
+        default_branch = adapter.get_default_branch(target_repo)
+        resolved_path, repo_file = self._resolve_and_fetch(
+            adapter=adapter,
+            target_repo=target_repo,
+            ref=default_branch.name,
+            candidate_path=candidate_path,
+            explicit_prefix=(getattr(connection, "repo_root", "") or "").strip(),
+        )
+
+        # ADR 0012 P4: ground the patch in the team's vetted prior fixes BEFORE the
+        # advisor proposes. Grounding never authorizes — validate_patch below still runs.
+        proposal = self._advisor.propose(
+            payload=payload,
+            path=resolved_path,
+            current_content=repo_file.content,
+            workspace_id=str(workspace_id),
+            source_type=_LOG_WATCH_SOURCE,
+        )
+        if proposal is None:
+            raise DraftPrPreconditionError(
+                "no_grounded_patch",
+                "No grounded patch could be generated from the finding's evidence.",
+            )
+
+        # Verification above the model: FAIL CLOSED. A destructive or broken patch (e.g.
+        # the advisor gutting the file it was asked to fix) never reaches a commit OR a
+        # preview — it raises a typed precondition the controller maps to 422 (D2).
+        try:
+            validate_patch(
+                original_content=repo_file.content,
+                updated_content=proposal.updated_content,
+                path=proposal.path,
+            )
+        except PatchValidationError as exc:
+            raise DraftPrPreconditionError(exc.reason, str(exc)) from exc
+
+        return _PreparedPatch(
+            adapter=adapter,
+            default_branch=default_branch,
+            repo_file=repo_file,
+            proposal=proposal,
+            payload=payload,
+        )
+
+    @staticmethod
+    def _unified_diff(original: str, updated: str, path: str, *, max_chars: int = 12_000) -> str:
+        """A bounded unified diff of the proposed change — what the operator reviews in
+        the preview (the change, not the whole file)."""
+        diff = "".join(
+            difflib.unified_diff(
+                (original or "").splitlines(keepends=True),
+                (updated or "").splitlines(keepends=True),
+                fromfile=f"a/{path}",
+                tofile=f"b/{path}",
+            )
+        )
+        if len(diff) > max_chars:
+            diff = diff[:max_chars] + "\n… (diff truncated)"
+        return diff
+
+    def _preview_grounding_sources(self, workspace_id: str, payload: dict) -> tuple[dict, ...]:
+        """The vetted priors that grounded the proposal, as light provenance dicts for
+        display (never executable content). Retrieved read-only through the same
+        RemediationRetrievalPort the advisor grounds on (their code is already
+        secret-scrubbed at embed time — P6). A cold library returns ``()``."""
+        from components.integrations.application.remediation_grounding_service import (
+            retrieve_grounding_sources,
+        )
+
+        query_text = " ".join(
+            str(payload.get(k) or "") for k in ("message", "signal", "probable_cause", "suggested_fix")
+        ).strip()
+        sources = retrieve_grounding_sources(
+            workspace_id=str(workspace_id),
+            source_type=_LOG_WATCH_SOURCE,
+            query_text=query_text,
+            retrieval=self._grounding_retrieval,
+        )
+        out: list[dict] = []
+        for s in sources:
+            code = (getattr(s, "code", "") or "").strip()
+            out.append(
+                {
+                    "finding_kind": getattr(s, "finding_kind", "") or "",
+                    "title": getattr(s, "title", "") or "",
+                    "summary": getattr(s, "summary", "") or "",
+                    "language": getattr(s, "language", "") or "",
+                    "similarity": round(float(getattr(s, "score", 0.0) or 0.0), 4),
+                    "rating": int(getattr(s, "rating", 0) or 0),
+                    # A short excerpt only — enough to show WHAT grounded the fix,
+                    # already secret-scrubbed at embed time; not the full body.
+                    "code_excerpt": code[:400],
+                }
+            )
+        return tuple(out)
 
     def _resolve_and_fetch(self, *, adapter, target_repo, ref, candidate_path, explicit_prefix):
         """Resolve ``candidate_path`` to its real repo path and fetch its content.

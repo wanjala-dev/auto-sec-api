@@ -31,13 +31,16 @@ def embed_remediation_entry(entry_id: str, workspace_id: str) -> int:
     from components.remediation.application.providers.remediation_provider import (
         build_embed_remediation_entry_use_case,
         build_remediation_service,
+        build_remediation_store,
     )
 
     logger.info("embed_remediation_entry started entry_id=%s workspace_id=%s", entry_id, workspace_id)
 
     try:
+        eid = UUID(str(entry_id))
+        wsid = UUID(str(workspace_id))
         service = build_remediation_service()
-        entry = service.get(entry_id=UUID(str(entry_id)), workspace_id=UUID(str(workspace_id)))
+        entry = service.get(entry_id=eid, workspace_id=wsid)
     except (ValueError, TypeError):
         logger.warning("embed_remediation_entry bad ids entry_id=%s workspace_id=%s", entry_id, workspace_id)
         return 0
@@ -50,6 +53,10 @@ def embed_remediation_entry(entry_id: str, workspace_id: str) -> int:
         return 0
 
     written = build_embed_remediation_entry_use_case().execute(entry)
+    # Stamp retrievability bookkeeping (P6): the entry is now embedded, so the
+    # re-index sweep will not treat it as an orphan. Done only after a successful
+    # execute() — if embedding raised, embedded_at stays NULL and the sweep re-embeds.
+    build_remediation_store().mark_embedded(entry_id=eid, workspace_id=wsid)
     logger.info(
         "embed_remediation_entry completed entry_id=%s workspace_id=%s chunks=%d",
         entry_id,

@@ -30,6 +30,7 @@ from components.remediation.application.ports.remediation_retrieval_port import 
     REMEDIATION_CHUNK_TYPE,
 )
 from components.remediation.domain.entities.remediation_entry_entity import RemediationEntry
+from components.remediation.domain.services.secret_redactor import redact_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,21 @@ class EmbedRemediationEntryUseCase:
         self._index = index
 
     def execute(self, entry: RemediationEntry) -> int:
-        content = self._build_content(entry)
+        # Defence-in-depth secret scrub (ADR 0012 P6): redact obvious credentials from
+        # the fix code BEFORE it is embedded / carried in chunk metadata, so a live
+        # secret never lands in the retrievable corpus (the advisor reads this back as
+        # grounding). The entry ROW keeps its raw code (D3 source of truth); this scrubs
+        # only the searchable projection. Never log the raw or matched value — a count
+        # only (logging.md §4).
+        safe_code, redactions = redact_secrets((entry.code or "")[:_MAX_CODE_CHARS])
+        if redactions:
+            logger.warning(
+                "remediation_entry_code_redacted entry_id=%s workspace_id=%s redactions=%d",
+                entry.id,
+                entry.workspace_id,
+                redactions,
+            )
+        content = self._build_content(entry, safe_code)
         metadata = {
             "chunk_type": REMEDIATION_CHUNK_TYPE,
             "workspace_id": str(entry.workspace_id),
@@ -59,9 +74,9 @@ class EmbedRemediationEntryUseCase:
             "title": entry.title or "",
             "summary": entry.summary or "",
             "tags": list(entry.tags),
-            # RAW fix text only (D3: never rendered HTML) — carried so retrieval can
-            # hand the advisor the prior fix's code without a second DB read.
-            "code": (entry.code or "")[:_MAX_CODE_CHARS],
+            # RAW fix text (D3: never rendered HTML), SECRET-SCRUBBED (P6) — carried so
+            # retrieval can hand the advisor the prior fix's code without a second DB read.
+            "code": safe_code,
             "entry_id": str(entry.id),
             # The DERIVED outcome rating (P5). Retrieval blends this with vector
             # similarity so proven fixes outrank unproven ones; re-embedding on each
@@ -83,18 +98,18 @@ class EmbedRemediationEntryUseCase:
         return written
 
     @staticmethod
-    def _build_content(entry: RemediationEntry) -> str:
-        """Compose the searchable text: the finding context + the raw fix.
+    def _build_content(entry: RemediationEntry, safe_code: str) -> str:
+        """Compose the searchable text: the finding context + the (scrubbed) fix.
 
         This is what a triage query (the error message / evidence) is matched
         against, so it leads with the human-readable finding context and follows
-        with the fix code.
+        with the fix code. ``safe_code`` is the secret-scrubbed projection (P6).
         """
         parts = [
             f"Remediation for {entry.finding_kind} finding.",
             entry.title or "",
             entry.summary or "",
             f"Fix ({entry.language or 'code'}):",
-            (entry.code or "")[:_MAX_CODE_CHARS],
+            safe_code,
         ]
         return "\n".join(p for p in parts if p and str(p).strip())

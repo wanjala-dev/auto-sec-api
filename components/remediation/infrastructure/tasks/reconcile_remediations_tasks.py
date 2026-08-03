@@ -159,3 +159,42 @@ def reconcile_applied_remediations(workspace_id: str | None = None) -> dict:
     }
     logger.info("reconcile_applied_remediations completed workspace_id=%s summary=%s", workspace_id, summary)
     return summary
+
+
+@shared_task(name="remediation.reindex_remediation_corpus", soft_time_limit=240, time_limit=300)
+def reindex_remediation_corpus(workspace_id: str | None = None) -> dict:
+    """Re-embed vetted fixes that are missing from — or stale in — the corpus (P6).
+
+    Closes the P4b orphan gap: an entry cleared the D1 gate but its after-commit embed
+    task never completed (an embeddings-backend outage, a lost dispatch, a store-write
+    failure), so it is admitted-but-unretrievable (``embedded_at IS NULL``). It also
+    re-embeds entries whose rating changed after their last embed
+    (``embedded_at < last_outcome_at``) in case the P5 re-embed dispatch was lost, so
+    retrieval ranks on the current rating. ``workspace_id`` scopes the sweep; ``None``
+    sweeps all workspaces.
+
+    The orphan/stale set is read through the sole-writer STORE PORT (never the
+    ``RemediationEntry`` model directly — the D1 model-locality guard keeps that import
+    confined to the repository), and each candidate is re-embedded via the existing
+    per-entry embed task (idempotent by entry id; it re-embeds AND re-stamps
+    ``embedded_at``) — no parallel embed path. Each dispatch is workspace-scoped (D4).
+    Idempotent + safe to run on a schedule: a healthy corpus dispatches nothing.
+    """
+    from components.remediation.application.providers.remediation_provider import (
+        build_remediation_store,
+    )
+    from components.remediation.infrastructure.tasks.embed_remediation_entry_tasks import (
+        embed_remediation_entry,
+    )
+
+    logger.info("reindex_remediation_corpus started workspace_id=%s", workspace_id)
+
+    candidates = build_remediation_store().iter_reindex_candidate_ids(workspace_id=workspace_id)
+    dispatched = 0
+    for entry_id, wsid in candidates:
+        embed_remediation_entry.apply_async(kwargs={"entry_id": entry_id, "workspace_id": wsid})
+        dispatched += 1
+
+    summary = {"dispatched": dispatched}
+    logger.info("reindex_remediation_corpus completed workspace_id=%s summary=%s", workspace_id, summary)
+    return summary
