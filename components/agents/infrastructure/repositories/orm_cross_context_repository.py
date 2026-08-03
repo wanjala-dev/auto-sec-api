@@ -31,6 +31,15 @@ class OrmWorkspaceQueryAdapter(WorkspaceQueryPort):
 
         return Workspace.objects.filter(id=workspace_id).first()
 
+    def get_by_id_unfiltered(self, workspace_id: str) -> Any | None:
+        # Base manager (unfiltered) so an inactive/soft-deleted workspace is
+        # still returned — mirrors the prior inline ``Workspace._base_manager``
+        # read in ``detector_cycle``.
+        from infrastructure.persistence.workspaces.models import Workspace
+
+        manager = getattr(Workspace, "_base_manager", None) or Workspace.objects
+        return manager.filter(id=str(workspace_id)).first()
+
     def exists(self, workspace_id: str) -> bool:
         from infrastructure.persistence.workspaces.models import Workspace
 

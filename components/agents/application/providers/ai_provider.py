@@ -767,6 +767,62 @@ class AIProvider:
         return OrmWorkspaceQueryAdapter()
 
     @staticmethod
+    def build_run_usage_port():
+        from components.agents.infrastructure.repositories.orm_run_usage_repository import (
+            OrmRunUsageRepository,
+        )
+
+        return OrmRunUsageRepository()
+
+    @staticmethod
+    def build_agent_capability_port():
+        from components.agents.infrastructure.repositories.orm_agent_capability_repository import (
+            OrmAgentCapabilityRepository,
+        )
+
+        return OrmAgentCapabilityRepository()
+
+    @staticmethod
+    def build_ai_permission_grant_port():
+        from components.agents.infrastructure.repositories.orm_ai_permission_grant_repository import (
+            OrmAiPermissionGrantRepository,
+        )
+
+        return OrmAiPermissionGrantRepository()
+
+    @staticmethod
+    def build_posture_read_port():
+        from components.agents.infrastructure.repositories.orm_posture_read_repository import (
+            OrmPostureReadRepository,
+        )
+
+        return OrmPostureReadRepository()
+
+    @staticmethod
+    def build_ai_governance_read_port():
+        from components.agents.infrastructure.repositories.orm_ai_governance_read_repository import (
+            OrmAiGovernanceReadRepository,
+        )
+
+        return OrmAiGovernanceReadRepository()
+
+    @staticmethod
+    def build_chat_conversation_store_port():
+        from components.agents.infrastructure.repositories.orm_chat_conversation_store_repository import (
+            OrmChatConversationStoreRepository,
+        )
+
+        return OrmChatConversationStoreRepository()
+
+    @staticmethod
+    def build_chat_workspace_profile_port():
+        from components.agents.infrastructure.repositories.orm_chat_workspace_profile_repository import (
+            OrmChatWorkspaceProfileRepository,
+        )
+
+        return OrmChatWorkspaceProfileRepository()
+
+    @staticmethod
     def build_team_query():
         from components.agents.infrastructure.repositories.orm_cross_context_repository import (
             OrmTeamQueryAdapter,

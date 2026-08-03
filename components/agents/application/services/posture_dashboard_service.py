@@ -249,22 +249,17 @@ def _collect_findings_created_by_date(workspace_id: str, window_days: int) -> tu
 
 
 def _collect_rollup_series(workspace_id: str, window_days: int) -> tuple[dict[str, int], dict[str, float], bool]:
-    """Runs/day + cost/day from the AiActionDailyRollup read model."""
-    from infrastructure.persistence.ai.agents.models import AiActionDailyRollup
+    """Runs/day + cost/day from the AiActionDailyRollup read model.
+
+    Read through the agents context's own ``PostureReadPort`` seam (Rule 2): the
+    ``AiActionDailyRollup`` rollup table is agents-owned ``ai.*`` persistence, so
+    the dashboard reaches it via a port, not the ORM."""
+    from components.agents.application.providers.ai_provider import AIProvider
 
     since = _utc_today() - timedelta(days=window_days - 1)
-    runs_by_date: dict[str, int] = {}
-    cost_by_date: dict[str, float] = {}
-    present = False
-    rows = AiActionDailyRollup.objects.filter(workspace_id=workspace_id, date__gte=since).only(
-        "date", "runs_total", "cost_usd"
+    return AIProvider.build_posture_read_port().collect_action_rollup_series(
+        workspace_id=workspace_id, since_date=since
     )
-    for row in rows.iterator(chunk_size=500):
-        present = True
-        iso = row.date.isoformat()
-        runs_by_date[iso] = int(row.runs_total)
-        cost_by_date[iso] = float(row.cost_usd)
-    return runs_by_date, cost_by_date, present
 
 
 def dashboard(

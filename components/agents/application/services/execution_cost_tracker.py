@@ -113,30 +113,21 @@ class ExecutionCostTracker:
         with self._lock:
             return self._total_cost
 
+    def _run_usage_port(self):
+        """Resolve the ORM-backed :class:`RunUsagePort` (composition root).
+
+        Kept as an overridable seam so the ORM stays out of this application
+        service (Rule 2) while the two ``persist_*`` helpers keep their existing
+        signatures for callers.
+        """
+        from components.agents.application.providers.ai_provider import AIProvider
+
+        return AIProvider.build_run_usage_port()
+
     def persist_to_execution(self, execution_id: str | int) -> None:
         """Merge usage snapshot into AgentExecution.state['usage']."""
-        try:
-            from infrastructure.persistence.ai.agents.models import AgentExecution
-
-            execution = AgentExecution.objects.filter(id=execution_id).first()
-            if not execution:
-                return
-            state = dict(execution.state or {})
-            state["usage"] = self.snapshot()
-            AgentExecution.objects.filter(id=execution_id).update(state=state)
-        except Exception:
-            logger.warning("Failed to persist cost tracker to execution %s", execution_id, exc_info=True)
+        self._run_usage_port().merge_execution_usage(execution_id, self.snapshot())
 
     def persist_to_deep_run(self, thread_id: str) -> None:
         """Merge usage snapshot into DeepRun.state['usage']."""
-        try:
-            from infrastructure.persistence.ai.agents.models import DeepRun
-
-            run = DeepRun.objects.filter(thread_id=thread_id).first()
-            if not run:
-                return
-            state = dict(run.state or {})
-            state["usage"] = self.snapshot()
-            DeepRun.objects.filter(thread_id=thread_id).update(state=state)
-        except Exception:
-            logger.warning("Failed to persist cost tracker to deep run %s", thread_id, exc_info=True)
+        self._run_usage_port().merge_deep_run_usage(thread_id, self.snapshot())

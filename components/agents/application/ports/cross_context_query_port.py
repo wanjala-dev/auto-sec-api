@@ -33,7 +33,17 @@ class WorkspaceQueryPort(ABC):
 
     @abstractmethod
     def get_by_id(self, workspace_id: str) -> Any | None:
-        """Return a workspace or *None*."""
+        """Return a workspace or *None* (default/active manager)."""
+
+    @abstractmethod
+    def get_by_id_unfiltered(self, workspace_id: str) -> Any | None:
+        """Return a workspace via the model's **base** manager, or *None*.
+
+        Resolves the row unfiltered so an inactive/soft-deleted workspace is
+        still returned — the detector cycle must run (or explicitly halt) for a
+        halted workspace, not silently treat it as absent. Mirrors the prior
+        inline ``Workspace._base_manager`` read.
+        """
 
     @abstractmethod
     def exists(self, workspace_id: str) -> bool:

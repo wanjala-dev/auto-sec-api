@@ -51,6 +51,20 @@ class WorkspaceAgentCapabilityResult:
 class SetWorkspaceAgentCapabilityUseCase:
     """Enable/disable one gated capability on the workspace's triage agent."""
 
+    def __init__(self, *, workspace_query=None, capability_port=None) -> None:
+        self._workspace_query = workspace_query
+        self._capability_port = capability_port
+
+    def _resolve_ports(self):
+        """Lazily resolve the cross-context workspace read + the agents
+        capability read/write ports from the composition root, so the ORM stays
+        out of this use case (Rule 2). Injected ports (tests) take precedence."""
+        from components.agents.application.providers.ai_provider import AIProvider
+
+        workspace_query = self._workspace_query or AIProvider.build_workspace_query()
+        capability_port = self._capability_port or AIProvider.build_agent_capability_port()
+        return workspace_query, capability_port
+
     def execute(
         self,
         *,
@@ -59,8 +73,7 @@ class SetWorkspaceAgentCapabilityUseCase:
         enabled: bool,
         actor: Any,
     ) -> WorkspaceAgentCapabilityResult:
-        from infrastructure.persistence.ai.agents.models import Agent
-        from infrastructure.persistence.workspaces.models import Workspace
+        workspace_query, capability_port = self._resolve_ports()
 
         capability = (capability or "").strip()
         if capability not in ALLOWED_AGENT_CAPABILITIES:
@@ -70,62 +83,33 @@ class SetWorkspaceAgentCapabilityUseCase:
         if not isinstance(enabled, bool):
             raise ValidationError("enabled must be a boolean.")
 
-        workspace = Workspace.objects.filter(id=str(workspace_id)).first()
+        workspace = workspace_query.get_by_id(str(workspace_id))
         if workspace is None:
             raise NotFoundError(f"Workspace {workspace_id} not found")
 
-        agent, created = self._ensure_triage_agent(Agent, workspace, actor)
+        row = capability_port.get_or_create_triage_agent(workspace=workspace, actor=actor)
 
-        previous_capabilities = dict(agent.config.get("capabilities") or {})
+        previous_capabilities = dict(row.capabilities)
         capabilities = dict(previous_capabilities)
         capabilities[capability] = enabled
 
-        merged_config = dict(agent.config or {})
-        merged_config["capabilities"] = capabilities
-        agent.config = merged_config
-        agent.save(update_fields=["config", "updated_at"])
+        capability_port.set_capabilities(agent=row.instance, capabilities=capabilities)
 
-        self._audit(agent, previous_capabilities, capabilities, actor)
+        self._audit(row.instance, previous_capabilities, capabilities, actor)
 
         logger.info(
             "workspace_agent_capability_set workspace_id=%s capability=%s enabled=%s created=%s actor_id=%s",
             workspace_id,
             capability,
             enabled,
-            created,
+            row.created,
             getattr(actor, "id", None),
         )
         return WorkspaceAgentCapabilityResult(
             workspace_id=str(workspace_id),
             capabilities={key: bool(value) for key, value in capabilities.items()},
-            created=created,
+            created=row.created,
         )
-
-    @staticmethod
-    def _ensure_triage_agent(Agent, workspace, actor):
-        """Return the workspace's most-recent triage_agent row, creating one if
-        the workspace has none yet (fresh org). Create-if-missing mirrors the
-        row-resolution ``OpenDraftPrUseCase._require_capability`` reads
-        (``order_by('-created_at').first()``), so the row this touches is the
-        same row the gate consults."""
-        agent = Agent.objects.filter(workspace=workspace, agent_type=TRIAGE_AGENT_TYPE).order_by("-created_at").first()
-        if agent is not None:
-            if not isinstance(agent.config, dict):
-                agent.config = {}
-            return agent, False
-
-        # No triage agent yet — provision one so the capability has a row to
-        # live on. ``Agent.user`` is non-null; the workspace owner is the
-        # natural owner of a workspace-level grant, falling back to the acting
-        # owner (the endpoint is owner-gated, so ``actor`` IS the owner).
-        owner = getattr(workspace, "workspace_owner", None) or actor
-        agent = Agent.objects.create(
-            workspace=workspace,
-            user=owner,
-            agent_type=TRIAGE_AGENT_TYPE,
-            config={},
-        )
-        return agent, True
 
     @staticmethod
     def _audit(agent, previous_capabilities: dict, capabilities: dict, actor: Any) -> None:
@@ -159,19 +143,9 @@ def get_workspace_capabilities(workspace_id: str) -> WorkspaceAgentCapabilityRes
     reports every allowlisted capability as ``False`` (the effective state the
     gate enforces), so the UI renders a consistent "off" without a write.
     """
-    from infrastructure.persistence.ai.agents.models import Agent
+    from components.agents.application.providers.ai_provider import AIProvider
 
-    agent = (
-        Agent.objects.filter(workspace_id=str(workspace_id), agent_type=TRIAGE_AGENT_TYPE)
-        .order_by("-created_at")
-        .only("agent_id", "config")
-        .first()
-    )
-    stored = {}
-    if agent is not None and isinstance(agent.config, dict):
-        raw = agent.config.get("capabilities")
-        if isinstance(raw, dict):
-            stored = raw
+    stored = AIProvider.build_agent_capability_port().get_triage_capabilities(workspace_id=str(workspace_id))
 
     capabilities = {key: bool(stored.get(key)) for key in sorted(ALLOWED_AGENT_CAPABILITIES)}
     return WorkspaceAgentCapabilityResult(workspace_id=str(workspace_id), capabilities=capabilities, created=False)

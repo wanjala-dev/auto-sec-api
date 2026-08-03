@@ -545,39 +545,24 @@ def response_kpis(workspace_id: str, window_days: int = 7) -> dict[str, Any]:
 
 
 def fleet_health(workspace_id: str, window_days: int = 7) -> dict[str, Any]:
-    """Deep-run success, rubric verdicts, spend, human votes, dispatch counts."""
-    from infrastructure.persistence.ai.agents.models import DeepRun
-    from infrastructure.persistence.ai.conversations.models import AgentResponseFeedback
+    """Deep-run success, rubric verdicts, spend, human votes, dispatch counts.
+
+    The deep-run cost records + human up/down votes are the agents context's OWN
+    ``ai.*`` telemetry — read through its ``PostureReadPort`` seam (Rule 2: the
+    application layer reaches persistence through a port, not the ORM). The board
+    findings still come from the ``project`` context's ``PostureFactsPort``."""
+    from components.agents.application.providers.ai_provider import AIProvider
 
     now = _utc_now()
     window_start = now - timedelta(days=window_days)
 
-    run_rows: list[dict[str, Any]] = []
-    runs = DeepRun.objects.filter(workspace_id=workspace_id, created_at__gte=window_start).only("id", "status", "state")
-    for run in runs.iterator(chunk_size=500):
-        state = run.state if isinstance(run.state, dict) else {}
-        run_metadata = state.get("run_metadata") if isinstance(state.get("run_metadata"), dict) else {}
-        cost_records = run_metadata.get("cost_usd_records")
-        run_rows.append(
-            {
-                "id": str(run.id),
-                "status": run.status,
-                "cost_records": cost_records if isinstance(cost_records, list) else [],
-            }
-        )
+    posture_read = AIProvider.build_posture_read_port()
+    run_rows = posture_read.collect_deep_run_cost_rows(workspace_id=str(workspace_id), window_start=window_start)
 
     finding_rows = _collect_finding_rows(str(workspace_id), window_start)
     handled_rows = _triaged_in_window(finding_rows, window_start)
 
-    # Conversation carries workspace only in metadata JSON (no FK) — same
-    # traversal the AI quality rollup task uses.
-    feedback_rows = [
-        {"rating": rating}
-        for rating in AgentResponseFeedback.objects.filter(
-            created_at__gte=window_start,
-            message__conversation__metadata__workspace_id=str(workspace_id),
-        ).values_list("rating", flat=True)
-    ]
+    feedback_rows = posture_read.collect_feedback_ratings(workspace_id=str(workspace_id), window_start=window_start)
 
     return compute_fleet_health(run_rows, handled_rows, feedback_rows, window_days=window_days)
 

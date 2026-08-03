@@ -82,28 +82,6 @@ _ORM_FREE_ALLOWLIST: set[tuple[str, str]] = {
     # TRANSITIONAL: cross-context/app-layer ORM — see architecture audit
     # 2026-08; burn down (task #45 for open_draft_pr).
     ("integrations", "application/use_cases/open_draft_pr_use_case.py"),
-    # agents — orchestrator/services/handlers read Agent/DeepRun/Task/
-    # Workspace/AITeammateProfile ORM inline; pending port extraction.
-    # TRANSITIONAL: app-layer ORM — see architecture audit 2026-08; burn down.
-    ("agents", "application/facades/ai_teammate_facade.py"),
-    # ai_governance_service: the CROSS-context reads (project.Task HITL ledger,
-    # integrations.GitHubConnection credential surface, workspaces.Workspace
-    # kill-switch toggle) are now routed through ports (PR-6). Only its OWN
-    # context's ai.* reads (DeepRun/DeepRunLog/Agent/AITeammateProfile) remain —
-    # the type-C same-context burndown tracked under PR-10. Entry kept for those.
-    ("agents", "application/services/ai_governance_service.py"),
-    ("agents", "application/services/detector_cycle.py"),
-    ("agents", "application/services/execution_cost_tracker.py"),
-    ("agents", "application/use_cases/agent_chat_use_case.py"),
-    ("agents", "application/use_cases/set_workspace_agent_capability_use_case.py"),
-    # agents posture services — the cross-context ``project.Task`` reads were
-    # routed through the project ``PostureFactsPort`` in PR-5; these entries
-    # STAY only for the remaining SAME-context ``ai.*`` reads (DeepRun /
-    # AgentResponseFeedback / AiActionDailyRollup), a type-C offender burned
-    # down in PR-10. TRANSITIONAL: app-layer ORM — see architecture audit
-    # 2026-08.
-    ("agents", "application/services/posture_dashboard_service.py"),
-    ("agents", "application/services/posture_service.py"),
 }
 
 

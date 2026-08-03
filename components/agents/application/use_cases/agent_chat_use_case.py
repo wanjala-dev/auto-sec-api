@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 import uuid as _uuid
-from typing import Any, Dict
+from typing import Any
 
 from components.agents.application.commands.agent_chat_command import (
     AgentChatCommand,
@@ -104,9 +104,7 @@ def _extract_plan_agent_types(state) -> list[str]:
         tasks = (plan.get("tasks") if isinstance(plan, dict) else getattr(plan, "tasks", None)) or []
         agents: list[str] = []
         for task in tasks:
-            agent_type = (
-                task.get("agent_type") if isinstance(task, dict) else getattr(task, "agent_type", "")
-            ) or ""
+            agent_type = (task.get("agent_type") if isinstance(task, dict) else getattr(task, "agent_type", "")) or ""
             agent_type = str(agent_type).strip()
             if agent_type and agent_type != "clarify" and agent_type not in agents:
                 agents.append(agent_type)
@@ -151,6 +149,24 @@ def _extract_final_answer(state: dict) -> str:
     return ""
 
 
+def _conversation_store():
+    """Resolve the ORM-backed :class:`ChatConversationStorePort` (composition
+    root). Overridable seam so the ORM stays out of this application use case
+    (Rule 2); tests patch this to inject a fake store."""
+    from components.agents.application.providers.ai_provider import AIProvider
+
+    return AIProvider.build_chat_conversation_store_port()
+
+
+def _workspace_profile_port():
+    """Resolve the ORM-backed :class:`ChatWorkspaceProfilePort` (composition
+    root). Overridable seam for the same reason; tests patch this to supply the
+    workspace mission fields + assistant name."""
+    from components.agents.application.providers.ai_provider import AIProvider
+
+    return AIProvider.build_chat_workspace_profile_port()
+
+
 def _persist_user_message_impl(
     *,
     conversation_id: str | None,
@@ -162,44 +178,17 @@ def _persist_user_message_impl(
     """Create/get a user-facing Conversation and append the user's query as a message.
 
     Returns the conversation id so the caller can keep using it for the
-    assistant reply + thread continuity.  Failures are swallowed — chat
-    should still work even if persistence hiccups.
+    assistant reply + thread continuity.  Persistence goes through the
+    ``ChatConversationStorePort`` seam (failure-safe by contract — chat still
+    works even if persistence hiccups).
     """
-    try:
-        from infrastructure.persistence.ai.conversations.models import (
-            Conversation,
-            ConversationMessage,
-        )
-    except Exception:
-        logger.exception("Could not import Conversation models for chat persistence")
-        return conversation_id
-
-    try:
-        conversation = None
-        if conversation_id:
-            conversation = Conversation.objects.filter(id=conversation_id).first()
-        if conversation is None:
-            conversation = Conversation.objects.create(
-                id=conversation_id or None,
-                user_id=user_id,
-                title=(query or "").strip()[:80] or "Chat",
-                metadata={
-                    "workspace_id": workspace_id,
-                    "agent_type": agent_type,
-                    "source": "agent_chat",
-                },
-            )
-        ConversationMessage.objects.create(
-            conversation=conversation,
-            role="human",
-            content=query or "",
-        )
-        return str(conversation.id)
-    except Exception:
-        logger.exception(
-            "Failed to persist user chat message for workspace %s", workspace_id
-        )
-        return conversation_id
+    return _conversation_store().ensure_conversation_with_user_message(
+        conversation_id=conversation_id,
+        user_id=user_id,
+        workspace_id=workspace_id,
+        agent_type=agent_type,
+        query=query,
+    )
 
 
 def _persist_assistant_message_impl(
@@ -218,32 +207,14 @@ def _persist_assistant_message_impl(
     ``ConversationMessage.metadata`` (a JSONField). Today this carries
     ``{"sources": [...]}`` for the citations panel — see AI Fluency
     Wave 2 in the plan. Empty / falsy metadata writes ``{}`` so the
-    server-side default behaviour is unchanged.
+    server-side default behaviour is unchanged. Goes through the
+    ``ChatConversationStorePort`` seam.
     """
-    if not conversation_id or not content:
-        return None
-    try:
-        from infrastructure.persistence.ai.conversations.models import (
-            Conversation,
-            ConversationMessage,
-        )
-
-        conversation = Conversation.objects.filter(id=conversation_id).first()
-        if conversation is None:
-            return None
-        message = ConversationMessage.objects.create(
-            conversation=conversation,
-            role="assistant",
-            content=content,
-            metadata=metadata or {},
-        )
-        return str(message.id)
-    except Exception:
-        logger.exception(
-            "Failed to persist assistant chat message for conversation %s",
-            conversation_id,
-        )
-        return None
+    return _conversation_store().append_assistant_message(
+        conversation_id=conversation_id,
+        content=content,
+        metadata=metadata,
+    )
 
 
 # Hard cap on chat-history turns we hand to the planner. Each turn
@@ -274,26 +245,10 @@ def _load_conversation_pdf_id(conversation_id: str | None) -> str | None:
 
     Failure-safe: missing imports, missing row, or non-dict metadata
     all yield ``None`` and the chat falls back to workspace-wide
-    retrieval (less accurate but still answers).
+    retrieval (less accurate but still answers). Reads through the
+    ``ChatConversationStorePort`` seam.
     """
-    if not conversation_id:
-        return None
-    try:
-        from infrastructure.persistence.ai.conversations.models import Conversation
-    except Exception:  # noqa: BLE001
-        return None
-    try:
-        row = (
-            Conversation.objects.filter(id=conversation_id)
-            .only("metadata")
-            .first()
-        )
-    except Exception:  # noqa: BLE001
-        return None
-    if row is None or not isinstance(row.metadata, dict):
-        return None
-    pdf_id = row.metadata.get("pdf_id")
-    return str(pdf_id) if pdf_id else None
+    return _conversation_store().get_conversation_pdf_id(conversation_id)
 
 
 def _load_conversation_history(
@@ -308,43 +263,24 @@ def _load_conversation_history(
 
     Why we load this in the use case rather than have the planner
     fetch it: the planner is framework-free (no Django imports) and
-    runs against the LLM directly. The use case already has the
-    conversation_id and the persistence layer; loading here keeps
-    the read in the application layer where it belongs.
+    runs against the LLM directly. The read goes through the
+    ``ChatConversationStorePort`` seam; the truncation + chronological
+    ordering stay HERE in the application layer.
     """
     if not conversation_id:
         return []
-    try:
-        from infrastructure.persistence.ai.conversations.models import (
-            ConversationMessage,
-        )
-    except Exception:  # noqa: BLE001
-        logger.exception(
-            "Could not import ConversationMessage for chat history load"
-        )
-        return []
-    try:
-        # Order DESC for the LIMIT, reverse client-side so the planner
-        # sees turns chronologically (oldest → newest).
-        rows = (
-            ConversationMessage.objects.filter(conversation_id=conversation_id)
-            .order_by("-created_at")
-            .values_list("role", "content")[:_MAX_HISTORY_TURNS_FOR_PLANNER]
-        )
-        history = []
-        for role, content in reversed(list(rows)):
-            text = (content or "").strip()
-            if not text:
-                continue
-            if len(text) > _MAX_CHARS_PER_HISTORY_MESSAGE:
-                text = text[:_MAX_CHARS_PER_HISTORY_MESSAGE].rstrip() + "…"
-            history.append({"role": role or "assistant", "content": text})
-        return history
-    except Exception:  # noqa: BLE001
-        logger.exception(
-            "Failed to load conversation history for %s", conversation_id
-        )
-        return []
+    # Port returns newest-first (role, content) tuples; reverse so the planner
+    # sees turns chronologically (oldest → newest).
+    rows = _conversation_store().load_recent_turns(conversation_id, limit=_MAX_HISTORY_TURNS_FOR_PLANNER)
+    history = []
+    for role, content in reversed(list(rows)):
+        text = (content or "").strip()
+        if not text:
+            continue
+        if len(text) > _MAX_CHARS_PER_HISTORY_MESSAGE:
+            text = text[:_MAX_CHARS_PER_HISTORY_MESSAGE].rstrip() + "…"
+        history.append({"role": role or "assistant", "content": text})
+    return history
 
 
 # Per-field budgets when assembling ``context.workspace_profile``.
@@ -397,30 +333,20 @@ def _build_workspace_profile_context(
 
     Returns ``{}`` when nothing is set so the planner sees no
     ``context.workspace_profile`` key (empty profile = no instruction
-    drift). Failure-safe: every fetch is wrapped so an ORM error never
-    breaks the chat path.
+    drift). The two ORM reads (workspace mission fields + assistant name)
+    go through the ``ChatWorkspaceProfilePort`` seam (Rule 2), which is
+    failure-safe by contract so an ORM error never breaks the chat path;
+    the truncation + voice/config assembly stay HERE in the application layer.
     """
     profile: dict[str, str] = {}
+    profile_port = _workspace_profile_port()
 
     # ── Workspace fields (mission / vision / story) ─────────────────
-    try:
-        from infrastructure.persistence.workspaces.models import Workspace
-    except Exception:  # noqa: BLE001
-        Workspace = None  # type: ignore[assignment]
-
-    if Workspace is not None and workspace_id:
-        try:
-            workspace = (
-                Workspace.objects.filter(id=workspace_id)
-                .only("mission", "vision", "workspace_story")
-                .first()
-            )
-        except Exception:  # noqa: BLE001
-            logger.debug("Could not load Workspace for profile context", exc_info=True)
-            workspace = None
-        if workspace is not None:
+    if workspace_id:
+        mission_fields = profile_port.get_mission_fields(str(workspace_id))
+        if mission_fields is not None:
             for attr in ("mission", "vision", "workspace_story"):
-                value = _truncate(getattr(workspace, attr, "") or "", _PROFILE_FIELD_BUDGETS[attr])
+                value = _truncate(getattr(mission_fields, attr, "") or "", _PROFILE_FIELD_BUDGETS[attr])
                 if value:
                     profile[attr] = value
 
@@ -428,7 +354,7 @@ def _build_workspace_profile_context(
     if brand_voice is not None and workspace_id:
         try:
             voice = brand_voice.get(str(workspace_id)) or {}
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.debug("Could not load brand voice for profile context", exc_info=True)
             voice = {}
         for attr, key in (("voice_tone", "tone"), ("voice_guidelines", "guidelines")):
@@ -449,42 +375,13 @@ def _build_workspace_profile_context(
     # ── Assistant identity from the teammate profile ─────────────────
     # The workspace can rename its assistant (AITeammateProfile.display_name,
     # edited in Settings ▸ AI Assistant). Inject the name so the assistant
-    # answers to it; the avatar is UI-only and never reaches the planner.
-    # Same lazy-ORM + failure-safe pattern as the Workspace lookup above.
-    # The config-JSON fallbacks mirror OrmTeammateProfileRepository's alias
-    # resolution for legacy rows renamed before display_name was a column.
+    # answers to it; the avatar is UI-only and never reaches the planner. The
+    # port resolves the same legacy config-JSON fallbacks the teammate-profile
+    # repository uses (rows renamed before display_name was a column).
     if workspace_id:
-        try:
-            from infrastructure.persistence.ai.models import AITeammateProfile
-
-            row = (
-                AITeammateProfile.objects.filter(workspace_id=workspace_id)
-                .only("display_name", "config")
-                .first()
-            )
-        except Exception:  # noqa: BLE001
-            logger.debug(
-                "Could not load teammate profile for context", exc_info=True
-            )
-            row = None
-        if row is not None:
-            config = row.config if isinstance(row.config, dict) else {}
-            profile_section = config.get("profile")
-            name = (
-                row.display_name
-                or config.get("display_name")
-                or (
-                    profile_section.get("name")
-                    if isinstance(profile_section, dict)
-                    else None
-                )
-                or ""
-            )
-            name = str(name).strip()
-            if name:
-                profile["assistant_name"] = _truncate(
-                    name, _PROFILE_FIELD_BUDGETS["assistant_name"]
-                )
+        name = profile_port.get_assistant_name(str(workspace_id))
+        if name:
+            profile["assistant_name"] = _truncate(name, _PROFILE_FIELD_BUDGETS["assistant_name"])
 
     return profile
 
@@ -528,14 +425,11 @@ class AgentChatUseCase(CommandHandler[AgentChatCommand]):
                 OrmDeepRunAggregatorRepository,
             )
 
-            agg = OrmDeepRunAggregatorRepository().aggregate_plan_totals(
-                plan_id=plan_id
-            )
+            agg = OrmDeepRunAggregatorRepository().aggregate_plan_totals(plan_id=plan_id)
             total_tokens = int((agg.get("prompt") or 0) + (agg.get("completion") or 0))
         except Exception:
             logger.debug(
-                "Could not sum DeepRunLog tokens for plan %s — "
-                "incrementing message count only",
+                "Could not sum DeepRunLog tokens for plan %s — incrementing message count only",
                 plan_id,
             )
 
@@ -593,9 +487,7 @@ class AgentChatUseCase(CommandHandler[AgentChatCommand]):
 
                 persona_role = command.persona_role or "contributor"
                 try:
-                    messages_today = self._ai_config_port.get_messages_used_today(
-                        ws_id, str(command.user_id)
-                    )
+                    messages_today = self._ai_config_port.get_messages_used_today(ws_id, str(command.user_id))
                 except Exception:
                     messages_today = 0
                 # Workspace-level usage drives the GTM cost gate (429).
@@ -604,15 +496,11 @@ class AgentChatUseCase(CommandHandler[AgentChatCommand]):
                 # hits their per-seat limit first; an active org hits
                 # the shared workspace pool before any one user does.
                 try:
-                    workspace_messages_today = (
-                        self._ai_config_port.get_workspace_messages_today(ws_id)
-                    )
+                    workspace_messages_today = self._ai_config_port.get_workspace_messages_today(ws_id)
                 except Exception:
                     workspace_messages_today = 0
                 try:
-                    workspace_tokens_this_month = (
-                        self._ai_config_port.get_workspace_tokens_this_month(ws_id)
-                    )
+                    workspace_tokens_this_month = self._ai_config_port.get_workspace_tokens_this_month(ws_id)
                 except Exception:
                     workspace_tokens_this_month = 0
 
@@ -648,12 +536,8 @@ class AgentChatUseCase(CommandHandler[AgentChatCommand]):
                                 "workspace_monthly_remaining_tokens": (
                                     feature_access.workspace_monthly_remaining_tokens
                                 ),
-                                "workspace_daily_message_budget": (
-                                    ai_config.workspace_daily_message_budget
-                                ),
-                                "workspace_monthly_token_budget": (
-                                    ai_config.monthly_token_budget
-                                ),
+                                "workspace_daily_message_budget": (ai_config.workspace_daily_message_budget),
+                                "workspace_monthly_token_budget": (ai_config.monthly_token_budget),
                             },
                         )
                     return AgentChatFailure(
@@ -718,9 +602,7 @@ class AgentChatUseCase(CommandHandler[AgentChatCommand]):
                 if context_str:
                     agent_config["session_memory_context"] = context_str
             except Exception:
-                logger.debug(
-                    "Failed to load session memory for %s/%s", ws_id, agent_type
-                )
+                logger.debug("Failed to load session memory for %s/%s", ws_id, agent_type)
 
         # 4a. Load prior chat turns BEFORE persisting the new user
         # message so the planner sees real context, not a parrot of
@@ -760,7 +642,7 @@ class AgentChatUseCase(CommandHandler[AgentChatCommand]):
         # The planner system prompt teaches the LLM to use this when
         # resolving cross-turn references ("those tasks", "the project
         # we discussed"). Empty list on first turn — no harm.
-        planner_extra_context: Dict[str, Any] = {}
+        planner_extra_context: dict[str, Any] = {}
         if conversation_history:
             planner_extra_context["conversation_history"] = conversation_history
 
@@ -770,9 +652,7 @@ class AgentChatUseCase(CommandHandler[AgentChatCommand]):
         # / empty profile = no key set, planner falls back to its
         # registered-agent defaults. See AI Fluency Wave 1 in the
         # atomic-gathering-fox plan.
-        workspace_profile = _build_workspace_profile_context(
-            ws_id, ai_config, self._brand_voice_port
-        )
+        workspace_profile = _build_workspace_profile_context(ws_id, ai_config, self._brand_voice_port)
         if workspace_profile:
             planner_extra_context["workspace_profile"] = workspace_profile
 
@@ -796,9 +676,7 @@ class AgentChatUseCase(CommandHandler[AgentChatCommand]):
         # Empty string means "no preference, LLMFactory picks default"
         # — matches the model picker in AISetupForm where an unset
         # workspace falls through to the platform default.
-        preferred_model = (
-            getattr(ai_config, "preferred_model", "") or ""
-        ).strip() or None
+        preferred_model = (getattr(ai_config, "preferred_model", "") or "").strip() or None
 
         deep_command = DeepPlanAndRunCommand(
             goal=command.query,
@@ -832,10 +710,7 @@ class AgentChatUseCase(CommandHandler[AgentChatCommand]):
         if not answer:
             self._persist_assistant_message(
                 conversation_id=conv_id,
-                content=(
-                    "Sorry — I finished the run but couldn't produce a "
-                    "response.  Try a more specific question."
-                ),
+                content=("Sorry — I finished the run but couldn't produce a response.  Try a more specific question."),
             )
             return AgentChatFailure(
                 error=(
