@@ -858,6 +858,68 @@ class TestOpenDraftPrMonorepoResolution:
 
 
 @pytest.mark.django_db
+class TestOpenDraftPrReadsAreOrmFreeAndTokenSafe:
+    """The app-layer ORM burndown (PR-12): the use case reads every fact through a
+    port / injected resolver, and the encrypted token NEVER crosses a port.
+
+    * The use-case MODULE imports no ``infrastructure.persistence`` (fitness
+      function guards this repo-wide; asserted here at the unit boundary too).
+    * The cross-context resolvers wired in the provider return exactly the
+      non-secret facts the use case needs — the connection's ``token_ciphertext``
+      is decrypted only via the injected secret-envelope callable and is present in
+      NEITHER the capability map, the owner-id read, NOR the operator-identity read.
+    """
+
+    def test_use_case_module_imports_no_persistence(self):
+        import ast
+        import inspect
+
+        from components.integrations.application.use_cases import open_draft_pr_use_case as mod
+
+        tree = ast.parse(inspect.getsource(mod))
+        imported: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                imported.add(node.module)
+            elif isinstance(node, ast.Import):
+                imported.update(a.name for a in node.names)
+
+        offenders = [m for m in imported if m == "infrastructure.persistence" or m.startswith("infrastructure.")]
+        assert offenders == [], f"use case must import no persistence: {offenders}"
+
+    def test_capability_port_return_carries_no_token(self, workspace_factory, team_factory):
+        from components.agents.application.providers.ai_provider import AIProvider
+
+        workspace, owner, _team, _column = _board(workspace_factory, team_factory)
+        _connection(workspace, owner)  # token_ciphertext is set on the row
+        _capability_agent(workspace, owner)
+
+        caps = AIProvider.build_agent_capability_port().get_triage_capabilities(workspace_id=str(workspace.id))
+        assert caps == {"open_draft_pr": True}
+        # The capability map is the ONLY thing the gate reads — no token leaks in.
+        assert "token" not in json.dumps(caps).lower()
+
+    def test_provider_resolvers_return_only_non_secret_facts(self, workspace_factory, team_factory):
+        from components.integrations.application.providers import vcs_provider
+
+        workspace, owner, _team, _column = _board(workspace_factory, team_factory)
+        conn = _connection(workspace, owner, commit_identity=VcsConnection.CommitIdentity.OPERATOR)
+
+        # The connection genuinely stores a ciphertext …
+        assert conn.token_ciphertext
+
+        owner_id = vcs_provider.resolve_workspace_owner_id(str(workspace.id))
+        assert owner_id == str(owner.id)
+
+        identity = vcs_provider.resolve_operator_identity(str(owner.id))
+        assert set(identity) == {"name", "email"}  # exactly name + email, nothing else
+        assert identity["email"] == owner.email
+        # … and NEITHER cross-context resolver ever surfaces the token material.
+        assert "ghp_test_token" not in json.dumps({"owner_id": owner_id, **identity})
+        assert "token" not in json.dumps(identity).lower()
+
+
+@pytest.mark.django_db
 class TestOpenDraftPrAmbiguousEndpoint:
     def test_ambiguous_maps_to_4xx_not_502(self, api_client, workspace_factory, team_factory):
         from components.integrations.application.ports.vcs_port import VcsApiError

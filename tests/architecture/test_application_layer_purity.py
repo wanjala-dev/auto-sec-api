@@ -76,13 +76,7 @@ _TRANSITIONAL_ALLOWLIST: set[tuple[str, str]] = set()
 # (context, posix path relative to the context dir). Extend the allowlist
 # ONLY to record an existing offender being tracked for removal — never to
 # excuse new application-layer ORM access.
-_ORM_FREE_ALLOWLIST: set[tuple[str, str]] = {
-    # integrations — the C2 WRITE (worst offender): opens a draft PR then
-    # mutates project.models.Task/TaskComment from the integrations context.
-    # TRANSITIONAL: cross-context/app-layer ORM — see architecture audit
-    # 2026-08; burn down (task #45 for open_draft_pr).
-    ("integrations", "application/use_cases/open_draft_pr_use_case.py"),
-}
+_ORM_FREE_ALLOWLIST: set[tuple[str, str]] = set()
 
 
 def _is_orm_model_import(mod: str) -> bool:
