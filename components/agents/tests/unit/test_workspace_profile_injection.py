@@ -20,20 +20,20 @@ runs against the LLM, gated on ``PROMPT_EVAL_E2E=1``.
 Plan reference: ``/Users/henrywanjala/.claude/plans/atomic-gathering-fox.md``
 AI Fluency Wave 1.
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from components.agents.application.use_cases.agent_chat_use_case import (
-    _build_workspace_profile_context,
     _PROFILE_FIELD_BUDGETS,
+    _build_workspace_profile_context,
 )
 from components.agents.domain.value_objects.workspace_ai_config import (
     WorkspaceAIConfig,
 )
 from components.agents.infrastructure.adapters.langchain.deep import llm_planner
-
 
 # ---------------------------------------------------------------------------
 # Profile assembly
@@ -77,9 +77,7 @@ class TestWorkspaceProfileAssembly:
                 "custom_system_prompt_addendum": "always cite sources",
             }
         )
-        profile = _build_workspace_profile_context(
-            workspace_id="", ai_config=ai_config
-        )
+        profile = _build_workspace_profile_context(workspace_id="", ai_config=ai_config)
         assert profile == {
             "beneficiary_language_rules": "say recipient not child",
             "custom_system_prompt_addendum": "always cite sources",
@@ -96,9 +94,7 @@ class TestWorkspaceProfileAssembly:
             avatar_url="https://cdn.example.org/z.png",
         )
         with _patched_teammate_profile_lookup(row):
-            profile = _build_workspace_profile_context(
-                workspace_id="ws-uuid-1234", ai_config=WorkspaceAIConfig()
-            )
+            profile = _build_workspace_profile_context(workspace_id="ws-uuid-1234", ai_config=WorkspaceAIConfig())
         assert profile == {"assistant_name": "Zawadi"}
 
     def test_assistant_name_falls_back_to_legacy_config_json(self):
@@ -109,20 +105,14 @@ class TestWorkspaceProfileAssembly:
             config={"profile": {"name": "Mtaalamu"}},
         )
         with _patched_teammate_profile_lookup(row):
-            profile = _build_workspace_profile_context(
-                workspace_id="ws-uuid-1234", ai_config=WorkspaceAIConfig()
-            )
+            profile = _build_workspace_profile_context(workspace_id="ws-uuid-1234", ai_config=WorkspaceAIConfig())
         assert profile == {"assistant_name": "Mtaalamu"}
 
     def test_teammate_profile_failure_is_silent(self):
         """A broken teammate-profile lookup never breaks profile assembly."""
-        ai_config = WorkspaceAIConfig.from_dict(
-            {"beneficiary_language_rules": "say recipient"}
-        )
+        ai_config = WorkspaceAIConfig.from_dict({"beneficiary_language_rules": "say recipient"})
         with _patched_teammate_profile_lookup_raising():
-            profile = _build_workspace_profile_context(
-                workspace_id="ws", ai_config=ai_config
-            )
+            profile = _build_workspace_profile_context(workspace_id="ws", ai_config=ai_config)
         assert profile == {"beneficiary_language_rules": "say recipient"}
 
     def test_picks_up_brand_voice_from_port(self):
@@ -147,12 +137,8 @@ class TestWorkspaceProfileAssembly:
             def get(self, workspace_id):
                 raise RuntimeError("theme store down")
 
-        ai_config = WorkspaceAIConfig.from_dict(
-            {"beneficiary_language_rules": "say recipient"}
-        )
-        profile = _build_workspace_profile_context(
-            workspace_id="ws", ai_config=ai_config, brand_voice=_BoomVoice()
-        )
+        ai_config = WorkspaceAIConfig.from_dict({"beneficiary_language_rules": "say recipient"})
+        profile = _build_workspace_profile_context(workspace_id="ws", ai_config=ai_config, brand_voice=_BoomVoice())
         assert profile == {"beneficiary_language_rules": "say recipient"}
 
     def test_picks_up_workspace_fields_when_orm_returns_a_workspace(self):
@@ -181,18 +167,14 @@ class TestWorkspaceProfileAssembly:
         """Long owner-authored copy is hard-capped per field budget."""
         long_mission = "x" * (_PROFILE_FIELD_BUDGETS["mission"] + 200)
         long_addendum = "y" * (_PROFILE_FIELD_BUDGETS["custom_system_prompt_addendum"] + 200)
-        ai_config = WorkspaceAIConfig.from_dict(
-            {"custom_system_prompt_addendum": long_addendum}
-        )
+        ai_config = WorkspaceAIConfig.from_dict({"custom_system_prompt_addendum": long_addendum})
         fake_workspace = SimpleNamespace(
             mission=long_mission,
             vision="",
             workspace_story="",
         )
         with _patched_workspace_lookup(fake_workspace):
-            profile = _build_workspace_profile_context(
-                workspace_id="ws", ai_config=ai_config
-            )
+            profile = _build_workspace_profile_context(workspace_id="ws", ai_config=ai_config)
 
         assert len(profile["mission"]) <= _PROFILE_FIELD_BUDGETS["mission"] + 1
         assert profile["mission"].endswith("…")
@@ -203,18 +185,14 @@ class TestWorkspaceProfileAssembly:
 
     def test_strips_blank_fields(self):
         """Whitespace-only fields are skipped (not surfaced as empty keys)."""
-        ai_config = WorkspaceAIConfig.from_dict(
-            {"voice_tone": "   ", "beneficiary_language_rules": ""}
-        )
+        ai_config = WorkspaceAIConfig.from_dict({"voice_tone": "   ", "beneficiary_language_rules": ""})
         fake_workspace = SimpleNamespace(
             mission="   ",
             vision="\n",
             workspace_story="",
         )
         with _patched_workspace_lookup(fake_workspace):
-            profile = _build_workspace_profile_context(
-                workspace_id="ws", ai_config=ai_config
-            )
+            profile = _build_workspace_profile_context(workspace_id="ws", ai_config=ai_config)
         assert profile == {}, (
             "All-whitespace fields produce an empty profile — the planner "
             "should not see keys whose values are stripped to empty strings."
@@ -223,17 +201,13 @@ class TestWorkspaceProfileAssembly:
     def test_failure_safe_on_orm_exception(self):
         """If the workspace lookup raises, the profile still assembles
         from AI-config fields and skips the workspace half silently."""
-        ai_config = WorkspaceAIConfig.from_dict(
-            {"beneficiary_language_rules": "say recipient"}
-        )
+        ai_config = WorkspaceAIConfig.from_dict({"beneficiary_language_rules": "say recipient"})
 
         def _broken_filter(*_args, **_kwargs):
             raise RuntimeError("simulated ORM failure")
 
         with _patched_workspace_lookup_raising(_broken_filter):
-            profile = _build_workspace_profile_context(
-                workspace_id="ws", ai_config=ai_config
-            )
+            profile = _build_workspace_profile_context(workspace_id="ws", ai_config=ai_config)
         assert profile == {"beneficiary_language_rules": "say recipient"}
 
 
@@ -282,129 +256,87 @@ class TestPlannerTemplateReferencesProfile:
 
 
 # ---------------------------------------------------------------------------
-# Helpers — patch the lazy-imported Workspace ORM model
+# Helpers — patch the ``ChatWorkspaceProfilePort`` seam
+#
+# Since the app-layer ORM burndown (PR-10), ``_build_workspace_profile_context``
+# reaches persistence through the ``ChatWorkspaceProfilePort`` — the two ORM
+# reads (workspace mission fields + assistant name, incl. the legacy config-JSON
+# fallback) live in ``OrmChatWorkspaceProfileRepository``. These helpers patch
+# the port resolver (``_workspace_profile_port``) with a faithful fake so the
+# assembler tests exercise the same contract without touching the ORM.
 # ---------------------------------------------------------------------------
 
 
-class _FakeQuerySet:
-    def __init__(self, workspace):
-        self._workspace = workspace
-
-    def only(self, *_fields):
-        return self
-
-    def first(self):
-        return self._workspace
-
-
-class _FakeManager:
-    def __init__(self, workspace):
-        self._workspace = workspace
-
-    def filter(self, **_kwargs):
-        return _FakeQuerySet(self._workspace)
+def _resolve_assistant_name(row) -> str:
+    """Mirror ``OrmChatWorkspaceProfileRepository.get_assistant_name`` resolution
+    (display_name → config['display_name'] → config['profile']['name'])."""
+    if row is None:
+        return ""
+    config = row.config if isinstance(row.config, dict) else {}
+    profile_section = config.get("profile")
+    name = (
+        row.display_name
+        or config.get("display_name")
+        or (profile_section.get("name") if isinstance(profile_section, dict) else None)
+        or ""
+    )
+    return str(name).strip()
 
 
-class _FakeWorkspaceModel:
-    def __init__(self, workspace):
-        self.objects = _FakeManager(workspace)
+class _FakeWorkspaceProfilePort:
+    """Fake :class:`ChatWorkspaceProfilePort` for the assembler tests."""
+
+    def __init__(self, *, mission_fields=None, teammate_row=None, raise_on_mission=False):
+        self._mission_fields = mission_fields
+        self._teammate_row = teammate_row
+        self._raise_on_mission = raise_on_mission
+
+    def get_mission_fields(self, workspace_id):
+        # The adapter is failure-safe (returns None on error); emulate that.
+        if self._raise_on_mission:
+            return None
+        return self._mission_fields
+
+    def get_assistant_name(self, workspace_id):
+        return _resolve_assistant_name(self._teammate_row)
 
 
-class _FakeRaisingManager:
-    def __init__(self, raising_filter):
-        self._raising_filter = raising_filter
+def _mission_fields_from(fake_workspace):
+    from components.agents.application.ports.chat_workspace_profile_port import (
+        WorkspaceMissionFields,
+    )
 
-    def filter(self, **kwargs):
-        return self._raising_filter(**kwargs)
+    return WorkspaceMissionFields(
+        mission=getattr(fake_workspace, "mission", "") or "",
+        vision=getattr(fake_workspace, "vision", "") or "",
+        workspace_story=getattr(fake_workspace, "workspace_story", "") or "",
+    )
 
 
-class _FakeRaisingWorkspaceModel:
-    def __init__(self, raising_filter):
-        self.objects = _FakeRaisingManager(raising_filter)
+def _patch_profile_port(port):
+    return patch(
+        "components.agents.application.use_cases.agent_chat_use_case._workspace_profile_port",
+        return_value=port,
+    )
 
 
 def _patched_workspace_lookup(fake_workspace):
-    """Patch the lazy ``Workspace`` import so the helper sees a stub.
-
-    The helper does ``from infrastructure.persistence.workspaces.models
-    import Workspace`` inside the function body, so we patch the
-    module's ``Workspace`` symbol after import.
-    """
-    import sys
-
-    fake_module = type(sys)("infrastructure.persistence.workspaces.models")
-    fake_module.Workspace = _FakeWorkspaceModel(fake_workspace)
-    return patch.dict(
-        sys.modules,
-        {"infrastructure.persistence.workspaces.models": fake_module},
-    )
+    """Patch the profile port so the assembler sees ``fake_workspace``'s fields."""
+    return _patch_profile_port(_FakeWorkspaceProfilePort(mission_fields=_mission_fields_from(fake_workspace)))
 
 
 def _patched_workspace_lookup_raising(raising_filter):
-    import sys
-
-    fake_module = type(sys)("infrastructure.persistence.workspaces.models")
-    fake_module.Workspace = _FakeRaisingWorkspaceModel(raising_filter)
-    return patch.dict(
-        sys.modules,
-        {"infrastructure.persistence.workspaces.models": fake_module},
-    )
-
-
-# Same lazy-import patching trick for the teammate-profile lookup
-# (``infrastructure.persistence.ai.models.AITeammateProfile``).
-
-
-class _FakeTeammateQuerySet:
-    def __init__(self, row):
-        self._row = row
-
-    def only(self, *_fields):
-        return self
-
-    def first(self):
-        return self._row
-
-
-class _FakeTeammateManager:
-    def __init__(self, row):
-        self._row = row
-
-    def filter(self, **_kwargs):
-        return _FakeTeammateQuerySet(self._row)
-
-
-class _FakeTeammateModel:
-    def __init__(self, row):
-        self.objects = _FakeTeammateManager(row)
-
-
-class _RaisingTeammateManager:
-    def filter(self, **_kwargs):
-        raise RuntimeError("simulated ORM failure")
-
-
-class _RaisingTeammateModel:
-    objects = _RaisingTeammateManager()
+    """Patch the profile port so the mission-fields read fails (returns None) —
+    the adapter is failure-safe, so the assembler skips the workspace half."""
+    return _patch_profile_port(_FakeWorkspaceProfilePort(raise_on_mission=True))
 
 
 def _patched_teammate_profile_lookup(row):
-    import sys
-
-    fake_module = type(sys)("infrastructure.persistence.ai.models")
-    fake_module.AITeammateProfile = _FakeTeammateModel(row)
-    return patch.dict(
-        sys.modules,
-        {"infrastructure.persistence.ai.models": fake_module},
-    )
+    """Patch the profile port so the assistant name resolves off ``row``."""
+    return _patch_profile_port(_FakeWorkspaceProfilePort(teammate_row=row))
 
 
 def _patched_teammate_profile_lookup_raising():
-    import sys
-
-    fake_module = type(sys)("infrastructure.persistence.ai.models")
-    fake_module.AITeammateProfile = _RaisingTeammateModel
-    return patch.dict(
-        sys.modules,
-        {"infrastructure.persistence.ai.models": fake_module},
-    )
+    """Patch the profile port so the assistant-name read yields '' (the adapter
+    swallows the failure), leaving the rest of the profile intact."""
+    return _patch_profile_port(_FakeWorkspaceProfilePort(teammate_row=None))

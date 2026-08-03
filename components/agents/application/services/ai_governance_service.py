@@ -415,49 +415,40 @@ def _declared_tool_risks() -> dict[str, str]:
         return {}
 
 
-def _ai_service_user_ids(workspace_id: str) -> set[str]:
-    from infrastructure.persistence.ai.models import AITeammateProfile
-
-    return {
-        str(user_id)
-        for user_id in AITeammateProfile.objects.filter(workspace_id=workspace_id).values_list("user_id", flat=True)
-    }
-
-
 def ai_activity(workspace_id: str, window_days: int = 7) -> dict[str, Any]:
-    """Runs by source/status + tool calls by tool/agent/risk-tier in the window."""
-    from infrastructure.persistence.ai.agents.models import DeepRun, DeepRunLog
+    """Runs by source/status + tool calls by tool/agent/risk-tier in the window.
+
+    The deep-run + tool-observation rows are the agents context's OWN ``ai.*``
+    telemetry — read through its ``AiGovernanceReadPort`` seam (Rule 2). The
+    source classification (detector vs chat) and risk-tier resolution stay HERE
+    in the application layer off the raw rows the port returns."""
+    from components.agents.application.providers.ai_provider import AIProvider
 
     now = _utc_now()
     window_start = now - timedelta(days=window_days)
     workspace_id = str(workspace_id)
 
-    detector_user_ids = _ai_service_user_ids(workspace_id)
-    run_rows: list[dict[str, Any]] = []
-    runs = DeepRun.objects.filter(workspace_id=workspace_id, created_at__gte=window_start).only(
-        "id", "status", "user_id"
+    activity = AIProvider.build_ai_governance_read_port().collect_ai_activity(
+        workspace_id=workspace_id, window_start=window_start
     )
-    for run in runs.iterator(chunk_size=500):
-        run_rows.append(
-            {
-                "id": str(run.id),
-                "status": run.status,
-                "source": (DISPATCH_SOURCE_DETECTOR if str(run.user_id) in detector_user_ids else DISPATCH_SOURCE_CHAT),
-            }
-        )
+    detector_user_ids = activity.service_user_ids
+
+    run_rows: list[dict[str, Any]] = [
+        {
+            "id": row["id"],
+            "status": row["status"],
+            "source": (DISPATCH_SOURCE_DETECTOR if row["user_id"] in detector_user_ids else DISPATCH_SOURCE_CHAT),
+        }
+        for row in activity.run_rows
+    ]
 
     declared_risks = _declared_tool_risks()
     tool_rows: list[dict[str, Any]] = []
-    logs = DeepRunLog.objects.filter(
-        deep_run__workspace_id=workspace_id,
-        event_type="tool_observation",
-        created_at__gte=window_start,
-    ).only("id", "agent_type", "tool_name")
-    for log in logs.iterator(chunk_size=500):
-        tool_name = log.tool_name or "unknown"
+    for row in activity.tool_rows:
+        tool_name = row.get("tool_name") or "unknown"
         tool_rows.append(
             {
-                "agent_type": log.agent_type or "unknown",
+                "agent_type": row.get("agent_type") or "unknown",
                 "tool_name": tool_name,
                 "risk": declared_risks.get(tool_name) or resolve_tool_risk(tool_name),
             }
@@ -466,63 +457,19 @@ def ai_activity(workspace_id: str, window_days: int = 7) -> dict[str, Any]:
     return compute_ai_activity(run_rows, tool_rows, now=now, window_days=window_days)
 
 
-def _grant_audit_entries(agent) -> list[dict[str, Any]]:
-    """Read-only audit history for the agent's capability grants.
-
-    Goes through the audit context's application provider (never its
-    infrastructure directly). Best-effort: an audit read failure yields an
-    empty history — reported as "not recorded", never invented.
-    """
-    try:
-        from components.audit.application.providers.audit_log_provider import get_audit_log_provider
-
-        entries = get_audit_log_provider().get_entity_history(
-            instance=agent,
-            field_name="capabilities",
-            limit=_MAX_AUDIT_ENTRIES_PER_AGENT,
-        )
-    except Exception:
-        logger.warning("capability grant audit read failed agent_id=%s", agent.agent_id, exc_info=True)
-        return []
-    rows = []
-    for entry in entries:
-        created_at = _parse_iso(getattr(entry, "created_at", None))
-        rows.append(
-            {
-                "field_name": getattr(entry, "field_name", ""),
-                "previous_value": getattr(entry, "previous_value", None),
-                "new_value": getattr(entry, "new_value", None),
-                "actor_id": getattr(entry, "actor_id", None),
-                "actor_display": getattr(entry, "actor_display", ""),
-                "reason": getattr(entry, "reason", ""),
-                "created_at": created_at.isoformat() if created_at else None,
-            }
-        )
-    return rows
-
-
 def capability_grants(workspace_id: str) -> dict[str, Any]:
-    """Per-agent capability grants, power flags and their audit history."""
-    from infrastructure.persistence.ai.agents.models import Agent
+    """Per-agent capability grants, power flags and their audit history.
+
+    The ``Agent`` rows + their capability-grant audit history are agents-owned
+    ``ai.*`` / audit reads — collected through the ``AiGovernanceReadPort`` seam
+    (Rule 2). The pure ``compute_capability_grants`` still shapes the report off
+    the returned rows."""
+    from components.agents.application.providers.ai_provider import AIProvider
 
     now = _utc_now()
-    agent_rows: list[dict[str, Any]] = []
-    agents = Agent.objects.filter(workspace_id=str(workspace_id)).only("agent_id", "agent_type", "status", "config")
-    for agent in agents.iterator(chunk_size=500):
-        config = agent.config if isinstance(agent.config, dict) else {}
-        capabilities = config.get("capabilities") if isinstance(config.get("capabilities"), dict) else {}
-        power_flags = {key: bool(config.get(key)) for key in _POWER_FLAG_KEYS if key in config}
-        agent_rows.append(
-            {
-                "agent_id": str(agent.agent_id),
-                "agent_type": agent.agent_type,
-                "status": agent.status,
-                "capabilities": capabilities,
-                "power_flags": power_flags,
-                "grant_audit_entries": _grant_audit_entries(agent),
-            }
-        )
-
+    agent_rows = AIProvider.build_ai_governance_read_port().collect_capability_agent_rows(
+        workspace_id=str(workspace_id)
+    )
     return compute_capability_grants(agent_rows, now=now)
 
 
@@ -589,46 +536,29 @@ def credential_inventory(workspace_id: str) -> dict[str, Any]:
 
 
 def kill_switch_status(workspace_id: str) -> dict[str, Any]:
-    """Kill-switch state: workspace toggle, emergency flag, what would stop."""
-    from infrastructure.persistence.ai.agents.models import Agent, DeepRun
-    from infrastructure.persistence.ai.models import AITeammateProfile
+    """Kill-switch state: workspace toggle, emergency flag, what would stop.
+
+    The workspace toggle is read through the agents cross-context
+    ``WorkspaceQueryPort`` (base manager, so an inactive workspace is still found);
+    the agents-owned teammate profile + agent inventory + in-flight run count come
+    through the ``AiGovernanceReadPort`` seam (Rule 2)."""
+    from components.agents.application.policies.ai_kill_switch import is_ai_killed
+    from components.agents.application.providers.ai_provider import AIProvider
 
     now = _utc_now()
     workspace_id = str(workspace_id)
 
-    # Workspace read routed through the agents context's cross-context port. The
-    # port resolves the row via the model's base manager (unfiltered) so an
-    # inactive/soft-deleted workspace is still found — the same semantics the
-    # prior inline ``_base_manager`` read had.
-    from components.agents.application.providers.ai_provider import AIProvider
-
     workspace_status = AIProvider.build_workspace_query().get_ai_toggle_status(workspace_id)
-
-    from components.agents.application.policies.ai_kill_switch import is_ai_killed
-
-    profile = AITeammateProfile.objects.filter(workspace_id=workspace_id).first()
-    teammate_profile = (
-        {"status": profile.status, "is_enabled": bool(profile.is_enabled)} if profile is not None else None
-    )
-
-    agent_rows = [
-        {"agent_id": str(agent.agent_id), "agent_type": agent.agent_type, "status": agent.status}
-        for agent in Agent.objects.filter(workspace_id=workspace_id)
-        .only("agent_id", "agent_type", "status")
-        .iterator(chunk_size=500)
-    ]
-    in_flight = DeepRun.objects.filter(
-        workspace_id=workspace_id, status__in=(DeepRun.STATUS_PENDING, DeepRun.STATUS_RUNNING)
-    ).count()
+    inventory = AIProvider.build_ai_governance_read_port().collect_kill_switch_inventory(workspace_id=workspace_id)
 
     return compute_kill_switch_status(
         now=now,
         workspace_found=workspace_status.found,
         ai_teammate_enabled=workspace_status.ai_teammate_enabled,
         emergency_flag_engaged=bool(is_ai_killed(workspace_id)),
-        teammate_profile=teammate_profile,
-        agent_rows=agent_rows,
-        in_flight_deep_runs=in_flight,
+        teammate_profile=inventory.teammate_profile,
+        agent_rows=inventory.agent_rows,
+        in_flight_deep_runs=inventory.in_flight_deep_runs,
     )
 
 

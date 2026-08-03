@@ -80,15 +80,6 @@ def _get_detector_modules():
     return detector_base, detector_registry
 
 
-def _get_workspace_model():
-    try:
-        from infrastructure.persistence.workspaces.models import Workspace
-
-        return Workspace
-    except ImportError:
-        return None
-
-
 def _build_detectors(detector_entries: list[Any] | None) -> list:
     _, det_registry = _get_detector_modules()
     detectors: list = []
@@ -203,14 +194,15 @@ def run_detector_cycle(
         Summary dict with detector outcomes, signals, created task ids
         and any LLM-suggested follow-ups.
     """
-    Workspace = _get_workspace_model()
-    if Workspace is None:
-        raise RuntimeError("Workspace model unavailable")
+    # Workspace read routed through the agents cross-context ``WorkspaceQueryPort``
+    # (Rule 2: reach another context's data through a port, not its ORM). The
+    # ``_unfiltered`` variant resolves via the model's base manager so an
+    # inactive/soft-deleted workspace is still found — the same semantics the
+    # prior inline ``Workspace._base_manager`` read had.
+    from components.agents.application.providers.ai_provider import AIProvider
 
-    queryset = getattr(Workspace, "_base_manager", None) or Workspace.objects
-    try:
-        workspace = queryset.get(id=workspace_id)
-    except Workspace.DoesNotExist:
+    workspace = AIProvider.build_workspace_query().get_by_id_unfiltered(workspace_id)
+    if workspace is None:
         raise NotFoundError(f"Workspace {workspace_id} not found")
 
     # SEE-202 — emergency kill switch. When tripped, the autonomous detector

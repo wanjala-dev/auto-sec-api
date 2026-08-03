@@ -8,9 +8,10 @@ the only module external contexts should import from.
 
 Implementation lives in the infrastructure layer; this facade re-exports.
 """
+
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 # Re-export the AI Findings board column names as part of the agents
 # context's published language, so external contexts (e.g. sign_off's
@@ -61,7 +62,7 @@ def ensure_agents_board(workspace: Any) -> Any:
     return _ensure(workspace)
 
 
-def get_teammate_profile(workspace_id: str) -> Optional[Any]:
+def get_teammate_profile(workspace_id: str) -> Any | None:
     """Return the AI teammate profile for a workspace, or None."""
     from components.agents.infrastructure.services.actions_service import (
         get_ai_action_service,
@@ -97,10 +98,7 @@ def enable_teammate(workspace: Any) -> tuple:
 
 def disable_teammate(workspace: Any) -> None:
     """Full disable: profile + grants + entitlement."""
-    from datetime import datetime, timezone
-
-    from infrastructure.persistence.ai.models import AIPermissionGrant
-
+    from components.agents.application.providers.ai_provider import AIProvider
     from components.agents.infrastructure.services.agent_entitlements import (
         ensure_workspace_agent_type,
         resolve_agent_type,
@@ -115,11 +113,8 @@ def disable_teammate(workspace: Any) -> None:
         profile.status = "disabled"
         profile.save(update_fields=["is_enabled", "status", "updated_at"])
 
-    AIPermissionGrant.objects.filter(
+    AIProvider.build_ai_permission_grant_port().disable_grants_for_principal(
         workspace=workspace, principal=profile.user
-    ).update(
-        status=AIPermissionGrant.STATUS_DISABLED,
-        updated_at=datetime.now(timezone.utc),
     )
 
     agent_type = resolve_agent_type("ai_teammate")
