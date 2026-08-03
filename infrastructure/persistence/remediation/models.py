@@ -79,6 +79,13 @@ class RemediationEntry(models.Model):
     recurrence_count = models.PositiveIntegerField(default=0)
     last_outcome_at = models.DateTimeField(null=True, blank=True)
     score = models.IntegerField(default=0, db_index=True)
+    # Retrievability bookkeeping (ADR 0012 P6 re-index sweep). Stamped when the entry
+    # is successfully (re-)embedded into the corpus. NULL = never embedded (the P4b
+    # orphan gap: the embed task failed / was lost, e.g. an embeddings-backend outage);
+    # ``embedded_at < last_outcome_at`` = a rating change never re-embedded (stale). The
+    # periodic ``reindex_remediation_corpus`` sweep re-embeds both classes so no vetted
+    # fix is silently missing from — or stale in — the retrievable corpus.
+    embedded_at = models.DateTimeField(null=True, blank=True, db_index=True)
     # Metadata
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

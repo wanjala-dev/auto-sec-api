@@ -27,6 +27,7 @@ def to_entity(row) -> RemediationEntry:
         recurrence_count=row.recurrence_count,
         last_outcome_at=row.last_outcome_at,
         score=row.score,
+        embedded_at=row.embedded_at,
         created_at=row.created_at,
         is_deleted=row.is_deleted,
     )

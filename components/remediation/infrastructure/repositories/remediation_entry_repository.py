@@ -168,6 +168,34 @@ class DjangoRemediationEntryRepository(RemediationEntryStorePort):
         )
         return to_entity(row)
 
+    def iter_reindex_candidate_ids(
+        self, *, workspace_id: UUID | None = None, limit: int = 1000
+    ) -> list[tuple[str, str]]:
+        from django.db.models import F, Q
+
+        from infrastructure.persistence.remediation.models import RemediationEntry as Row
+
+        # Orphaned (never embedded) OR rating-stale (a later outcome post-dated the last
+        # embed). ``embedded_at < NULL`` is NULL in SQL, so a never-outcome entry matches
+        # only via the isnull branch — exactly the intended set. Returns lightweight id
+        # pairs (not model rows), bounded by ``limit``; the model import stays HERE (D1).
+        qs = Row.active.filter(Q(embedded_at__isnull=True) | Q(embedded_at__lt=F("last_outcome_at")))
+        if workspace_id is not None:
+            qs = qs.filter(workspace_id=workspace_id)
+        rows = qs.order_by("id").values_list("id", "workspace_id")[: max(1, int(limit))]
+        return [(str(eid), str(wsid)) for eid, wsid in rows]
+
+    def mark_embedded(self, *, entry_id: UUID, workspace_id: UUID) -> None:
+        from django.utils import timezone
+
+        from infrastructure.persistence.remediation.models import RemediationEntry as Row
+
+        # A direct ``.update()`` (not ``.save()``): a single-column retrievability
+        # stamp, workspace-scoped (D4). Not a corpus create/content write, so it does
+        # not touch the D1 sole-writer path — it only records that an already-admitted
+        # entry has been embedded. ``.active`` so a revoked entry is never re-stamped.
+        Row.active.filter(id=entry_id, workspace_id=workspace_id).update(embedded_at=timezone.now())
+
     def revoke(
         self,
         *,

@@ -9,6 +9,7 @@ from components.integrations.api.controller import (
     AwsConnectionTemplateView,
     AwsConnectionVerifyView,
     FindingOpenDraftPrView,
+    FindingPreviewDraftPrView,
     TriageCapabilityView,
     VcsConnectionDetailView,
     VcsConnectionListCreateView,
@@ -51,6 +52,13 @@ urlpatterns = [
         "workspaces/<uuid:workspace_id>/findings/<str:task_id>/open-draft-pr/",
         FindingOpenDraftPrView.as_view(),
         name=FindingOpenDraftPrView.name,
+    ),
+    path(
+        # Preview-before-commit (ADR 0012 P6): show the grounded proposed patch +
+        # its grounding provenance BEFORE opening a PR. Same guardrail, no commit.
+        "workspaces/<uuid:workspace_id>/findings/<str:task_id>/preview-draft-pr/",
+        FindingPreviewDraftPrView.as_view(),
+        name=FindingPreviewDraftPrView.name,
     ),
     # ── Log sources (ADR 0008 Phase 3) ──
     path(

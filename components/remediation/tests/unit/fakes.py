@@ -100,6 +100,28 @@ class FakeStore(RemediationEntryStorePort):
         self._replace(updated)
         return updated
 
+    def iter_reindex_candidate_ids(self, *, workspace_id=None, limit: int = 1000) -> list[tuple[str, str]]:
+        out: list[tuple[str, str]] = []
+        for e in self.saved:
+            if e.is_deleted:
+                continue
+            stale = e.last_outcome_at is not None and (
+                e.embedded_at is None or e.embedded_at < e.last_outcome_at
+            )
+            if not (e.embedded_at is None or stale):
+                continue
+            if workspace_id is not None and str(e.workspace_id) != str(workspace_id):
+                continue
+            out.append((str(e.id), str(e.workspace_id)))
+        return out[:limit]
+
+    def mark_embedded(self, *, entry_id: UUID, workspace_id: UUID) -> None:
+        from datetime import UTC, datetime
+
+        cur = self.get(entry_id, workspace_id=workspace_id)
+        if cur is not None:
+            self._replace(replace(cur, embedded_at=datetime.now(UTC)))
+
     def revoke(
         self,
         *,

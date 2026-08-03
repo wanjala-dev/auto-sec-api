@@ -82,7 +82,7 @@ class ProjectAgent(WorkspaceContextMixin, BaseAgent):
             "Fetch a project's details. Use for ANY 'tell me about "
             "project X', 'what's project X', 'project details for X' "
             "style question. Input: project name or ID. Output: title, "
-            "status, priority, dates, lead, description, budget."
+            "status, priority, dates, team, lead, tasks, milestones."
         ),
     )
     def get_project_info(self, input_str: str) -> str:
