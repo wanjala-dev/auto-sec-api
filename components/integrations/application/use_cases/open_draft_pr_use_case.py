@@ -49,6 +49,13 @@ logger = logging.getLogger(__name__)
 _LOG_WATCH_SOURCE = "ai.log_watch"
 _ACTING_AGENT = "triage_agent"
 
+# VcsConnection status/commit-identity values. Kept as string literals so the
+# application layer needs no ORM import to compare them — they mirror the enum
+# TextChoices on ``infrastructure.persistence.integrations.models.VcsConnection``.
+_STATUS_CONNECTED = "connected"
+_COMMIT_IDENTITY_OPERATOR = "operator"
+_COMMIT_IDENTITY_CUSTOM = "custom"
+
 
 class DraftPrPreconditionError(Exception):
     """A draft-PR precondition failed. ``reason`` is a stable machine code."""
@@ -73,15 +80,33 @@ class OpenDraftPrUseCase:
         advisor: LogPatchAdvisor | None = None,
         finding_facts: FindingFactsPort | None = None,
         pr_recorder: FindingPrRecorderPort | None = None,
+        resolve_connection: Callable[[str], object | None] | None = None,
+        decrypt: Callable[[str], str] | None = None,
+        capability_port: AgentCapabilityPort | None = None,
+        resolve_workspace_owner_id: Callable[[str], str | None] | None = None,
+        resolve_operator_identity: Callable[[str], dict | None] | None = None,
     ) -> None:
         self._adapter_factory = adapter_factory
         self._advisor = advisor or LogPatchAdvisor()
-        # Cross-context board access goes through ports (C2/C3). Defaults are
-        # resolved lazily from the provider so the application layer holds no
-        # direct infrastructure import (Rule 2); the provider is the composition
-        # root that wires the concrete adapters.
+        # Every cross-context / own-context READ goes through a port or an
+        # injected resolver (C2/C3 + Rule 2). Defaults are resolved lazily from
+        # the provider — the composition root that owns the ORM — so the
+        # application layer holds no direct infrastructure import:
+        #   * board read/write   → FindingFactsPort / FindingPrRecorderPort
+        #   * VcsConnection (own) → resolve_connection (mirrors the sibling
+        #     CheckPullRequestMergedUseCase; the row is resolved in the provider)
+        #   * token ciphertext    → decrypt (a runtime credential produced by the
+        #     injected secret-envelope callable; never a port return value)
+        #   * triage capability   → AgentCapabilityPort (#216, agents context)
+        #   * workspace owner id  → resolve_workspace_owner_id
+        #   * operator identity   → resolve_operator_identity (name/email only)
         self._finding_facts = finding_facts
         self._pr_recorder = pr_recorder
+        self._resolve_connection = resolve_connection
+        self._decrypt = decrypt
+        self._capability_port = capability_port
+        self._resolve_workspace_owner_id = resolve_workspace_owner_id
+        self._resolve_operator_identity = resolve_operator_identity
 
     def _finding_facts_port(self) -> FindingFactsPort:
         if self._finding_facts is None:
@@ -100,6 +125,49 @@ class OpenDraftPrUseCase:
 
             self._pr_recorder = get_finding_pr_recorder()
         return self._pr_recorder
+
+    def _resolve_connection_fn(self) -> Callable[[str], object | None]:
+        if self._resolve_connection is None:
+            from components.integrations.application.providers.vcs_provider import (
+                resolve_vcs_connection,
+            )
+
+            self._resolve_connection = resolve_vcs_connection
+        return self._resolve_connection
+
+    def _decrypt_fn(self) -> Callable[[str], str]:
+        if self._decrypt is None:
+            from components.integrations.application.providers.secret_envelope_provider import (
+                decrypt_secret,
+            )
+
+            self._decrypt = decrypt_secret
+        return self._decrypt
+
+    def _capability_port_(self) -> AgentCapabilityPort:
+        if self._capability_port is None:
+            from components.agents.application.providers.ai_provider import AIProvider
+
+            self._capability_port = AIProvider.build_agent_capability_port()
+        return self._capability_port
+
+    def _resolve_workspace_owner_id_fn(self) -> Callable[[str], str | None]:
+        if self._resolve_workspace_owner_id is None:
+            from components.integrations.application.providers.vcs_provider import (
+                resolve_workspace_owner_id,
+            )
+
+            self._resolve_workspace_owner_id = resolve_workspace_owner_id
+        return self._resolve_workspace_owner_id
+
+    def _resolve_operator_identity_fn(self) -> Callable[[str], dict | None]:
+        if self._resolve_operator_identity is None:
+            from components.integrations.application.providers.vcs_provider import (
+                resolve_operator_identity,
+            )
+
+            self._resolve_operator_identity = resolve_operator_identity
+        return self._resolve_operator_identity
 
     def execute(
         self,
@@ -134,7 +202,7 @@ class OpenDraftPrUseCase:
                 "The finding's evidence names no source file — cannot derive a patch target.",
             )
 
-        adapter = self._adapter_factory(connection.provider, token)
+        adapter = self._adapter_factory(getattr(connection, "provider", ""), token)
         default_branch = adapter.get_default_branch(target_repo)
         resolved_path, repo_file = self._resolve_and_fetch(
             adapter=adapter,
@@ -266,21 +334,21 @@ class OpenDraftPrUseCase:
                 ) from exc
             raise
 
-    @staticmethod
-    def _notify_draft_pr_opened(*, workspace_id, task, performed_by, pr_url, repo) -> None:
+    def _notify_draft_pr_opened(self, *, workspace_id, task, performed_by, pr_url, repo) -> None:
         """HITL alert: a draft PR now awaits human review — tell the owner.
 
         Goes through the notification dispatcher funnel (reuses
         ``create_notification`` semantics: preference gating, dedup, deep
         link, realtime + web-push/email fan-out). Loss-tolerant — the PR
-        itself must never be lost to a notification hiccup.
+        itself must never be lost to a notification hiccup. The workspace
+        owner id is resolved through the injected resolver (provider-owned
+        ORM), so this use case holds no persistence import.
         """
         try:
             from components.notifications.workers.tasks import dispatch_notification_async
             from components.shared_kernel.application.transactional import on_commit
-            from infrastructure.persistence.workspaces.models import Workspace
 
-            owner_id = Workspace.objects.filter(id=workspace_id).values_list("workspace_owner_id", flat=True).first()
+            owner_id = self._resolve_workspace_owner_id_fn()(str(workspace_id))
             if owner_id is None:
                 return
 
@@ -309,23 +377,22 @@ class OpenDraftPrUseCase:
 
     # ── Preconditions ─────────────────────────────────────────────────
 
-    @staticmethod
-    def _require_connection(workspace_id: str):
-        # ADR 0010 Phase 2: reads the provider-agnostic VcsConnection (seeded from any
-        # legacy GitHubConnection by migration 0008). Most-recent connection wins; a
-        # per-repo/provider resolution refinement lands with the CRUD API (Phase 3).
-        from infrastructure.persistence.integrations.models import VcsConnection
-
-        connection = VcsConnection.objects.filter(workspace_id=workspace_id).order_by("-created_at").first()
+    def _require_connection(self, workspace_id: str):
+        # ADR 0010 Phase 2: resolves the provider-agnostic VcsConnection (seeded from any
+        # legacy GitHubConnection by migration 0008) through the injected resolver — the
+        # provider owns the ORM read (most-recent connection wins). A per-repo/provider
+        # resolution refinement lands with the CRUD API (Phase 3).
+        connection = self._resolve_connection_fn()(str(workspace_id))
         if connection is None:
             raise DraftPrPreconditionError(
                 "no_github_connection",
                 "No VCS connection is linked for this workspace.",
             )
-        if connection.status != VcsConnection.Status.CONNECTED:
+        status = getattr(connection, "status", "")
+        if status != _STATUS_CONNECTED:
             raise DraftPrPreconditionError(
                 "connection_not_connected",
-                f"The VCS connection is '{connection.status}', not connected.",
+                f"The VCS connection is '{status}', not connected.",
             )
         return connection
 
@@ -371,14 +438,11 @@ class OpenDraftPrUseCase:
             )
         return finding
 
-    @staticmethod
-    def _require_capability(workspace_id: str) -> None:
-        from infrastructure.persistence.ai.agents.models import Agent
-
-        agent_row = (
-            Agent.objects.filter(workspace_id=workspace_id, agent_type=_ACTING_AGENT).order_by("-created_at").first()
-        )
-        capabilities = ((agent_row.config or {}).get("capabilities") or {}) if agent_row else {}
+    def _require_capability(self, workspace_id: str) -> None:
+        # #216: the triage agent's capability map belongs to the ``agents`` context —
+        # read it through AgentCapabilityPort (never ``ai.agents``'s ORM). The port's
+        # ``get_triage_capabilities`` resolves the same most-recent ``triage_agent`` row.
+        capabilities = self._capability_port_().get_triage_capabilities(workspace_id=str(workspace_id))
         enabled = capabilities.get("open_draft_pr") is True if isinstance(capabilities, dict) else False
         if not enabled:
             raise DraftPrPreconditionError(
@@ -386,11 +450,12 @@ class OpenDraftPrUseCase:
                 "The triage agent's open_draft_pr capability is not enabled for this workspace.",
             )
 
-    @staticmethod
-    def _decrypt_token(connection) -> str:
-        from components.integrations.application.providers.secret_envelope_provider import decrypt_secret
-
-        token = decrypt_secret(connection.token_ciphertext)
+    def _decrypt_token(self, connection) -> str:
+        # The ciphertext lives on the resolver-provided connection object; the injected
+        # secret-envelope callable turns it into the runtime token. The token is a
+        # credential the use case must USE to call the host — it is never returned across
+        # a port (no port method exposes it; #213's status seam stays presence-only).
+        token = self._decrypt_fn()(getattr(connection, "token_ciphertext", "") or "")
         if not token:
             raise DraftPrPreconditionError(
                 "no_github_token",
@@ -398,35 +463,33 @@ class OpenDraftPrUseCase:
             )
         return token
 
-    @staticmethod
-    def _resolve_commit_author(connection, performed_by: str) -> dict | None:
+    def _resolve_commit_author(self, connection, performed_by: str) -> dict | None:
         """Resolve the commit author/committer identity from the connection's
         ``commit_identity`` policy. Returns ``{"name", "email"}`` or ``None`` (→ the
         adapter omits author/committer, so the host attributes the commit to the PAT
         owner — the default).
 
         - ``pat_owner`` (default) → ``None``.
-        - ``operator`` → the approving user's name + email. If the user or their email
-          is missing, fall back to ``None`` — attribution never fails the PR.
+        - ``operator`` → the approving user's name + email, read through the injected
+          identity resolver. If the user or their email is missing, fall back to
+          ``None`` — attribution never fails the PR.
         - ``custom`` → the stored ``commit_author_name`` / ``commit_author_email``
           (both required; the DTO validates that on write, so a half-set row falls
           back to ``None`` rather than sending a malformed identity).
         """
-        from infrastructure.persistence.integrations.models import VcsConnection
+        mode = getattr(connection, "commit_identity", "") or ""
 
-        mode = getattr(connection, "commit_identity", VcsConnection.CommitIdentity.PAT_OWNER)
-
-        if mode == VcsConnection.CommitIdentity.OPERATOR:
-            from infrastructure.persistence.users.models import CustomUser
-
-            user = CustomUser.objects.filter(id=performed_by).first()
-            email = (getattr(user, "email", "") or "").strip() if user else ""
-            if not user or not email:
+        if mode == _COMMIT_IDENTITY_OPERATOR:
+            identity = self._resolve_operator_identity_fn()(str(performed_by))
+            if not identity:
                 return None
-            name = (user.get_full_name() or "").strip() or (user.username or "").strip() or email
-            return {"name": name, "email": email}
+            name = (identity.get("name") or "").strip()
+            email = (identity.get("email") or "").strip()
+            if not email:
+                return None
+            return {"name": name or email, "email": email}
 
-        if mode == VcsConnection.CommitIdentity.CUSTOM:
+        if mode == _COMMIT_IDENTITY_CUSTOM:
             name = (getattr(connection, "commit_author_name", "") or "").strip()
             email = (getattr(connection, "commit_author_email", "") or "").strip()
             if name and email:
