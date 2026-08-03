@@ -186,8 +186,9 @@ and `LogSourcePort` (ADR 0008), pointed at threat intelligence. A small **`vuln_
   `findings` scorer never imports `vuln_intel` infrastructure.
 
 The feed data is **reference/enrichment data, not findings** — it does **not** create a per-pillar finding
-table (C6). It enriches the one Finding SSOT by CVE id. (Open question O6: `vuln_intel` as a full bounded
-context vs. a module — it has its own refresh lifecycle/provenance, which argues BC; noted for review.)
+table (C6). It enriches the one Finding SSOT by CVE id. (Resolved decision #4: `vuln_intel` **starts as a
+module** in / adjacent to the `findings` hub behind these ports — "start as a module; extract later" — and
+earns promotion to a full bounded context only if its lifecycle/provenance later justify it.)
 
 ### D3 — Where it lives: a per-finding scorer + materialized table in the `findings` hub, reading exposure + intel by port
 
@@ -303,7 +304,7 @@ inline, or ranking on raw CVSS) is the exact debt ADR 0004 §6 and BOD 26-04 exi
 5. **HUD re-rank + convergence.** Findings list sorts on contextual risk; the Today brief card consumes
    the ranked read; begin the D5 convergence (workspace `RiskScoreCalculator` consumes per-finding
    `FindingRisk` rollup instead of raw counts). **Phase 2 — after the substrate proves out.**
-6. **Hardening + tuning.** Per-finding EPSS%/KEV badge display (O5), operator-driven weight tuning, feed
+6. **Hardening + tuning.** Operator-driven weight tuning, feed
    checksum/integrity, and fitness tests: `vuln_intel` writes only snapshot rows (no finding rows, C6);
    the scorer imports no cross-context infrastructure (C3); `FindingRisk` correlates by CVE/URN, not FK
    (C4). **Phase 2.**
@@ -321,24 +322,37 @@ score exists; 3–4 stand up the ranking substrate; 5–6 land the HUD value + c
 - **Not** a new per-pillar finding table — feeds enrich the one Finding SSOT by CVE id (C6).
 - **Not** the workspace `RiskScoreCalculator` rewrite — that convergence (D5) is named, staged over Phase 5.
 
-## Open questions / decisions for Henry
+## Resolved decisions (approved by Henry 2026-08-03)
 
-1. **Score bands.** Reuse `RiskBand.from_score`'s existing `34/67` GREEN/AMBER/RED cutoffs, or tune for
-   this blend? (Reusing keeps one banding across the sign-off spine.)
-2. **The blend weights.** Confirm the *shape* (KEV floors to RED; EPSS gates via `0.7·L + 0.3`; exposure
-   `1.0/0.7/0.4`) — exact constants are D6-tunable, but the shape is the decision. In particular: should
-   **KEV floor to RED, or hard-set to the max score**? And should `knownRansomwareCampaignUse` bump higher
-   than plain KEV?
-3. **Refresh cadence.** Daily EPSS + KEV pull (proposed). KEV can move intra-day on active exploitation —
-   do we want a tighter KEV cadence (e.g. every 6h) than EPSS's daily?
-4. **CVSS base capture.** Confirm we start persisting the numeric CVSS base from Trivy (currently dropped)
-   so `I` uses the real score — or stay on the qualitative severity mapping for MVP?
-5. **Per-finding badges.** Surface **EPSS %** and a **KEV badge** on every finding row/card (recommended —
-   it *shows the why*), or only the composite band in MVP?
-6. **`vuln_intel` shape.** Full bounded context (own lifecycle/provenance — my lean) vs. a module under an
-   existing context?
-7. **Exposure default.** When an asset's exposure is *unknown* (not yet in the graph), default to
-   `private` (least urgency from absence of signal, proposed) or `public` (fail-safe-loud)?
+The model and its recommended defaults are **approved**. These are locked; the constants that remain
+tunable (D6) stay in the single scorer module, but the calls below are the decisions to build to.
+
+1. **KEV → floor-to-RED.** A finding whose CVE is in the CISA KEV catalog is **always placed in the RED
+   band** — confirmed-exploited outranks predicted, unconditionally (not merely a numeric bump). This is
+   the `max(score, RED-floor)` behaviour in D1, made definitive: KEV membership ⇒ RED, full stop.
+2. **Band cutoffs — reuse the existing `RiskBand` `34/67` thresholds.** No new cutoffs. One banding across
+   the whole sign-off spine (`RiskBand.from_score` stays the single source of the GREEN/AMBER/RED split).
+3. **Unknown exposure → treat as `private` (0.4 amplifier) but FLAG the finding `exposure_unknown`.** A
+   missing graph signal defaults to the least-urgency multiplier (so absent data can't inflate everything
+   to RED), **but the finding is visibly marked `exposure_unknown`** — a stored flag surfaced in the API +
+   HUD — so a confident `private` is never conflated with "we don't know yet." The uncertainty is damped,
+   not hidden. (`FindingRisk` carries the flag; the factor breakdown reads "exposure unknown — treated as
+   private, ×0.4".)
+4. **`vuln_intel` starts as a MODULE** (in / adjacent to the `findings` hub), not a full bounded context —
+   the architecture skill's "start as a module; extract later." It earns promotion to a standalone context
+   only if its lifecycle/provenance later justify it; until then it is a module behind the `VulnFeedPort` /
+   `VulnIntelPort` so the extraction, if it comes, is a move-not-a-rewrite.
+5. **Persist the numeric CVSS base now.** Fix `trivy_normalizer` (and any other normalizer currently
+   dropping it) to capture the numeric CVSS base onto the finding (in `attributes`), so the impact term `I`
+   uses the real base score rather than only the qualitative severity mapping. This lands in Phase 2 (it is
+   the input the scorer's `I` term needs), not deferred to hardening.
+6. **Per-finding EPSS % + KEV badges in the HUD — yes.** Every finding row/card surfaces the **EPSS
+   percentage** and a **KEV badge** (not just the composite band) — explainability is the point (William:
+   *"make the person a fan of what they're risking"*). Ships with the Phase 4 CQRS read that already
+   exposes `epss`/`in_kev`, rendered in the Phase 5 HUD re-rank.
+
+**Cadence** stays as designed in D2 — a ~daily EPSS + KEV pull; if active-exploitation latency later proves
+material, a tighter KEV cadence is a one-line beat-schedule change, not a design change.
 
 ## Cross-references
 
