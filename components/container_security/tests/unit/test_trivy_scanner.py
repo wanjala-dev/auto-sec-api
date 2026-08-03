@@ -125,6 +125,40 @@ class TestTrivyNormalizer:
         assert trivy_json_to_scan_result("not json", image_ref="x").findings == ()
         assert trivy_json_to_scan_result({"Results": None}, image_ref="x").findings == ()
 
+    def test_captures_numeric_cvss_base_prefer_nvd_v3(self):
+        """ADR 0013 P2 (decision #5): the numeric CVSS base must be captured for the scorer."""
+        data = {
+            "Results": [
+                {
+                    "Target": "app",
+                    "Class": "lang-pkgs",
+                    "Type": "npm",
+                    "Vulnerabilities": [
+                        {
+                            "VulnerabilityID": "CVE-2021-44228",
+                            "PkgName": "log4j",
+                            "InstalledVersion": "2.14.0",
+                            "Severity": "CRITICAL",
+                            "CVSS": {
+                                "redhat": {"V3Score": 7.5},
+                                "nvd": {"V2Score": 9.3, "V3Score": 10.0},
+                            },
+                        }
+                    ],
+                }
+            ]
+        }
+        result = trivy_json_to_scan_result(data, image_ref="app:1")
+        (finding,) = result.findings
+        assert finding.attributes["cvss_base"] == 10.0  # NVD V3 preferred over redhat/V2
+
+    def test_no_cvss_map_omits_cvss_base(self):
+        data = {
+            "Results": [{"Vulnerabilities": [{"VulnerabilityID": "CVE-2020-1", "PkgName": "x", "Severity": "HIGH"}]}]
+        }
+        (finding,) = trivy_json_to_scan_result(data, image_ref="app:1").findings
+        assert "cvss_base" not in finding.attributes
+
 
 # ── TrivyScanner drives the backend + parses ───────────────────────────
 class _FakeBackend:

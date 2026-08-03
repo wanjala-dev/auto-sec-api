@@ -1,14 +1,18 @@
-"""Output DTO for the findings read API — maps a FindingEntity to a JSON-safe dict."""
+"""Output DTO for the findings read API — maps a ranked finding to a JSON-safe dict."""
 
 from __future__ import annotations
 
-from components.findings.application.queries.list_findings_query import FindingPage
+from components.findings.application.queries.list_findings_query import (
+    FindingPage,
+    FindingRiskView,
+    RankedFinding,
+)
 from components.findings.domain.entities.finding_entity import FindingEntity
 
 
 class FindingResource:
     @staticmethod
-    def from_entity(e: FindingEntity) -> dict:
+    def _finding_dict(e: FindingEntity) -> dict:
         return {
             "id": str(e.id),
             "source": e.source,
@@ -28,9 +32,32 @@ class FindingResource:
         }
 
     @staticmethod
+    def _risk_dict(risk: FindingRiskView | None) -> dict | None:
+        """The contextual-risk block (ADR 0013): score + band + EPSS%/KEV/exposure badges +
+        the explainable factor breakdown. None until the recompute job has scored it."""
+        if risk is None:
+            return None
+        return {
+            "score": risk.score,
+            "band": risk.band,
+            "epss": risk.epss,
+            "epss_percentile": risk.epss_percentile,
+            "in_kev": risk.in_kev,
+            "exposure": risk.exposure,
+            "exposure_unknown": risk.exposure_unknown,
+            "factors": risk.factors,
+        }
+
+    @staticmethod
+    def from_ranked(row: RankedFinding) -> dict:
+        data = FindingResource._finding_dict(row.finding)
+        data["risk"] = FindingResource._risk_dict(row.risk)
+        return data
+
+    @staticmethod
     def page(page: FindingPage) -> dict:
         return {
-            "items": [FindingResource.from_entity(e) for e in page.items],
+            "items": [FindingResource.from_ranked(row) for row in page.items],
             "total": page.total,
             "limit": page.limit,
             "offset": page.offset,

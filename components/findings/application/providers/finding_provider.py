@@ -14,6 +14,9 @@ class FindingProvider:
         from components.findings.infrastructure.repositories.django_finding_repository import (
             DjangoFindingRepository,
         )
+        from components.findings.infrastructure.repositories.finding_risk_repository import (
+            FindingRiskRepository,
+        )
         from components.shared_kernel.infrastructure.adapters.celery_event_publisher import (
             CeleryEventPublisher,
         )
@@ -21,6 +24,7 @@ class FindingProvider:
         return RecordObservedFindingUseCase(
             store=DjangoFindingRepository(),
             event_publisher=CeleryEventPublisher(),
+            risk_store=FindingRiskRepository(),
         )
 
     @staticmethod
@@ -34,6 +38,31 @@ class FindingProvider:
         )
 
         return ListFindingsUseCase(store=DjangoFindingRepository())
+
+    @staticmethod
+    def build_recompute_finding_risk_use_case():
+        """The background contextual-risk scorer (ADR 0013): reads findings + intel +
+        exposure through ports, materializes ``FindingRisk``. Wires the two cross-context
+        read seams (VulnIntelPort, AssetExposurePort) via their owning contexts' providers."""
+        from components.cloud_graph.application.providers.cloud_graph_provider import (
+            CloudGraphProvider,
+        )
+        from components.findings.application.use_cases.recompute_finding_risk_use_case import (
+            RecomputeFindingRiskUseCase,
+        )
+        from components.findings.infrastructure.repositories.finding_risk_repository import (
+            FindingRiskRepository,
+        )
+        from components.vuln_intel.application.providers.vuln_intel_provider import (
+            VulnIntelProvider,
+        )
+
+        return RecomputeFindingRiskUseCase(
+            finding_store=FindingProvider.build_finding_store(),
+            risk_store=FindingRiskRepository(),
+            vuln_intel=VulnIntelProvider.build_vuln_intel_port(),
+            exposure_port=CloudGraphProvider.build_asset_exposure_port(),
+        )
 
     @staticmethod
     def build_recompute_attck_coverage_use_case():

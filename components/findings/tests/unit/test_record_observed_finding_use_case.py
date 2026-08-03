@@ -49,6 +49,26 @@ class _FakeStore(FindingStorePort):
     ):
         return []
 
+    def list_ranked_findings(
+        self,
+        workspace_id,
+        *,
+        severity=None,
+        status=None,
+        source=None,
+        asset_urn=None,
+        order_by="contextual_risk",
+        limit=25,
+        offset=0,
+    ):
+        return []
+
+    def iter_scorable_findings(self, workspace_id, *, finding_id=None):
+        return iter(())
+
+    def list_workspace_ids_with_findings(self):
+        return []
+
     def count_findings(self, workspace_id, *, severity=None, status=None, source=None, asset_urn=None):
         return 0
 

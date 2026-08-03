@@ -21,12 +21,13 @@ class ListFindingsUseCase:
         self._store = store
 
     def execute(self, query: ListFindingsQuery) -> FindingPage:
-        items = self._store.list_findings(
+        items = self._store.list_ranked_findings(
             query.workspace_id,
             severity=query.severity,
             status=query.status,
             source=query.source,
             asset_urn=query.asset_urn,
+            order_by=query.order_by,
             limit=query.limit,
             offset=query.offset,
         )

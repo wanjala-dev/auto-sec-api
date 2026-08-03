@@ -2,10 +2,21 @@
 
 from __future__ import annotations
 
+from components.cloud_graph.application.ports.asset_exposure_port import AssetExposurePort
 from components.cloud_graph.application.ports.cloud_asset_store_port import CloudAssetStorePort
 
 
 class CloudGraphProvider:
+    @staticmethod
+    def build_asset_exposure_port() -> AssetExposurePort:
+        """The read-only exposure-by-URN seam the findings contextual-risk scorer consumes
+        (ADR 0013 D3, C3). cloud_graph owns exposure; findings reads it by AssetUrn."""
+        from components.cloud_graph.infrastructure.repositories.asset_exposure_repository import (
+            AssetExposureRepository,
+        )
+
+        return AssetExposureRepository()
+
     @staticmethod
     def build_cloud_asset_store() -> CloudAssetStorePort:
         """The graph read/write store — the cloud_graph context's public data seam.
