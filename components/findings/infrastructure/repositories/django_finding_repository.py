@@ -135,7 +135,14 @@ class DjangoFindingRepository(FindingStorePort):
     def list_workspace_ids_with_findings(self) -> list[UUID]:
         from infrastructure.persistence.findings.models import Finding
 
-        return list(Finding.objects.values_list("workspace_id", flat=True).distinct())
+        # Scope the daily feed-refresh fan-out to workspaces with NON-terminal findings (S3):
+        # a resolved/suppressed-only workspace has nothing whose rank a feed move could change,
+        # so rescoring it every day is wasted work.
+        return list(
+            Finding.objects.exclude(status__in=["resolved", "suppressed"])
+            .values_list("workspace_id", flat=True)
+            .distinct()
+        )
 
     def count_findings(
         self,

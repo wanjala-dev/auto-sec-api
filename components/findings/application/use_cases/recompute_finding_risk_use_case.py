@@ -14,7 +14,9 @@ on-demand) and a single-finding rescore (a ``FindingRaised``/``FindingResolved``
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
 from datetime import datetime
+from itertools import islice
 from uuid import UUID
 
 from components.cloud_graph.application.ports.asset_exposure_port import AssetExposurePort
@@ -24,6 +26,11 @@ from components.findings.domain.services.contextual_risk_scorer import extract_c
 from components.vuln_intel.application.ports.vuln_intel_port import VulnIntelPort
 
 logger = logging.getLogger(__name__)
+
+# Score in bounded batches so a huge workspace never materializes every finding + all of
+# its intel/exposure maps into RAM at once (performance.md §5 / ADR 0013 D3). The
+# cross-context reads are batched PER CHUNK, keeping them to a small constant per batch.
+_CHUNK_SIZE = 500
 
 
 class RecomputeFindingRiskUseCase:
@@ -41,21 +48,32 @@ class RecomputeFindingRiskUseCase:
         self._exposure = exposure_port
 
     def execute(self, workspace_id: UUID, now: datetime, *, finding_id: UUID | None = None) -> int:
-        findings = list(self._findings.iter_scorable_findings(workspace_id, finding_id=finding_id))
-        if not findings:
-            return 0
+        version = self._intel.version_stamp()  # one snapshot resolution for the whole run
+        scored = 0
+        for batch in _chunked(self._findings.iter_scorable_findings(workspace_id, finding_id=finding_id), _CHUNK_SIZE):
+            scored += self._score_batch(workspace_id, batch, version=version, now=now)
 
-        # Batch the cross-context reads (two intel queries + one exposure query), not N per
-        # finding — the scorer then works entirely from in-memory maps (performance.md §1).
-        cves = {cve for f in findings if (cve := extract_cve(f.attributes))}
-        urns = {f.asset_urn for f in findings if f.asset_urn}
+        logger.info(
+            "finding_risk_recomputed workspace_id=%s scored=%s single=%s epss_date=%s kev_version=%s",
+            workspace_id,
+            scored,
+            finding_id is not None,
+            version.epss_score_date,
+            version.kev_catalog_version,
+        )
+        return scored
+
+    def _score_batch(self, workspace_id, batch, *, version, now) -> int:
+        # Batch the cross-context reads for THIS chunk (two intel queries + one exposure
+        # query), not N per finding — the scorer then works from in-memory maps
+        # (performance.md §1); memory stays bounded to one chunk (§5).
+        cves = {cve for f in batch if (cve := extract_cve(f.attributes))}
+        urns = {f.asset_urn for f in batch if f.asset_urn}
         epss_map = self._intel.epss_scores(cves)
         kev_set = self._intel.kev_members(cves)
         exposure_map = self._exposure.exposure_by_urn(workspace_id, urns)
-        version = self._intel.version_stamp()
 
-        scored = 0
-        for finding in findings:
+        for finding in batch:
             cve = extract_cve(finding.attributes)
             epss_obj = epss_map.get(cve) if cve else None
             cvss_base = _as_float(finding.attributes.get("cvss_base"))
@@ -76,17 +94,17 @@ class RecomputeFindingRiskUseCase:
                 kev_catalog_version=version.kev_catalog_version,
                 scored_at=now,
             )
-            scored += 1
+        return len(batch)
 
-        logger.info(
-            "finding_risk_recomputed workspace_id=%s scored=%s single=%s epss_date=%s kev_version=%s",
-            workspace_id,
-            scored,
-            finding_id is not None,
-            version.epss_score_date,
-            version.kev_catalog_version,
-        )
-        return scored
+
+def _chunked(iterable, size: int) -> Iterator[list]:
+    """Yield successive ``size``-length lists from ``iterable`` (bounded memory)."""
+    iterator = iter(iterable)
+    while True:
+        batch = list(islice(iterator, size))
+        if not batch:
+            return
+        yield batch
 
 
 def _as_float(value) -> float | None:

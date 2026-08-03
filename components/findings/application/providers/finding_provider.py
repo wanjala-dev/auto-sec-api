@@ -14,6 +14,9 @@ class FindingProvider:
         from components.findings.infrastructure.repositories.django_finding_repository import (
             DjangoFindingRepository,
         )
+        from components.findings.infrastructure.repositories.finding_risk_repository import (
+            FindingRiskRepository,
+        )
         from components.shared_kernel.infrastructure.adapters.celery_event_publisher import (
             CeleryEventPublisher,
         )
@@ -21,6 +24,7 @@ class FindingProvider:
         return RecordObservedFindingUseCase(
             store=DjangoFindingRepository(),
             event_publisher=CeleryEventPublisher(),
+            risk_store=FindingRiskRepository(),
         )
 
     @staticmethod

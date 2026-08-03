@@ -160,6 +160,21 @@ class TestRecompute:
         assert FindingRisk.objects.filter(finding=a).count() == 1
         assert FindingRisk.objects.filter(finding=b).count() == 0
 
+    def test_chunked_recompute_scores_every_finding(self, workspace_factory, monkeypatch):
+        # W2: force multiple chunks (5 findings, chunk size 2 → 3 chunks) and assert all are
+        # scored — the per-chunk batched intel/exposure reads must cover every finding.
+        import components.findings.application.use_cases.recompute_finding_risk_use_case as module
+
+        monkeypatch.setattr(module, "_CHUNK_SIZE", 2)
+        ws = workspace_factory()
+        _seed_epss([(_LOG4SHELL, 0.5, 0.8)])
+        _seed_kev("2026.08.01", [])
+        for i in range(5):
+            _finding(ws, fingerprint=f"fp-{i}", urn=f"urn:{i}")
+
+        assert _recompute(ws) == 5
+        assert FindingRisk.objects.filter(workspace=ws).count() == 5
+
 
 class TestRankedRead:
     def test_list_orders_by_contextual_risk(self, workspace_factory):
@@ -182,3 +197,55 @@ class TestRankedRead:
         assert page.items[0].finding.asset_urn == _PUBLIC_URN
         assert page.items[0].risk is not None
         assert page.items[0].risk.in_kev is False
+
+    def test_unscored_finding_sorts_last_never_dropped(self, workspace_factory):
+        # W3 (load-bearing #6 invariant): a workspace with ONE scored finding + ONE with NO
+        # FindingRisk row must return BOTH under the default contextual_risk order, with the
+        # unscored one LAST (nulls_last) — never hidden by an INNER-JOIN "optimization".
+        ws = workspace_factory()
+        _asset(ws, _PUBLIC_URN, "public")
+        _seed_epss([(_LOG4SHELL, 0.94, 0.99)])
+        _seed_kev("2026.08.01", [])
+        scored = _finding(ws, fingerprint="fp-scored", urn=_PUBLIC_URN)
+        unscored = _finding(ws, fingerprint="fp-unscored", urn="urn:none")
+
+        # Score ONLY the first finding; the second is left without a FindingRisk row.
+        FindingProvider.build_recompute_finding_risk_use_case().execute(ws.id, timezone.now(), finding_id=scored.id)
+
+        page = FindingProvider.build_list_findings_use_case().execute(
+            ListFindingsQuery(workspace_id=ws.id, order_by="contextual_risk")
+        )
+        returned = {str(row.finding.id) for row in page.items}
+        assert returned == {str(scored.id), str(unscored.id)}  # BOTH present
+        assert page.items[0].finding.id == scored.id and page.items[0].risk is not None
+        assert page.items[-1].finding.id == unscored.id and page.items[-1].risk is None  # nulls last
+
+
+class TestProvisionalScore:
+    def test_recording_a_finding_stamps_a_provisional_risk_immediately(self, workspace_factory):
+        # S1: a finding raised through the record use case gets a provisional (severity-derived,
+        # no feeds/graph) FindingRisk synchronously, so it never sorts to the bottom (null)
+        # during the window before the async rescore refines it.
+        from components.findings.application.commands.record_observed_finding_command import (
+            RecordObservedFindingCommand,
+        )
+        from components.shared_kernel.domain.security import Severity
+
+        ws = workspace_factory()
+        use_case = FindingProvider.build_record_observed_finding_use_case()
+        result = use_case.execute(
+            RecordObservedFindingCommand(
+                workspace_id=ws.id,
+                source="container_security.trivy",
+                fingerprint="fp-prov",
+                asset_urn="urn:prov",
+                severity=Severity.CRITICAL,
+                title="critical CVE",
+                observed_at=timezone.now(),
+                attributes={"vulnerability_id": _LOG4SHELL, "cvss_base": 9.8},
+            )
+        )
+        risk = FindingRisk.objects.get(finding_id=result.finding_id)
+        assert risk.score > 0.0  # ranks sanely immediately, not null/bottom
+        assert risk.epss_score_date == ""  # provisional: no feed consulted yet
+        assert risk.in_kev is False  # KEV comes from the async refine, not the provisional
