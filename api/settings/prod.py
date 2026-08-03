@@ -338,6 +338,14 @@ CELERY_BEAT_SCHEDULE = {
         "task": "cloud_posture.schedule_prowler_runs",
         "schedule": crontab(hour=2, minute=0),
     },
+    # Daily Remediation Memory orphan-recovery sweep (ADR 0012 P6) — re-embeds
+    # vetted fixes that cleared the D1 gate but whose after-commit embed never
+    # landed (admitted-but-unretrievable) or whose rating changed after their last
+    # embed. Idempotent: a healthy corpus dispatches nothing.
+    "reindex_remediation_corpus": {
+        "task": "remediation.reindex_remediation_corpus",
+        "schedule": crontab(hour=3, minute=30),
+    },
 }
 
 CELERY_QUEUE_DEFAULT = os.environ.get("CELERY_QUEUE_DEFAULT", "default")

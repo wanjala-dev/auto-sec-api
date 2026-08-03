@@ -177,9 +177,13 @@ def _render(grounding) -> str:
         if code:
             lines.append(f"code ({language}):" if language else "code:")
             lines.append(_CODE_FENCE)
-            # Defang the fence token inside the body so the code can't close its own
-            # fence and smuggle following text out as prompt instructions.
-            lines.append(code.replace(_CODE_FENCE, "~~ ~"))
+            # Defang ALL delimiter tokens inside the body — not just the code fence.
+            # A crafted prior whose code embeds ``</prior_fix>`` would otherwise emit a
+            # SECOND real closing tag and let a delimiter-aware model read the trailing
+            # code as instructions OUTSIDE the block. Running the full defang neutralises
+            # the closing tag, the open tag, AND the fence, so the body cannot forge any
+            # delimiter and break out of its fence.
+            lines.append(_defang_delimiters(code))
             lines.append(_CODE_FENCE)
         lines.append(_PRIOR_CLOSE)
     return "\n".join(lines) + "\n\n"

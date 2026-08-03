@@ -22,9 +22,7 @@ def test_redacts_aws_access_key():
 
 def test_redacts_pem_private_key_block():
     text = (
-        "KEY = '''-----BEGIN RSA PRIVATE KEY-----\n"
-        "MIIEowIBAAKCAQEA0Z3VS5JJ\nc7mHR7pv\n"
-        "-----END RSA PRIVATE KEY-----'''"
+        "KEY = '''-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA0Z3VS5JJ\nc7mHR7pv\n-----END RSA PRIVATE KEY-----'''"
     )
     redacted, count = redact_secrets(text)
     assert "BEGIN RSA PRIVATE KEY" not in redacted
@@ -50,6 +48,27 @@ def test_redacts_secret_assignment_keeps_key_name():
     # the KEY name is preserved so the fix stays readable
     assert "password" in redacted
     assert REDACTION_PLACEHOLDER in redacted
+    assert count == 1
+
+
+def test_redacts_quoted_key_json_dict_secret():
+    # JSON/dict-shaped secrets — the ``"`` between key and ``:`` used to break the
+    # bare ``\bkey\b\s*[:=]`` match, so these leaked through unredacted.
+    text = '{"api_key": "AbCdEf0123456789xyzLongEnough"}'
+    redacted, count = redact_secrets(text)
+    assert "AbCdEf0123456789xyzLongEnough" not in redacted
+    assert REDACTION_PLACEHOLDER in redacted
+    # the key name is preserved so the fix stays readable
+    assert "api_key" in redacted
+    assert count == 1
+
+
+def test_redacts_single_quoted_dict_password():
+    text = "config = {'password': 'sup3rSecretValue123'}"
+    redacted, count = redact_secrets(text)
+    assert "sup3rSecretValue123" not in redacted
+    assert REDACTION_PLACEHOLDER in redacted
+    assert "password" in redacted
     assert count == 1
 
 

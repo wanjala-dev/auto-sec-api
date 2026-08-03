@@ -43,6 +43,11 @@ class OrmRecordFindingPreviewRepository(RecordFindingPreviewPort):
             return RecordFindingPreviewResult(recorded=False)
 
         previewed_at = datetime.now(UTC).isoformat()
+        # NB: the code is stamped RAW here on purpose. The board card is NOT the
+        # retrievable corpus — it is the operator's own tenant-scoped work surface, not a
+        # cross-finding retrieval source. Secret redaction (secret_redactor) applies only
+        # to the EMBEDDED projection at corpus-admission time (embed_remediation_entry),
+        # keeping the raw finding row untouched (ADR 0012 D3).
         payload["proposed_patch"] = {
             "path": command.path,
             "code": command.code,

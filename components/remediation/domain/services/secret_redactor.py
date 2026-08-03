@@ -46,22 +46,40 @@ _TOKEN_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"),  # Google API key
 )
 
-# ``key = "value"`` / ``key: value`` assignments where the KEY names a secret. Captures
-# the assignment head (key + operator + optional quote) in group 1 so we keep it and
-# redact only the value. Value = a run of non-space/non-quote chars long enough to be a
-# real secret (≥ 8), so short config words ("password: true") aren't clobbered wholesale.
+# ``key = "value"`` / ``key: value`` / ``"key": "value"`` assignments where the KEY names
+# a secret. Captures the assignment head (key + optional closing quote + operator + optional
+# opening quote) in group 1 so we keep it and redact only the value. The optional quote BEFORE
+# the separator is what catches JSON/dict-shaped secrets — ``{"api_key": "…"}`` — whose ``"``
+# between the key and the ``:`` otherwise breaks a bare ``\bkey\b\s*[:=]`` match. Value = a run
+# of non-space/non-quote chars long enough to be a real secret (≥ 8), so short config words
+# ("password: true") aren't clobbered wholesale.
 _SECRET_ASSIGNMENT = re.compile(
     r"""(?ix)
     (
         \b(?:password|passwd|pwd|secret|secret_key|api[_-]?key|apikey|access[_-]?key|
         auth[_-]?token|access[_-]?token|refresh[_-]?token|client[_-]?secret|
         private[_-]?key|bearer|token)\b
-        \s*[:=]\s*
+        ['"]?\s*[:=]\s*
         ['"]?
     )
     ([^\s'"]{8,})
     """,
 )
+
+# Known residual gaps — ACCEPTED defence-in-depth limitations, not bugs (ADR 0012:
+# "this is the last line, not the first"). This scrub is a conservative last-resort net
+# over vetted fixes that should already be secret-free; it deliberately does NOT chase:
+#   - Opaque bearer/authorization values with no self-identifying prefix or secret-named
+#     key — e.g. ``Authorization: Bearer <opaque>`` where ``<opaque>`` is a bare
+#     high-entropy blob. ``bearer``/``token`` keyed assignments ARE caught; a naked
+#     ``Bearer xxxxx`` header value with no ``bearer =`` key is not, to avoid clobbering
+#     ordinary prose/identifiers.
+#   - Secrets split across lines (a value continued onto the next physical line, or a
+#     token wrapped mid-string), which the single-line value class ``[^\s'"]{8,}`` will
+#     only partially match.
+# These are intentionally out of scope: over-broadening the value class to chase them
+# risks redacting benign code, and the real control is source hygiene + the entry gate,
+# not this regex. Tighten here only with a concrete leak this net missed.
 
 
 def redact_secrets(text: str) -> tuple[str, int]:
