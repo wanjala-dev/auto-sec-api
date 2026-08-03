@@ -719,7 +719,7 @@ _MONOREPO_PATH = f"api-v2.0/{_RUNTIME_PATH}"
 _ADAPTER = "components.integrations.infrastructure.adapters.vcs.github_vcs_adapter.GitHubVcsAdapter"
 
 
-def _echo_path_patch(*, payload, path, current_content):
+def _echo_path_patch(*, payload, path, current_content, **_):
     """Advisor stub that echoes the path it is given — so the resolved (possibly
     monorepo-prefixed) path is what flows into commit_file, letting the test assert
     the branch/commit target the real repo path."""

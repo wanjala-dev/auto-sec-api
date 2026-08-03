@@ -327,10 +327,15 @@ def resolve_repo_path(*, adapter, repo: str, ref: str, runtime_path: str, explic
 class LogPatchAdvisor:
     """Turns one triaged finding + the implicated file into a grounded patch."""
 
-    def __init__(self, llm_port=None) -> None:
+    def __init__(self, llm_port=None, retrieval=None) -> None:
         # Lazy — only resolve an LLM when actually asked, so importing this
         # module never forces the knowledge stack to load.
         self._llm = llm_port
+        # Injected RemediationRetrievalPort (ADR 0012 P4). Tests wire a fake;
+        # production resolves it lazily inside the grounding helper. When no
+        # workspace is supplied to ``propose`` retrieval is skipped entirely, so
+        # the ungrounded call path is byte-for-byte what it was before.
+        self._retrieval = retrieval
 
     def _get_llm(self):
         if self._llm is not None:
@@ -347,11 +352,26 @@ class LogPatchAdvisor:
             self._llm = provider.get_default_port(temperature=_TEMPERATURE)
         return self._llm
 
-    def propose(self, *, payload: dict, path: str, current_content: str) -> PatchProposal | None:
+    def propose(
+        self,
+        *,
+        payload: dict,
+        path: str,
+        current_content: str,
+        workspace_id: str = "",
+        source_type: str = "",
+    ) -> PatchProposal | None:
         """Return a grounded patch for ``path``, or ``None`` if unavailable.
 
         Never raises — a draft PR is an enhancement on top of a filed finding,
         never a gate on it.
+
+        ``workspace_id`` + ``source_type`` (ADR 0012 P4) enable Remediation-Memory
+        grounding: when a workspace is supplied, the team's vetted prior fixes for
+        this class of finding are retrieved and folded into the prompt as reference
+        material BEFORE the model proposes. Grounding never authorizes — the caller
+        STILL runs ``validate_patch`` on whatever this returns (D2). Omitting the
+        workspace skips retrieval entirely (identical to the pre-P4 behaviour).
         """
         if not path or current_content is None:
             return None
@@ -359,7 +379,10 @@ class LogPatchAdvisor:
             logger.info("log_patch_advisor file_too_large path=%s chars=%s", path, len(current_content))
             return None
 
+        grounding_block = self._grounding_block(payload=payload, workspace_id=workspace_id, source_type=source_type)
+
         prompt = (
+            f"{grounding_block}"
             f"service: {payload.get('service') or 'unknown'}\n"
             f"level: {payload.get('level') or 'ERROR'}\n"
             f"error message: {(payload.get('message') or payload.get('signal') or '')[:1600]}\n"
@@ -389,6 +412,29 @@ class LogPatchAdvisor:
             logger.info("log_patch_advisor ungrounded patch rejected path=%s", path)
             return None
         return proposal
+
+    def _grounding_block(self, *, payload: dict, workspace_id: str, source_type: str) -> str:
+        """Retrieve + render this team's vetted prior fixes (ADR 0012 P4), or ``""``.
+
+        The retrieval query is the finding's own evidence (error message/signal +
+        suggested fix) — the same salient surface the groundedness gate checks — so
+        we retrieve priors for the *actual* error, not a generic term.
+        """
+        if not workspace_id:
+            return ""
+        from components.integrations.application.remediation_grounding_service import (
+            retrieve_grounding_block,
+        )
+
+        query_text = " ".join(
+            str(payload.get(k) or "") for k in ("message", "signal", "probable_cause", "suggested_fix")
+        ).strip()
+        return retrieve_grounding_block(
+            workspace_id=str(workspace_id),
+            source_type=source_type,
+            query_text=query_text,
+            retrieval=self._retrieval,
+        )
 
     @staticmethod
     def _evidence_text(payload: dict) -> str:

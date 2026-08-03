@@ -61,10 +61,14 @@ class FixSuggestion:
 class LogFixAdvisor:
     """Turns one confirmed log error into a concise, grounded remediation."""
 
-    def __init__(self, llm_port=None) -> None:
+    def __init__(self, llm_port=None, retrieval=None) -> None:
         # Lazy — only resolve an LLM when actually asked to advise, so importing
         # this module never forces the knowledge stack to load.
         self._llm = llm_port
+        # Injected RemediationRetrievalPort (ADR 0012 P4). Tests wire a fake;
+        # production resolves it lazily via the grounding helper. No workspace
+        # supplied to ``suggest`` → retrieval skipped → identical to pre-P4.
+        self._retrieval = retrieval
 
     def _get_llm(self):
         if self._llm is not None:
@@ -81,16 +85,32 @@ class LogFixAdvisor:
             self._llm = provider.get_default_port(temperature=_TEMPERATURE)
         return self._llm
 
-    def suggest(self, *, service: str, level: str, message: str, feedback: str = "") -> FixSuggestion | None:
+    def suggest(
+        self,
+        *,
+        service: str,
+        level: str,
+        message: str,
+        feedback: str = "",
+        workspace_id: str = "",
+        source_type: str = "",
+    ) -> FixSuggestion | None:
         """Return a grounded fix suggestion, or ``None`` if unavailable.
 
         ``feedback`` (set on a re-advise after the grounded verifier rejected the
         first attempt) is threaded into the prompt so the second attempt is a
         genuine correction, not an identical re-run.
 
+        ``workspace_id`` + ``source_type`` (ADR 0012 P4) enable Remediation-Memory
+        grounding: the team's vetted prior fixes for this class of finding are
+        folded into the prompt BEFORE the model answers. Grounding never authorizes
+        — the caller's ``verify_suggestion`` evidence check still runs on the result
+        (D2). Omitting the workspace skips retrieval (identical to pre-P4).
+
         Never raises — a filed finding must not depend on the LLM being up.
         """
-        prompt = f"service: {service}\nlevel: {level}\nmessage: {message[:1600]}\n\n"
+        grounding_block = self._grounding_block(workspace_id=workspace_id, source_type=source_type, message=message)
+        prompt = f"{grounding_block}service: {service}\nlevel: {level}\nmessage: {message[:1600]}\n\n"
         if feedback:
             prompt += (
                 f"Your previous suggestion was rejected as ungrounded: {feedback}\n"
@@ -110,6 +130,25 @@ class LogFixAdvisor:
             return None
 
         return self._parse(getattr(response, "content", "") or "", service)
+
+    def _grounding_block(self, *, workspace_id: str, source_type: str, message: str) -> str:
+        """Retrieve + render this team's vetted prior fixes (ADR 0012 P4), or ``""``.
+
+        The retrieval query is the error message — the grounding surface the
+        verifier also checks — so we retrieve priors for the actual error.
+        """
+        if not workspace_id:
+            return ""
+        from components.integrations.application.remediation_grounding_service import (
+            retrieve_grounding_block,
+        )
+
+        return retrieve_grounding_block(
+            workspace_id=str(workspace_id),
+            source_type=source_type,
+            query_text=message or "",
+            retrieval=self._retrieval,
+        )
 
     @staticmethod
     def _parse(content: str, service: str) -> FixSuggestion | None:
