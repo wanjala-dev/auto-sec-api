@@ -30,6 +30,7 @@ from components.scanning.application.ports.scan_execution_backend import (
     ScanExecutionBackend,
     ScanJobSpec,
 )
+from components.scanning.domain.errors import ScanExecutionError
 from components.shared_kernel.application.ports.scanner_port import (
     ProgressCallback,
     ScannerPort,
@@ -93,6 +94,27 @@ class ProwlerScanner(ScannerPort):
             ),
             on_progress=on_progress,  # K8s elapsed-time heartbeat (Prowler has no stdout progress)
         )
+        # Fail LOUD, never silent. A Prowler Job that FATAL-errors / OOMKills / times out leaves no
+        # (or no complete) OCSF file, so `cat` exits non-zero (or the backend flags timed_out) →
+        # result.ok is False. Parsing whatever is on stdout would yield [] → 0 findings, and
+        # run_prowler_scan_for_account would then record a COMPLETED CloudPostureScan AND promote
+        # the account link to VERIFIED — a crashed scan masquerading as a clean account, the worst
+        # failure mode for a security scanner. Raise so the task's `except` marks the link FAILED and
+        # reports the run failed (no-shortcuts: a bad scan is a failed scan). The memory_limit note
+        # above only *mitigates* the OOM (4Gi headroom); THIS is what actually *surfaces* it.
+        if not result.ok:
+            snippet = (result.stdout or "").strip().replace("\n", " ")[:300]
+            logger.error(
+                "prowler_scan_failed account=%s exit_code=%s timed_out=%s detail=%s",
+                _account,
+                result.exit_code,
+                result.timed_out,
+                snippet,
+            )
+            raise ScanExecutionError(
+                f"Prowler scan of account {_account} failed "
+                f"(exit_code={result.exit_code}, timed_out={result.timed_out})"
+            )
         return records_to_scan_result(_parse_ocsf_stdout(result.stdout), engine_version=_ENGINE)
 
 

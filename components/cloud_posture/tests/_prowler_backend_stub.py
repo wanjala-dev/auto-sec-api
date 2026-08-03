@@ -16,10 +16,16 @@ from components.scanning.application.ports.scan_execution_backend import ScanJob
 class RecordsBackend:
     """A ``ScanExecutionBackend`` that yields ``records`` as the OCSF JSON array on stdout."""
 
-    def __init__(self, records: list):
+    def __init__(self, records: list, *, exit_code: int = 0, timed_out: bool = False):
         self._records = records
+        self._exit_code = exit_code
+        self._timed_out = timed_out
         self.calls: list = []  # captured ScanJobSpecs, for assertions
 
     def run(self, spec, *, on_progress=None, on_output_line=None) -> ScanJobResult:
         self.calls.append(spec)
-        return ScanJobResult(stdout=json.dumps(self._records), exit_code=0)
+        return ScanJobResult(
+            stdout=json.dumps(self._records),
+            exit_code=self._exit_code,
+            timed_out=self._timed_out,
+        )
