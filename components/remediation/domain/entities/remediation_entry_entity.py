@@ -49,6 +49,9 @@ class RemediationEntry:
     recurrence_count: int = 0
     last_outcome_at: datetime | None = None
     score: int = 0
+    # Retrievability bookkeeping (P6): when this entry was last successfully embedded
+    # into the corpus. ``None`` ⇒ never embedded (a re-index-sweep candidate).
+    embedded_at: datetime | None = None
     created_at: datetime | None = None
     is_deleted: bool = False
 

@@ -6,7 +6,6 @@ import ast
 import json
 import logging
 import re
-import uuid
 from datetime import date, datetime
 from typing import Any
 
@@ -216,22 +215,28 @@ def get_project_info(agent, project_identifier: str) -> str:
         if not project:
             return f"Project '{project_identifier}' not found.\n{_format_project_listing(agent)}"
 
-        team_members = project.team_members.all() if hasattr(project, "team_members") else []
-        member_names = ", ".join(member.name for member in team_members) or "None"
+        # The auto-sec fork stripped budgeting, so ``project.budget`` no longer
+        # exists — nor does ``project.updated_at`` (Project has ``created_at``
+        # only) or a ``team_members`` M2M (projects attach to a ``team`` FK).
+        # Report only the fields the fork's Project model actually exposes.
+        team_name = project.team.title if project.team_id else "Unassigned"
+        lead = project.lead
+        lead_label = (lead.get_full_name() or lead.email) if lead else "Unassigned"
         tasks_count = project.tasks.count() if hasattr(project, "tasks") else 0
+        milestones_count = project.milestones.count() if hasattr(project, "milestones") else 0
         return (
             "Project Information:\n"
             f"Name: {project.title}\n"
             f"Description: {project.description or 'No description'}\n"
-            f"Status: {project.status}\n"
-            f"Progress: {getattr(project, 'progress_percentage', 0)}%\n"
+            f"Status: {project.get_status_display()}\n"
+            f"Priority: {project.get_priority_display()}\n"
             f"Start Date: {project.start_date or 'Not set'}\n"
             f"End Date: {project.end_date or 'Not set'}\n"
-            f"Budget: ${project.budget:.2f}\n"
-            f"Team Members: {len(team_members)} ({member_names})\n"
+            f"Team: {team_name}\n"
+            f"Lead: {lead_label}\n"
             f"Tasks: {tasks_count}\n"
-            f"Created: {project.created_at.strftime('%Y-%m-%d')}\n"
-            f"Last Updated: {project.updated_at.strftime('%Y-%m-%d')}"
+            f"Milestones: {milestones_count}\n"
+            f"Created: {project.created_at.strftime('%Y-%m-%d')}"
         )
     except Exception as exc:  # pylint: disable=broad-except
         return f"Error retrieving project info: {exc}"
@@ -978,13 +983,13 @@ def create_project(agent, project_data: Any) -> str:
     ``confirm`` flag (mirrors the other write tools) and ``project:write``
     access.
     """
-    from infrastructure.persistence.workspaces.models import Workspace
     from components.project.application.service import ProjectService
     from components.project.domain.errors import (
         ProjectLimitExceededError,
         TeamMembershipRequiredError,
         TeamNotFoundError,
     )
+    from infrastructure.persistence.workspaces.models import Workspace
 
     try:
         data = _coerce_payload(project_data)
