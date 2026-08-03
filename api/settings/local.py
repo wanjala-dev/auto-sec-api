@@ -556,6 +556,14 @@ CELERY_BEAT_SCHEDULE = {
         "task": "container_security.schedule_container_scans",
         "schedule": crontab(hour=3, minute=0),
     },
+    # Hourly Remediation Memory capture reconciler (ADR 0012 P4a) — merge-checks
+    # findings with an open draft PR via VcsPort, resolves the merged ones, and
+    # offers them to the gated corpus capture. The driver of the capture loop:
+    # without a schedule nothing is captured autonomously. Idempotent.
+    "reconcile_applied_remediations": {
+        "task": "remediation.reconcile_applied_remediations",
+        "schedule": crontab(minute=15),
+    },
     # Daily Remediation Memory orphan-recovery sweep (ADR 0012 P6) — re-embeds
     # vetted fixes that cleared the D1 gate but whose after-commit embed never
     # landed (admitted-but-unretrievable) or whose rating changed. Idempotent.
