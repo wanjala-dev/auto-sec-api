@@ -110,14 +110,16 @@ def capture_remediation_if_gated(
     return entry
 
 
-def _dispatch_embed(entry: RemediationEntry) -> None:
-    """Enqueue embed-on-capture after commit (P4). Loss-tolerant by design.
+def dispatch_embed(entry_id, workspace_id) -> None:
+    """Enqueue an entry's (re-)embed after commit — loss-tolerant (P4/P5).
 
-    The Celery task module is imported lazily inside the body so the application
-    handler carries no eager infrastructure/celery import at module load, and the
-    dispatch is deferred to ``on_commit`` so the worker never races the entry's own
-    transaction. Any dispatch failure is logged, never raised — the entry is already
-    admitted; embedding is an enhancement, not a gate.
+    Reused for both the newly-admitted entry (capture) and a prior whose score
+    changed (outcome propagation, P5) — a score change re-embeds so retrieval ranks
+    on the new rating. The Celery task module is imported lazily inside the body so
+    this application module carries no eager infrastructure/celery import, and the
+    dispatch is deferred to ``on_commit`` so the worker never races the writer's
+    transaction. Idempotent by entry id; any dispatch failure is logged, never
+    raised — embedding is an enhancement, not a gate.
     """
     try:
         from components.remediation.infrastructure.tasks.embed_remediation_entry_tasks import (
@@ -125,14 +127,16 @@ def _dispatch_embed(entry: RemediationEntry) -> None:
         )
         from components.shared_kernel.application.transactional import on_commit
 
-        entry_id = str(entry.id)
-        workspace_id = str(entry.workspace_id)
-        on_commit(
-            lambda: embed_remediation_entry.apply_async(kwargs={"entry_id": entry_id, "workspace_id": workspace_id})
-        )
+        eid = str(entry_id)
+        wsid = str(workspace_id)
+        on_commit(lambda: embed_remediation_entry.apply_async(kwargs={"entry_id": eid, "workspace_id": wsid}))
     except Exception:
         logger.exception(
             "remediation_embed_dispatch_failed entry_id=%s workspace_id=%s",
-            getattr(entry, "id", None),
-            getattr(entry, "workspace_id", None),
+            entry_id,
+            workspace_id,
         )
+
+
+def _dispatch_embed(entry: RemediationEntry) -> None:
+    dispatch_embed(entry.id, entry.workspace_id)

@@ -11,7 +11,12 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from components.shared_kernel.domain.errors import DomainError, NotFoundError, ValidationError
+from components.shared_kernel.domain.errors import (
+    AuthorizationError,
+    DomainError,
+    NotFoundError,
+    ValidationError,
+)
 
 
 class RemediationError(DomainError):
@@ -22,6 +27,22 @@ class RemediationEntryNotFoundError(RemediationError, NotFoundError):
     def __init__(self, entry_id: str) -> None:
         super().__init__(f"remediation entry {entry_id} not found")
         self.entry_id = entry_id
+
+
+class RevocationNotAuthorizedError(RemediationError, AuthorizationError):
+    """The caller is not permitted to REVOKE a corpus entry (ADR 0012 P5).
+
+    Revocation removes a vetted fix from the retrievable corpus — a
+    security-sensitive, governance-gated action (an attacker who could revoke at
+    will could strip a workspace of its proven fixes, or hide the evidence of a bad
+    one). Only a workspace owner/admin, or a sign-off-approved request, may do it;
+    every other caller is refused here (fail-closed) and nothing is mutated.
+    """
+
+    def __init__(self, *, workspace_id: str, actor_id: str | None) -> None:
+        super().__init__("not authorized to revoke a remediation entry")
+        self.workspace_id = workspace_id
+        self.actor_id = actor_id
 
 
 class EntryGateNotSatisfiedError(RemediationError, ValidationError):

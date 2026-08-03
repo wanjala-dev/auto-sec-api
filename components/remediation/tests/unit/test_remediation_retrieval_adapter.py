@@ -11,6 +11,8 @@ adapter, not merely asserted about a mock.
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 import pytest
 
 from components.knowledge.application.ports.vector_store_port import RetrievedChunk
@@ -20,6 +22,15 @@ from components.remediation.application.ports.remediation_retrieval_port import 
 from components.remediation.infrastructure.adapters.pgvector_remediation_retrieval_adapter import (
     PgVectorRemediationRetrievalAdapter,
 )
+
+
+class _ActiveAll:
+    """Entry-store stub: every queried entry_id is active (non-revoked). Isolates
+    the tenant/ranking behaviour under test from the P5 active-status cross-check
+    (which has its own dedicated tests)."""
+
+    def filter_active_entry_ids(self, *, workspace_id, entry_ids):
+        return {str(e) for e in entry_ids if e}
 
 
 class _FilteringFakeStore:
@@ -64,6 +75,7 @@ def _chunk(*, workspace_id, finding_kind="log_watch", title="Fix", code="alias =
             "summary": "did this before",
             "code": code,
             "tags": ["import"],
+            "entry_id": str(uuid4()),
         },
         score=0.9,
     )
@@ -85,7 +97,7 @@ class TestRemediationRetrievalTenantIsolation:
                 _chunk(workspace_id=_WS_B, title="B's fix", code="b_fix()"),
             ]
         )
-        adapter = PgVectorRemediationRetrievalAdapter(store=store)
+        adapter = PgVectorRemediationRetrievalAdapter(store=store, entry_store=_ActiveAll())
 
         results = adapter.retrieve_grounding(workspace_id=_WS_A, finding_kind="log_watch", query_text="import error")
 
@@ -112,7 +124,7 @@ class TestRemediationRetrievalTenantIsolation:
 
     def test_maps_chunk_metadata_to_grounding_dto(self):
         store = _FilteringFakeStore([_chunk(workspace_id=_WS_A, title="T", code="c()")])
-        adapter = PgVectorRemediationRetrievalAdapter(store=store)
+        adapter = PgVectorRemediationRetrievalAdapter(store=store, entry_store=_ActiveAll())
 
         [dto] = adapter.retrieve_grounding(workspace_id=_WS_A, finding_kind="log_watch", query_text="q")
 
@@ -141,4 +153,46 @@ class TestRemediationRetrievalTenantIsolation:
                 return [_chunk(workspace_id=_WS_B, title="leaked")]
 
         adapter = PgVectorRemediationRetrievalAdapter(store=_LeakyStore())
+        assert adapter.retrieve_grounding(workspace_id=_WS_A, finding_kind="log_watch", query_text="q") == []
+
+
+@pytest.mark.unit
+class TestRevokedEntriesAreNeverRetrieved:
+    """P5 authority: the soft-delete — not the embedding-delete — decides
+    retrievability. A revoked entry whose chunk is still present (embedding-delete
+    failed / not yet run) MUST be dropped by the active-status cross-check."""
+
+    def test_revoked_entry_chunk_is_dropped_even_when_still_embedded(self):
+        chunk = _chunk(workspace_id=_WS_A, title="revoked fix")
+        store = _FilteringFakeStore([chunk])
+
+        class _NoneActive:
+            def filter_active_entry_ids(self, *, workspace_id, entry_ids):
+                return set()  # entry is revoked → NOT active
+
+        adapter = PgVectorRemediationRetrievalAdapter(store=store, entry_store=_NoneActive())
+        assert adapter.retrieve_grounding(workspace_id=_WS_A, finding_kind="log_watch", query_text="q") == []
+
+    def test_chunk_without_entry_id_is_dropped_fail_closed(self):
+        legacy = RetrievedChunk(
+            content="legacy",
+            metadata={
+                "chunk_type": REMEDIATION_CHUNK_TYPE,
+                "workspace_id": _WS_A,
+                "finding_kind": "log_watch",
+                "title": "no entry_id",
+            },
+            score=0.9,
+        )
+        adapter = PgVectorRemediationRetrievalAdapter(store=_FilteringFakeStore([legacy]), entry_store=_ActiveAll())
+        assert adapter.retrieve_grounding(workspace_id=_WS_A, finding_kind="log_watch", query_text="q") == []
+
+    def test_active_check_failure_fails_closed(self):
+        store = _FilteringFakeStore([_chunk(workspace_id=_WS_A)])
+
+        class _BoomEntries:
+            def filter_active_entry_ids(self, *, workspace_id, entry_ids):
+                raise RuntimeError("db down")
+
+        adapter = PgVectorRemediationRetrievalAdapter(store=store, entry_store=_BoomEntries())
         assert adapter.retrieve_grounding(workspace_id=_WS_A, finding_kind="log_watch", query_text="q") == []

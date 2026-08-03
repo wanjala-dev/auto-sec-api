@@ -49,7 +49,12 @@ class RemediationGroundingDTO:
     summary: str
     code: str
     tags: tuple[str, ...] = field(default_factory=tuple)
+    # ``score`` is the vector SIMILARITY of this candidate to the query. ``rating``
+    # is the entry's DERIVED outcome rating (P5); the adapter blends the two to
+    # ORDER results (proven fixes rank above unproven ones of like similarity), and
+    # carries both here for transparency.
     score: float = 0.0
+    rating: int = 0
 
 
 class RemediationRetrievalPort(ABC):

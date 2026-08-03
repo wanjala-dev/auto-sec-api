@@ -14,8 +14,14 @@ from uuid import UUID
 from components.remediation.application.commands.record_remediation_entry_command import (
     RecordRemediationEntryCommand,
 )
+from components.remediation.application.commands.revoke_remediation_entry_command import (
+    RevokeRemediationEntryCommand,
+)
 from components.remediation.application.use_cases.record_remediation_entry_use_case import (
     RecordRemediationEntryUseCase,
+)
+from components.remediation.application.use_cases.revoke_remediation_entry_use_case import (
+    RevokeRemediationEntryUseCase,
 )
 from components.remediation.domain.entities.remediation_entry_entity import RemediationEntry
 
@@ -26,15 +32,26 @@ class RemediationService:
         *,
         record: RecordRemediationEntryUseCase,
         store,
+        revoke: RevokeRemediationEntryUseCase | None = None,
     ) -> None:
         self._record = record
         self._store = store
+        self._revoke = revoke
 
     def record(self, command: RecordRemediationEntryCommand) -> RemediationEntry:
         """Attempt to admit a candidate fix into the corpus. Raises
         ``EntryGateNotSatisfiedError`` (writing nothing) unless the D1 gate's
         three conditions all hold."""
         return self._record.execute(command)
+
+    def revoke(self, command: RevokeRemediationEntryCommand) -> RemediationEntry | None:
+        """Governance-gated revocation (P5): pull a vetted fix from the corpus
+        (soft-delete the row + delete its embedding) so retrieval can never surface
+        it again. Raises ``RevocationNotAuthorizedError`` unless the caller is a
+        workspace owner/admin or the request is sign-off-approved."""
+        if self._revoke is None:  # pragma: no cover - always wired by the provider
+            raise RuntimeError("revoke use case not wired into RemediationService")
+        return self._revoke.execute(command)
 
     def get(self, *, entry_id: UUID, workspace_id: UUID) -> RemediationEntry | None:
         return self._store.get(entry_id, workspace_id=workspace_id)

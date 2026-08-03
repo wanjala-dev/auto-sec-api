@@ -7,6 +7,7 @@ two read-ports return scripted facts.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from uuid import UUID
 
 from components.remediation.application.ports.finding_remediation_facts_port import (
@@ -18,19 +19,26 @@ from components.remediation.application.ports.remediation_entry_store_port impor
 )
 from components.remediation.application.ports.sign_off_gate_port import SignOffGatePort
 from components.remediation.domain.entities.remediation_entry_entity import RemediationEntry
+from components.remediation.domain.services.remediation_ranking_policy import (
+    RemediationRankingPolicy,
+)
 
 
 class FakeStore(RemediationEntryStorePort):
     def __init__(self) -> None:
         self.saved: list[RemediationEntry] = []
 
-    def save(self, entry: RemediationEntry) -> RemediationEntry:
+    def _replace(self, entry: RemediationEntry) -> None:
+        self.saved = [e for e in self.saved if e.id != entry.id]
         self.saved.append(entry)
+
+    def save(self, entry: RemediationEntry) -> RemediationEntry:
+        self._replace(entry)
         return entry
 
     def get(self, entry_id: UUID, *, workspace_id: UUID) -> RemediationEntry | None:
         for e in self.saved:
-            if e.id == entry_id and e.workspace_id == workspace_id:
+            if e.id == entry_id and e.workspace_id == workspace_id and not e.is_deleted:
                 return e
         return None
 
@@ -42,6 +50,70 @@ class FakeStore(RemediationEntryStorePort):
 
     def list_for_workspace(self, workspace_id: UUID, *, limit: int = 50) -> list[RemediationEntry]:
         return [e for e in self.saved if e.workspace_id == workspace_id and not e.is_deleted][:limit]
+
+    def find_active_priors(
+        self,
+        *,
+        workspace_id: UUID,
+        finding_kind: str,
+        exclude_entry_id: UUID,
+        limit: int = 50,
+    ) -> list[RemediationEntry]:
+        return [
+            e
+            for e in self.saved
+            if e.workspace_id == workspace_id
+            and e.finding_kind == finding_kind
+            and e.id != exclude_entry_id
+            and not e.is_deleted
+        ][:limit]
+
+    def filter_active_entry_ids(self, *, workspace_id, entry_ids: list[str]) -> set[str]:
+        wanted = {str(e) for e in (entry_ids or []) if e}
+        return {
+            str(e.id)
+            for e in self.saved
+            if str(e.id) in wanted and str(e.workspace_id) == str(workspace_id) and not e.is_deleted
+        }
+
+    def record_reuse_success(self, *, entry_id: UUID, workspace_id: UUID) -> RemediationEntry | None:
+        return self._bump(entry_id=entry_id, workspace_id=workspace_id, reuse=1, success=1, recurrence=0)
+
+    def record_recurrence(self, *, entry_id: UUID, workspace_id: UUID) -> RemediationEntry | None:
+        return self._bump(entry_id=entry_id, workspace_id=workspace_id, reuse=0, success=0, recurrence=1)
+
+    def _bump(self, *, entry_id: UUID, workspace_id: UUID, reuse: int, success: int, recurrence: int):
+        cur = self.get(entry_id, workspace_id=workspace_id)
+        if cur is None:
+            return None
+        updated = replace(
+            cur,
+            reuse_count=cur.reuse_count + reuse,
+            success_count=cur.success_count + success,
+            recurrence_count=cur.recurrence_count + recurrence,
+            score=RemediationRankingPolicy.derive_score(
+                reuse_count=cur.reuse_count + reuse,
+                success_count=cur.success_count + success,
+                recurrence_count=cur.recurrence_count + recurrence,
+            ),
+        )
+        self._replace(updated)
+        return updated
+
+    def revoke(
+        self,
+        *,
+        entry_id: UUID,
+        workspace_id: UUID,
+        revoked_by: str,
+        reason: str,
+    ) -> RemediationEntry | None:
+        for e in self.saved:
+            if e.id == entry_id and e.workspace_id == workspace_id:
+                revoked = e.revoked()
+                self._replace(revoked)
+                return revoked
+        return None
 
 
 class FakeSignOffGate(SignOffGatePort):

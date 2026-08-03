@@ -80,3 +80,120 @@ class DjangoRemediationEntryRepository(RemediationEntryStorePort):
 
         qs = Row.active.select_related("workspace").filter(workspace_id=workspace_id)
         return [to_entity(row) for row in qs.order_by("-created_at")[: max(1, int(limit))]]
+
+    def find_active_priors(
+        self,
+        *,
+        workspace_id: UUID,
+        finding_kind: str,
+        exclude_entry_id: UUID,
+        limit: int = 50,
+    ) -> list[RemediationEntry]:
+        from infrastructure.persistence.remediation.models import RemediationEntry as Row
+
+        qs = (
+            Row.active.select_related("workspace")
+            .filter(workspace_id=workspace_id, finding_kind=finding_kind)
+            .exclude(id=exclude_entry_id)
+            .order_by("-created_at")
+        )
+        return [to_entity(row) for row in qs[: max(1, int(limit))]]
+
+    def filter_active_entry_ids(self, *, workspace_id, entry_ids: list[str]) -> set[str]:
+        from infrastructure.persistence.remediation.models import RemediationEntry as Row
+
+        ids = [str(e) for e in (entry_ids or []) if e]
+        if not ids:
+            return set()
+        # Bounded by the retrieval pool (top-k) and workspace-scoped. Reads the
+        # ``.active`` manager so a soft-deleted (revoked) entry is absent — that is
+        # the authority that makes a revoked entry unretrievable regardless of the
+        # embedding-delete's fate.
+        rows = Row.active.filter(workspace_id=workspace_id, id__in=ids).values_list("id", flat=True)
+        return {str(rid) for rid in rows}
+
+    # ── Outcome mutations (P5) — the ONLY corpus writes besides the gate save ──
+    # These live here (the sole-writer repository) because ANY RemediationEntry ORM
+    # write must (ADR 0012 D1). Each re-derives ``score`` from the bumped counters
+    # via the domain ranking policy — never from caller input — under a row lock so
+    # concurrent outcomes don't lose an increment.
+
+    def record_reuse_success(self, *, entry_id: UUID, workspace_id: UUID) -> RemediationEntry | None:
+        return self._bump_outcome(entry_id=entry_id, workspace_id=workspace_id, reuse=1, success=1, recurrence=0)
+
+    def record_recurrence(self, *, entry_id: UUID, workspace_id: UUID) -> RemediationEntry | None:
+        return self._bump_outcome(entry_id=entry_id, workspace_id=workspace_id, reuse=0, success=0, recurrence=1)
+
+    def _bump_outcome(
+        self,
+        *,
+        entry_id: UUID,
+        workspace_id: UUID,
+        reuse: int,
+        success: int,
+        recurrence: int,
+    ) -> RemediationEntry | None:
+        from django.db import transaction
+        from django.utils import timezone
+
+        from components.remediation.domain.services.remediation_ranking_policy import (
+            RemediationRankingPolicy,
+        )
+        from infrastructure.persistence.remediation.models import RemediationEntry as Row
+
+        with transaction.atomic():
+            # Lock the active row so parallel outcome writes serialise (no lost
+            # increment). A revoked/foreign row resolves to None and mutates nothing.
+            row = Row.active.select_for_update().filter(id=entry_id, workspace_id=workspace_id).first()
+            if row is None:
+                return None
+            row.reuse_count = int(row.reuse_count) + reuse
+            row.success_count = int(row.success_count) + success
+            row.recurrence_count = int(row.recurrence_count) + recurrence
+            row.score = RemediationRankingPolicy.derive_score(
+                reuse_count=row.reuse_count,
+                success_count=row.success_count,
+                recurrence_count=row.recurrence_count,
+            )
+            row.last_outcome_at = timezone.now()
+            row.save(update_fields=["reuse_count", "success_count", "recurrence_count", "score", "last_outcome_at"])
+        logger.info(
+            "remediation_outcome_recorded entry_id=%s workspace_id=%s reuse=%s success=%s recurrence=%s score=%s",
+            entry_id,
+            workspace_id,
+            row.reuse_count,
+            row.success_count,
+            row.recurrence_count,
+            row.score,
+        )
+        return to_entity(row)
+
+    def revoke(
+        self,
+        *,
+        entry_id: UUID,
+        workspace_id: UUID,
+        revoked_by: str,
+        reason: str,
+    ) -> RemediationEntry | None:
+        from django.db import transaction
+
+        from infrastructure.persistence.remediation.models import RemediationEntry as Row
+
+        with transaction.atomic():
+            # Scope to the workspace (D4): a foreign id revokes nothing. Use the base
+            # manager (not ``active``) so revoking an already-revoked entry is an
+            # idempotent no-op that still returns the (already soft-deleted) row.
+            row = Row.objects.select_for_update().filter(id=entry_id, workspace_id=workspace_id).first()
+            if row is None:
+                return None
+            if not row.is_deleted:
+                row.is_deleted = True
+                row.save(update_fields=["is_deleted", "updated_at"])
+        logger.info(
+            "remediation_entry_revoked entry_id=%s workspace_id=%s revoked_by=%s",
+            entry_id,
+            workspace_id,
+            revoked_by,
+        )
+        return to_entity(row)
