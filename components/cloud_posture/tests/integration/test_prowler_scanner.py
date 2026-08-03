@@ -88,3 +88,33 @@ def test_prowler_scanner_rejects_a_malicious_region():
     )
     with pytest.raises(InvalidAwsScanTargetError):
         scanner.scan(target)
+
+
+def _scan_target():
+    return ScanTarget(
+        identifier="123456789012",
+        credentials={"AccessKeyId": "x", "SecretAccessKey": "y", "SessionToken": "z"},
+        params={"regions": ["us-east-1"]},
+    )
+
+
+@pytest.mark.unit
+def test_nonzero_exit_raises_instead_of_recording_empty_result():
+    # THE regression this fix exists for: a crashed Prowler Job (FATAL-error / OOMKill, whose
+    # `cat` of a missing OCSF file exits non-zero) must FAIL LOUD, not parse to 0 findings and
+    # be recorded as a COMPLETED clean scan with the account link promoted to VERIFIED.
+    from components.scanning.domain.errors import ScanExecutionError
+
+    backend = RecordsBackend([], exit_code=1)  # non-zero exit → engine failure
+    with pytest.raises(ScanExecutionError):
+        ProwlerScanner(backend=backend).scan(_scan_target())
+
+
+@pytest.mark.unit
+def test_timeout_raises():
+    # A Prowler Job that exceeds its deadline must surface as a failed run, never "0 findings".
+    from components.scanning.domain.errors import ScanExecutionError
+
+    backend = RecordsBackend([], exit_code=124, timed_out=True)
+    with pytest.raises(ScanExecutionError):
+        ProwlerScanner(backend=backend).scan(_scan_target())
