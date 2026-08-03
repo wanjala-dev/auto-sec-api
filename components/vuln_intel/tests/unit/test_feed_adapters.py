@@ -49,6 +49,27 @@ class TestEpssParse:
         assert record.epss == 1.0
         assert record.percentile == 0.0
 
+    def test_streaming_snapshot_yields_a_lazy_single_consumption_generator(self):
+        # The production ``_snapshot`` path (used by ``fetch``) must NOT materialize a tuple —
+        # it hands back a lazy generator so the store can drain ~280k rows in bounded batches
+        # without the whole feed living in RAM (the OOM fix).
+        import types
+
+        snap = EpssFeedAdapter._snapshot(_EPSS_CSV, checksum="s")
+        assert isinstance(snap.records, types.GeneratorType)
+        assert snap.record_count == 0  # a streamed snapshot reports 0 until the store drains it
+        cves = [r.cve for r in snap.records]
+        assert cves == ["CVE-2024-3094", "CVE-2021-44228"]
+        assert list(snap.records) == []  # one-shot: already consumed
+
+    def test_streaming_and_materialized_parse_agree(self):
+        # ``_parse`` (materialized, for tests) is built on ``_snapshot`` (streamed) — one parser,
+        # identical rows/header, clamps + bad-row drops included.
+        text = "#model_version:v9,score_date:2026-08-03\ncve,epss,percentile\nCVE-A,bad,0.5\nCVE-B,2.0,0.5\n"
+        streamed = {r.cve: (r.epss, r.percentile) for r in EpssFeedAdapter._snapshot(text).records}
+        materialized = {r.cve: (r.epss, r.percentile) for r in EpssFeedAdapter._parse(text).records}
+        assert streamed == materialized == {"CVE-B": (1.0, 0.5)}
+
 
 class TestKevParse:
     def test_parses_version_and_records(self):
