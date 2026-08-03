@@ -338,6 +338,12 @@ CELERY_BEAT_SCHEDULE = {
         "task": "cloud_posture.schedule_prowler_runs",
         "schedule": crontab(hour=2, minute=0),
     },
+    # Daily threat-intel feed refresh (ADR 0013 D2) — EPSS + CISA KEV → immutable dated
+    # snapshots; publishes VulnIntelRefreshed so findings rescores contextual risk.
+    "vuln_intel_refresh_feeds": {
+        "task": "vuln_intel.refresh_feeds",
+        "schedule": crontab(hour=1, minute=30),
+    },
     # Hourly Remediation Memory capture reconciler (ADR 0012 P4a) — scans findings
     # carrying an open draft PR, checks merge via VcsPort, resolves the merged
     # finding, and offers it to the gated corpus capture. This is the driver of the

@@ -51,6 +51,7 @@ import components.shared_platform.infrastructure.tasks.document_import_tasks
 import components.shared_platform.workers.tasks
 import components.sign_off.workers.tasks
 import components.subscription.workers.tasks
+import components.vuln_intel.infrastructure.tasks.vuln_intel_tasks
 
 # NOTE: workflow tasks are registered via the autodiscover shim at
 # infrastructure/persistence/workspaces/workflows/tasks.py (that app IS in
