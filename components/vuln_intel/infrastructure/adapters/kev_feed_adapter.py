@@ -20,12 +20,13 @@ import httpx
 from components.vuln_intel.application.ports.vuln_feed_port import KevFeedPort
 from components.vuln_intel.domain.errors import MalformedFeedError
 from components.vuln_intel.domain.value_objects.feed_snapshot import KevFeedSnapshot, KevRecord
+from components.vuln_intel.infrastructure.adapters.feed_http import download_capped
 
 logger = logging.getLogger(__name__)
 
-# Pinned authoritative source (CISA KEV catalog JSON).
+# Pinned authoritative source (CISA KEV catalog JSON). The download is size-capped
+# (feed_http) against an oversized body — supply-chain hardening for a 3rd-party feed pull.
 KEV_CATALOG_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
-_HTTP_TIMEOUT = 60.0
 
 
 class KevFeedAdapter(KevFeedPort):
@@ -34,20 +35,10 @@ class KevFeedAdapter(KevFeedPort):
         self._client = client
 
     def fetch(self) -> KevFeedSnapshot:
-        raw = self._download()
+        raw = download_capped(self._url, client=self._client)
         checksum = hashlib.sha256(raw).hexdigest()
         data = json.loads(raw.decode("utf-8", errors="replace"))
         return self._parse(data, checksum=checksum)
-
-    def _download(self) -> bytes:
-        if self._client is not None:
-            resp = self._client.get(self._url)
-            resp.raise_for_status()
-            return resp.content
-        with httpx.Client(timeout=_HTTP_TIMEOUT, follow_redirects=True) as client:
-            resp = client.get(self._url)
-            resp.raise_for_status()
-            return resp.content
 
     @staticmethod
     def _parse(data: dict, *, checksum: str = "") -> KevFeedSnapshot:

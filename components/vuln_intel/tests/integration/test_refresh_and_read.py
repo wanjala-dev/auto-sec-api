@@ -135,6 +135,24 @@ class TestRefreshAndRead:
         assert EpssScore.objects.filter(snapshot=latest).count() == 2
         assert KevEntry.objects.count() == 3  # 1 (v1) + 2 (v2, replaced-in-place on re-pull)
 
+    def test_retention_prunes_old_snapshots(self):
+        from datetime import timedelta
+
+        from infrastructure.persistence.vuln_intel.models import EpssSnapshot
+
+        # Land 9 daily EPSS snapshots (KEV static) via successive refreshes.
+        base = date(2026, 8, 1)
+        for i in range(9):
+            _run_refresh(_epss(base + timedelta(days=i)), _kev("2026.08.01", ("CVE-2021-44228",)))
+
+        # W4: only the most-recent 7 are retained; the 2 oldest are pruned.
+        remaining = set(EpssSnapshot.objects.values_list("score_date", flat=True))
+        assert len(remaining) == 7
+        assert base not in remaining  # 2026-08-01 pruned
+        assert (base + timedelta(days=8)) in remaining  # newest kept
+        # The reader still resolves the latest snapshot.
+        assert VulnIntelReader().version_stamp().epss_score_date == "2026-08-09"
+
     def test_one_feed_failure_does_not_sink_the_other(self):
         class _BoomEpss(EpssFeedPort):
             def fetch(self):

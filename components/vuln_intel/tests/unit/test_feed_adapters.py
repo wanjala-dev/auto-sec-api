@@ -40,6 +40,15 @@ class TestEpssParse:
         snap = EpssFeedAdapter._parse(text)
         assert {r.cve for r in snap.records} == {"CVE-2"}
 
+    def test_out_of_range_values_are_clamped(self):
+        # S2: a feed value outside [0,1] is clamped at ingest so it can't trip EpssScore's
+        # invariant at read time.
+        text = "#score_date:2026-08-03\ncve,epss,percentile\nCVE-1,1.5,-0.2\n"
+        snap = EpssFeedAdapter._parse(text)
+        (record,) = snap.records
+        assert record.epss == 1.0
+        assert record.percentile == 0.0
+
 
 class TestKevParse:
     def test_parses_version_and_records(self):

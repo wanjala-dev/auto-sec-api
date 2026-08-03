@@ -13,7 +13,6 @@ data, not a floating image tag, but the endpoint is fixed and reviewable here.
 from __future__ import annotations
 
 import csv
-import gzip
 import hashlib
 import io
 import logging
@@ -24,12 +23,15 @@ import httpx
 
 from components.vuln_intel.application.ports.vuln_feed_port import EpssFeedPort
 from components.vuln_intel.domain.value_objects.feed_snapshot import EpssFeedSnapshot, EpssRecord
+from components.vuln_intel.infrastructure.adapters.feed_http import download_capped, gunzip_capped
 
 logger = logging.getLogger(__name__)
 
-# Pinned authoritative source (FIRST.org EPSS "current" daily CSV, gzipped).
+# Pinned authoritative source. `epss.empiricalsecurity.com` is the current FIRST.org-linked
+# Empirical Security mirror for the EPSS daily CSV (the pinned trust anchor — FIRST moved the
+# canonical download here). The download + decompress are size-capped (feed_http) against an
+# oversized-body / gzip-bomb (supply-chain hardening — a security tool ingesting a 3rd-party feed).
 EPSS_CURRENT_URL = "https://epss.empiricalsecurity.com/epss_scores-current.csv.gz"
-_HTTP_TIMEOUT = 60.0
 
 # The metadata comment line, e.g.: ``#model_version:v2025.03.14,score_date:2026-08-03T00:00:00+0000``
 _META_RE = re.compile(r"(model_version|score_date)\s*:\s*([^,]+)")
@@ -41,20 +43,10 @@ class EpssFeedAdapter(EpssFeedPort):
         self._client = client
 
     def fetch(self) -> EpssFeedSnapshot:
-        raw = self._download()
-        text = gzip.decompress(raw).decode("utf-8", errors="replace")
+        raw = download_capped(self._url, client=self._client)
+        text = gunzip_capped(raw).decode("utf-8", errors="replace")
         checksum = hashlib.sha256(raw).hexdigest()
         return self._parse(text, checksum=checksum)
-
-    def _download(self) -> bytes:
-        if self._client is not None:
-            resp = self._client.get(self._url)
-            resp.raise_for_status()
-            return resp.content
-        with httpx.Client(timeout=_HTTP_TIMEOUT, follow_redirects=True) as client:
-            resp = client.get(self._url)
-            resp.raise_for_status()
-            return resp.content
 
     @staticmethod
     def _parse(text: str, *, checksum: str = "") -> EpssFeedSnapshot:
@@ -81,6 +73,11 @@ class EpssFeedAdapter(EpssFeedPort):
             except ValueError:
                 logger.warning("epss_parse_skip_row cve=%s", cve)
                 continue
+            # Clamp to [0,1] at ingest (S2): a malformed/out-of-range feed value must never
+            # reach the stored snapshot, where it would trip EpssScore's [0,1] invariant at
+            # read time and break scoring. Damp defensively rather than trust the source.
+            epss = min(1.0, max(0.0, epss))
+            percentile = min(1.0, max(0.0, percentile))
             records.append(EpssRecord(cve=cve, epss=epss, percentile=percentile))
 
         # If the feed omitted a score_date comment, fall back to today (still a dated,

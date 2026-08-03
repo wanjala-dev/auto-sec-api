@@ -69,6 +69,18 @@ class VulnSnapshotRepository(VulnSnapshotStorePort):
             )
         return snapshot.record_count
 
+    def prune_snapshots(self, *, keep: int = 7) -> int:
+        from infrastructure.persistence.vuln_intel.models import EpssSnapshot, KevSnapshot
+
+        deleted = 0
+        keep_epss = list(EpssSnapshot.objects.order_by("-score_date").values_list("id", flat=True)[:keep])
+        _, per_model = EpssSnapshot.objects.exclude(id__in=keep_epss).delete()
+        deleted += per_model.get("vuln_intel.EpssSnapshot", 0)
+        keep_kev = list(KevSnapshot.objects.order_by("-fetched_at").values_list("id", flat=True)[:keep])
+        _, per_model = KevSnapshot.objects.exclude(id__in=keep_kev).delete()
+        deleted += per_model.get("vuln_intel.KevSnapshot", 0)
+        return deleted
+
     def latest_epss_score_date(self) -> str | None:
         from infrastructure.persistence.vuln_intel.models import EpssSnapshot
 

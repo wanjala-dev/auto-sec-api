@@ -20,12 +20,18 @@ from components.vuln_intel.application.ports.vuln_snapshot_store_port import Vul
 logger = logging.getLogger(__name__)
 
 
+# How many dated snapshots per feed to retain (W4). The reader only ever uses the latest;
+# a week of history keeps recent snapshots for audit/reproducibility without unbounded growth.
+_SNAPSHOTS_RETAINED = 7
+
+
 @dataclass(frozen=True)
 class RefreshFeedsResult:
     epss_score_date: str | None = None
     epss_records: int = 0
     kev_catalog_version: str | None = None
     kev_records: int = 0
+    snapshots_pruned: int = 0
     errors: tuple[str, ...] = ()
 
 
@@ -68,6 +74,16 @@ class RefreshFeedsUseCase:
             logger.exception("vuln_intel_kev_refresh_failed")
             errors.append(f"kev: {exc}")
 
+        # Retention (W4): after landing fresh snapshots, prune old ones so the tables don't
+        # grow unbounded (~280k EPSS child rows/day). Only prune if at least one feed landed
+        # this cycle — a total-outage run must not delete the last good snapshot we score on.
+        pruned = 0
+        if epss_date or kev_version:
+            try:
+                pruned = self._store.prune_snapshots(keep=_SNAPSHOTS_RETAINED)
+            except Exception:
+                logger.exception("vuln_intel_snapshot_prune_failed")
+
         # Announce the refresh so downstream risk rescoring can react. Best-effort: a
         # mis-wired publisher must never fail the ingest that already persisted.
         if self._publisher is not None and (epss_date or kev_version):
@@ -83,5 +99,6 @@ class RefreshFeedsUseCase:
             epss_records=epss_count,
             kev_catalog_version=kev_version,
             kev_records=kev_count,
+            snapshots_pruned=pruned,
             errors=tuple(errors),
         )

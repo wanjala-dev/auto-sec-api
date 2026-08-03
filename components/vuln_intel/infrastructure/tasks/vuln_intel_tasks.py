@@ -23,11 +23,13 @@ def refresh_feeds() -> dict:
     logger.info("vuln_intel_refresh_feeds started")
     result = VulnIntelProvider.build_refresh_feeds_use_case().execute()
     logger.info(
-        "vuln_intel_refresh_feeds completed epss_score_date=%s epss_records=%s kev_version=%s kev_records=%s errors=%s",
+        "vuln_intel_refresh_feeds completed epss_score_date=%s epss_records=%s kev_version=%s "
+        "kev_records=%s pruned=%s errors=%s",
         result.epss_score_date,
         result.epss_records,
         result.kev_catalog_version,
         result.kev_records,
+        result.snapshots_pruned,
         len(result.errors),
     )
     return {
@@ -36,5 +38,6 @@ def refresh_feeds() -> dict:
         "epss_records": result.epss_records,
         "kev_catalog_version": result.kev_catalog_version,
         "kev_records": result.kev_records,
+        "snapshots_pruned": result.snapshots_pruned,
         "errors": list(result.errors),
     }
