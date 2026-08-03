@@ -32,8 +32,40 @@ class FindingStorePort(ABC):
         """Return a filtered, paginated page of findings for a workspace (read side).
 
         Filters AND together; ordered most-recently-seen first. Workspace-scoped by
-        construction — a finding for another workspace is never returned.
+        construction — a finding for another workspace is never returned. Plain entity
+        read used by internal consumers (e.g. the cloud_graph inventory sync); the
+        risk-ranked API read is ``list_ranked_findings``.
         """
+
+    @abstractmethod
+    def list_ranked_findings(
+        self,
+        workspace_id: UUID,
+        *,
+        severity: str | None = None,
+        status: str | None = None,
+        source: str | None = None,
+        asset_urn: str | None = None,
+        order_by: str = "contextual_risk",
+        limit: int = 25,
+        offset: int = 0,
+    ) -> list[RankedFinding]:
+        """Return a filtered, paginated page of findings paired with their contextual-risk
+        score (ADR 0013 D4 — the findings-list read). ``order_by="contextual_risk"``
+        (default) sorts by the materialized ``FindingRisk.score`` desc (nulls last), else
+        most-recently-seen. Each row carries its ``FindingRiskView`` (or None if unscored)."""
+
+    @abstractmethod
+    def iter_scorable_findings(self, workspace_id: UUID, *, finding_id: UUID | None = None) -> Iterator[FindingEntity]:
+        """Stream the workspace's findings for (re)scoring (chunked, memory-safe).
+
+        The background contextual-risk job iterates these and writes one ``FindingRisk``
+        each. ``finding_id`` narrows to a single finding (the per-event rescore path)."""
+
+    @abstractmethod
+    def list_workspace_ids_with_findings(self) -> list[UUID]:
+        """Distinct workspace ids that have at least one finding — the fan-out set the
+        daily feed-refresh rescore iterates (ADR 0013 D3)."""
 
     @abstractmethod
     def count_findings(
