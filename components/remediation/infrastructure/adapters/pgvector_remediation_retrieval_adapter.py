@@ -50,11 +50,16 @@ def _rating_of(chunk) -> int:
 class PgVectorRemediationRetrievalAdapter(RemediationRetrievalPort):
     """Reads remediation-entry chunks from ``ai_embedding_chunks`` (D4-scoped)."""
 
-    def __init__(self, store=None) -> None:
+    def __init__(self, store=None, entry_store=None) -> None:
         # ``store`` is an injected knowledge ``VectorStorePort`` (tests wire a fake
         # that honours the metadata filters). Production resolves the pgvector
         # adapter lazily through knowledge's application provider.
         self._store = store
+        # ``entry_store`` is the remediation ``RemediationEntryStorePort`` used for
+        # the ACTIVE-status cross-check (P5): retrieval drops any candidate whose
+        # entry has been revoked (soft-deleted), so the soft-delete — not the
+        # fragile embedding-delete — is the authority on retrievability.
+        self._entry_store = entry_store
 
     def _vector_store(self):
         if self._store is not None:
@@ -65,6 +70,16 @@ class PgVectorRemediationRetrievalAdapter(RemediationRetrievalPort):
 
         self._store = AIVectorStoreProvider().get_port("pgvector")
         return self._store
+
+    def _entries(self):
+        if self._entry_store is not None:
+            return self._entry_store
+        from components.remediation.application.providers.remediation_provider import (
+            build_remediation_store,
+        )
+
+        self._entry_store = build_remediation_store()
+        return self._entry_store
 
     def retrieve_grounding(
         self,
@@ -114,6 +129,16 @@ class PgVectorRemediationRetrievalAdapter(RemediationRetrievalPort):
             chunk for chunk in chunks if str((chunk.metadata or {}).get("workspace_id")) == str(workspace_id)
         ]
 
+        # ACTIVE-status authority check (P5): the vector store lags the corpus — a
+        # revoked entry's chunk can still be present if the embedding-delete failed
+        # or in the window before it runs. So cross-check every candidate against the
+        # ``.active`` RemediationEntry store (batch, workspace-scoped, bounded to the
+        # pool) and DROP any whose entry is not active. A chunk with no ``entry_id``
+        # can't be verified ⇒ dropped (fail-closed). This makes the soft-delete —
+        # not the fragile second-system embedding-delete — the authority on whether
+        # a fix is retrievable, so a revoked fix is unretrievable regardless.
+        safe_chunks = self._drop_revoked(workspace_id=str(workspace_id), chunks=safe_chunks)
+
         # Blend similarity + DERIVED rating, then take the top k. Similarity leads;
         # the rating (P5) lifts proven fixes and sinks recurred ones within the pool.
         ranked = sorted(
@@ -133,6 +158,36 @@ class PgVectorRemediationRetrievalAdapter(RemediationRetrievalPort):
             len(results),
         )
         return results
+
+    def _drop_revoked(self, *, workspace_id: str, chunks: list) -> list:
+        """Keep only chunks whose ``entry_id`` is an ACTIVE (non-revoked) entry.
+
+        A chunk without an ``entry_id`` is dropped (can't be verified → fail-closed).
+        If the active-status check itself fails, fail-closed to ``[]`` — a cold/broken
+        cross-check must never risk surfacing a revoked fix."""
+        entry_ids = [str((c.metadata or {}).get("entry_id") or "") for c in chunks]
+        pairs = [(c, eid) for c, eid in zip(chunks, entry_ids) if eid]
+        if not pairs:
+            return []
+        try:
+            active = self._entries().filter_active_entry_ids(
+                workspace_id=workspace_id, entry_ids=[eid for _, eid in pairs]
+            )
+        except Exception:
+            logger.exception(
+                "remediation_retrieval_active_check_failed workspace_id=%s (fail-closed grounding=[])",
+                workspace_id,
+            )
+            return []
+        kept = [c for c, eid in pairs if eid in active]
+        dropped = len(chunks) - len(kept)
+        if dropped:
+            logger.info(
+                "remediation_retrieval_dropped_revoked workspace_id=%s dropped=%d",
+                workspace_id,
+                dropped,
+            )
+        return kept
 
     @staticmethod
     def _to_dto(chunk) -> RemediationGroundingDTO:

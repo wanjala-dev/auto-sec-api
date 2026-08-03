@@ -165,8 +165,9 @@ class TestRevocationRemovesFromBothStores:
         store.save(entry)
         EmbedRemediationEntryUseCase(index=corpus).execute(entry)
 
-        retrieval = PgVectorRemediationRetrievalAdapter(store=corpus)
-        # Before: retrievable.
+        # Retrieval reads the vector store for candidates AND cross-checks the active
+        # entry store (the P5 authority) — wire both to our fakes.
+        retrieval = PgVectorRemediationRetrievalAdapter(store=corpus, entry_store=store)
         before = retrieval.retrieve_grounding(
             workspace_id=str(_WS), finding_kind="log_watch", query_text="import error"
         )
@@ -180,6 +181,34 @@ class TestRevocationRemovesFromBothStores:
         assert store.get(entry.id, workspace_id=_WS) is None
         after = retrieval.retrieve_grounding(workspace_id=str(_WS), finding_kind="log_watch", query_text="import error")
         assert after == []  # revoked ⇒ never surfaced again
+
+    def test_revoked_entry_unretrievable_even_when_embedding_delete_raises(self):
+        # THE DEFENSE-IN-DEPTH TEST (review blocker): the soft-delete — not the
+        # fragile embedding-delete — is the authority. Even if delete_by_key RAISES
+        # (or never runs), a revoked entry must be unretrievable.
+        store = FakeStore()
+        entry = _entry()
+        store.save(entry)
+
+        class _CorpusThatFailsDelete(_InMemoryCorpus):
+            def delete_by_key(self, *, document_key: str) -> int:
+                raise RuntimeError("vector store unavailable")
+
+        corpus = _CorpusThatFailsDelete()
+        EmbedRemediationEntryUseCase(index=corpus).execute(entry)
+
+        retrieval = PgVectorRemediationRetrievalAdapter(store=corpus, entry_store=store)
+        assert len(retrieval.retrieve_grounding(workspace_id=str(_WS), finding_kind="log_watch", query_text="x")) == 1
+
+        # Revoke completes despite the embedding-delete failing (best-effort cleanup).
+        result = _build(store=store, corpus=corpus).execute(
+            RevokeRemediationEntryCommand(workspace_id=_WS, entry_id=entry.id, actor_user_id="owner", reason="insecure")
+        )
+        assert result is not None
+        # The chunk is STILL in the vector store (delete failed) …
+        assert corpus.chunks
+        # … yet the entry is unretrievable, because retrieval drops non-active entries.
+        assert retrieval.retrieve_grounding(workspace_id=str(_WS), finding_kind="log_watch", query_text="x") == []
 
     def test_revocation_is_audited(self):
         store, corpus, audit = FakeStore(), _InMemoryCorpus(), _RecordingAudit()

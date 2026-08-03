@@ -71,9 +71,15 @@ class RemediationAuditAdapter(RemediationAuditPort):
                 reason=reason or "",
             )
         except Exception:
-            # Audit failure must NEVER fail the governance action (already committed).
+            # Audit failure must NEVER fail the governance action (already committed) —
+            # but it must NOT pass silently either: a revoke with no EntityAuditLog row
+            # is a governance-trail GAP, so raise it loud + alertable (ERROR + traceback,
+            # structured context) so monitoring can catch and backfill it. This is a
+            # deliberate, documented broad catch (a governance action must not crash on
+            # an audit-store hiccup), not a swallow.
             logger.exception(
-                "remediation_revocation_audit_failed entry_id=%s workspace_id=%s actor_id=%s",
+                "remediation_revocation_audit_write_failed ALERT governance_trail_gap "
+                "entry_id=%s workspace_id=%s actor_id=%s",
                 entry_id,
                 workspace_id,
                 actor_id,

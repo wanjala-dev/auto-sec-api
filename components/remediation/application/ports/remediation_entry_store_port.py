@@ -46,6 +46,14 @@ class RemediationEntryStorePort(ABC):
         *exclude_entry_id* — the priors a newly-admitted fix's outcome propagates
         to (P5). Workspace-scoped (D4)."""
 
+    @abstractmethod
+    def filter_active_entry_ids(self, *, workspace_id, entry_ids: list[str]) -> set[str]:
+        """Of *entry_ids*, return (as strings) the subset that are ACTIVE
+        (non-revoked) rows in *workspace_id*. The retrieval authority check (P5):
+        the soft-delete — not the fragile embedding-delete — decides retrievability,
+        so retrieval drops any candidate chunk whose entry is not in this set.
+        Workspace-scoped (D4); an empty input returns an empty set (no query)."""
+
     # ── Outcome mutations (P5) — DERIVED score only; no raw score write ──────
     # These are corpus writes, so — per ADR 0012 D1 — they live ONLY on the
     # sole-writer repository. Each recomputes ``score`` from the (bumped) counters

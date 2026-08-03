@@ -68,6 +68,14 @@ class FakeStore(RemediationEntryStorePort):
             and not e.is_deleted
         ][:limit]
 
+    def filter_active_entry_ids(self, *, workspace_id, entry_ids: list[str]) -> set[str]:
+        wanted = {str(e) for e in (entry_ids or []) if e}
+        return {
+            str(e.id)
+            for e in self.saved
+            if str(e.id) in wanted and str(e.workspace_id) == str(workspace_id) and not e.is_deleted
+        }
+
     def record_reuse_success(self, *, entry_id: UUID, workspace_id: UUID) -> RemediationEntry | None:
         return self._bump(entry_id=entry_id, workspace_id=workspace_id, reuse=1, success=1, recurrence=0)
 

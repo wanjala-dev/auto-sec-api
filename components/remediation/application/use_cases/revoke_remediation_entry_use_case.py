@@ -12,21 +12,21 @@ The flow, in order (the ordering is load-bearing):
   1. **Authorize.** Owner/admin (``RemediationGovernancePort``) OR a sign-off-approved
      request (``SignOffGatePort``). Neither ⇒ ``RevocationNotAuthorizedError`` and
      NOTHING is touched (fail-closed).
-  2. **Soft-delete the corpus row FIRST** (``store.revoke`` → ``is_deleted=True``).
-     This must precede the embedding delete: the embed task loads entries through
-     the ``.active`` store, so once the row is soft-deleted a racing/scheduled
-     re-embed can no longer resurrect the chunk. (Doing it after the embedding
-     delete would leave a window where a re-embed re-adds what we just removed.)
+  2. **Soft-delete the corpus row** (``store.revoke`` → ``is_deleted=True``). This is
+     the AUTHORITY on retrievability: retrieval cross-checks every candidate chunk
+     against the ``.active`` store and drops any whose entry is not active (see
+     ``PgVectorRemediationRetrievalAdapter._drop_revoked``), so the moment this
+     commits the entry is unretrievable — regardless of the embedding's fate. It
+     also blocks any scheduled re-embed (the embed task loads via ``.active``).
   3. **Delete the embedding** from ``ai_embedding_chunks`` via the knowledge
-     ``CorpusChunkIndexPort`` (keyed on ``remediation_entry:<id>``). This is the
-     step that makes the entry unretrievable — retrieval reads the vector store, not
-     the corpus row — so it MUST succeed; a failure here RAISES so the revocation is
-     retried until the chunk is gone (the soft-delete already blocks re-embed, so a
-     retry is safe and monotonic toward "gone").
+     ``CorpusChunkIndexPort`` — **best-effort cleanup**, NOT the security control.
+     Because retrieval no longer depends on it, a failure here is logged loud +
+     alertable but does NOT fail the revocation (the entry is already unretrievable).
   4. **Audit** the governance action (best-effort; never fails the revocation).
 
-Result: a revoked entry is invisible to retrieval immediately (chunk deleted) and
-permanently (row soft-deleted ⇒ never re-embedded, ⇒ never in ``list_for_workspace``).
+Result: a revoked entry is invisible to retrieval immediately AND permanently — the
+soft-delete + active-status cross-check guarantee it even if the embedding-delete
+fails; the chunk-delete is housekeeping that a retry / re-embed-refusal completes.
 """
 
 from __future__ import annotations
@@ -103,16 +103,28 @@ class RevokeRemediationEntryUseCase:
             )
             return None
 
-        # (3) Delete the embedding — the step that removes it from RETRIEVAL. Must
-        # succeed; a failure raises so the whole revocation is retried (safe: the row
-        # is already soft-deleted, so no re-embed can race us).
-        removed = self._corpus_index.delete_by_key(document_key=document_key_for(str(command.entry_id)))
-        logger.info(
-            "remediation_revoke_embedding_deleted entry_id=%s workspace_id=%s chunks=%s",
-            command.entry_id,
-            workspace_id,
-            removed,
-        )
+        # (3) Delete the embedding — best-effort cleanup. Retrievability is ALREADY
+        # settled by the soft-delete above: retrieval cross-checks every candidate
+        # against the ``.active`` store and drops revoked entries, so a stale chunk
+        # can never be surfaced. Deleting the chunk is housekeeping (keeps the vector
+        # store from growing), so a failure here is logged loud+alertable but does
+        # NOT fail the revocation (the entry is already unretrievable) — a retry /
+        # the eventual re-embed-refusal cleans it up.
+        try:
+            removed = self._corpus_index.delete_by_key(document_key=document_key_for(str(command.entry_id)))
+            logger.info(
+                "remediation_revoke_embedding_deleted entry_id=%s workspace_id=%s chunks=%s",
+                command.entry_id,
+                workspace_id,
+                removed,
+            )
+        except Exception:
+            logger.exception(
+                "remediation_revoke_embedding_delete_failed entry_id=%s workspace_id=%s "
+                "(entry already unretrievable via active-status check; chunk left for cleanup)",
+                command.entry_id,
+                workspace_id,
+            )
 
         # (4) Audit the governance action (best-effort — never fails the revocation).
         self._audit.log_revocation(

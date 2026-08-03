@@ -9,6 +9,8 @@ per-chunk similarity + ``rating`` metadata, so ordering is proven through the ad
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 import pytest
 
 from components.knowledge.application.ports.vector_store_port import RetrievedChunk
@@ -22,6 +24,13 @@ from components.remediation.infrastructure.adapters.pgvector_remediation_retriev
 pytestmark = pytest.mark.unit
 
 _WS = "11111111-1111-1111-1111-111111111111"
+
+
+class _ActiveAll:
+    """Every queried entry_id is active — isolates ranking from the P5 revoked-drop."""
+
+    def filter_active_entry_ids(self, *, workspace_id, entry_ids):
+        return {str(e) for e in entry_ids if e}
 
 
 class _RankingFakeStore:
@@ -59,6 +68,7 @@ def _chunk(*, title, similarity, rating, workspace_id=_WS, finding_kind="log_wat
             "code": f"{title}()",
             "tags": [],
             "rating": rating,
+            "entry_id": str(uuid4()),
         },
         score=similarity,
     )
@@ -72,7 +82,7 @@ class TestRetrievalRanking:
                 _chunk(title="proven", similarity=0.9, rating=12),
             ]
         )
-        adapter = PgVectorRemediationRetrievalAdapter(store=store)
+        adapter = PgVectorRemediationRetrievalAdapter(store=store, entry_store=_ActiveAll())
 
         results = adapter.retrieve_grounding(
             workspace_id=_WS, finding_kind="log_watch", query_text="import error", top_k=2
@@ -89,7 +99,7 @@ class TestRetrievalRanking:
                 _chunk(title="held", similarity=0.9, rating=4),
             ]
         )
-        adapter = PgVectorRemediationRetrievalAdapter(store=store)
+        adapter = PgVectorRemediationRetrievalAdapter(store=store, entry_store=_ActiveAll())
 
         results = adapter.retrieve_grounding(workspace_id=_WS, finding_kind="log_watch", query_text="q", top_k=2)
         assert [r.title for r in results] == ["held", "recurred"]
@@ -102,7 +112,7 @@ class TestRetrievalRanking:
                 _chunk(title="marginal", similarity=0.55, rating=50),
             ]
         )
-        adapter = PgVectorRemediationRetrievalAdapter(store=store)
+        adapter = PgVectorRemediationRetrievalAdapter(store=store, entry_store=_ActiveAll())
 
         results = adapter.retrieve_grounding(workspace_id=_WS, finding_kind="log_watch", query_text="q", top_k=2)
         assert results[0].title == "relevant"
@@ -116,11 +126,12 @@ class TestRetrievalRanking:
                 "workspace_id": _WS,
                 "finding_kind": "log_watch",
                 "title": "legacy",
+                "entry_id": str(uuid4()),  # has an entry_id (active); only the rating is absent
             },
             score=0.9,
         )
         store = _RankingFakeStore([legacy, _chunk(title="rated", similarity=0.9, rating=8)])
-        adapter = PgVectorRemediationRetrievalAdapter(store=store)
+        adapter = PgVectorRemediationRetrievalAdapter(store=store, entry_store=_ActiveAll())
 
         results = adapter.retrieve_grounding(workspace_id=_WS, finding_kind="log_watch", query_text="q", top_k=2)
         assert [r.title for r in results] == ["rated", "legacy"]

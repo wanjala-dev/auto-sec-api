@@ -9,6 +9,8 @@ weakened gate.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from components.remediation.application.ports.finding_remediation_facts_port import (
     FindingRemediationFactsPort,
 )
@@ -26,6 +28,22 @@ from components.remediation.application.use_cases.record_remediation_entry_use_c
 from components.remediation.application.use_cases.revoke_remediation_entry_use_case import (
     RevokeRemediationEntryUseCase,
 )
+
+if TYPE_CHECKING:
+    # Annotation-only references (avoid F821 without eager runtime imports). The
+    # bodies import their concrete classes lazily; these keep the type hints valid.
+    from components.remediation.application.ports.remediation_audit_port import (
+        RemediationAuditPort,
+    )
+    from components.remediation.application.ports.remediation_governance_port import (
+        RemediationGovernancePort,
+    )
+    from components.remediation.application.ports.remediation_retrieval_port import (
+        RemediationRetrievalPort,
+    )
+    from components.remediation.application.use_cases.embed_remediation_entry_use_case import (
+        EmbedRemediationEntryUseCase,
+    )
 
 
 def build_remediation_store() -> RemediationEntryStorePort:

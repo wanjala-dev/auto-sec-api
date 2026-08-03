@@ -99,6 +99,19 @@ class DjangoRemediationEntryRepository(RemediationEntryStorePort):
         )
         return [to_entity(row) for row in qs[: max(1, int(limit))]]
 
+    def filter_active_entry_ids(self, *, workspace_id, entry_ids: list[str]) -> set[str]:
+        from infrastructure.persistence.remediation.models import RemediationEntry as Row
+
+        ids = [str(e) for e in (entry_ids or []) if e]
+        if not ids:
+            return set()
+        # Bounded by the retrieval pool (top-k) and workspace-scoped. Reads the
+        # ``.active`` manager so a soft-deleted (revoked) entry is absent — that is
+        # the authority that makes a revoked entry unretrievable regardless of the
+        # embedding-delete's fate.
+        rows = Row.active.filter(workspace_id=workspace_id, id__in=ids).values_list("id", flat=True)
+        return {str(rid) for rid in rows}
+
     # ── Outcome mutations (P5) — the ONLY corpus writes besides the gate save ──
     # These live here (the sole-writer repository) because ANY RemediationEntry ORM
     # write must (ADR 0012 D1). Each re-derives ``score`` from the bumped counters
