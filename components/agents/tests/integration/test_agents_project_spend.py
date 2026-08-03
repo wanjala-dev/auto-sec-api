@@ -1,4 +1,14 @@
-"""Tests for project spend tool."""
+"""Tests for the project-resolution helpers on ProjectAgent.
+
+The nonprofit ``get_project_spend`` tool reported *budget spend* (project
+estimate/actual transactions) for a named project. Budgeting was stripped from
+the autosec fork, so the tool — and any notion of project "spend" — no longer
+exists. What survives is the project-resolution behaviour those tests exercised:
+looking a project up by name and listing available projects when it is missing
+(``get_project_info``), and parsing a project name out of free text
+(``_extract_project_name``). These tests cover that real fork behaviour.
+"""
+
 from types import SimpleNamespace
 
 import pytest
@@ -8,7 +18,7 @@ from infrastructure.persistence.project.models import Project
 
 
 @pytest.mark.django_db
-def test_get_project_spend_lists_projects_when_missing(
+def test_get_project_info_lists_projects_when_missing(
     user_factory,
     workspace_factory,
     team_factory,
@@ -20,14 +30,14 @@ def test_get_project_spend_lists_projects_when_missing(
 
     agent = SimpleNamespace(workspace_id=str(workspace.id), user_id=str(owner.id), config={})
 
-    result = project_agent.get_project_spend(agent, {"project": "Unknown"})
+    result = project_agent.get_project_info(agent, "Unknown")
 
     assert "Project 'Unknown' not found." in result
     assert "Project Sunrise" in result
 
 
 @pytest.mark.django_db
-def test_get_project_spend_parses_project_from_text(
+def test_extract_project_name_parses_project_from_text(
     user_factory,
     workspace_factory,
     team_factory,
@@ -37,11 +47,8 @@ def test_get_project_spend_parses_project_from_text(
     team = team_factory(workspace=workspace, created_by=owner, members=[owner])
     Project.objects.create(workspace=workspace, team=team, title="Project Sunrise", created_by=owner)
 
-    agent = SimpleNamespace(workspace_id=str(workspace.id), user_id=str(owner.id), config={})
+    name = project_agent._extract_project_name("How much have we spent on Project Sunrise this quarter?")
 
-    result = project_agent.get_project_spend(
-        agent,
-        {"text": "How much have we spent on Project Sunrise this quarter?"},
-    )
-
-    assert "Project spend for Project Sunrise" in result
+    assert name == "Sunrise"
+    # The parsed name resolves to the seeded project (same lookup get_project_info uses).
+    assert Project.objects.filter(title__icontains=name, workspace_id=str(workspace.id)).exists()
