@@ -8,12 +8,37 @@ half-written pull is never scored against. Child rows are ``bulk_create``d in ba
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from django.db import transaction
 
 from components.vuln_intel.application.ports.vuln_snapshot_store_port import VulnSnapshotStorePort
 from components.vuln_intel.domain.value_objects.feed_snapshot import EpssFeedSnapshot, KevFeedSnapshot
 
 _BULK_BATCH = 5000
+
+
+def _stream_bulk_create(model, instances: Iterable) -> int:
+    """``bulk_create`` an iterable of model instances in bounded batches of ``_BULK_BATCH``,
+    holding at most one batch in memory at a time — flat memory regardless of feed size.
+
+    Django's ``bulk_create`` eagerly ``list()``s whatever iterable it's handed to compute the
+    length and split batches, so passing a 280k-row generator straight in still materializes
+    the entire feed (~280k model instances) and OOM-kills the 768Mi worker. The caller MUST
+    hand us the generator; we pull it one row at a time, flushing every ``_BULK_BATCH``. Returns
+    the number of rows created."""
+    total = 0
+    batch: list = []
+    for obj in instances:
+        batch.append(obj)
+        if len(batch) >= _BULK_BATCH:
+            model.objects.bulk_create(batch, batch_size=_BULK_BATCH)
+            total += len(batch)
+            batch = []  # release the flushed batch before building the next
+    if batch:
+        model.objects.bulk_create(batch, batch_size=_BULK_BATCH)
+        total += len(batch)
+    return total
 
 
 class VulnSnapshotRepository(VulnSnapshotStorePort):
@@ -28,17 +53,25 @@ class VulnSnapshotRepository(VulnSnapshotStorePort):
                 defaults={
                     "model_version": snapshot.model_version,
                     "fetched_at": timezone.now(),
-                    "record_count": snapshot.record_count,
+                    # Streaming means the true count is known only after the last batch drains;
+                    # stamp 0 now and update below (see the trailing .update()).
+                    "record_count": 0,
                     "checksum": snapshot.checksum,
                 },
             )
             # Replace this date's scores atomically — a re-pull is idempotent, never partial.
             EpssScore.objects.filter(snapshot=snap).delete()
-            EpssScore.objects.bulk_create(
+            # Stream the records (a lazy generator on the real feed — ~280k CVEs) into bounded
+            # bulk_create batches. Django's bulk_create eagerly ``list()``s whatever it's given,
+            # so feeding it the 280k-row generator directly would still materialize the lot and
+            # OOM the 768Mi worker; we chunk here so at most _BULK_BATCH model instances ever
+            # coexist in memory.
+            count = _stream_bulk_create(
+                EpssScore,
                 (EpssScore(snapshot=snap, cve=r.cve, epss=r.epss, percentile=r.percentile) for r in snapshot.records),
-                batch_size=_BULK_BATCH,
             )
-        return snapshot.record_count
+            EpssSnapshot.objects.filter(pk=snap.pk).update(record_count=count)
+        return count
 
     def save_kev_snapshot(self, snapshot: KevFeedSnapshot) -> int:
         from django.utils import timezone
