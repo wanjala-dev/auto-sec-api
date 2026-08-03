@@ -560,6 +560,14 @@ CELERY_BEAT_SCHEDULE = {
         "task": "infrastructure.ai.agents.tasks.schedule_ai_teammate_runs",
         "schedule": crontab(minute="*/5"),
     },
+    # Daily threat-intel feed refresh (ADR 0013 D2) — pulls EPSS + CISA KEV into
+    # immutable, version-stamped dated snapshots (never live-fetched per request), then
+    # publishes VulnIntelRefreshed so the findings context rescores contextual risk.
+    # Global (not per-workspace); runs before the 02:00 CSPM scan.
+    "vuln_intel_refresh_feeds": {
+        "task": "vuln_intel.refresh_feeds",
+        "schedule": crontab(hour=1, minute=30),
+    },
     # Daily AI-action rollup — recomputes yesterday's AiActionDailyRollup
     # rows (runs, tool calls, tokens, spend). The posture dashboard's
     # governance charts read these rollup rows instead of live-aggregating

@@ -123,6 +123,7 @@ INSTALLED_APPS = [
     "infrastructure.persistence.cloud_graph",
     "infrastructure.persistence.response",
     "infrastructure.persistence.remediation",
+    "infrastructure.persistence.vuln_intel",
     "infrastructure.persistence.ai",
     "infrastructure.persistence.recycle_bin",
     # ai submodules

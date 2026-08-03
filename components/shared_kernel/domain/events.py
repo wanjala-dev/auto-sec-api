@@ -168,3 +168,23 @@ class AttackPathDetected(DomainEvent):
     title: str
     asset_urns: list[str] = field(default_factory=list)
     finding_ids: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True, kw_only=True)
+class VulnIntelRefreshed(DomainEvent):
+    """The daily threat-intel feed pull landed a fresh EPSS / KEV snapshot (ADR 0013 D2).
+
+    Emitted by ``vuln_intel.refresh_feeds`` after a new dated snapshot is persisted. The
+    ``findings`` context subscribes and fans out a contextual-risk recompute per
+    workspace — because a CVE can *newly* enter KEV, or its EPSS can jump, without any
+    finding changing, so the materialized score must be recomputed on the feed moving,
+    not only on ``FindingRaised``/``FindingResolved`` (ADR 0013 D3).
+
+    Lives in the shared kernel because the emitter (``vuln_intel``) and the subscriber
+    (``findings``) are different bounded contexts — same rationale as the finding events.
+    The version fields are the snapshot stamps (empty string when that feed's pull
+    failed this cycle) so a consumer/audit can see which intel triggered the rescore.
+    """
+
+    epss_score_date: str = ""  # ISO date of the EPSS snapshot, or "" if EPSS failed
+    kev_catalog_version: str = ""  # KEV catalogVersion, or "" if KEV failed

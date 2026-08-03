@@ -371,6 +371,11 @@ CELERY_BEAT_SCHEDULE = {
         "task": "cloud_posture.schedule_prowler_runs",
         "schedule": crontab(hour=2, minute=0),
     },
+    # Daily threat-intel feed refresh (ADR 0013 D2) — EPSS + CISA KEV → dated snapshots.
+    "vuln_intel_refresh_feeds": {
+        "task": "vuln_intel.refresh_feeds",
+        "schedule": crontab(hour=1, minute=30),
+    },
     "ai_teammate_schedule": {
         "task": "infrastructure.ai.agents.tasks.schedule_ai_teammate_runs",
         "schedule": timedelta(hours=1),
