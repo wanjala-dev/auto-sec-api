@@ -37,6 +37,46 @@ def test_get_project_info_lists_projects_when_missing(
 
 
 @pytest.mark.django_db
+def test_get_project_info_returns_surviving_fields_when_found(
+    user_factory,
+    workspace_factory,
+    team_factory,
+):
+    """Happy path: a found project renders cleanly.
+
+    Regression guard for the fork drift where ``get_project_info`` read
+    ``project.budget`` (stripped with budgeting) and ``project.updated_at``
+    (never existed on Project) — both would break whenever a project was
+    actually found. The tool must report only surviving Project fields.
+    """
+    owner = user_factory()
+    workspace = workspace_factory(owner=owner)
+    team = team_factory(workspace=workspace, created_by=owner, members=[owner])
+    Project.objects.create(
+        workspace=workspace,
+        team=team,
+        title="Project Sunrise",
+        description="Restore log ingestion",
+        created_by=owner,
+        lead=owner,
+    )
+
+    agent = SimpleNamespace(workspace_id=str(workspace.id), user_id=str(owner.id), config={})
+
+    result = project_agent.get_project_info(agent, "Sunrise")
+
+    assert "Project Information:" in result
+    assert "Name: Project Sunrise" in result
+    assert "Restore log ingestion" in result
+    assert "Team:" in result
+    assert "Tasks: 0" in result
+    assert "Milestones: 0" in result
+    # The removed/nonexistent fields must not surface, and nothing errored.
+    assert "Budget" not in result
+    assert "Error retrieving project info" not in result
+
+
+@pytest.mark.django_db
 def test_extract_project_name_parses_project_from_text(
     user_factory,
     workspace_factory,
