@@ -18,6 +18,7 @@ from components.scanning.application.ports.scan_execution_backend import (
     ScanJobResult,
     ScanJobSpec,
 )
+from components.scanning.domain.errors import ScanExecutionError
 from components.shared_kernel.application.ports.scanner_port import ScanTarget
 from components.shared_kernel.domain.security import Severity
 
@@ -162,13 +163,15 @@ class TestTrivyNormalizer:
 
 # ── TrivyScanner drives the backend + parses ───────────────────────────
 class _FakeBackend:
-    def __init__(self, stdout):
+    def __init__(self, stdout, *, exit_code=0, timed_out=False):
         self.stdout = stdout
+        self.exit_code = exit_code
+        self.timed_out = timed_out
         self.spec: ScanJobSpec | None = None
 
     def run(self, spec, *, on_progress=None):
         self.spec = spec
-        return ScanJobResult(stdout=self.stdout, exit_code=0)
+        return ScanJobResult(stdout=self.stdout, exit_code=self.exit_code, timed_out=self.timed_out)
 
 
 class TestTrivyScanner:
@@ -197,3 +200,28 @@ class TestTrivyScanner:
         TrivyScanner(backend=backend).scan(ScanTarget(identifier="nginx:latest", credentials=creds))
         assert backend.spec.secret_env["AWS_ACCESS_KEY_ID"] == "AK"
         assert "AK" not in " ".join(backend.spec.args)  # creds never in argv
+
+    def test_wires_a_writable_cache_dir_for_readonly_rootfs(self):
+        # The hardened Job runs read-only-rootfs; Trivy MUST cache under the writable /tmp
+        # mount, else it FATAL-errors ("mkdir /.cache: read-only file system") on lang-DB
+        # download. Cache dir is set both as argv (--cache-dir) and env (TRIVY_CACHE_DIR).
+        backend = _FakeBackend(json.dumps(_TRIVY_JSON))
+        TrivyScanner(backend=backend).scan(ScanTarget(identifier="nginx:latest"))
+        args = backend.spec.args
+        assert "--cache-dir" in args
+        cache_dir = args[args.index("--cache-dir") + 1]
+        assert cache_dir.startswith("/tmp/")
+        assert backend.spec.env.get("TRIVY_CACHE_DIR") == cache_dir
+        assert backend.spec.env.get("HOME") == "/tmp"
+
+    def test_nonzero_exit_raises_instead_of_recording_empty_result(self):
+        # THE regression this fix exists for: a crashed scan (non-zero exit, stdout = an
+        # error message, not JSON) must FAIL LOUD, not parse to 0 findings and look clean.
+        backend = _FakeBackend("FATAL Fatal error: Unable to initialize the Java DB", exit_code=1)
+        with pytest.raises(ScanExecutionError):
+            TrivyScanner(backend=backend).scan(ScanTarget(identifier="nginx:latest"))
+
+    def test_timeout_raises(self):
+        backend = _FakeBackend("", exit_code=124, timed_out=True)
+        with pytest.raises(ScanExecutionError):
+            TrivyScanner(backend=backend).scan(ScanTarget(identifier="nginx:latest"))
