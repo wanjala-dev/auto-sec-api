@@ -63,6 +63,10 @@ class EmbedRemediationEntryUseCase:
             # hand the advisor the prior fix's code without a second DB read.
             "code": (entry.code or "")[:_MAX_CODE_CHARS],
             "entry_id": str(entry.id),
+            # The DERIVED outcome rating (P5). Retrieval blends this with vector
+            # similarity so proven fixes outrank unproven ones; re-embedding on each
+            # outcome keeps the ranked rating current.
+            "rating": int(entry.score),
         }
         written = self._index.index_chunk(
             document_key=document_key_for(str(entry.id)),

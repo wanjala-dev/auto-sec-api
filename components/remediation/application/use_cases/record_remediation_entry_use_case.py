@@ -27,6 +27,7 @@ entry rather than creating a duplicate.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -42,6 +43,9 @@ from components.remediation.application.ports.remediation_entry_store_port impor
 from components.remediation.application.ports.sign_off_gate_port import SignOffGatePort
 from components.remediation.domain.entities.remediation_entry_entity import RemediationEntry
 from components.remediation.domain.services.entry_gate_policy import EntryGatePolicy
+from components.remediation.domain.services.remediation_ranking_policy import (
+    RemediationRankingPolicy,
+)
 from components.remediation.domain.value_objects.gate_conditions import GateConditions
 
 logger = logging.getLogger(__name__)
@@ -54,10 +58,15 @@ class RecordRemediationEntryUseCase:
         store: RemediationEntryStorePort,
         sign_off_gate: SignOffGatePort,
         finding_facts: FindingRemediationFactsPort,
+        on_admit: Callable[[RemediationEntry], None] | None = None,
     ) -> None:
         self._store = store
         self._sign_off_gate = sign_off_gate
         self._finding_facts = finding_facts
+        # Fired ONCE per NEW admission (never on an idempotent hit) — the precise
+        # moment novelty is known. The provider wires outcome propagation here (P5);
+        # left None it is a no-op, so the gate's core stays independently testable.
+        self._on_admit = on_admit
 
     def execute(self, command: RecordRemediationEntryCommand) -> RemediationEntry:
         workspace_id = command.workspace_id
@@ -129,6 +138,9 @@ class RecordRemediationEntryUseCase:
             applied_pr_url=command.applied_pr_url,
             approved_by=command.sign_off_artifact_id,
             resolved_at=datetime.now(UTC),
+            # Baseline rating — DERIVED (never caller-set), so every vetted entry
+            # starts at the same gate-earned score and only outcomes move it (P5).
+            score=RemediationRankingPolicy.derive_score(reuse_count=0, success_count=0, recurrence_count=0),
         )
         saved = self._store.save(entry)
         logger.info(
@@ -138,4 +150,20 @@ class RecordRemediationEntryUseCase:
             saved.id,
             saved.finding_kind,
         )
+        self._notify_admitted(saved)
         return saved
+
+    def _notify_admitted(self, entry: RemediationEntry) -> None:
+        """Fire the post-admission hook (outcome propagation, P5). A hook failure
+        must NEVER roll back a valid admission — the entry is already saved — so it
+        is logged and swallowed."""
+        if self._on_admit is None:
+            return
+        try:
+            self._on_admit(entry)
+        except Exception:
+            logger.exception(
+                "remediation_on_admit_hook_failed entry_id=%s workspace_id=%s",
+                entry.id,
+                entry.workspace_id,
+            )

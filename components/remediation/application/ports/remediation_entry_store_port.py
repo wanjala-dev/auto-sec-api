@@ -32,3 +32,46 @@ class RemediationEntryStorePort(ABC):
     def list_for_workspace(self, workspace_id: UUID, *, limit: int = 50) -> list[RemediationEntry]:
         """The active (non-revoked) corpus for a workspace, newest-first. Never
         crosses a workspace boundary (D4)."""
+
+    @abstractmethod
+    def find_active_priors(
+        self,
+        *,
+        workspace_id: UUID,
+        finding_kind: str,
+        exclude_entry_id: UUID,
+        limit: int = 50,
+    ) -> list[RemediationEntry]:
+        """Active entries in *workspace_id* of the same *finding_kind*, excluding
+        *exclude_entry_id* — the priors a newly-admitted fix's outcome propagates
+        to (P5). Workspace-scoped (D4)."""
+
+    # ── Outcome mutations (P5) — DERIVED score only; no raw score write ──────
+    # These are corpus writes, so — per ADR 0012 D1 — they live ONLY on the
+    # sole-writer repository. Each recomputes ``score`` from the (bumped) counters
+    # via ``RemediationRankingPolicy``; a caller can never set the rating directly.
+
+    @abstractmethod
+    def record_reuse_success(self, *, entry_id: UUID, workspace_id: UUID) -> RemediationEntry | None:
+        """A same-class fix grounded on this entry merged/resolved — bump
+        reuse+success and re-derive the score. Workspace-scoped; ``None`` if the
+        entry is absent/revoked."""
+
+    @abstractmethod
+    def record_recurrence(self, *, entry_id: UUID, workspace_id: UUID) -> RemediationEntry | None:
+        """The finding this entry fixed recurred — bump recurrence and re-derive
+        the (now lower) score. Workspace-scoped; ``None`` if absent/revoked."""
+
+    @abstractmethod
+    def revoke(
+        self,
+        *,
+        entry_id: UUID,
+        workspace_id: UUID,
+        revoked_by: str,
+        reason: str,
+    ) -> RemediationEntry | None:
+        """Soft-delete (revoke) an entry so it leaves the retrievable corpus while
+        its audit row survives (P5). Workspace-scoped (D4): a foreign id resolves to
+        ``None`` and revokes nothing. Idempotent — revoking an already-revoked entry
+        returns it unchanged."""

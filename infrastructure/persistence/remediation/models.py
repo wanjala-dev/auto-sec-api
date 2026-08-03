@@ -64,9 +64,21 @@ class RemediationEntry(models.Model):
     applied_pr_url = models.URLField(max_length=1024)
     approved_by = models.CharField(max_length=64)
     resolved_at = models.DateTimeField()
-    # Outcome / ranking — stubbed for P5 (the "did this fix hold?" loop is not
-    # built yet); a revoked entry is soft-deleted, not scored to zero.
-    score = models.IntegerField(default=0)
+    # Outcome / ranking (ADR 0012 P5 — the "did this fix hold?" loop).
+    #
+    # ``score`` is DERIVED from the outcome counters below by
+    # ``RemediationRankingPolicy.derive_score`` — never set from raw user input, so
+    # a caller cannot forge a ranking (D-poisoning residual: rating can't be gamed).
+    # Retrieval blends this rating with vector similarity so proven fixes outrank
+    # unproven ones. The counters:
+    #   reuse_count      — times this entry grounded a later same-class fix that landed
+    #   success_count    — of those reuses, how many merged/resolved (a "held" signal)
+    #   recurrence_count — times the finding this fix closed came back (a "didn't hold" signal)
+    reuse_count = models.PositiveIntegerField(default=0)
+    success_count = models.PositiveIntegerField(default=0)
+    recurrence_count = models.PositiveIntegerField(default=0)
+    last_outcome_at = models.DateTimeField(null=True, blank=True)
+    score = models.IntegerField(default=0, db_index=True)
     # Metadata
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

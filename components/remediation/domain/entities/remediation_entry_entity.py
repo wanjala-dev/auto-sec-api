@@ -40,7 +40,14 @@ class RemediationEntry:
     applied_pr_url: str
     approved_by: str
     resolved_at: datetime
-    # Outcome / ranking — stubbed for P5; the "did this fix hold?" loop is later.
+    # Outcome / ranking (ADR 0012 P5). ``score`` is DERIVED from the counters by
+    # ``RemediationRankingPolicy.derive_score`` — never caller-set — so a rating
+    # can't be forged to game retrieval. The counters record the "did this fix
+    # hold?" loop: reuse/success raise the score, recurrence lowers it.
+    reuse_count: int = 0
+    success_count: int = 0
+    recurrence_count: int = 0
+    last_outcome_at: datetime | None = None
     score: int = 0
     created_at: datetime | None = None
     is_deleted: bool = False
