@@ -325,6 +325,20 @@ CELERY_BEAT_SCHEDULE = {
         "task": "sign_off.materialize_pending_signoff_tasks",
         "schedule": crontab(minute="*/5"),
     },
+    # AI-teammate cycle — fans out run_ai_teammate_cycle to every AI-enabled
+    # workspace, which runs the detector cycle (LogWatchErrorDetector files
+    # evidence findings, AiFindingRouterDetector dispatches them to their
+    # specialist, e.g. triage_agent). This entry is what makes the SOC
+    # log-watch → triage pipeline autonomous; without it the detectors never
+    # run and findings are only ever routed by hand (route_findings command).
+    # Self-gating keeps it safe in prod: the fan-out skips workspaces without
+    # ai_teammate_enabled, honors feature.ai_kill_switch, and the router holds
+    # a dispatch lease so overlapping cycles can't double-dispatch. Routed to
+    # the dedicated ai_teammate queue by CELERY_TASK_ROUTES below.
+    "schedule_ai_teammate_runs": {
+        "task": "infrastructure.ai.agents.tasks.schedule_ai_teammate_runs",
+        "schedule": crontab(minute="*/5"),
+    },
     # Daily AI-action rollup — recomputes yesterday's AiActionDailyRollup
     # rows (runs, tool calls, tokens, spend). The posture dashboard's
     # governance charts read these rollup rows instead of live-aggregating
