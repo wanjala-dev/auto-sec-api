@@ -386,3 +386,64 @@ class NotificationDelivery(models.Model):
 
     def __str__(self) -> str:  # pragma: no cover - simple representation
         return f"{self.notification_id}:{self.channel} -> {self.status}"
+
+
+class ExternalDelivery(models.Model):
+    """Delivery ledger for the workspace-level EXTERNAL leg (ADR 0016 D7).
+
+    Sits beside ``NotificationDelivery`` with the same semantics, but keyed
+    differently on purpose. The per-user channels record one row per
+    (notification, channel, subscription); the external leg is workspace-level and
+    fires once per *event*, so its idempotency key is (connection, dedup_key).
+
+    Deliberately NOT foreign-keyed to ``Notification``: the external leg must fire
+    even when no in-app row was created — a workspace Slack channel has nothing to
+    do with whether individual members muted their own notifications, and tying the
+    two would make a team channel go silent for an unrelated reason.
+
+    The unique constraint is the whole point: a retried Celery task, a redelivered
+    message, or a duplicate dispatch all converge on the same row instead of
+    double-posting to a customer's channel.
+    """
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        # In-flight. Exists so claiming is an ATOMIC conditional update rather than
+        # a read-then-write: two workers racing the same event would both pass an
+        # "is it pending?" check, and the cost of losing that race is a duplicate
+        # message in a customer's channel.
+        SENDING = "sending", "Sending"
+        SENT = "sent", "Sent"
+        FAILED = "failed", "Failed"
+        SKIPPED = "skipped", "Skipped"
+
+    # FK / relations
+    connection = models.ForeignKey(
+        "integrations.DeliveryConnection",
+        on_delete=models.CASCADE,
+        related_name="external_deliveries",
+    )
+    # Data fields
+    dedup_key = models.CharField(max_length=255)
+    event_key = models.CharField(max_length=64)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    attempts = models.PositiveIntegerField(default=0)
+    last_error = models.TextField(blank=True, default="")
+    # Metadata
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["connection", "dedup_key"],
+                name="uniq_external_delivery_connection_dedup",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["connection", "status"]),
+            models.Index(fields=["event_key", "status"]),
+        ]
+
+    def __str__(self) -> str:  # pragma: no cover - simple representation
+        return f"{self.connection_id}:{self.event_key} -> {self.status}"
