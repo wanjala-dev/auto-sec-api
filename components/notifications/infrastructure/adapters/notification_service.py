@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from collections import OrderedDict
 from collections.abc import Iterable, Sequence
 from datetime import date, datetime
@@ -19,6 +21,8 @@ from infrastructure.persistence.notifications.models import (
 
 User = get_user_model()
 
+
+logger = logging.getLogger(__name__)
 
 class NotificationRecipientBuilder:
     """Collect recipients while preventing duplicates."""
@@ -349,15 +353,7 @@ class NotificationDispatcher:
         envelope, and push payloads all carry the same destination. An
         explicit ``link`` always wins over the resolver.
         """
-        if actor is None or not recipients:
-            return
-        allowed = self.preference_service.filter_recipients(
-            recipients,
-            workspace=workspace,
-            notification_type=notification_type,
-            ai_channel=ai_channel,
-        )
-        if not allowed:
+        if actor is None:
             return
 
         metadata = sanitize_metadata(metadata or {})
@@ -372,6 +368,32 @@ class NotificationDispatcher:
 
         actor_id = getattr(actor, "pk", None) or getattr(actor, "id", None)
         workspace_id = str(getattr(workspace, "pk", None) or getattr(workspace, "id", "")) if workspace else None
+
+        # ── ADR 0016 D1: the workspace-level EXTERNAL leg. Fires ONCE per dispatch
+        # (a Slack channel is a team destination, not N inboxes) and — importantly —
+        # BEFORE the per-recipient preference gate. A team channel has nothing to do
+        # with whether individual members muted their own notifications; running it
+        # after the `allowed` filter would let one person's settings silence the
+        # whole workspace's alerting, which is the failure mode this ordering exists
+        # to prevent.
+        self._enqueue_external_leg(
+            workspace_id=workspace_id,
+            notification_type=notification_type,
+            verb=verb,
+            metadata=metadata,
+            target=target,
+        )
+
+        if not recipients:
+            return
+        allowed = self.preference_service.filter_recipients(
+            recipients,
+            workspace=workspace,
+            notification_type=notification_type,
+            ai_channel=ai_channel,
+        )
+        if not allowed:
+            return
 
         # The GenericFK target can't cross the Celery boundary as an object —
         # serialize a (app_label, model, pk) reference and rehydrate in the
@@ -396,3 +418,52 @@ class NotificationDispatcher:
                 link=link,
             )
             db_transaction.on_commit(lambda kw=kwargs: dispatch_notification_async.apply_async(kwargs=kw))
+
+    def _enqueue_external_leg(
+        self, *, workspace_id, notification_type, verb, metadata, target
+    ) -> None:
+        """Hand a dispatched event to the workspace's external channels (ADR 0016 D1).
+
+        Loss-tolerant by design: an external-delivery hiccup must never break the
+        funnel or the caller that triggered it. A workspace with no connected
+        channels, or an event that classifies as internal-only, is a silent no-op.
+        """
+        if not workspace_id:
+            return
+        try:
+            from django.db import transaction as db_transaction
+
+            from components.notifications.domain.policies.external_event_policy import (
+                classify_event,
+            )
+            from components.notifications.infrastructure.adapters.link_resolver import (
+                resolve_link,
+            )
+            from components.notifications.infrastructure.tasks.external_delivery_tasks import (
+                deliver_external,
+            )
+
+            event_key = classify_event(notification_type, metadata)
+            if event_key is None:
+                # Fail closed — an unrecognised dispatch never leaves the tenant.
+                return
+
+            kwargs = {
+                "workspace_id": str(workspace_id),
+                "event_key": event_key,
+                "verb": verb,
+                "metadata": metadata,
+                "link": resolve_link(
+                    notification_type,
+                    target=target,
+                    workspace_id=workspace_id,
+                    metadata=metadata,
+                ),
+            }
+            db_transaction.on_commit(lambda kw=kwargs: deliver_external.apply_async(kwargs=kw))
+        except Exception:
+            logger.exception(
+                "notification_external_leg_enqueue_failed workspace_id=%s type=%s",
+                workspace_id,
+                notification_type,
+            )

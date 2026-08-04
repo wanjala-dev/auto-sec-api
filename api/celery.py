@@ -40,6 +40,7 @@ import components.findings.infrastructure.tasks.finding_risk_tasks
 import components.identity.workers.tasks
 import components.knowledge.infrastructure.tasks.index_freshness_tasks
 import components.knowledge.infrastructure.tasks.workspace_index_tasks
+import components.notifications.infrastructure.tasks.external_delivery_tasks
 import components.notifications.workers.tasks
 import components.payments.workers.tasks
 import components.project.infrastructure.tasks.at_risk_detector_tasks
