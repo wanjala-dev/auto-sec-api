@@ -59,6 +59,54 @@ class FindingListView(APIView):
         return Response({"success": True, "data": FindingResource.page(page)})
 
 
+class FindingStatusView(APIView):
+    """POST /findings/workspaces/<ws>/<finding_id>/status/ — operator lifecycle action.
+
+    The write behind the HUD finding-detail action row: an operator resolves, suppresses
+    (dismisses as accepted-risk/false-positive — the finding-native soft "delete"), or
+    reopens a finding. Membership-gated (any workspace member may act, matching the read
+    gate). Never a hard delete — findings carry a lifecycle (ADR 0004 D1); this transitions
+    the SSOT row and it stays auditable + re-observable.
+
+    Body: ``{"action": "resolve" | "suppress" | "reopen"}``.
+    """
+
+    permission_classes = (permissions.IsAuthenticated,)
+    name = "findings-status"
+
+    def post(self, request, workspace_id, finding_id):
+        from django.utils import timezone
+
+        from components.findings.api.requests.change_finding_status_request import (
+            ChangeFindingStatusRequest,
+        )
+        from components.findings.application.providers.finding_provider import FindingProvider
+        from components.findings.domain.errors import FindingNotFoundError, InvalidFindingActionError
+        from components.findings.infrastructure.services.workspace_access import is_workspace_member
+
+        if not is_workspace_member(user=request.user, workspace_id=workspace_id):
+            return Response({"success": False, "error": "forbidden"}, status=403)
+
+        req = ChangeFindingStatusRequest.from_request(request, workspace_id, finding_id)
+        try:
+            result = FindingProvider.build_change_finding_status_use_case().execute(req.to_command(at=timezone.now()))
+        except FindingNotFoundError:
+            return Response({"success": False, "error": "not_found"}, status=404)
+        except InvalidFindingActionError as exc:
+            return Response({"success": False, "error": str(exc)}, status=400)
+
+        return Response(
+            {
+                "success": True,
+                "data": {
+                    "id": str(result.finding_id),
+                    "status": result.status,
+                    "changed": result.changed,
+                },
+            }
+        )
+
+
 class AttckCoverageView(APIView):
     """GET /findings/workspaces/<ws>/attack-coverage/ — the materialized ATT&CK heatmap.
 

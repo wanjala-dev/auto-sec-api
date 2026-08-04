@@ -81,3 +81,16 @@ class FindingEntity:
     def resolved(self, *, at: datetime) -> FindingEntity:
         """Mark the finding resolved (e.g. no longer observed / remediated)."""
         return replace(self, status=FindingStatus.RESOLVED, resolved_at=at)
+
+    def suppressed(self, *, at: datetime) -> FindingEntity:
+        """Dismiss the finding as accepted-risk / false-positive (terminal, reversible).
+
+        This is the finding-native "delete": the record is retained (auditable, and a
+        re-observation reopens it), it simply drops off the open/actionable surfaces. The
+        operator's soft-delete of a finding — never a hard row delete."""
+        return replace(self, status=FindingStatus.SUPPRESSED, resolved_at=at)
+
+    def reopened(self) -> FindingEntity:
+        """Reopen a terminal (resolved/suppressed) finding — the undo for a mistaken
+        resolve/dismiss. Clears ``resolved_at`` and returns it to the actionable list."""
+        return replace(self, status=FindingStatus.OPEN, resolved_at=None)
