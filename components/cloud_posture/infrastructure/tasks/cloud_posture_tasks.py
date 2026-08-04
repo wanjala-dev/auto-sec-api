@@ -87,10 +87,12 @@ def enqueue_scan_for_connection(*, workspace_id, connection_id) -> int | None:
 @shared_task(
     name="cloud_posture.run_prowler_scan_for_account",
     # Pin to the dedicated queue: this task shells out to Prowler, which is ONLY
-    # installed in the cloud-posture worker's isolated venv. The global route
-    # table is inert (settings use the dead `CELERY_ROUTES` name, not
-    # `CELERY_TASK_ROUTES`), so without this the task falls to the default queue
-    # and dies with `FileNotFoundError: 'prowler'`. Queue name == CELERY_QUEUE_CLOUD_POSTURE.
+    # installed in the cloud-posture worker's isolated venv. Scan pillars pin at
+    # the decorator (not the global route table in
+    # infrastructure/celery/routes.py) — without this the task would fall to the
+    # default queue and die with `FileNotFoundError: 'prowler'`. The queue must
+    # stay in the scanning-worker's `-Q` list (locked by
+    # tests/test_celery_task_routes.py).
     queue="cloud_posture",
     soft_time_limit=1800,
     time_limit=1860,

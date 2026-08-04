@@ -16,9 +16,11 @@ set -o nounset
 : "${UNIFIED_MAX_TASKS_PER_CHILD:=50}"
 
 # Queue order matters: Celery prefetches from queues left-to-right, so list
-# latency-sensitive queues first. `payments` must win over aggregations and
-# AI work if the queue has anything waiting.
-QUEUES="${CELERY_QUEUES_CSV:-payments,default,ai_teammate,workspace_aggregations}"
+# latency-sensitive queues first. Queue list = the autosec queue map
+# (infrastructure/celery/routes.py); the fork-dead `payments` /
+# `workspace_aggregations` queues were dropped 2026-08 (no task routes to them).
+# Scan queues (cloud_posture/container_security) stay on their isolated workers.
+QUEUES="${CELERY_QUEUES_CSV:-default,ai_teammate}"
 
 exec celery -A api worker \
   -l "${CELERY_LOG_LEVEL:-INFO}" \

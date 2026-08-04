@@ -7,7 +7,8 @@ import environ
 import redis
 from celery.schedules import crontab
 from corsheaders.defaults import default_headers
-from kombu import Exchange, Queue
+
+from infrastructure.celery.routes import TASK_ROUTES
 
 from .base import *  # noqa: F403
 
@@ -428,15 +429,6 @@ REDIS = redis.Redis(
 )
 
 
-CELERY_QUEUE_DEFAULT = "default"
-CELERY_QUEUE_OTHER = "other"
-CELERY_QUEUE_AI_TEAMMATE = "ai_teammate"
-CELERY_QUEUE_WORKSPACE_AGGREGATIONS = "workspace_aggregations"
-# Dedicated queue for the Prowler CSPM scans — served only by the isolated
-# cloud-posture worker (the one image that carries Prowler).
-CELERY_QUEUE_CLOUD_POSTURE = "cloud_posture"
-CELERY_QUEUE_CONTAINER_SECURITY = "container_security"
-
 CELERY_BROKER_URL = env("CELERY_BROKER", default="redis://127.0.0.1:6379/0")
 CELERY_RESULT_BACKEND = env("CELERY_BACKEND", default="redis://127.0.0.1:6379/0")
 
@@ -445,54 +437,19 @@ CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = "America/Vancouver"
 
-CELERY_DEFAULT_EXCHANGE_TYPE = "direct"
-
 CELERY_BEAT_SCHEDULER = "celery.beat:PersistentScheduler"
 
-CELERY_QUEUES = (
-    Queue(CELERY_QUEUE_DEFAULT, Exchange(CELERY_QUEUE_DEFAULT), routing_key=CELERY_QUEUE_DEFAULT),
-    Queue(
-        CELERY_QUEUE_WORKSPACE_AGGREGATIONS,
-        Exchange(CELERY_QUEUE_WORKSPACE_AGGREGATIONS),
-        routing_key=CELERY_QUEUE_WORKSPACE_AGGREGATIONS,
-    ),
-    Queue(CELERY_QUEUE_AI_TEAMMATE, Exchange(CELERY_QUEUE_AI_TEAMMATE), routing_key=CELERY_QUEUE_AI_TEAMMATE),
-    Queue(
-        CELERY_QUEUE_CLOUD_POSTURE,
-        Exchange(CELERY_QUEUE_CLOUD_POSTURE),
-        routing_key=CELERY_QUEUE_CLOUD_POSTURE,
-    ),
-    Queue(
-        CELERY_QUEUE_CONTAINER_SECURITY,
-        Exchange(CELERY_QUEUE_CONTAINER_SECURITY),
-        routing_key=CELERY_QUEUE_CONTAINER_SECURITY,
-    ),
-)
-
-CELERY_ROUTES = {
-    "cloud_posture.*": {
-        "queue": CELERY_QUEUE_CLOUD_POSTURE,
-        "routing_key": CELERY_QUEUE_CLOUD_POSTURE,
-    },
-    "infrastructure.workspaces.aggregations.tasks.*": {
-        "queue": CELERY_QUEUE_WORKSPACE_AGGREGATIONS,
-        "routing_key": CELERY_QUEUE_WORKSPACE_AGGREGATIONS,
-    },
-    "ai.agents.tasks.run_ai_teammate_cycle": {
-        "queue": CELERY_QUEUE_AI_TEAMMATE,
-        "routing_key": CELERY_QUEUE_AI_TEAMMATE,
-    },
-    "ai.agents.tasks.schedule_ai_teammate_runs": {
-        "queue": CELERY_QUEUE_AI_TEAMMATE,
-        "routing_key": CELERY_QUEUE_AI_TEAMMATE,
-    },
-    "ai.agents.tasks.run_agent_execution": {
-        "queue": CELERY_QUEUE_AI_TEAMMATE,
-        "routing_key": CELERY_QUEUE_AI_TEAMMATE,
-    },
-}
-
-CELERY_DEFAULT_QUEUE = CELERY_QUEUE_DEFAULT
+# Routing — NAMESPACE GOTCHA: with config_from_object(namespace="CELERY") only
+# NEW-style names apply. The old-style CELERY_ROUTES / CELERY_QUEUES /
+# CELERY_DEFAULT_QUEUE / CELERY_DEFAULT_EXCHANGE_TYPE that used to sit here were
+# silently ignored (task_routes was None at runtime on Celery 5.4 — every
+# "routed" task ran on the default queue). Canonical task->queue map + the full
+# story live in infrastructure/celery/routes.py; locked by
+# tests/test_celery_task_routes.py. Scan pillars (cloud_posture,
+# container_security) pin their queue at the task decorator / dispatch_scan
+# instead — don't re-add routes for them here.
+CELERY_TASK_DEFAULT_QUEUE = "default"
+CELERY_TASK_ROUTES = TASK_ROUTES
 
 CELERY_TASK_TIME_LIMIT = int(env("CELERY_TASK_TIME_LIMIT", default=300))
 CELERY_TASK_SOFT_TIME_LIMIT = int(env("CELERY_TASK_SOFT_TIME_LIMIT", default=270))

@@ -8,7 +8,8 @@ from datetime import timedelta
 import environ
 from celery.schedules import crontab
 from corsheaders.defaults import default_headers
-from kombu import Exchange, Queue
+
+from infrastructure.celery.routes import TASK_ROUTES
 
 from .base import *  # noqa: F403
 
@@ -377,65 +378,18 @@ CELERY_BEAT_SCHEDULE = {
     },
 }
 
-CELERY_QUEUE_DEFAULT = os.environ.get("CELERY_QUEUE_DEFAULT", "default")
-CELERY_QUEUE_AI_TEAMMATE = os.environ.get("CELERY_QUEUE_AI_TEAMMATE", "ai_teammate")
-CELERY_QUEUE_WORKSPACE_AGGREGATIONS = os.environ.get("CELERY_QUEUE_WORKSPACE_AGGREGATIONS", "workspace_aggregations")
-# Dedicated queue for latency-sensitive payment webhook / donation tasks so
-# slow aggregations or AI work on `default` can't starve Stripe event processing.
-CELERY_QUEUE_PAYMENTS = os.environ.get("CELERY_QUEUE_PAYMENTS", "payments")
-
-CELERY_TASK_DEFAULT_QUEUE = CELERY_QUEUE_DEFAULT
-CELERY_QUEUES = (
-    Queue(CELERY_QUEUE_DEFAULT, Exchange(CELERY_QUEUE_DEFAULT), routing_key=CELERY_QUEUE_DEFAULT),
-    Queue(CELERY_QUEUE_AI_TEAMMATE, Exchange(CELERY_QUEUE_AI_TEAMMATE), routing_key=CELERY_QUEUE_AI_TEAMMATE),
-    Queue(
-        CELERY_QUEUE_WORKSPACE_AGGREGATIONS,
-        Exchange(CELERY_QUEUE_WORKSPACE_AGGREGATIONS),
-        routing_key=CELERY_QUEUE_WORKSPACE_AGGREGATIONS,
-    ),
-    Queue(CELERY_QUEUE_PAYMENTS, Exchange(CELERY_QUEUE_PAYMENTS), routing_key=CELERY_QUEUE_PAYMENTS),
-)
-
-CELERY_ROUTES = {
-    # Payments — latency-sensitive Stripe webhook + donation delivery.
-    "process_payment_event": {
-        "queue": CELERY_QUEUE_PAYMENTS,
-        "routing_key": CELERY_QUEUE_PAYMENTS,
-    },
-    "send_donation_notification": {
-        "queue": CELERY_QUEUE_PAYMENTS,
-        "routing_key": CELERY_QUEUE_PAYMENTS,
-    },
-    "infrastructure.workspaces.aggregations.tasks.*": {
-        "queue": CELERY_QUEUE_WORKSPACE_AGGREGATIONS,
-        "routing_key": CELERY_QUEUE_WORKSPACE_AGGREGATIONS,
-    },
-    "infrastructure.ai.agents.tasks.schedule_ai_teammate_runs": {
-        "queue": CELERY_QUEUE_AI_TEAMMATE,
-        "routing_key": CELERY_QUEUE_AI_TEAMMATE,
-    },
-    "infrastructure.ai.agents.tasks.run_ai_teammate_cycle": {
-        "queue": CELERY_QUEUE_AI_TEAMMATE,
-        "routing_key": CELERY_QUEUE_AI_TEAMMATE,
-    },
-    "infrastructure.ai.agents.tasks.run_agent_execution": {
-        "queue": CELERY_QUEUE_AI_TEAMMATE,
-        "routing_key": CELERY_QUEUE_AI_TEAMMATE,
-    },
-    # Embedding tasks should run on the ai_teammate queue too
-    "infrastructure.ai.embeddings.tasks.create_embeddings_for_workspace": {
-        "queue": CELERY_QUEUE_AI_TEAMMATE,
-        "routing_key": CELERY_QUEUE_AI_TEAMMATE,
-    },
-    "infrastructure.ai.embeddings.tasks.create_embeddings_for_workspace_content": {
-        "queue": CELERY_QUEUE_AI_TEAMMATE,
-        "routing_key": CELERY_QUEUE_AI_TEAMMATE,
-    },
-    "infrastructure.ai.embeddings.tasks.create_embeddings_for_conversations": {
-        "queue": CELERY_QUEUE_AI_TEAMMATE,
-        "routing_key": CELERY_QUEUE_AI_TEAMMATE,
-    },
-}
+# Routing — NAMESPACE GOTCHA: with config_from_object(namespace="CELERY") only
+# NEW-style names apply. The old-style CELERY_ROUTES / CELERY_QUEUES dicts that
+# used to sit here were silently ignored (task_routes was None at runtime on
+# Celery 5.4 — every "routed" task ran on the default queue). They also carried
+# fork-dead routes (process_payment_event / send_donation_notification /
+# workspace aggregations — tasks and queues that no longer exist and no k8s
+# worker consumes). Canonical task->queue map + the full story live in
+# infrastructure/celery/routes.py; locked by tests/test_celery_task_routes.py.
+# Scan pillars (cloud_posture, container_security) pin their queue at the task
+# decorator / dispatch_scan instead — don't re-add routes for them here.
+CELERY_TASK_DEFAULT_QUEUE = "default"
+CELERY_TASK_ROUTES = TASK_ROUTES
 
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", os.environ.get("CELERY_BROKER", "redis://redis:6379/0"))
 CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", os.environ.get("CELERY_BACKEND", CELERY_BROKER_URL))

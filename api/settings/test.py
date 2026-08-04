@@ -14,11 +14,15 @@ from pathlib import Path
 os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
 os.environ.setdefault("OPEN_AI_SECRET_KEY", "test-openai-key")
 
+from infrastructure.celery.routes import TASK_ROUTES
+
 from .base import *  # noqa: F403 - import base defaults
 
 # Strip out integrations that require external services during the test run.
 INSTALLED_APPS = [
-    app for app in INSTALLED_APPS if app != "django_elasticsearch_dsl"  # type: ignore[name-defined]
+    app
+    for app in INSTALLED_APPS
+    if app != "django_elasticsearch_dsl"  # type: ignore[name-defined]
 ]
 
 
@@ -58,6 +62,7 @@ STORAGES = {
 # --- Databases ------------------------------------------------------------------
 TEST_DB_DIR = BASE_DIR / ".pytest-dbs"
 TEST_DB_DIR.mkdir(exist_ok=True)
+
 
 def _sqlite_db(name: str) -> dict:
     return {
@@ -133,6 +138,12 @@ CELERY_BROKER_URL = "memory://"
 CELERY_RESULT_BACKEND = "cache+memory://"
 CELERY_TASK_ALWAYS_EAGER = True
 CELERY_TASK_EAGER_PROPAGATES = True
+# The real route table (eager mode never exercises routing, but wiring it here
+# lets tests/test_celery_task_routes.py assert the CELERY_TASK_ROUTES setting
+# actually reaches app.conf.task_routes — the old CELERY_ROUTES name was
+# silently ignored under config_from_object(namespace="CELERY")).
+CELERY_TASK_DEFAULT_QUEUE = "default"
+CELERY_TASK_ROUTES = TASK_ROUTES
 
 
 # --- External service placeholders ---------------------------------------------
