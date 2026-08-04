@@ -18,7 +18,7 @@ from components.cloud_posture.infrastructure.services.prowler_ingest_service imp
     _to_normalized,
     ingest_prowler_scan,
 )
-from components.shared_kernel.domain.events import FindingObserved
+from components.shared_kernel.domain.events import FindingObserved, ScanCompleted
 
 _FIXTURE = Path(__file__).resolve().parent.parent / "fixtures" / "prowler_ocsf_sample.json"
 _NOW = datetime(2026, 7, 25, 12, 0, 0, tzinfo=UTC)
@@ -92,11 +92,39 @@ def test_ingest_emits_finding_observed_only_for_actionable(workspace_factory, dj
 
     # The fixture has 3 checks (2 actionable FAIL + 1 PASS) — only the 2 actionable
     # ones emit; the PASS is not surfaced.
-    assert len(cap.published) == 2
-    assert all(isinstance(e, FindingObserved) for e in cap.published)
-    assert {e.source for e in cap.published} == {"cloud_posture.prowler"}
-    checks = {e.attributes["check_id"] for e in cap.published}
+    observed = [e for e in cap.published if isinstance(e, FindingObserved)]
+    assert len(observed) == 2
+    assert {e.source for e in observed} == {"cloud_posture.prowler"}
+    checks = {e.attributes["check_id"] for e in observed}
     assert checks == {"s3_bucket_public_access", "iam_root_mfa_enabled"}
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_ingest_emits_exactly_one_scan_completed_digest(workspace_factory, django_capture_on_commit_callbacks):
+    """The anti-flood digest signal (ADR 0016 D5): ONE ScanCompleted per ingest,
+    carrying the severity counts the external digest renders."""
+    ws = workspace_factory()
+    cap = _CapturingPublisher()
+
+    with django_capture_on_commit_callbacks(execute=True):
+        scan = ingest_prowler_scan(
+            workspace_id=ws.id,
+            account_id="123456789012",
+            records=_records(),
+            event_publisher=cap,
+        )
+
+    completed = [e for e in cap.published if isinstance(e, ScanCompleted)]
+    assert len(completed) == 1
+    digest = completed[0]
+    assert digest.workspace_id == ws.id
+    assert digest.source == "cloud_posture.prowler"
+    assert digest.engine == "prowler"
+    assert digest.scan_id == str(scan.id)
+    assert digest.account_id == "123456789012"
+    assert digest.findings_observed == 2
+    assert digest.critical + digest.high + digest.medium + digest.low == 2
 
 
 @pytest.mark.integration

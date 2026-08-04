@@ -130,3 +130,42 @@ def test_run_prowler_scan_for_account_missing_connection_is_safe():
     result = run_prowler_scan_for_account(str(uuid.uuid4()), "123456789012")
     assert result["success"] is False
     assert result["error"] == "connection_not_found"
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_failed_scan_publishes_scan_failed_event(workspace_factory, monkeypatch):
+    """The fail-loud path emits ``ScanFailed`` so the funnel can alert that
+    coverage is degraded (ADR 0016 ``soc.scan_failed``) — with a per-attempt
+    identity and a coarse redaction-safe reason, never the raw exception."""
+    from components.shared_kernel.domain.events import ScanFailed
+    from components.shared_kernel.infrastructure.adapters import celery_event_publisher as pub_mod
+
+    ws = workspace_factory()
+    conn = AwsOrganizationConnection.objects.create(
+        workspace=ws,
+        management_account_id="123456789012",
+        external_id=f"ext-{uuid.uuid4().hex[:12]}",
+        role_name="AutoSecAuditRole",
+    )
+
+    published = []
+    monkeypatch.setattr(pub_mod.CeleryEventPublisher, "publish", lambda self, event: published.append(event))
+
+    creds_port = MagicMock()
+    creds_port.assume_role.side_effect = RuntimeError("AccessDenied: arn:aws:iam::123:role/secret")
+    target = "components.cloud_posture.infrastructure.tasks.cloud_posture_tasks"
+    with patch(f"{target}.get_aws_credentials_port", return_value=creds_port):
+        result = run_prowler_scan_for_account(str(conn.id), "123456789012")
+
+    assert result == {"success": False, "error": "scan_failed"}
+    failed = [e for e in published if isinstance(e, ScanFailed)]
+    assert len(failed) == 1
+    event = failed[0]
+    assert event.workspace_id == ws.id
+    assert event.source == "cloud_posture.prowler"
+    assert event.engine == "prowler"
+    assert event.account_id == "123456789012"
+    assert event.run_id, "a per-attempt identity is required so recurring failures re-alert"
+    assert event.reason == "scan engine failure"
+    assert "AccessDenied" not in event.reason

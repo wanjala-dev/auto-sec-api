@@ -177,6 +177,63 @@ class AttackPathDetected(DomainEvent):
 
 
 @dataclass(frozen=True, kw_only=True)
+class ScanCompleted(DomainEvent):
+    """A scan run finished and its findings were handed to the SSOT.
+
+    Emitted once per completed scan by the pillar's ingest choreography —
+    cloud_posture's ``ingest_scan_result`` and the generic
+    ``run_scan_and_ingest`` (container_security and future pillars). The
+    notifications context subscribes and dispatches the ONE-per-scan external
+    digest (``soc.scan_completed`` → ``scan_digest``, ADR 0016 D5) — never one
+    message per finding. Fields are JSON-safe primitives (wire format, like the
+    finding events above); the severity counts describe the ACTIONABLE findings
+    the scan observed, so the digest can say "3 critical / 20 high" without a
+    cross-context read back into the findings store.
+
+    ``scan_id`` is the pillar's scan/run row id — the stable identity that makes
+    a redelivered digest dedup instead of double-posting.
+    """
+
+    workspace_id: UUID
+    source: str  # the pillar/scanner, e.g. "cloud_posture.prowler"
+    engine: str  # "prowler", "trivy", …
+    scan_id: str  # CloudPostureScan / ScanRun id — the dedup identity
+    target_ref: str = ""  # what was scanned (account id, image ref)
+    account_id: str = ""
+    total_checks: int = 0
+    findings_observed: int = 0  # actionable findings emitted to the SSOT
+    critical: int = 0
+    high: int = 0
+    medium: int = 0
+    low: int = 0
+
+
+@dataclass(frozen=True, kw_only=True)
+class ScanFailed(DomainEvent):
+    """A scan engine failed loud — coverage is silently degraded until fixed.
+
+    Emitted from the pillars' fail-loud task paths (cloud_posture's
+    ``run_prowler_scan_for_account`` except-branch, scanning's ``run_scan``);
+    the notifications context subscribes and dispatches ``soc.scan_failed`` →
+    the ``scan_failed`` external event (ADR 0016 D4). ``reason`` is a coarse,
+    redaction-safe token — never a raw exception string, which could carry
+    internal paths/ARNs into a third-party chat channel.
+
+    ``run_id`` is a per-attempt identity (the background-job id) so tonight's
+    failure and tomorrow's identical failure are distinct events — hashing the
+    (identical) metadata instead would silently dedup the second alert away.
+    """
+
+    workspace_id: UUID
+    source: str
+    engine: str = ""
+    run_id: str = ""  # per-attempt identity (background-job id)
+    target_ref: str = ""
+    account_id: str = ""
+    reason: str = ""
+
+
+@dataclass(frozen=True, kw_only=True)
 class VulnIntelRefreshed(DomainEvent):
     """The daily threat-intel feed pull landed a fresh EPSS / KEV snapshot (ADR 0013 D2).
 

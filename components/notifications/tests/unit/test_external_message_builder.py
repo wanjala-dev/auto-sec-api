@@ -59,7 +59,22 @@ class TestRedaction:
 
         assert "Public S3 bucket" in blob
         assert "arn:aws:s3:::bucket" in blob
-        assert "https://app.example.com/findings/1" == message.link
+        assert message.link == "https://app.example.com/findings/1"
+
+    def test_keeps_the_vulnerability_identity(self):
+        """#247: CVE + package are allowlisted so lookalike titles ("CVE-… in
+        openssl" across images) stay distinguishable in a chat channel."""
+        message = build_message(
+            event_key=FINDING_CRITICAL,
+            verb="CVE-2024-1234 in openssl",
+            metadata={
+                "severity": "critical",
+                "vulnerability_id": "CVE-2024-1234",
+                "package": "openssl",
+            },
+        )
+        assert message.fields["vulnerability_id"] == "CVE-2024-1234"
+        assert message.fields["package"] == "openssl"
 
     def test_strips_newlines_so_a_log_line_cannot_forge_extra_lines(self):
         """A crafted log line is untrusted input — without this it could inject
@@ -79,9 +94,7 @@ class TestRedaction:
 
 class TestRendering:
     def test_finding_title_carries_severity(self):
-        message = build_message(
-            event_key=FINDING_CRITICAL, verb="Public bucket", metadata={"severity": "critical"}
-        )
+        message = build_message(event_key=FINDING_CRITICAL, verb="Public bucket", metadata={"severity": "critical"})
         assert "Critical" in message.title
         assert message.severity == "critical"
 

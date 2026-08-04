@@ -84,24 +84,20 @@ def deliver_external(self, *, workspace_id, event_key, verb="", metadata=None, l
     if not connections:
         return {"delivered": 0, "skipped": 0, "connections": 0}
 
-    dedup_key = derive_dedup_key(
-        workspace_id=str(workspace_id), event_key=event_key, metadata=metadata
-    )
+    dedup_key = derive_dedup_key(workspace_id=str(workspace_id), event_key=event_key, metadata=metadata)
     severity = str(metadata.get("severity") or "").strip().lower()
     kev = is_kev(metadata)
     fresh = is_new_observation(metadata)
     channel_on = external_delivery_enabled()
     provider = get_delivery_channel_provider()
-    message = build_message(event_key=event_key, verb=verb, metadata=metadata, link=link or "")
+    message = build_message(event_key=event_key, verb=verb, metadata=metadata, link=_absolutize(link or ""))
 
     delivered = skipped = 0
     transient_error: str | None = None
     retry_after: int | None = None
 
     for connection in connections:
-        record = ledger.record(
-            connection_id=connection.id, dedup_key=dedup_key, event_key=event_key
-        )
+        record = ledger.record(connection_id=connection.id, dedup_key=dedup_key, event_key=event_key)
 
         reason = _skip_reason(
             channel_on=channel_on,
@@ -161,6 +157,32 @@ def deliver_external(self, *, workspace_id, event_key, verb="", metadata=None, l
         raise self.retry(exc=exc)
 
     return {"delivered": delivered, "skipped": skipped, "connections": len(connections)}
+
+
+def _absolutize(link: str) -> str:
+    """Make the funnel's relative deep link absolute at send time.
+
+    The funnel stores RELATIVE paths (``link_resolver``) and each link-consuming
+    channel absolutizes when it leaves the product — web push and email already do
+    exactly this via ``resolve_frontend_base_url()``. The external leg is such a
+    channel: a Slack Block Kit button rejects a non-http URL, so a relative path
+    would fail the whole delivery. Best-effort — an unresolvable base degrades to
+    the raw path rather than blocking a live security alert.
+    """
+    if not link.startswith("/") or link.startswith("//"):
+        return link
+    try:
+        from components.shared_platform.application.providers.core_utils_provider import (
+            CoreUtilsProvider,
+        )
+
+        base = CoreUtilsProvider().resolve_frontend_base_url()
+    except Exception:
+        logger.exception("deliver_external_frontend_base_resolve_failed")
+        return link
+    if not base:
+        return link
+    return f"{base.rstrip('/')}{link}"
 
 
 def _skip_reason(*, channel_on, connection, event_key, severity, kev, fresh) -> str | None:

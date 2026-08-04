@@ -112,6 +112,13 @@ def run_scan(
     except Exception:
         logger.exception("run_scan failed source=%s target=%s", source, target_ref)
         fail_job(job_id=job_id, error="scan_failed")
+        _publish_scan_failed(
+            workspace_id=workspace_id,
+            source=source,
+            run_id=str(job_id or ""),
+            target_ref=target_ref,
+            account_id=account_id,
+        )
         return {"success": False, "error": "scan_failed"}
 
     complete_job(
@@ -120,6 +127,36 @@ def run_scan(
         detail=f"{run.failed_count} findings",
     )
     return {"success": True, "run_id": str(run.id), "findings": run.failed_count}
+
+
+def _publish_scan_failed(*, workspace_id, source: str, run_id: str, target_ref: str, account_id: str) -> None:
+    """Emit ``ScanFailed`` so the funnel can alert that coverage is degraded (ADR 0016).
+
+    Loss-tolerant: the alert must never change the task's failure handling or its
+    return contract. ``reason`` stays a coarse token — a raw exception string could
+    carry internal paths/ARNs into a third-party chat channel.
+    """
+    try:
+        from uuid import UUID
+
+        from components.shared_kernel.domain.events import ScanFailed
+        from components.shared_kernel.infrastructure.adapters.celery_event_publisher import (
+            CeleryEventPublisher,
+        )
+
+        CeleryEventPublisher().publish(
+            ScanFailed(
+                workspace_id=UUID(str(workspace_id)),
+                source=source,
+                engine=source.rsplit(".", 1)[-1],
+                run_id=run_id,
+                target_ref=str(target_ref or "")[:512],
+                account_id=str(account_id or ""),
+                reason="scan engine failure",
+            )
+        )
+    except Exception:
+        logger.exception("run_scan_failed_event_publish_failed source=%s target=%s", source, target_ref)
 
 
 def _vend_credentials(*, connection_id: str | None, account_id: str) -> dict | None:

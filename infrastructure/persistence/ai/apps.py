@@ -40,6 +40,7 @@ class AiConfig(AppConfig):
                 "components.agents.application.handlers",
                 "components.findings.application.handlers",
                 "components.integrations.application.handlers",
+                "components.notifications.application.handlers",
             ),
         )
 
