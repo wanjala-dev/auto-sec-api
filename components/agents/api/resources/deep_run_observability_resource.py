@@ -9,6 +9,7 @@ from components.agents.application.ports.deep_run_query_port import (
     DeepRunSnapshotView,
     DeepRunStatsView,
     DeepRunSubagentView,
+    DeepRunSummaryView,
 )
 
 
@@ -32,6 +33,7 @@ def _canonical_name(agent_type: str) -> str:
         from components.agents.application.providers.agent_registry_provider import (
             get_agent_registry_provider,
         )
+
         AgentRegistry = get_agent_registry_provider()
     except ImportError:  # pragma: no cover — defensive
         return agent_type
@@ -53,6 +55,7 @@ def _display_name(agent_type: str) -> str:
         from components.agents.application.providers.agent_registry_provider import (
             get_agent_registry_provider,
         )
+
         AgentRegistry = get_agent_registry_provider()
     except ImportError:  # pragma: no cover
         return agent_type.replace("_", " ").title()
@@ -77,7 +80,7 @@ class DeepRunSubagentResource:
     tool_calls: list = field(default_factory=list)
 
     @classmethod
-    def from_view(cls, view: DeepRunSubagentView) -> "DeepRunSubagentResource":
+    def from_view(cls, view: DeepRunSubagentView) -> DeepRunSubagentResource:
         return cls(
             task_id=view.task_id,
             agent_type=view.agent_type,
@@ -113,7 +116,7 @@ class DeepRunSnapshotResource:
     subagents: list
 
     @classmethod
-    def from_view(cls, view: DeepRunSnapshotView) -> "DeepRunSnapshotResource":
+    def from_view(cls, view: DeepRunSnapshotView) -> DeepRunSnapshotResource:
         return cls(
             plan_id=view.plan_id,
             thread_id=view.thread_id,
@@ -138,6 +141,57 @@ class DeepRunSnapshotResource:
 
 
 @dataclass(frozen=True)
+class DeepRunSummaryResource:
+    """Redacted, team-safe per-run row for
+    ``GET /ai/agents/runs/?workspace_id=&status=``.
+
+    The ONLY deep-run read a non-owner teammate may see. Carries the
+    5-stage pipeline projection (stage states + current tool/agent NAMES)
+    + status + progress + task counts — but NEVER ``goal`` (the raw user
+    prompt) or any tool input/output. A teammate uses it to render the
+    LIVE RUN card; full run detail stays owner-only behind
+    ``retrieve``/``events``.
+    """
+
+    plan_id: str
+    thread_id: str
+    workspace_id: str | None
+    status: str
+    progress_percent: int
+    current_stage: int
+    current_agent_type: str
+    current_agent_display_name: str
+    current_tool_name: str
+    stages: list
+    task_count: int
+    completed_task_count: int
+    started_at: str
+    updated_at: str
+
+    @classmethod
+    def from_view(cls, view: DeepRunSummaryView) -> DeepRunSummaryResource:
+        return cls(
+            plan_id=view.plan_id,
+            thread_id=view.thread_id,
+            workspace_id=view.workspace_id,
+            status=view.status,
+            progress_percent=view.progress_percent,
+            current_stage=view.current_stage,
+            current_agent_type=view.current_agent_type,
+            current_agent_display_name=_display_name(view.current_agent_type),
+            current_tool_name=view.current_tool_name,
+            stages=[asdict(stage) for stage in view.stages],
+            task_count=view.task_count,
+            completed_task_count=view.completed_task_count,
+            started_at=_iso(view.started_at) or "",
+            updated_at=_iso(view.updated_at) or "",
+        )
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class DeepRunEventResource:
     id: int
     timestamp: str
@@ -148,7 +202,7 @@ class DeepRunEventResource:
     payload: dict
 
     @classmethod
-    def from_view(cls, view: DeepRunEventView) -> "DeepRunEventResource":
+    def from_view(cls, view: DeepRunEventView) -> DeepRunEventResource:
         return cls(
             id=view.id,
             timestamp=_iso(view.timestamp) or "",
@@ -174,7 +228,7 @@ class DeepRunStatsResource:
     window_started_at: str | None
 
     @classmethod
-    def from_view(cls, view: DeepRunStatsView) -> "DeepRunStatsResource":
+    def from_view(cls, view: DeepRunStatsView) -> DeepRunStatsResource:
         return cls(
             workspace_id=view.workspace_id,
             total_runs=view.total_runs,

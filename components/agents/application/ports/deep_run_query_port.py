@@ -82,12 +82,77 @@ class DeepRunStatsView:
     window_started_at: datetime | None
 
 
+@dataclass(frozen=True)
+class DeepRunStageView:
+    """One lane of the 5-stage SOC pipeline, redacted.
+
+    ``state`` is one of ``pending`` | ``active`` | ``done`` (or
+    ``skipped`` when a later stage advanced past an optional one). Carries
+    NO run content — only the lane identity and its state.
+    """
+
+    key: str
+    label: str
+    state: str
+
+
+@dataclass(frozen=True)
+class DeepRunSummaryView:
+    """Redacted, team-safe per-run projection for
+    ``GET /ai/agents/runs/?workspace_id=&status=``.
+
+    This is the ONLY deep-run read a workspace teammate who did not start
+    the run may see. It is deliberately a **progress projection** — it
+    carries the pipeline stage, status, progress, and the current
+    tool/agent **names**, but NEVER prompt text or tool inputs/outputs
+    (those stay owner-only behind ``retrieve``/``events``). ``goal`` is
+    intentionally absent: it is the raw user prompt and must not leak to
+    non-owner teammates.
+
+    Lets a passive dashboard card *discover* the run happening right now
+    (or the most recent one) AND render its 5-stage pipeline off this
+    single team-gated projection — no owner-gated calls, no WebSocket.
+    """
+
+    plan_id: str
+    thread_id: str
+    workspace_id: str | None
+    status: str
+    progress_percent: int
+    # Redacted pipeline projection (names + states only).
+    current_stage: int
+    current_agent_type: str
+    current_tool_name: str
+    stages: tuple[DeepRunStageView, ...]
+    task_count: int
+    completed_task_count: int
+    started_at: datetime
+    updated_at: datetime
+
+
 class DeepRunQueryPort(ABC):
     """Contract for reading deep-run observability data."""
 
     @abstractmethod
     def get_snapshot(self, plan_id: str) -> DeepRunSnapshotView | None:
         """Return the run for *plan_id*, or ``None`` if unknown."""
+        ...
+
+    @abstractmethod
+    def list_runs(
+        self,
+        *,
+        workspace_id: str,
+        status: str | None = None,
+        limit: int = 10,
+    ) -> list[DeepRunSummaryView]:
+        """Return the workspace's runs, newest-updated first.
+
+        Powers the passive "live run" dashboard card: given only a
+        ``workspace_id`` (and optionally ``status="running"``) it finds
+        the in-flight run(s) so the card can pick one and subscribe by
+        ``plan_id``.  ``status=None`` returns every status.
+        """
         ...
 
     @abstractmethod
