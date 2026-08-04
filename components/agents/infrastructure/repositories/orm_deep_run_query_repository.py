@@ -24,6 +24,7 @@ from components.agents.application.ports.deep_run_query_port import (
     DeepRunEventView,
     DeepRunQueryPort,
     DeepRunSnapshotView,
+    DeepRunStageView,
     DeepRunStatsView,
     DeepRunSubagentView,
     DeepRunSummaryView,
@@ -53,25 +54,105 @@ def _progress_percent(state) -> int:
     return min(100, int(round(done / total * 100)))
 
 
-def _summary_view(run) -> DeepRunSummaryView:
-    """Build a compact summary from a ``DeepRun`` row (no log fetch).
+# ── Redacted 5-stage pipeline projection ─────────────────────────────
+#
+# The SOC remediation loop, in order. Labels are display strings; keys
+# are stable identifiers. This projection carries ONLY the stage identity
+# + state + the current tool/agent NAMES — never prompt text or tool
+# inputs/outputs (those stay owner-only behind retrieve/events).
+_STAGE_DEFS = (
+    ("alert", "Alert"),
+    ("triage", "Triage"),
+    ("finding", "Finding"),
+    ("draft_pr", "Draft PR"),
+    ("board", "Board Task"),
+)
+_TRIAGE_WRITE_TOOLS = {"triage_finding", "triage_cloud_exposure", "triage_container_vuln"}
+_DRAFT_PR_TOOLS = {"open_draft_pr"}
+_BOARD_TOOLS = {"assign_task"}
 
-    Mirrors the goal/agent_type/progress derivation of
-    :meth:`OrmDeepRunQueryRepository.get_snapshot` but skips the
-    per-run event query entirely — the list is polled, so it must stay
-    cheap and constant-cost per row.
+
+def _is_triage_log(log) -> bool:
+    agent = (log.agent_type or "").lower()
+    tool = log.tool_name or ""
+    return "triage" in agent or log.event_type == "worker_started" or tool.startswith("list_pending")
+
+
+def _stage_of_log(log) -> int:
+    """Furthest pipeline stage a single log evidences (-1 = none).
+
+    Reads only non-sensitive scalar columns (``event_type``, ``status``,
+    ``agent_type``, ``tool_name``) — never ``payload``.
+    """
+    tool = log.tool_name or ""
+    if tool in _DRAFT_PR_TOOLS:
+        return 3
+    if tool in _BOARD_TOOLS:
+        return 4
+    if tool in _TRIAGE_WRITE_TOOLS:
+        return 2
+    if _is_triage_log(log):
+        return 1
+    if log.event_type in ("run_completed", "worker_completed"):
+        return 4
+    if log.event_type == "run_started":
+        return 0
+    return -1
+
+
+def _stage_projection(run, logs):
+    """Derive (current_stage, current_agent, current_tool, stages) for a run.
+
+    ``logs`` must be chronological. A completed run marks every lane
+    ``done``; otherwise the furthest-reached lane is ``active``, earlier
+    lanes ``done``, later lanes ``pending``. ``current_agent``/
+    ``current_tool`` are the most-recent non-empty NAMES seen — no IO.
+    """
+    reached = 0
+    current_agent = ""
+    current_tool = ""
+    for log in logs:
+        stage = _stage_of_log(log)
+        if stage > reached:
+            reached = stage
+        if log.agent_type:
+            current_agent = log.agent_type
+        if log.tool_name:
+            current_tool = log.tool_name
+
+    terminal_done = run.status == "completed"
+    current_stage = len(_STAGE_DEFS) if terminal_done else reached
+    stages = []
+    for index, (key, label) in enumerate(_STAGE_DEFS):
+        if terminal_done or index < current_stage:
+            state = "done"
+        elif index == current_stage:
+            state = "active"
+        else:
+            state = "pending"
+        stages.append(DeepRunStageView(key=key, label=label, state=state))
+    return current_stage, current_agent, current_tool, tuple(stages)
+
+
+def _summary_view(run, logs=()) -> DeepRunSummaryView:
+    """Build the redacted, team-safe summary + pipeline projection.
+
+    Only task COUNTS + status + the derived stage/agent/tool NAMES are
+    exposed — ``goal`` (the raw user prompt) and all payload content are
+    deliberately omitted so a non-owner teammate never reads run content.
     """
     state = run.state if isinstance(run.state, dict) else {}
-    plan = state.get("plan") if isinstance(state.get("plan"), dict) else {}
-    run_metadata = state.get("run_metadata") if isinstance(state.get("run_metadata"), dict) else {}
+    current_stage, current_agent, current_tool, stages = _stage_projection(run, logs)
     return DeepRunSummaryView(
         plan_id=run.plan_id,
         thread_id=run.thread_id,
         workspace_id=str(run.workspace_id) if run.workspace_id else None,
         status=run.status,
         progress_percent=_progress_percent(state),
-        goal=str(plan.get("goal") or run_metadata.get("goal") or ""),
-        agent_type=str(run_metadata.get("agent_type") or ""),
+        current_stage=current_stage,
+        current_agent_type=current_agent,
+        current_tool_name=current_tool,
+        stages=stages,
         task_count=_task_count(state),
         completed_task_count=_completed_count(state),
         started_at=run.created_at,
@@ -206,12 +287,31 @@ class OrmDeepRunQueryRepository(DeepRunQueryPort):
         status: str | None = None,
         limit: int = 10,
     ) -> list[DeepRunSummaryView]:
-        from infrastructure.persistence.ai.agents.models import DeepRun
+        from infrastructure.persistence.ai.agents.models import DeepRun, DeepRunLog
 
-        queryset = DeepRun.objects.filter(workspace_id=workspace_id).select_related("workspace").order_by("-updated_at")
+        queryset = DeepRun.objects.filter(workspace_id=workspace_id).order_by("-updated_at")
         if status:
             queryset = queryset.filter(status=status)
-        return [_summary_view(run) for run in queryset[:limit]]
+        runs = list(queryset[:limit])
+        if not runs:
+            return []
+
+        # One query for all the page's logs, deliberately loading ONLY the
+        # non-sensitive scalar columns the stage projection reads — never
+        # ``payload`` (which carries tool inputs/outputs). This keeps the
+        # redaction airtight at the data-access layer AND bounds the cost
+        # to 2 queries regardless of ``limit``.
+        run_ids = [run.id for run in runs]
+        logs_by_run: dict = defaultdict(list)
+        log_rows = (
+            DeepRunLog.objects.filter(deep_run_id__in=run_ids)
+            .only("deep_run_id", "event_type", "status", "agent_type", "tool_name", "created_at")
+            .order_by("created_at")
+        )
+        for log in log_rows:
+            logs_by_run[log.deep_run_id].append(log)
+
+        return [_summary_view(run, logs_by_run.get(run.id, ())) for run in runs]
 
     def list_events(
         self,

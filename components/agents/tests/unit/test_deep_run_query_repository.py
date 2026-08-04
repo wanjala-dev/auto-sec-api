@@ -86,49 +86,94 @@ class _FakeRun:
     state: dict[str, Any]
 
 
-class TestSummaryView:
-    def test_derives_goal_agent_and_progress_from_state(self):
+def _run_state(tasks=2, done=1):
+    return {
+        "plan": {"goal": "SENSITIVE user prompt text", "tasks": [{"id": i} for i in range(tasks)]},
+        "completed_tasks": [{"id": i} for i in range(done)],
+        "run_metadata": {"agent_type": "triage_agent"},
+    }
+
+
+class TestSummaryProjectionIsRedacted:
+    """The list projection must carry the 5-stage pipeline + counts but
+    NEVER the raw goal/prompt or any tool payload."""
+
+    def test_no_goal_or_payload_fields_on_the_projection(self):
         t0 = _now()
-        run = _FakeRun(
-            plan_id="plan-1",
-            thread_id="thread-1",
-            workspace_id="ws-1",
-            status="running",
-            created_at=t0,
-            updated_at=t0 + timedelta(seconds=5),
-            state={
-                "plan": {"goal": "Triage findings", "tasks": [{"id": "a"}, {"id": "b"}]},
-                "completed_tasks": [{"id": "a"}],
-                "run_metadata": {"agent_type": "triage_agent"},
-            },
-        )
-        view = _summary_view(run)
-        assert view.plan_id == "plan-1"
-        assert view.workspace_id == "ws-1"
-        assert view.status == "running"
-        assert view.goal == "Triage findings"
-        assert view.agent_type == "triage_agent"
+        run = _FakeRun("p", "t", "ws-1", "running", t0, t0, _run_state())
+        view = _summary_view(run, [])
+        # The raw user prompt (goal) is deliberately absent.
+        assert not hasattr(view, "goal")
+        # No payload / tool-IO fields leak onto the projection.
+        for banned in ("payload", "tool_input", "tool_output", "system_prompt", "user_prompt", "llm_response"):
+            assert not hasattr(view, banned)
+        # Non-sensitive counts + status still present.
         assert view.task_count == 2
         assert view.completed_task_count == 1
         assert view.progress_percent == 50
-        assert view.started_at == t0
+
+    def test_running_run_with_no_logs_sits_at_alert(self):
+        t0 = _now()
+        run = _FakeRun("p", "t", "ws-1", "running", t0, t0, _run_state())
+        view = _summary_view(run, [])
+        assert view.current_stage == 0
+        assert [s.state for s in view.stages] == ["active", "pending", "pending", "pending", "pending"]
+        assert [s.key for s in view.stages] == ["alert", "triage", "finding", "draft_pr", "board"]
+
+    def test_triage_worker_advances_to_triage_stage(self):
+        t0 = _now()
+        logs = [
+            _FakeLog(id=1, created_at=t0, event_type="run_started", status="running"),
+            _FakeLog(
+                id=2,
+                created_at=t0 + timedelta(seconds=1),
+                event_type="worker_started",
+                agent_type="triage_agent",
+                payload={"task_id": "x"},
+            ),
+        ]
+        run = _FakeRun("p", "t", "ws-1", "running", t0, t0, _run_state())
+        view = _summary_view(run, logs)
+        assert view.current_stage == 1
+        assert view.stages[0].state == "done"
+        assert view.stages[1].state == "active"
+        assert view.stages[2].state == "pending"
+        # Current agent NAME surfaces (no IO).
+        assert view.current_agent_type == "triage_agent"
+
+    def test_full_chain_tool_names_reach_board(self):
+        t0 = _now()
+        logs = [
+            _FakeLog(id=1, created_at=t0, event_type="run_started"),
+            _FakeLog(
+                id=2, created_at=t0 + timedelta(seconds=1), event_type="worker_started", agent_type="triage_agent"
+            ),
+            _FakeLog(
+                id=3, created_at=t0 + timedelta(seconds=2), event_type="tool_observation", tool_name="triage_finding"
+            ),
+            _FakeLog(
+                id=4, created_at=t0 + timedelta(seconds=3), event_type="tool_observation", tool_name="assign_task"
+            ),
+        ]
+        run = _FakeRun("p", "t", "ws-1", "running", t0, t0, _run_state())
+        view = _summary_view(run, logs)
+        assert view.current_stage == 4
+        assert view.current_tool_name == "assign_task"
+
+    def test_completed_run_marks_all_stages_done(self):
+        t0 = _now()
+        run = _FakeRun("p", "t", "ws-1", "completed", t0, t0, _run_state(tasks=2, done=2))
+        view = _summary_view(run, [])
+        assert view.current_stage == 5
+        assert all(s.state == "done" for s in view.stages)
 
     def test_null_workspace_and_empty_state_are_safe(self):
         t0 = _now()
-        run = _FakeRun(
-            plan_id="plan-2",
-            thread_id="thread-2",
-            workspace_id=None,
-            status="pending",
-            created_at=t0,
-            updated_at=t0,
-            state={},
-        )
-        view = _summary_view(run)
+        run = _FakeRun("p", "t", None, "pending", t0, t0, {})
+        view = _summary_view(run, [])
         assert view.workspace_id is None
-        assert view.goal == ""
-        assert view.agent_type == ""
         assert view.progress_percent == 0
+        assert view.current_stage == 0
 
 
 class TestSubagentRollup:

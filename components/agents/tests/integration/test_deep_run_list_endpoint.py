@@ -9,15 +9,22 @@ the compact response contract each card row carries.
 
 from __future__ import annotations
 
+import json
 import uuid
 
 import pytest
 from django.core.management import call_command
 
-from infrastructure.persistence.ai.agents.models import DeepRun
+from infrastructure.persistence.ai.agents.models import DeepRun, DeepRunLog
 from infrastructure.persistence.workspaces.models import WorkspaceMembership
 
 URL = "/ai/agents/runs/"
+
+# Fields that would leak run CONTENT (prompts / tool IO) — a redacted
+# team projection must never carry any of these.
+_SENSITIVE_KEYS = frozenset(
+    {"goal", "payload", "tool_input", "tool_output", "system_prompt", "user_prompt", "llm_response"}
+)
 
 
 @pytest.fixture
@@ -41,6 +48,19 @@ def _run(workspace, user, *, status=DeepRun.STATUS_RUNNING, goal="Triage pending
             "completed_tasks": [{"title": "t1"}],
             "run_metadata": {"agent_type": agent_type, "goal": goal},
         },
+    )
+
+
+def _log(run, *, event_type="worker_started", agent_type="triage_agent", tool_name="", status="running"):
+    return DeepRunLog.objects.create(
+        deep_run=run,
+        event_type=event_type,
+        agent_type=agent_type,
+        tool_name=tool_name,
+        status=status,
+        # A payload carrying tool IO — the redaction assertions prove it
+        # never surfaces on the team projection.
+        payload={"tool_input": "SECRET INPUT", "tool_output": "SECRET OUTPUT", "task_id": "x"},
     )
 
 
@@ -112,9 +132,11 @@ class TestDeepRunListContract:
         assert response.status_code == 200, response.data
         assert response.data == {"runs": []}
 
-    def test_row_carries_plan_id_goal_progress_and_agent_label(self, roles, api_client, workspace_factory):
+    def test_row_carries_redacted_stage_projection(self, roles, api_client, workspace_factory):
         workspace = workspace_factory()
         run = _run(workspace, workspace.workspace_owner)
+        # A triage worker log → the projection should sit at the TRIAGE lane.
+        _log(run, event_type="worker_started", agent_type="triage_agent")
 
         response = self._get(api_client, workspace)
 
@@ -124,14 +146,16 @@ class TestDeepRunListContract:
         row = runs[0]
         assert row["plan_id"] == run.plan_id
         assert row["status"] == "running"
-        assert row["goal"] == "Triage pending findings"
         # 1 of 2 tasks done → 50%.
         assert row["task_count"] == 2
         assert row["completed_task_count"] == 1
         assert row["progress_percent"] == 50
-        # Alias-resolved label present so the card header needs no 2nd call.
-        assert "agent_display_name" in row
-        assert "agent_canonical_name" in row
+        # Redacted 5-stage pipeline projection.
+        assert row["current_stage"] == 1
+        assert [s["key"] for s in row["stages"]] == ["alert", "triage", "finding", "draft_pr", "board"]
+        assert [s["state"] for s in row["stages"]] == ["done", "active", "pending", "pending", "pending"]
+        assert row["current_agent_type"] == "triage_agent"
+        assert "current_agent_display_name" in row
 
     def test_status_filter_returns_only_running(self, roles, api_client, workspace_factory):
         workspace = workspace_factory()
@@ -170,23 +194,36 @@ class TestDeepRunListContract:
 
 
 @pytest.mark.django_db
-class TestDeepRunReadIsTeamGated:
-    """Snapshot + events reads use the SAME workspace-teammate gate as the
-    list/stats endpoints — so a teammate can drill into the workspace's
-    autonomous runs (which run under a system/owner user), which is the
-    whole point of the LIVE RUN card. Previously these were owner-only.
+class TestRunDetailIsOwnerOnly:
+    """SECURITY CONTRACT: full run detail — prompts + tool inputs/outputs
+    via ``retrieve`` and ``events`` — is OWNER-ONLY. A workspace teammate
+    who did not start the run must never read its content; they get the
+    redacted team projection on the list endpoint instead.
     """
 
-    def test_teammate_can_retrieve_another_users_run(
+    def test_teammate_cannot_retrieve_another_users_run(
         self, roles, api_client, workspace_factory, user_factory, team_factory
     ):
         workspace = workspace_factory()
         # Run started by the owner (stands in for the autonomous system user).
         run = _run(workspace, workspace.workspace_owner)
-        # A different human, a member of one of the workspace's teams.
+        _log(run, tool_name="triage_finding")
+        # A different human, an active member of one of the workspace's teams.
         teammate = user_factory()
         team_factory(workspace=workspace, members=[teammate])
         api_client.force_authenticate(teammate)
+
+        snap = api_client.get(f"{URL}{run.plan_id}/")
+        events = api_client.get(f"{URL}{run.plan_id}/events/")
+
+        # A teammate is NOT the owner → no access to prompts / tool IO.
+        assert snap.status_code == 403, snap.data
+        assert events.status_code == 403, events.data
+
+    def test_owner_can_retrieve_own_run(self, roles, api_client, workspace_factory):
+        workspace = workspace_factory()
+        run = _run(workspace, workspace.workspace_owner)
+        api_client.force_authenticate(workspace.workspace_owner)
 
         snap = api_client.get(f"{URL}{run.plan_id}/")
         events = api_client.get(f"{URL}{run.plan_id}/events/")
@@ -195,12 +232,37 @@ class TestDeepRunReadIsTeamGated:
         assert snap.data["plan_id"] == run.plan_id
         assert events.status_code == 200, events.data
 
-    def test_non_member_cannot_retrieve_run(self, roles, api_client, workspace_factory, user_factory):
+
+@pytest.mark.django_db
+class TestListProjectionCarriesNoRunContent:
+    """SECURITY CONTRACT: the team-gated list projection must expose stage
+    progress but NEVER prompt text or tool inputs/outputs, even when the
+    underlying run logs carry them.
+    """
+
+    def test_no_sensitive_fields_on_any_row(self, roles, api_client, workspace_factory, user_factory, team_factory):
         workspace = workspace_factory()
-        run = _run(workspace, workspace.workspace_owner)
-        outsider = user_factory()
-        api_client.force_authenticate(outsider)
+        run = _run(workspace, workspace.workspace_owner, goal="SENSITIVE PROMPT TEXT")
+        # Logs whose payloads carry tool IO the projection must not echo.
+        _log(run, event_type="worker_started", agent_type="triage_agent")
+        _log(run, event_type="tool_observation", tool_name="triage_finding")
+        # Read as a NON-owner teammate — the projection's whole audience.
+        teammate = user_factory()
+        team_factory(workspace=workspace, members=[teammate])
+        api_client.force_authenticate(teammate)
 
-        response = api_client.get(f"{URL}{run.plan_id}/")
+        response = api_client.get(URL, {"workspace_id": str(workspace.id)})
 
-        assert response.status_code == 403
+        assert response.status_code == 200, response.data
+        rows = response.data["runs"]
+        assert len(rows) == 1
+        blob = json.dumps(rows)
+        # No sensitive key names on any row, and no sensitive VALUES leak.
+        for row in rows:
+            assert _SENSITIVE_KEYS.isdisjoint(row.keys())
+        assert "SENSITIVE PROMPT TEXT" not in blob
+        assert "SECRET INPUT" not in blob
+        assert "SECRET OUTPUT" not in blob
+        # But the redacted progress IS present.
+        assert rows[0]["current_stage"] == 2
+        assert rows[0]["current_tool_name"] == "triage_finding"

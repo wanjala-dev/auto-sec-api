@@ -142,12 +142,15 @@ class DeepRunSnapshotResource:
 
 @dataclass(frozen=True)
 class DeepRunSummaryResource:
-    """Compact per-run row for ``GET /ai/agents/runs/?workspace_id=&status=``.
+    """Redacted, team-safe per-run row for
+    ``GET /ai/agents/runs/?workspace_id=&status=``.
 
-    Carries just enough for the live-run card to pick a run and then
-    subscribe to it by ``plan_id`` — the alias-resolved agent label is
-    included so the card header reads consistently without a second
-    round-trip.
+    The ONLY deep-run read a non-owner teammate may see. Carries the
+    5-stage pipeline projection (stage states + current tool/agent NAMES)
+    + status + progress + task counts — but NEVER ``goal`` (the raw user
+    prompt) or any tool input/output. A teammate uses it to render the
+    LIVE RUN card; full run detail stays owner-only behind
+    ``retrieve``/``events``.
     """
 
     plan_id: str
@@ -155,10 +158,11 @@ class DeepRunSummaryResource:
     workspace_id: str | None
     status: str
     progress_percent: int
-    goal: str
-    agent_type: str
-    agent_canonical_name: str
-    agent_display_name: str
+    current_stage: int
+    current_agent_type: str
+    current_agent_display_name: str
+    current_tool_name: str
+    stages: list
     task_count: int
     completed_task_count: int
     started_at: str
@@ -172,10 +176,11 @@ class DeepRunSummaryResource:
             workspace_id=view.workspace_id,
             status=view.status,
             progress_percent=view.progress_percent,
-            goal=view.goal,
-            agent_type=view.agent_type,
-            agent_canonical_name=_canonical_name(view.agent_type),
-            agent_display_name=_display_name(view.agent_type),
+            current_stage=view.current_stage,
+            current_agent_type=view.current_agent_type,
+            current_agent_display_name=_display_name(view.current_agent_type),
+            current_tool_name=view.current_tool_name,
+            stages=[asdict(stage) for stage in view.stages],
             task_count=view.task_count,
             completed_task_count=view.completed_task_count,
             started_at=_iso(view.started_at) or "",
