@@ -58,17 +58,16 @@ class EntityAuditLogRepository(AuditLogPort):
         reason: str,
     ) -> AuditEntry | None:
         from django.contrib.contenttypes.models import ContentType
+
         from infrastructure.persistence.audit.models import EntityAuditLog
 
         app_label, _, model_name = entity_type.partition(".")
         if not model_name:
-            # Accept a bare model name (sponsorship fallback) by
+            # Accept a bare model name (legacy fallback) by
             # deferring to ContentType's natural-key lookup.
             ct = ContentType.objects.filter(model=entity_type).first()
         else:
-            ct = ContentType.objects.filter(
-                app_label=app_label, model=model_name
-            ).first()
+            ct = ContentType.objects.filter(app_label=app_label, model=model_name).first()
         if ct is None:
             return None
 
@@ -89,30 +88,82 @@ class EntityAuditLogRepository(AuditLogPort):
         *,
         entity_type: str,
         entity_id: str,
+        workspace_id: str | None = None,
         field_name: str | None = None,
         limit: int | None = None,
     ) -> list[AuditEntry]:
         from django.contrib.contenttypes.models import ContentType
+
         from infrastructure.persistence.audit.models import EntityAuditLog
 
         app_label, _, model_name = entity_type.partition(".")
         if not model_name:
             ct = ContentType.objects.filter(model=entity_type).first()
         else:
-            ct = ContentType.objects.filter(
-                app_label=app_label, model=model_name
-            ).first()
+            ct = ContentType.objects.filter(app_label=app_label, model=model_name).first()
         if ct is None:
             return []
 
-        qs = (
-            EntityAuditLog.objects.filter(
-                content_type=ct, object_id=str(entity_id)
-            )
-            .select_related("actor", "content_type")
+        qs = EntityAuditLog.objects.filter(content_type=ct, object_id=str(entity_id)).select_related(
+            "actor", "content_type"
         )
+        if workspace_id:
+            # Tenant scoping. Rows written with workspace=NULL
+            # (historical/system events) are deliberately excluded from
+            # workspace-scoped reads — they carry no proof of tenancy.
+            qs = qs.filter(workspace_id=workspace_id)
         if field_name:
             qs = qs.filter(field_name=field_name)
         if limit:
             qs = qs[:limit]
         return [_entry_to_domain(row) for row in qs]
+
+    def list_for_workspace(
+        self,
+        *,
+        workspace_id: str,
+        entity_type: str | None = None,
+        field_name: str | None = None,
+        actor_id: str | None = None,
+        since: Any = None,
+        until: Any = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[AuditEntry], int]:
+        from django.contrib.contenttypes.models import ContentType
+
+        from infrastructure.persistence.audit.models import EntityAuditLog
+
+        # Tenant scope is mandatory — the workspace_id filter drives the
+        # ``audit_workspace_idx`` (workspace, -created_at) index. NULL-
+        # workspace (historical/system) rows carry no tenancy proof and
+        # are excluded exactly like the per-entity read path.
+        qs = EntityAuditLog.objects.filter(workspace_id=workspace_id).select_related("actor", "content_type")
+
+        if entity_type:
+            app_label, _, model_name = entity_type.partition(".")
+            if model_name:
+                ct = ContentType.objects.filter(app_label=app_label, model=model_name).first()
+            else:
+                ct = ContentType.objects.filter(model=entity_type).first()
+            if ct is None:
+                # An unknown entity_type filter matches nothing — return
+                # an empty, correctly-typed page rather than 400ing.
+                return [], 0
+            qs = qs.filter(content_type=ct)
+        if field_name:
+            qs = qs.filter(field_name=field_name)
+        if actor_id:
+            qs = qs.filter(actor_id=actor_id)
+        if since is not None:
+            qs = qs.filter(created_at__gte=since)
+        if until is not None:
+            qs = qs.filter(created_at__lte=until)
+
+        # Count the filtered set BEFORE slicing so the caller can page.
+        total = qs.count()
+
+        start = max(0, offset)
+        end = start + max(1, limit)
+        rows = qs.order_by("-created_at")[start:end]
+        return [_entry_to_domain(row) for row in rows], total
