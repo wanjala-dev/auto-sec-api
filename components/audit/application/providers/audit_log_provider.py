@@ -75,6 +75,43 @@ class AuditLogProvider:
             limit=limit,
         )
 
+    def entity_history_use_case(self) -> Any:
+        """Return a wired ``GetEntityHistoryUseCase``.
+
+        Composition root for the REST read path — the controller calls
+        this instead of instantiating the repository itself.
+        """
+
+        from components.audit.application.providers.entity_audit_log_repository_provider import (
+            get_entity_audit_log_repository_provider,
+        )
+        from components.audit.application.use_cases.get_entity_history_use_case import (
+            GetEntityHistoryUseCase,
+        )
+
+        return GetEntityHistoryUseCase(
+            audit_log=get_entity_audit_log_repository_provider().repository(),
+        )
+
+    def workspace_history_use_case(self) -> Any:
+        """Return a wired ``GetWorkspaceHistoryUseCase``.
+
+        Composition root for the auditor workspace-wide read path —
+        same repository as the per-entity path, no entity narrowing
+        required.
+        """
+
+        from components.audit.application.providers.entity_audit_log_repository_provider import (
+            get_entity_audit_log_repository_provider,
+        )
+        from components.audit.application.use_cases.get_workspace_history_use_case import (
+            GetWorkspaceHistoryUseCase,
+        )
+
+        return GetWorkspaceHistoryUseCase(
+            audit_log=get_entity_audit_log_repository_provider().repository(),
+        )
+
 
 _default = AuditLogProvider()
 

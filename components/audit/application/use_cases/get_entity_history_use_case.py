@@ -17,12 +17,14 @@ class GetEntityHistoryUseCase:
         *,
         entity_type: str,
         entity_id: str,
+        workspace_id: str | None = None,
         field_name: str | None = None,
         limit: int | None = None,
     ) -> list[AuditEntry]:
         return self.audit_log.list_for_entity(
             entity_type=entity_type,
             entity_id=entity_id,
+            workspace_id=workspace_id,
             field_name=field_name,
             limit=limit,
         )
