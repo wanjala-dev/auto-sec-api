@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from components.agents.infrastructure.repositories.orm_deep_run_query_repository import (
     _completed_count,
     _progress_percent,
     _subagent_views,
+    _summary_view,
     _task_count,
 )
 
@@ -17,6 +18,7 @@ from components.agents.infrastructure.repositories.orm_deep_run_query_repository
 @dataclass
 class _FakeLog:
     """Test double for ``DeepRunLog`` — only the fields the rollup reads."""
+
     id: int
     created_at: datetime
     event_type: str
@@ -27,7 +29,7 @@ class _FakeLog:
 
 
 def _now():
-    return datetime(2026, 4, 18, 12, 0, 0, tzinfo=timezone.utc)
+    return datetime(2026, 4, 18, 12, 0, 0, tzinfo=UTC)
 
 
 class TestProgressMath:
@@ -71,6 +73,64 @@ class TestProgressMath:
         assert _completed_count(state) == 2
 
 
+@dataclass
+class _FakeRun:
+    """Test double for ``DeepRun`` — the fields ``_summary_view`` reads."""
+
+    plan_id: str
+    thread_id: str
+    workspace_id: Any
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    state: dict[str, Any]
+
+
+class TestSummaryView:
+    def test_derives_goal_agent_and_progress_from_state(self):
+        t0 = _now()
+        run = _FakeRun(
+            plan_id="plan-1",
+            thread_id="thread-1",
+            workspace_id="ws-1",
+            status="running",
+            created_at=t0,
+            updated_at=t0 + timedelta(seconds=5),
+            state={
+                "plan": {"goal": "Triage findings", "tasks": [{"id": "a"}, {"id": "b"}]},
+                "completed_tasks": [{"id": "a"}],
+                "run_metadata": {"agent_type": "triage_agent"},
+            },
+        )
+        view = _summary_view(run)
+        assert view.plan_id == "plan-1"
+        assert view.workspace_id == "ws-1"
+        assert view.status == "running"
+        assert view.goal == "Triage findings"
+        assert view.agent_type == "triage_agent"
+        assert view.task_count == 2
+        assert view.completed_task_count == 1
+        assert view.progress_percent == 50
+        assert view.started_at == t0
+
+    def test_null_workspace_and_empty_state_are_safe(self):
+        t0 = _now()
+        run = _FakeRun(
+            plan_id="plan-2",
+            thread_id="thread-2",
+            workspace_id=None,
+            status="pending",
+            created_at=t0,
+            updated_at=t0,
+            state={},
+        )
+        view = _summary_view(run)
+        assert view.workspace_id is None
+        assert view.goal == ""
+        assert view.agent_type == ""
+        assert view.progress_percent == 0
+
+
 class TestSubagentRollup:
     def test_no_events_returns_empty(self):
         assert _subagent_views([]) == ()
@@ -79,8 +139,11 @@ class TestSubagentRollup:
         t0 = _now()
         logs = [
             _FakeLog(
-                id=1, created_at=t0, event_type="worker_started",
-                agent_type="workspace_agent", payload={"task_id": "t-1"},
+                id=1,
+                created_at=t0,
+                event_type="worker_started",
+                agent_type="workspace_agent",
+                payload={"task_id": "t-1"},
             ),
         ]
         views = _subagent_views(logs)
@@ -94,10 +157,14 @@ class TestSubagentRollup:
         t0 = _now()
         t1 = t0 + timedelta(seconds=3)
         logs = [
-            _FakeLog(id=1, created_at=t0, event_type="worker_started",
-                     agent_type="workspace_agent", payload={"task_id": "t-1"}),
-            _FakeLog(id=2, created_at=t1, event_type="worker_completed",
-                     payload={"task_id": "t-1"}),
+            _FakeLog(
+                id=1,
+                created_at=t0,
+                event_type="worker_started",
+                agent_type="workspace_agent",
+                payload={"task_id": "t-1"},
+            ),
+            _FakeLog(id=2, created_at=t1, event_type="worker_completed", payload={"task_id": "t-1"}),
         ]
         view = _subagent_views(logs)[0]
         assert view.status == "completed"
@@ -107,36 +174,56 @@ class TestSubagentRollup:
     def test_worker_failure_status(self):
         t0 = _now()
         logs = [
-            _FakeLog(id=1, created_at=t0, event_type="worker_started",
-                     agent_type="x", payload={"task_id": "t-1"}),
-            _FakeLog(id=2, created_at=t0 + timedelta(seconds=1),
-                     event_type="worker_failed", payload={"task_id": "t-1"}),
+            _FakeLog(id=1, created_at=t0, event_type="worker_started", agent_type="x", payload={"task_id": "t-1"}),
+            _FakeLog(
+                id=2, created_at=t0 + timedelta(seconds=1), event_type="worker_failed", payload={"task_id": "t-1"}
+            ),
         ]
         assert _subagent_views(logs)[0].status == "failed"
 
     def test_worker_blocked_status(self):
         t0 = _now()
         logs = [
-            _FakeLog(id=1, created_at=t0, event_type="worker_started",
-                     agent_type="x", payload={"task_id": "t-1"}),
-            _FakeLog(id=2, created_at=t0 + timedelta(seconds=1),
-                     event_type="worker_blocked", status="denied", payload={"task_id": "t-1"}),
+            _FakeLog(id=1, created_at=t0, event_type="worker_started", agent_type="x", payload={"task_id": "t-1"}),
+            _FakeLog(
+                id=2,
+                created_at=t0 + timedelta(seconds=1),
+                event_type="worker_blocked",
+                status="denied",
+                payload={"task_id": "t-1"},
+            ),
         ]
         assert _subagent_views(logs)[0].status == "blocked"
 
     def test_tool_calls_grouped_under_task(self):
         t0 = _now()
         logs = [
-            _FakeLog(id=1, created_at=t0, event_type="worker_started",
-                     agent_type="workspace_agent", payload={"task_id": "t-1"}),
-            _FakeLog(id=2, created_at=t0 + timedelta(seconds=1),
-                     event_type="tool_call", tool_name="retrieve_workspace_context",
-                     agent_type="workspace_agent", payload={"task_id": "t-1"}),
-            _FakeLog(id=3, created_at=t0 + timedelta(seconds=2),
-                     event_type="tool_call", tool_name="get_organization_info",
-                     agent_type="workspace_agent", payload={"task_id": "t-1"}),
-            _FakeLog(id=4, created_at=t0 + timedelta(seconds=3),
-                     event_type="worker_completed", payload={"task_id": "t-1"}),
+            _FakeLog(
+                id=1,
+                created_at=t0,
+                event_type="worker_started",
+                agent_type="workspace_agent",
+                payload={"task_id": "t-1"},
+            ),
+            _FakeLog(
+                id=2,
+                created_at=t0 + timedelta(seconds=1),
+                event_type="tool_call",
+                tool_name="retrieve_workspace_context",
+                agent_type="workspace_agent",
+                payload={"task_id": "t-1"},
+            ),
+            _FakeLog(
+                id=3,
+                created_at=t0 + timedelta(seconds=2),
+                event_type="tool_call",
+                tool_name="get_organization_info",
+                agent_type="workspace_agent",
+                payload={"task_id": "t-1"},
+            ),
+            _FakeLog(
+                id=4, created_at=t0 + timedelta(seconds=3), event_type="worker_completed", payload={"task_id": "t-1"}
+            ),
         ]
         view = _subagent_views(logs)[0]
         tool_names = [c["tool_name"] for c in view.tool_calls]
@@ -145,13 +232,17 @@ class TestSubagentRollup:
     def test_multiple_tasks_are_distinct(self):
         t0 = _now()
         logs = [
-            _FakeLog(id=1, created_at=t0, event_type="worker_started",
-                     agent_type="a", payload={"task_id": "t-1"}),
-            _FakeLog(id=2, created_at=t0 + timedelta(seconds=1),
-                     event_type="worker_completed", payload={"task_id": "t-1"}),
-            _FakeLog(id=3, created_at=t0 + timedelta(seconds=2),
-                     event_type="worker_started", agent_type="b",
-                     payload={"task_id": "t-2"}),
+            _FakeLog(id=1, created_at=t0, event_type="worker_started", agent_type="a", payload={"task_id": "t-1"}),
+            _FakeLog(
+                id=2, created_at=t0 + timedelta(seconds=1), event_type="worker_completed", payload={"task_id": "t-1"}
+            ),
+            _FakeLog(
+                id=3,
+                created_at=t0 + timedelta(seconds=2),
+                event_type="worker_started",
+                agent_type="b",
+                payload={"task_id": "t-2"},
+            ),
         ]
         views = _subagent_views(logs)
         assert [v.task_id for v in views] == ["t-1", "t-2"]

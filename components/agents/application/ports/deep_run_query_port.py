@@ -82,12 +82,53 @@ class DeepRunStatsView:
     window_started_at: datetime | None
 
 
+@dataclass(frozen=True)
+class DeepRunSummaryView:
+    """Compact per-run row for ``GET /ai/agents/runs/?workspace_id=&status=``.
+
+    Lets a passive dashboard card *discover* the run happening right now
+    (or the most recent one) without already holding its ``plan_id``.
+    Deliberately leaner than :class:`DeepRunSnapshotView` — no sub-agent
+    roll-up, no event log — because the list is polled and the card only
+    needs enough to pick a run and then subscribe to it by ``plan_id``.
+    """
+
+    plan_id: str
+    thread_id: str
+    workspace_id: str | None
+    status: str
+    progress_percent: int
+    goal: str
+    agent_type: str
+    task_count: int
+    completed_task_count: int
+    started_at: datetime
+    updated_at: datetime
+
+
 class DeepRunQueryPort(ABC):
     """Contract for reading deep-run observability data."""
 
     @abstractmethod
     def get_snapshot(self, plan_id: str) -> DeepRunSnapshotView | None:
         """Return the run for *plan_id*, or ``None`` if unknown."""
+        ...
+
+    @abstractmethod
+    def list_runs(
+        self,
+        *,
+        workspace_id: str,
+        status: str | None = None,
+        limit: int = 10,
+    ) -> list[DeepRunSummaryView]:
+        """Return the workspace's runs, newest-updated first.
+
+        Powers the passive "live run" dashboard card: given only a
+        ``workspace_id`` (and optionally ``status="running"``) it finds
+        the in-flight run(s) so the card can pick one and subscribe by
+        ``plan_id``.  ``status=None`` returns every status.
+        """
         ...
 
     @abstractmethod

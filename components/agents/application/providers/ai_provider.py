@@ -30,6 +30,7 @@ from components.agents.application.queries.agent_execution_query import (
 from components.agents.application.queries.agent_graph_query import FetchAgentGraphQuery
 from components.agents.application.queries.deep_run_observability_query import (
     FetchDeepRunEventsQuery,
+    FetchDeepRunListQuery,
     FetchDeepRunSnapshotQuery,
     FetchDeepRunStatsQuery,
 )
@@ -384,6 +385,10 @@ class AIProvider:
     @staticmethod
     def build_deep_run_stats_query() -> FetchDeepRunStatsQuery:
         return FetchDeepRunStatsQuery(port=AIProvider._deep_run_query_port())
+
+    @staticmethod
+    def build_deep_run_list_query() -> FetchDeepRunListQuery:
+        return FetchDeepRunListQuery(port=AIProvider._deep_run_query_port())
 
     @staticmethod
     def build_agent_chat_use_case() -> AgentChatUseCase:

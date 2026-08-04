@@ -155,6 +155,34 @@ def _has_teammate_permissions(user, workspace, *, include_followers: bool = Fals
     return False
 
 
+def _can_view_deep_run(user, view) -> bool:
+    """Return True when *user* may read the deep run described by *view*.
+
+    Deep runs are workspace-level SOC provenance (agents-as-teammates):
+    the autonomous triage loop runs under a system/owner user, so gating
+    run reads to the *starting* user alone would hide the workspace's own
+    AI activity from its teammates — and break the LIVE RUN dashboard
+    card, whose whole job is to surface that activity. So the read gate
+    is the SAME workspace-teammate gate as ``/runs/stats/`` and
+    ``/runs/`` (list): the run's owner, workspace staff, or an active
+    member of one of the workspace's teams. Falls back to owner-only when
+    the run carries no workspace (legacy chat-scoped runs).
+    """
+    if user is None or view is None:
+        return False
+    if getattr(user, "is_staff", False):
+        return True
+    if str(getattr(view, "user_id", "")) == str(getattr(user, "id", None)):
+        return True
+    workspace_id = getattr(view, "workspace_id", None)
+    if not workspace_id:
+        return False
+    workspace = agents_service.get_workspace_by_id(str(workspace_id))
+    if not workspace:
+        return False
+    return _has_teammate_permissions(user, workspace)
+
+
 def _has_agent_access(user, agent_record, *, include_followers: bool = False) -> bool:
     """Return True when the user may view the agent's data."""
     if not user or not agent_record:
@@ -1571,6 +1599,44 @@ class DeepRunViewSet(viewsets.GenericViewSet):
     permission_classes = [IsAuthenticated]
 
     @_schema()
+    def list(self, request):
+        """``GET /ai/agents/runs/?workspace_id=<id>&status=running&limit=<n>``.
+
+        Lets a passive dashboard card *discover* the run happening right
+        now (or the most recent run) without already holding a
+        ``plan_id`` — it only has one if the chat UI handed it over.
+        Workspace-membership gated like ``stats`` (``view_agents``).
+        Returns compact summaries, newest-updated first, each carrying
+        the ``plan_id`` the card subscribes to over WebSocket.
+        """
+        from components.agents.api.resources.deep_run_observability_resource import (
+            DeepRunSummaryResource,
+        )
+        from components.agents.application.providers.ai_provider import AIProvider
+
+        workspace_id = request.GET.get("workspace_id") or None
+        if not workspace_id:
+            return Response(
+                {"error": "workspace_id is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        workspace = agents_service.get_workspace_by_id(workspace_id)
+        if not workspace:
+            return Response({"error": "Workspace not found"}, status=status.HTTP_404_NOT_FOUND)
+        if not _has_teammate_permissions(request.user, workspace):
+            return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
+
+        run_status = request.GET.get("status") or None
+        limit = _parse_int(request.GET.get("limit"), default=10, min_value=1)
+        limit = min(limit, 50)
+
+        query = AIProvider.build_deep_run_list_query()
+        runs = query.execute(str(workspace_id), status=run_status, limit=limit)
+        return Response(
+            {"runs": [DeepRunSummaryResource.from_view(r).to_dict() for r in runs]},
+        )
+
+    @_schema()
     def retrieve(self, request, pk=None):
         """``GET /ai/agents/runs/<plan_id>/`` — snapshot for one run."""
         from components.agents.api.resources.deep_run_observability_resource import (
@@ -1582,7 +1648,7 @@ class DeepRunViewSet(viewsets.GenericViewSet):
         view = query.execute(pk)
         if view is None:
             return Response({"error": "Run not found"}, status=status.HTTP_404_NOT_FOUND)
-        if view.user_id != str(request.user.id) and not request.user.is_staff:
+        if not _can_view_deep_run(request.user, view):
             return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
         return Response(DeepRunSnapshotResource.from_view(view).to_dict())
 
@@ -1601,7 +1667,7 @@ class DeepRunViewSet(viewsets.GenericViewSet):
         snapshot = snapshot_query.execute(pk)
         if snapshot is None:
             return Response({"error": "Run not found"}, status=status.HTTP_404_NOT_FOUND)
-        if snapshot.user_id != str(request.user.id) and not request.user.is_staff:
+        if not _can_view_deep_run(request.user, snapshot):
             return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
 
         since_raw = request.GET.get("since")

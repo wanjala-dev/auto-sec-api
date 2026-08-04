@@ -15,8 +15,8 @@ filtered by ``tool_name`` being non-empty.
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Iterable
 from datetime import datetime
-from typing import Iterable
 
 from django.db.models import Count
 
@@ -26,6 +26,7 @@ from components.agents.application.ports.deep_run_query_port import (
     DeepRunSnapshotView,
     DeepRunStatsView,
     DeepRunSubagentView,
+    DeepRunSummaryView,
 )
 
 
@@ -50,6 +51,32 @@ def _progress_percent(state) -> int:
         return 0
     done = _completed_count(state)
     return min(100, int(round(done / total * 100)))
+
+
+def _summary_view(run) -> DeepRunSummaryView:
+    """Build a compact summary from a ``DeepRun`` row (no log fetch).
+
+    Mirrors the goal/agent_type/progress derivation of
+    :meth:`OrmDeepRunQueryRepository.get_snapshot` but skips the
+    per-run event query entirely — the list is polled, so it must stay
+    cheap and constant-cost per row.
+    """
+    state = run.state if isinstance(run.state, dict) else {}
+    plan = state.get("plan") if isinstance(state.get("plan"), dict) else {}
+    run_metadata = state.get("run_metadata") if isinstance(state.get("run_metadata"), dict) else {}
+    return DeepRunSummaryView(
+        plan_id=run.plan_id,
+        thread_id=run.thread_id,
+        workspace_id=str(run.workspace_id) if run.workspace_id else None,
+        status=run.status,
+        progress_percent=_progress_percent(state),
+        goal=str(plan.get("goal") or run_metadata.get("goal") or ""),
+        agent_type=str(run_metadata.get("agent_type") or ""),
+        task_count=_task_count(state),
+        completed_task_count=_completed_count(state),
+        started_at=run.created_at,
+        updated_at=run.updated_at,
+    )
 
 
 def _event_view(log_row) -> DeepRunEventView:
@@ -145,10 +172,7 @@ class OrmDeepRunQueryRepository(DeepRunQueryPort):
         from infrastructure.persistence.ai.agents.models import DeepRun
 
         run = (
-            DeepRun.objects.filter(plan_id=plan_id)
-            .select_related("workspace", "user")
-            .order_by("-updated_at")
-            .first()
+            DeepRun.objects.filter(plan_id=plan_id).select_related("workspace", "user").order_by("-updated_at").first()
         )
         if run is None:
             return None
@@ -174,6 +198,20 @@ class OrmDeepRunQueryRepository(DeepRunQueryPort):
             last_error=run.last_error or "",
             subagents=_subagent_views(logs),
         )
+
+    def list_runs(
+        self,
+        *,
+        workspace_id: str,
+        status: str | None = None,
+        limit: int = 10,
+    ) -> list[DeepRunSummaryView]:
+        from infrastructure.persistence.ai.agents.models import DeepRun
+
+        queryset = DeepRun.objects.filter(workspace_id=workspace_id).select_related("workspace").order_by("-updated_at")
+        if status:
+            queryset = queryset.filter(status=status)
+        return [_summary_view(run) for run in queryset[:limit]]
 
     def list_events(
         self,
@@ -208,10 +246,7 @@ class OrmDeepRunQueryRepository(DeepRunQueryPort):
             logs_qs = logs_qs.filter(created_at__gte=since)
 
         total_runs = runs_qs.count()
-        runs_by_status = {
-            row["status"]: row["n"]
-            for row in runs_qs.values("status").annotate(n=Count("id"))
-        }
+        runs_by_status = {row["status"]: row["n"] for row in runs_qs.values("status").annotate(n=Count("id"))}
         failed = runs_by_status.get("failed", 0)
         failure_rate = (failed / total_runs) if total_runs else 0.0
 
@@ -226,17 +261,10 @@ class OrmDeepRunQueryRepository(DeepRunQueryPort):
 
         tool_call_counts = {
             row["tool_name"]: row["n"]
-            for row in (
-                logs_qs.exclude(tool_name="")
-                .values("tool_name")
-                .annotate(n=Count("id"))
-                .order_by("-n")[:50]
-            )
+            for row in (logs_qs.exclude(tool_name="").values("tool_name").annotate(n=Count("id")).order_by("-n")[:50])
         }
 
-        window_started_at = since or (
-            runs_qs.order_by("created_at").values_list("created_at", flat=True).first()
-        )
+        window_started_at = since or (runs_qs.order_by("created_at").values_list("created_at", flat=True).first())
 
         return DeepRunStatsView(
             workspace_id=workspace_id,

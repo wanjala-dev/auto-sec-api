@@ -15,6 +15,7 @@ from components.agents.application.ports.deep_run_query_port import (
     DeepRunQueryPort,
     DeepRunSnapshotView,
     DeepRunStatsView,
+    DeepRunSummaryView,
 )
 
 
@@ -42,6 +43,22 @@ class FetchDeepRunEventsQuery:
         limit: int = 200,
     ) -> list[DeepRunEventView]:
         return self.port.list_events(plan_id, since=since, limit=limit)
+
+
+@dataclass
+class FetchDeepRunListQuery:
+    """Return the workspace's runs (newest first) for the live-run card."""
+
+    port: DeepRunQueryPort
+
+    def execute(
+        self,
+        workspace_id: str,
+        *,
+        status: str | None = None,
+        limit: int = 10,
+    ) -> list[DeepRunSummaryView]:
+        return self.port.list_runs(workspace_id=workspace_id, status=status, limit=limit)
 
 
 @dataclass
