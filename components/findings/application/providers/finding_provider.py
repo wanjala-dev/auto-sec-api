@@ -28,6 +28,17 @@ class FindingProvider:
         )
 
     @staticmethod
+    def build_change_finding_status_use_case():
+        """The write-side use case behind the HUD action row — resolve/suppress/reopen a
+        finding through the store port (CQRS write). No hard delete: a transition on the
+        finding lifecycle, never a row destroy."""
+        from components.findings.application.use_cases.change_finding_status_use_case import (
+            ChangeFindingStatusUseCase,
+        )
+
+        return ChangeFindingStatusUseCase(store=FindingProvider.build_finding_store())
+
+    @staticmethod
     def build_list_findings_use_case():
         """The read-side use case backing the findings list API (CQRS read)."""
         from components.findings.application.use_cases.list_findings_use_case import (
