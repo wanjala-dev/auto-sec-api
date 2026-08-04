@@ -38,7 +38,9 @@ _SEVERITY_EMOJI = {
 # cannot silently start leaving the tenant.
 _ALLOWED_FIELDS: dict[str, tuple[str, ...]] = {
     DRAFT_PR_OPENED: ("repo", "pr_url"),
-    FINDING_CRITICAL: ("asset_urn", "source", "severity"),
+    # vulnerability_id/package carry the vulnerability identity (#247) so lookalike
+    # CVE titles ("CVE-… in openssl" across images) stay distinguishable in a channel.
+    FINDING_CRITICAL: ("asset_urn", "source", "severity", "vulnerability_id", "package"),
     SCAN_FAILED: ("engine", "account_id", "reason"),
     SCAN_DIGEST: ("engine", "critical", "high", "medium", "low", "total"),
     RISK_ACCEPT_EXPIRING: ("asset_urn", "expires_at"),
@@ -106,9 +108,7 @@ def _body_for(event_key: str, *, fields: dict, meta: dict) -> str:
     if event_key == SCAN_DIGEST:
         # The batch rule made legible: ONE message per scan with counts, never one
         # message per finding (ADR 0016 D5).
-        counts = " / ".join(
-            f"{fields[k]} {k}" for k in ("critical", "high", "medium", "low") if fields.get(k)
-        )
+        counts = " / ".join(f"{fields[k]} {k}" for k in ("critical", "high", "medium", "low") if fields.get(k))
         return counts or "No new findings."
     lines = [f"{key.replace('_', ' ').title()}: {value}" for key, value in fields.items()]
     return "\n".join(lines)

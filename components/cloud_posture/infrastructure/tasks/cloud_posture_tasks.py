@@ -37,6 +37,34 @@ from components.shared_kernel.application.ports.scanner_port import ScanTarget
 logger = logging.getLogger(__name__)
 
 
+def _publish_scan_failed(*, workspace_id, account_id: str, run_id: str) -> None:
+    """Emit ``ScanFailed`` so the funnel can alert that coverage is degraded (ADR 0016).
+
+    Loss-tolerant: the alert must never change the task's failure handling or its
+    return contract. ``reason`` stays a coarse token — a raw exception string could
+    carry internal paths/ARNs into a third-party chat channel.
+    """
+    try:
+        from components.shared_kernel.domain.events import ScanFailed
+        from components.shared_kernel.infrastructure.adapters.celery_event_publisher import (
+            CeleryEventPublisher,
+        )
+
+        CeleryEventPublisher().publish(
+            ScanFailed(
+                workspace_id=workspace_id,
+                source="cloud_posture.prowler",
+                engine="prowler",
+                run_id=run_id,
+                target_ref=str(account_id or ""),
+                account_id=str(account_id or ""),
+                reason="scan engine failure",
+            )
+        )
+    except Exception:
+        logger.exception("cloud_posture_scan_failed_event_publish_failed account=%s", account_id)
+
+
 def _set_link_status(connection_id, account_id: str, status: str) -> None:
     """Best-effort update of an account link's verification status (no-op if absent)."""
     from infrastructure.persistence.integrations.models import AwsAccountLink
@@ -165,6 +193,11 @@ def run_prowler_scan_for_account(connection_id: str, account_id: str) -> dict[st
         logger.exception("cloud_posture_scan failed connection=%s account=%s", connection_id, account_id)
         _set_link_status(connection_id, account_id, AwsAccountLink.Status.FAILED)
         fail_job(job_id=job_id, error="scan_failed")
+        _publish_scan_failed(
+            workspace_id=connection.workspace_id,
+            account_id=account_id,
+            run_id=str(job_id or ""),
+        )
         return {"success": False, "error": "scan_failed"}
 
     scan = ingest_scan_result(

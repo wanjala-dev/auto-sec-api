@@ -14,6 +14,7 @@ OCSF field paths (Prowler v4/v5): ``metadata.event_code`` (check id),
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from uuid import UUID
 
 from django.db import transaction
@@ -26,7 +27,7 @@ from components.cloud_posture.domain.value_objects.enums import (
     status_from_prowler,
 )
 from components.shared_kernel.application.ports.scanner_port import ScanResult
-from components.shared_kernel.domain.events import FindingObserved
+from components.shared_kernel.domain.events import FindingObserved, ScanCompleted
 from components.shared_kernel.domain.security import AssetUrn, NormalizedFinding, Severity
 
 logger = logging.getLogger(__name__)
@@ -167,7 +168,25 @@ def ingest_scan_result(
         created += int(was_created)
         observed_events.append(_finding_observed_from_normalized(workspace_id, finding))
 
-    _publish_finding_observed(observed_events, event_publisher)
+    # One ScanCompleted per ingest — the anti-flood digest signal (ADR 0016 D5):
+    # the notifications context turns it into ONE external message per scan.
+    severity_counts = Counter(f.severity.value for f in result.findings)
+    completed_event = ScanCompleted(
+        workspace_id=workspace_id,
+        source="cloud_posture.prowler",
+        engine=result.engine or "prowler",
+        scan_id=str(scan.id),
+        target_ref=str(account_id or ""),
+        account_id=str(account_id or ""),
+        total_checks=result.total_checks,
+        findings_observed=len(observed_events),
+        critical=severity_counts.get("critical", 0),
+        high=severity_counts.get("high", 0),
+        medium=severity_counts.get("medium", 0),
+        low=severity_counts.get("low", 0),
+    )
+
+    _publish_events([*observed_events, completed_event], event_publisher)
 
     logger.info(
         "cloud_posture_ingest workspace_id=%s account=%s checks=%s failed=%s findings_created=%s observed=%s",
@@ -248,8 +267,8 @@ def _finding_observed_from_normalized(workspace_id: UUID, finding: NormalizedFin
     )
 
 
-def _publish_finding_observed(events: list, event_publisher) -> None:
-    """Publish the observed-finding events after the scan's rows commit.
+def _publish_events(events: list, event_publisher) -> None:
+    """Publish the scan's events (FindingObserved* + ScanCompleted) after its rows commit.
 
     ``on_commit`` guards against publishing into an outer transaction that later rolls
     back (which would leave orphan findings). No-op when there is nothing to emit.

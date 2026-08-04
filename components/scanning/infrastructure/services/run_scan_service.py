@@ -3,7 +3,8 @@
 ``run_scan_and_ingest`` is the ONE place a scan is executed and its findings land:
 
     create ScanRun(running) → scanner.scan(target) → record counts + emit one
-    FindingObserved per finding (into the findings SSOT) → ScanRun(completed).
+    FindingObserved per finding (into the findings SSOT) + one ScanCompleted
+    (the per-scan digest signal, ADR 0016 D5) → ScanRun(completed).
 
 Every pillar (Prowler, Trivy, future arms) reuses this verbatim — a new pillar is a
 ``ScannerPort`` adapter + a registry entry, never a re-implementation of this dance
@@ -15,6 +16,7 @@ context; pillar-specific detail rides in each ``NormalizedFinding.attributes``.
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from uuid import UUID
 
 from django.db import transaction
@@ -25,7 +27,7 @@ from components.shared_kernel.application.ports.scanner_port import (
     ScannerPort,
     ScanTarget,
 )
-from components.shared_kernel.domain.events import FindingObserved
+from components.shared_kernel.domain.events import FindingObserved, ScanCompleted
 from components.shared_kernel.domain.security import NormalizedFinding
 
 logger = logging.getLogger(__name__)
@@ -76,6 +78,24 @@ def run_scan_and_ingest(
 
     observed = [_finding_observed(workspace_id, f) for f in result.findings]
 
+    # One ScanCompleted per run — the anti-flood digest signal (ADR 0016 D5): the
+    # notifications context turns it into ONE external message per completed scan.
+    severity_counts = Counter(f.severity.value for f in result.findings)
+    completed_event = ScanCompleted(
+        workspace_id=UUID(str(workspace_id)),
+        source=source,
+        engine=result.engine or source.rsplit(".", 1)[-1],
+        scan_id=str(run.id),
+        target_ref=target.identifier[:512],
+        account_id=str(account_id or ""),
+        total_checks=result.total_checks,
+        findings_observed=len(observed),
+        critical=severity_counts.get("critical", 0),
+        high=severity_counts.get("high", 0),
+        medium=severity_counts.get("medium", 0),
+        low=severity_counts.get("low", 0),
+    )
+
     with transaction.atomic():
         ScanRun.objects.filter(id=run.id).update(
             status=ScanRun.Status.COMPLETED,
@@ -86,7 +106,7 @@ def run_scan_and_ingest(
             failed_count=result.failed_count,
             completed_at=timezone.now(),
         )
-        _publish_after_commit(observed, event_publisher)
+        _publish_after_commit([*observed, completed_event], event_publisher)
 
     logger.info(
         "scan_completed source=%s target=%s run_id=%s total=%s failed=%s emitted=%s",
@@ -118,7 +138,7 @@ def _finding_observed(workspace_id: UUID, finding: NormalizedFinding) -> Finding
 
 
 def _publish_after_commit(events: list, event_publisher) -> None:
-    """Emit the observed-finding events only after the run row commits."""
+    """Emit the run's events (FindingObserved* + ScanCompleted) only after the run row commits."""
     if not events:
         return
 
