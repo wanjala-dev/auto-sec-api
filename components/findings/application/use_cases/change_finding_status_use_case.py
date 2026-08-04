@@ -44,14 +44,23 @@ class ChangeFindingStatusUseCase:
             raise InvalidFindingActionError(
                 f"Unknown finding action {command.action!r}; expected one of {sorted(VALID_ACTIONS)}."
             )
+        if command.action != SUPPRESS and (command.reason or command.expires_at is not None):
+            # Risk-acceptance context is suppress-only (ADR 0015 D9).
+            raise InvalidFindingActionError("reason/expires_at are only valid with action='suppress'.")
 
         existing = self._store.find_by_id(command.workspace_id, command.finding_id)
         if existing is None:
             raise FindingNotFoundError(f"Finding {command.finding_id} not found in workspace {command.workspace_id}.")
 
         updated = self._transition(existing, command)
-        if updated.status == existing.status:
-            # Idempotent no-op (e.g. resolving an already-resolved finding) — nothing to write.
+        if (
+            updated.status == existing.status
+            and updated.status_reason == existing.status_reason
+            and updated.suppress_expires_at == existing.suppress_expires_at
+        ):
+            # Idempotent no-op (e.g. resolving an already-resolved finding) — nothing to
+            # write. Re-suppressing with a NEW reason/expiry IS a write (it updates the
+            # risk-acceptance context, ADR 0015 D9).
             return ChangeFindingStatusResult(finding_id=existing.id, status=existing.status.value, changed=False)
 
         self._store.upsert(updated)
@@ -70,7 +79,7 @@ class ChangeFindingStatusUseCase:
         if command.action == RESOLVE:
             return finding.resolved(at=command.at)
         if command.action == SUPPRESS:
-            return finding.suppressed(at=command.at)
+            return finding.suppressed(at=command.at, reason=command.reason, expires_at=command.expires_at)
         if command.action == REOPEN:
             return finding.reopened()
         # Unreachable — action was validated above; kept exhaustive for safety.

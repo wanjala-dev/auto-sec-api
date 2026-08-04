@@ -22,6 +22,11 @@ class ChangeFindingStatusCommand:
     action: str
     at: datetime
     actor_id: str | None = None
+    # Risk-acceptance context (ADR 0015 D9) — valid ONLY with action="suppress"
+    # (InvalidFindingActionError otherwise). Both optional so one-click suppress
+    # keeps working; enforcement of the expiry (auto-reopen) is P2.
+    reason: str = ""
+    expires_at: datetime | None = None
 
 
 @dataclass(frozen=True)

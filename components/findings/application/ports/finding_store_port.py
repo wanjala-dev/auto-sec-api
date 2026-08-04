@@ -26,6 +26,8 @@ class FindingStorePort(ABC):
         status: str | None = None,
         source: str | None = None,
         asset_urn: str | None = None,
+        tag_groups: tuple[tuple[UUID, ...], ...] = (),
+        exclude_tag_ids: tuple[UUID, ...] = (),
         limit: int = 25,
         offset: int = 0,
     ) -> list[FindingEntity]:
@@ -35,6 +37,11 @@ class FindingStorePort(ABC):
         construction — a finding for another workspace is never returned. Plain entity
         read used by internal consumers (e.g. the cloud_graph inventory sync); the
         risk-ranked API read is ``list_ranked_findings``.
+
+        ``tag_groups`` is an AND of OR-groups of already-slug-resolved tag ids
+        (ADR 0015 D7); ``exclude_tag_ids`` are AND-NOT. A group that resolved to
+        zero tags matches nothing. The port stays slug-agnostic — slug→id
+        resolution happens once at the request layer via ``TagStorePort``.
         """
 
     @abstractmethod
@@ -46,6 +53,8 @@ class FindingStorePort(ABC):
         status: str | None = None,
         source: str | None = None,
         asset_urn: str | None = None,
+        tag_groups: tuple[tuple[UUID, ...], ...] = (),
+        exclude_tag_ids: tuple[UUID, ...] = (),
         order_by: str = "contextual_risk",
         limit: int = 25,
         offset: int = 0,
@@ -53,7 +62,8 @@ class FindingStorePort(ABC):
         """Return a filtered, paginated page of findings paired with their contextual-risk
         score (ADR 0013 D4 — the findings-list read). ``order_by="contextual_risk"``
         (default) sorts by the materialized ``FindingRisk.score`` desc (nulls last), else
-        most-recently-seen. Each row carries its ``FindingRiskView`` (or None if unscored)."""
+        most-recently-seen. Each row carries its ``FindingRiskView`` (or None if unscored).
+        Tag filters per ``list_findings``; rows carry their live tag refs (chip read)."""
 
     @abstractmethod
     def iter_scorable_findings(self, workspace_id: UUID, *, finding_id: UUID | None = None) -> Iterator[FindingEntity]:
@@ -76,6 +86,8 @@ class FindingStorePort(ABC):
         status: str | None = None,
         source: str | None = None,
         asset_urn: str | None = None,
+        tag_groups: tuple[tuple[UUID, ...], ...] = (),
+        exclude_tag_ids: tuple[UUID, ...] = (),
     ) -> int:
         """Total findings matching the same filter set (for pagination). Read side."""
 

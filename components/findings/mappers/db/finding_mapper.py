@@ -4,6 +4,17 @@ from __future__ import annotations
 
 from components.findings.domain.entities.finding_entity import FindingEntity
 from components.shared_kernel.domain.security import FindingStatus, Severity
+from components.shared_kernel.domain.tagging import TagRef
+
+
+def _tag_refs(model) -> tuple[TagRef, ...]:
+    """Project prefetched live tag links (``to_attr="prefetched_tag_links"`` — set
+    only by the list read's ``Prefetch``, ADR 0015 D7) into read refs. A queryset
+    that did not prefetch simply yields no tags — never a lazy per-row query."""
+    links = getattr(model, "prefetched_tag_links", None)
+    if not links:
+        return ()
+    return tuple(TagRef(id=link.tag.id, slug=link.tag.slug, name=link.tag.name, color=link.tag.color) for link in links)
 
 
 def to_finding_entity(model) -> FindingEntity:
@@ -23,6 +34,9 @@ def to_finding_entity(model) -> FindingEntity:
         compliance=model.compliance or {},
         attributes=model.attributes or {},
         resolved_at=model.resolved_at,
+        status_reason=model.status_reason,
+        suppress_expires_at=model.suppress_expires_at,
+        tags=_tag_refs(model),
     )
 
 
@@ -44,6 +58,8 @@ def to_finding_defaults(finding: FindingEntity) -> dict:
         "attributes": finding.attributes,
         "last_seen_at": finding.last_seen_at,
         "resolved_at": finding.resolved_at,
+        "status_reason": finding.status_reason,
+        "suppress_expires_at": finding.suppress_expires_at,
     }
 
 

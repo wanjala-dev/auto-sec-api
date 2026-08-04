@@ -40,7 +40,10 @@ class SampleDataModeView(APIView):
 
 
 class FindingListView(APIView):
-    """GET /findings/workspaces/<ws>/?severity=&status=&source=&limit=&offset= — the SSOT list."""
+    """GET /findings/workspaces/<ws>/?severity=&status=&source=&tag=&exclude_tag=&limit=&offset=
+    — the SSOT list. ``tag`` is repeatable (each occurrence an OR-group of
+    comma-separated slugs; occurrences AND together); ``exclude_tag`` is AND-NOT
+    (ADR 0015 D7)."""
 
     permission_classes = (permissions.IsAuthenticated,)
     name = "findings-list"
@@ -55,7 +58,10 @@ class FindingListView(APIView):
             return Response({"success": False, "error": "forbidden"}, status=403)
 
         req = ListFindingsRequest.from_request(request, workspace_id)
-        page = FindingProvider.build_list_findings_use_case().execute(req.to_query())
+        tag_store = None
+        if req.tag_slug_groups or req.exclude_tag_slugs:
+            tag_store = FindingProvider.build_tag_vocabulary_port()
+        page = FindingProvider.build_list_findings_use_case().execute(req.to_query(tag_store=tag_store))
         return Response({"success": True, "data": FindingResource.page(page)})
 
 
@@ -102,6 +108,57 @@ class FindingStatusView(APIView):
                     "id": str(result.finding_id),
                     "status": result.status,
                     "changed": result.changed,
+                },
+            }
+        )
+
+
+class FindingTagView(APIView):
+    """POST /findings/workspaces/<ws>/<finding_id>/tags/ — tag/untag a finding (ADR 0015 D6).
+
+    ONE endpoint, modeled 1:1 on ``FindingStatusView``: membership-gated (any
+    workspace member acts — same gate as status), single POST body
+    ``{"add": [slugs…], "remove": [slugs…]}`` subsumes apply + remove (no separate
+    DELETE route). ``add`` auto-creates user tags on first use (D4); ``remove`` of
+    unknown slugs is a no-op. Returns the finding's full post-change tag set so the
+    HUD chip row re-renders from the response.
+    """
+
+    permission_classes = (permissions.IsAuthenticated,)
+    name = "findings-tags"
+
+    def post(self, request, workspace_id, finding_id):
+        from django.utils import timezone
+
+        from components.findings.api.requests.tag_finding_request import TagFindingRequest
+        from components.findings.api.resources.finding_resource import FindingResource
+        from components.findings.application.providers.finding_provider import FindingProvider
+        from components.findings.domain.errors import FindingNotFoundError
+        from components.findings.infrastructure.services.workspace_access import is_workspace_member
+        from components.shared_kernel.domain.errors import ValidationError as DomainValidationError
+
+        if not is_workspace_member(user=request.user, workspace_id=workspace_id):
+            return Response({"success": False, "error": "forbidden"}, status=403)
+
+        req = TagFindingRequest.from_request(request, workspace_id, finding_id)
+        try:
+            result = FindingProvider.build_tag_finding_use_case().execute(req.to_command(at=timezone.now()))
+        except FindingNotFoundError:
+            return Response({"success": False, "error": "not_found"}, status=404)
+        except DomainValidationError as exc:
+            # Tagging's domain errors (reserved_tag / tag_limit_exceeded / invalid_tag)
+            # are caught at the shared-kernel taxonomy level — this controller never
+            # imports another context's domain (Rule 3). Each error carries its own
+            # ``api_code`` so the D6 contract's error strings survive the boundary.
+            code = getattr(exc, "api_code", "invalid_tag")
+            return Response({"success": False, "error": code, "detail": str(exc)}, status=400)
+
+        return Response(
+            {
+                "success": True,
+                "data": {
+                    "id": str(result.finding_id),
+                    "tags": [FindingResource.tag_ref_dict(ref) for ref in result.tags],
                 },
             }
         )
