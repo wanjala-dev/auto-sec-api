@@ -1,7 +1,7 @@
 """Fernet envelope for integrations secrets (Slack tokens, GitHub PATs).
 
 The ONE encryption envelope for every secret column in the integrations
-persistence app (``SinkConnector.secret_ciphertext``,
+persistence app (``DeliveryConnection.secret_ciphertext``,
 ``GitHubConnection.token_ciphertext``). Uses Fernet (AES128 + HMAC) derived
 from the project SECRET_KEY — same derivation as the payments envelope
 (``components/payments/infrastructure/adapters/encryption.py``), kept

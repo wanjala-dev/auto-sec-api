@@ -18,8 +18,11 @@ Design (validated against how Wiz/Panther/Datadog-class vendors onboard):
   DLQ for poison messages); S3 prefix-listing checkpoint as the fallback
   channel. Event-level idempotency lives in the findings pipeline (dedupe on
   CloudTrail ``eventID`` — duplicates are documented AWS behaviour).
-* **SinkConnector** — outbound alert sinks (Slack first). Secrets are stored
-  via the app-layer encryption envelope, never plaintext.
+* **DeliveryConnection** — outbound delivery channels (Slack first; Teams /
+  Discord / generic webhook / SMTP follow as adapters land, ADR 0016). One row
+  per destination, carrying its own event subscriptions and severity floor.
+  Secrets are stored via the app-layer encryption envelope, never plaintext —
+  note an incoming-webhook URL *is* a bearer credential and lives there too.
 
 Everything is workspace-scoped (row-level tenancy, same as the rest of the
 platform).
@@ -319,7 +322,7 @@ class GitHubConnection(models.Model):
     # boundary. A repo not on this list is rejected before any API call.
     repo_allowlist = models.JSONField(default=list, blank=True)
     # Encrypted fine-grained PAT — Fernet envelope applied at the application
-    # layer (same envelope as SinkConnector secrets); NEVER plaintext.
+    # layer (same envelope as DeliveryConnection secrets); NEVER plaintext.
     token_ciphertext = models.TextField(blank=True, default="")
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.CONNECTED)
     last_used_at = models.DateTimeField(null=True, blank=True)
@@ -385,7 +388,7 @@ class VcsConnection(models.Model):
     commit_author_name = models.CharField(max_length=120, blank=True, default="")
     commit_author_email = models.EmailField(blank=True, default="")
     # Encrypted fine-grained PAT — Fernet envelope at the application layer (same
-    # envelope as SinkConnector/GitHubConnection secrets); NEVER plaintext.
+    # envelope as DeliveryConnection/GitHubConnection secrets); NEVER plaintext.
     token_ciphertext = models.TextField(blank=True, default="")
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.CONNECTED)
     last_used_at = models.DateTimeField(null=True, blank=True)
@@ -402,25 +405,67 @@ class VcsConnection(models.Model):
         return f"{self.name} [{self.provider}] ({self.workspace_id})"
 
 
-class SinkConnector(models.Model):
+def default_delivery_events() -> list[str]:
+    """Event keys a new connection subscribes to (ADR 0016 D4 — sane defaults, all on).
+
+    Mirrors the notifications ``EXTERNAL_EVENT_CATALOG``. Kept as a literal here so
+    persistence stays free of bounded-context imports; a fitness test in the
+    notifications context asserts the two never drift.
+    """
+    return ["draft_pr_opened", "finding_critical", "scan_failed", "scan_digest"]
+
+
+class DeliveryConnection(models.Model):
+    """One outbound destination a workspace has connected (ADR 0016).
+
+    Workspace-level by nature — a team channel, not a personal inbox — which is why
+    the notifications funnel delivers to it once per event rather than once per
+    recipient.
+    """
+
     class Kind(models.TextChoices):
         SLACK = "slack", "Slack"
         WEBHOOK = "webhook", "Generic webhook"
 
+    class AuthMode(models.TextChoices):
+        WEBHOOK_URL = "webhook_url", "Incoming webhook URL"
+        BOT_TOKEN = "bot_token", "Bot token"
+
+    class Status(models.TextChoices):
+        CONNECTED = "connected", "Connected"
+        DISABLED = "disabled", "Disabled"
+        ERROR = "error", "Error"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name="sink_connectors")
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name="delivery_connections")
     kind = models.CharField(max_length=16, choices=Kind.choices)
     name = models.CharField(max_length=120)
-    # Non-secret config (channel name, min severity, url host…).
+    auth_mode = models.CharField(max_length=16, choices=AuthMode.choices, default=AuthMode.WEBHOOK_URL)
+    # Non-secret config (channel label, display hints).
     config = models.JSONField(default=dict, blank=True)
-    # Encrypted secret material (bot token / signing secret) — Fernet envelope
+    # Subscribed event keys; empty list means "deliver nothing" (explicit, not a
+    # fallback to defaults — an operator who unticks everything meant it).
+    events = models.JSONField(default=default_delivery_events, blank=True)
+    # The noise dial. Promoted out of ``config`` so it is queryable and typed;
+    # mirrors components.integrations.domain.alert_policy.DEFAULT_MIN_SEVERITY.
+    min_severity = models.CharField(max_length=16, default="high")
+    # Encrypted credential — bot token OR incoming-webhook URL. Fernet envelope
     # applied at the application layer; NEVER plaintext.
     secret_ciphertext = models.TextField(blank=True, default="")
     is_enabled = models.BooleanField(default=True)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.CONNECTED)
+    last_verified_at = models.DateTimeField(null=True, blank=True)
     last_delivery_at = models.DateTimeField(null=True, blank=True)
     last_error = models.TextField(blank=True, default="")
+    created_by = models.ForeignKey("users.CustomUser", null=True, blank=True, on_delete=models.SET_NULL)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        indexes = [models.Index(fields=["workspace", "kind", "is_enabled"])]
+        indexes = [
+            models.Index(fields=["workspace", "kind", "is_enabled"]),
+            models.Index(fields=["workspace", "status"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.name or self.kind} [{self.kind}] ({self.workspace_id})"

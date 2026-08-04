@@ -8,7 +8,7 @@ from components.workspace.domain.policies.workspace_setup_policy_service import 
 from infrastructure.persistence.findings.models import Finding
 from infrastructure.persistence.integrations.models import (
     AwsOrganizationConnection,
-    SinkConnector,
+    DeliveryConnection,
 )
 from infrastructure.persistence.scanning.models import ScanRun
 from infrastructure.persistence.team.models import Team
@@ -65,6 +65,6 @@ class OrmWorkspaceSetupQueryRepository:
 
     @staticmethod
     def _has_slack_connected(workspace) -> bool:
-        return SinkConnector.objects.filter(
-            workspace=workspace, kind=SinkConnector.Kind.SLACK, is_enabled=True
+        return DeliveryConnection.objects.filter(
+            workspace=workspace, kind=DeliveryConnection.Kind.SLACK, is_enabled=True
         ).exists()
