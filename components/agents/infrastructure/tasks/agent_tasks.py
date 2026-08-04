@@ -432,9 +432,11 @@ def _mark_deep_run_failed(thread_id: str, error: str) -> None:
 @shared_task(
     bind=True,
     name="infrastructure.ai.agents.tasks.run_deep_plan_and_run",
-    # Pin to the AI-teammate worker's queue: the global route table is inert
-    # (settings use the dead `CELERY_ROUTES` name, not `CELERY_TASK_ROUTES` —
-    # same pin-at-the-task pattern as cloud_posture.run_prowler_scan_for_account).
+    # Pin to the AI-teammate worker's queue. The global route table
+    # (infrastructure/celery/routes.py) also routes the whole
+    # `infrastructure.ai.agents.tasks.*` family there; the explicit pin is kept
+    # as belt-and-suspenders (same pin-at-the-task pattern as
+    # cloud_posture.run_prowler_scan_for_account).
     queue="ai_teammate",
     # A deep run is planner + a batch of agent tasks — same 3x budget as
     # dispatch_finding_specialist, env-tunable via AGENT_TASK_SOFT_TIME_LIMIT.
