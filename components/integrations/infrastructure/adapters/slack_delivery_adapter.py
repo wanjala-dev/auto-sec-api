@@ -20,11 +20,11 @@ hop to follow.
 from __future__ import annotations
 
 import logging
-from urllib.parse import urlparse
 
 import requests
 from django.views.decorators.debug import sensitive_variables
 
+from components.integrations.domain.delivery_policy import is_slack_webhook_url
 from components.integrations.application.ports.delivery_channel_port import (
     DeliveryChannelPort,
     DeliveryHealth,
@@ -37,8 +37,6 @@ logger = logging.getLogger(__name__)
 
 _SLACK_POST_MESSAGE_URL = "https://slack.com/api/chat.postMessage"
 _SLACK_AUTH_TEST_URL = "https://slack.com/api/auth.test"
-_WEBHOOK_HOST = "hooks.slack.com"
-_WEBHOOK_PATH_PREFIX = "/services/"
 _TIMEOUT_SECONDS = 10
 
 # Slack errors that will never succeed on retry — the credential or destination
@@ -57,25 +55,6 @@ _PERMANENT_ERRORS = frozenset(
 
 _VERIFY_TITLE = "Auto-Sec connected"
 _VERIFY_BODY = "This channel will receive Auto-Sec alerts."
-
-
-def is_slack_webhook_url(url: str) -> bool:
-    """True when ``url`` is a Slack incoming-webhook URL.
-
-    Strict allowlist (ADR 0016 D6): https, exact host, ``/services/`` path prefix.
-    Anything else is rejected before a request is ever made, which is what lets
-    this kind skip the generic SSRF guard.
-    """
-    try:
-        parsed = urlparse((url or "").strip())
-    except ValueError:
-        return False
-    return (
-        parsed.scheme == "https"
-        and parsed.hostname == _WEBHOOK_HOST
-        and parsed.path.startswith(_WEBHOOK_PATH_PREFIX)
-        and len(parsed.path) > len(_WEBHOOK_PATH_PREFIX)
-    )
 
 
 class SlackDeliveryAdapter(DeliveryChannelPort):

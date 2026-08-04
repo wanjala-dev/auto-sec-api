@@ -70,3 +70,27 @@ def get_delivery_connection_repository():
     )
 
     return DeliveryConnectionRepository()
+
+
+def get_delivery_connection_service():
+    """Composition root for the connection lifecycle (list/create/update/delete/verify)."""
+    from components.integrations.application.delivery_connection_service import (
+        DeliveryConnectionService,
+    )
+    from components.integrations.application.providers.secret_envelope_provider import (
+        decrypt_secret,
+        encrypt_secret,
+    )
+
+    return DeliveryConnectionService(
+        _repo=get_delivery_connection_repository(),
+        _resolve_adapter=lambda kind: get_delivery_channel_provider().get(kind),
+        _encrypt=encrypt_secret,
+        _decrypt=decrypt_secret,
+    )
+
+
+def enabled_delivery_kinds() -> tuple[str, ...]:
+    """Kinds a workspace can connect today — drives the Settings picker and the API's
+    accepted-kind check, so the two can never disagree."""
+    return get_delivery_channel_provider().kinds()
