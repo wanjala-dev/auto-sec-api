@@ -1,7 +1,7 @@
 """Application-layer façade for the integrations Fernet secret envelope.
 
 The ONE entry point application code (and callers in other contexts' allowed
-layers) uses to encrypt/decrypt integrations secrets — ``SinkConnector``
+layers) uses to encrypt/decrypt integrations secrets — ``DeliveryConnection``
 tokens and ``GitHubConnection`` PATs alike. Provider files are the only
 application-layer slot allowed to touch own-context infrastructure (they are
 the composition root), which keeps ``cryptography``/Django out of use cases.

@@ -49,6 +49,7 @@ from components.integrations.api.requests.vcs_connection_request import (
 from components.integrations.api.resources.aws_connection_resource import (
     AwsConnectionResource,
 )
+from components.integrations.api.resources.draft_pr_preview_resource import DraftPrPreviewResource
 from components.integrations.api.resources.draft_pr_resource import DraftPrResource
 from components.integrations.api.resources.log_source_resource import LogSourceResource
 from components.integrations.api.resources.triage_capability_resource import (

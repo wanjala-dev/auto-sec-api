@@ -37,4 +37,7 @@ def test_workspace_bootstrap_provider_builds_use_case():
         use_case.finalize_bootstrap_use_case.workspace_bootstrap_store
         is use_case.setup_bootstrap_use_case.workspace_bootstrap_store
     )
-    assert use_case.budget_bootstrap_use_case.__class__.__name__ == "BootstrapWorkspaceBudgetUseCase"
+    # NOTE: the budget bootstrap assertion was dropped — ``budget`` is one of the
+    # nonprofit contexts the autosec fork removed, so ``budget_bootstrap_use_case``
+    # no longer exists on the use case. Fork-drift fixture, trimmed rather than
+    # baselined (CLAUDE.md: "fix the fixture, never baseline a real violation").
