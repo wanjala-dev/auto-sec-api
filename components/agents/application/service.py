@@ -156,6 +156,35 @@ class AgentsService:
         quota.record_run(status.workspace_id)
         return result
 
+    # ── Async deep-run enqueue (the HTTP entry points) ────────────────
+    #
+    # A deep run is minutes of LLM wall-clock; executing it inside the
+    # request path blocked the single daphne ASGI process past the k8s
+    # liveness timeout and got the api pod killed. The HTTP controllers
+    # call these enqueue methods instead: gate up-front so the API fails
+    # fast with the same AiUnavailable/AiRunLimitExceeded semantics, queue
+    # the run, return the pending plan_id. Metering is deliberately NOT
+    # recorded here — the worker executes through ``deep_plan_and_run`` /
+    # ``deep_run_plan`` above, which re-check and record on success, so
+    # "a rejected run never consumes allowance and a failed run isn't
+    # tallied" still holds and nothing is double-counted.
+
+    def enqueue_deep_plan_and_run(self, command) -> Any:
+        """Gate, then queue a one-shot deep plan+run for background execution."""
+        self._raise_if_ai_killed(getattr(command, "workspace_id", None))
+        quota = self.provider.build_ai_run_quota()
+        self._raise_if_over(quota.check_for_workspace(getattr(command, "workspace_id", None)))
+        use_case = self.provider.build_deep_plan_and_run_use_case()
+        return use_case.enqueue(command)
+
+    def enqueue_deep_run_plan(self, command) -> Any:
+        """Gate, then queue a pre-built-plan deep run for background execution."""
+        self._raise_if_ai_killed(getattr(command, "workspace_id", None))
+        quota = self.provider.build_ai_run_quota()
+        self._raise_if_over(quota.check_for_workspace(getattr(command, "workspace_id", None)))
+        use_case = self.provider.build_deep_run_plan_use_case()
+        return use_case.enqueue(command)
+
     # ── Commands still dispatched directly (not yet on bus) ──────────
 
     def execute_agent(self, command) -> Any:
