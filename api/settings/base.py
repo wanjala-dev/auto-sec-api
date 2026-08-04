@@ -120,6 +120,7 @@ INSTALLED_APPS = [
     "infrastructure.persistence.cloud_posture",
     "infrastructure.persistence.scanning",
     "infrastructure.persistence.findings",
+    "infrastructure.persistence.tagging",
     "infrastructure.persistence.cloud_graph",
     "infrastructure.persistence.response",
     "infrastructure.persistence.remediation",
