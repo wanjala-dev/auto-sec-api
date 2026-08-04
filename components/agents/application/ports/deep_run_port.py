@@ -46,3 +46,49 @@ class DeepRunPort(ABC):
     ) -> dict:
         """Generate a plan from *goal* via LLM, then execute it."""
         ...
+
+    @abstractmethod
+    def enqueue_run_plan(
+        self,
+        *,
+        raw_plan: dict,
+        plan_id: str,
+        agent_type: str,
+        user_id: str,
+        workspace_id: str,
+        team_id: str | None = None,
+        agent_config: dict,
+        thread_id: str,
+        sync_to_kanban: bool = True,
+    ) -> None:
+        """Queue :meth:`run_plan` for background execution.
+
+        Records a pending run keyed by ``thread_id`` so clients can follow it
+        immediately, then hands the execution to a background worker. Never
+        blocks on the run itself; enqueue failures raise.
+        """
+        ...
+
+    @abstractmethod
+    def enqueue_plan_and_run(
+        self,
+        *,
+        goal: str,
+        plan_id: str,
+        agent_type: str,
+        user_id: str,
+        workspace_id: str,
+        team_id: str | None = None,
+        agent_config: dict,
+        model_name: str | None = None,
+        sync_to_kanban: bool = True,
+        extra_context: dict | None = None,
+        deep_pack: str | None = None,
+    ) -> None:
+        """Queue :meth:`plan_and_run` for background execution.
+
+        Records a pending run keyed by ``plan_id`` so clients can follow it
+        immediately, then hands the execution to a background worker. Never
+        blocks on the run itself; enqueue failures raise.
+        """
+        ...

@@ -46,7 +46,6 @@ from components.agents.application.commands.agent_lifecycle_command import (
 )
 from components.agents.application.commands.deep_run_command import (
     DeepPlanAndRunCommand,
-    DeepRunFailure,
     DeepRunPlanCommand,
 )
 from components.agents.application.commands.pdf_chat_command import (
@@ -1238,7 +1237,12 @@ class AgentViewSet(viewsets.GenericViewSet):
     @_schema(request_body=True)
     @action(detail=False, methods=["post"], url_path="deep/run-plan")
     def deep_run_plan(self, request):
-        """Execute a provided PlanSpec with an existing agent type - delegates to DeepRunPlanUseCase."""
+        """Execute a provided PlanSpec, enqueued — returns 202 immediately.
+
+        PlanSpec validation stays here at the API boundary; the run itself
+        executes on the ai-teammate Celery worker. Follow it by ``plan_id``
+        (``agent_run`` WS stream / ``GET /ai/agents/runs/{plan_id}/``).
+        """
         raw_plan = request.data.get("plan") or {}
         agent_type = request.data.get("agent_type") or "task_agent"
         workspace_id = request.data.get("workspace_id") or raw_plan.get("workspace_id")
@@ -1261,7 +1265,9 @@ class AgentViewSet(viewsets.GenericViewSet):
         raw_plan = default_plan_payload(raw_plan, str(workspace.id), team_id)
 
         try:
-            validated_plan = PlanSpec.model_validate(raw_plan)
+            # Validation stays at the API boundary (reject bad plans with a
+            # 400 before enqueueing); the worker re-validates on execution.
+            PlanSpec.model_validate(raw_plan)
         except Exception as exc:
             return Response({"error": "Invalid plan", "detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1277,20 +1283,29 @@ class AgentViewSet(viewsets.GenericViewSet):
         )
 
         try:
-            result = agents_service.deep_run_plan(command, validated_plan=validated_plan)
+            result = agents_service.enqueue_deep_run_plan(command)
         except AiUnavailable as exc:
             return _ai_unavailable_response(exc)
         except AiRunLimitExceeded as exc:
             return _ai_run_limit_response(exc)
 
-        if isinstance(result, DeepRunFailure):
-            return Response({"error": result.error}, status=result.status_code)
-        return Response({"plan_id": result.plan_id, "state": result.state}, status=status.HTTP_200_OK)
+        return Response(
+            {"plan_id": result.plan_id, "status": "pending", "state": result.state},
+            status=status.HTTP_202_ACCEPTED,
+        )
 
     @_schema(request_body=True)
     @action(detail=False, methods=["post"], url_path="deep/plan-and-run")
     def deep_plan_and_run(self, request):
-        """One-shot plan+execute - delegates to DeepPlanAndRunUseCase."""
+        """One-shot plan+execute, enqueued — returns 202 immediately.
+
+        The run executes on the ai-teammate Celery worker (a deep run is
+        minutes of LLM wall-clock and must never block the ASGI process).
+        Follow it by ``plan_id``: the ``agent_run`` WS stream emits the
+        DeepRunLog events exactly as before, and ``GET /ai/agents/runs/
+        {plan_id}/`` serves the state snapshot with the pending → running →
+        completed/failed status transitions.
+        """
         goal = request.data.get("goal")
         agent_type = request.data.get("agent_type") or "task_agent"
         workspace_id = request.data.get("workspace_id")
@@ -1320,15 +1335,16 @@ class AgentViewSet(viewsets.GenericViewSet):
         )
 
         try:
-            result = agents_service.deep_plan_and_run(command)
+            result = agents_service.enqueue_deep_plan_and_run(command)
         except AiUnavailable as exc:
             return _ai_unavailable_response(exc)
         except AiRunLimitExceeded as exc:
             return _ai_run_limit_response(exc)
 
-        if isinstance(result, DeepRunFailure):
-            return Response({"error": result.error}, status=result.status_code)
-        return Response({"plan_id": result.plan_id, "state": result.state}, status=status.HTTP_200_OK)
+        return Response(
+            {"plan_id": result.plan_id, "status": "pending", "state": result.state},
+            status=status.HTTP_202_ACCEPTED,
+        )
 
     # ── Engagement actions (merged from AgentEngagementViewSet) ──────────
 
