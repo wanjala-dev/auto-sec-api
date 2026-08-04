@@ -298,13 +298,16 @@ class ProjectGetSerializer(serializers.ModelSerializer):
         ]
 
     def get_tasks(self, obj):
+        # ``status=ARCHIVED`` is the Task soft-delete state (recycle-bin
+        # trash) — soft-deleted tasks must not leak into project reads.
         prefetched_tasks = getattr(obj, "_prefetched_objects_cache", {}).get("tasks")
         if prefetched_tasks is not None:
-            tasks = prefetched_tasks
+            tasks = [task for task in prefetched_tasks if task.status != Task.ARCHIVED]
         else:
             tasks = (
                 obj.tasks.select_related("column")
                 .prefetch_related("assigned_to__profile", "assigned_to")
+                .exclude(status=Task.ARCHIVED)
                 .order_by("order", "created_at")
             )
         if isinstance(tasks, list):
@@ -641,9 +644,15 @@ class ColumnSerializer(WritableNestedModelSerializer, serializers.ModelSerialize
         # here previously ignored the drag-persisted `order` field — every
         # in-column reorder reverted on the next board fetch. Board order is
         # ('order', 'created_at'), matching ProjectSerializer's task listing.
+        #
+        # ``status=ARCHIVED`` is the Task soft-delete state (recycle-bin
+        # trash keeps the column FK). Without the exclusion a trashed card
+        # reappeared on the board on the very next columns fetch, while also
+        # sitting in the recycle bin — mirrors project_repository's task reads.
         tasks = (
             obj.tasks.select_related("column")
             .prefetch_related("assigned_to__profile", "assigned_to")
+            .exclude(status=Task.ARCHIVED)
             .order_by("order", "created_at")
         )
         return TaskSerializer(tasks, many=True, context=self.context).data
