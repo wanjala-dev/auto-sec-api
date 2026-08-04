@@ -63,6 +63,9 @@ class _FakeStore(FindingStorePort):
     ):
         return []
 
+    def get_ranked_finding(self, workspace_id, finding_id):
+        return None
+
     def iter_scorable_findings(self, workspace_id, *, finding_id=None):
         return iter(())
 
@@ -125,6 +128,25 @@ def test_first_observation_creates_open_and_raises_new():
     assert raised.is_new is True
     assert raised.finding_id == result.finding_id
     assert raised.severity == "high"
+
+
+def test_raised_event_carries_vulnerability_identity_from_attributes():
+    """SCA attributes (Trivy: vulnerability_id + pkg_name) ride onto FindingRaised so
+    outbound alerts can disambiguate lookalike titles without a cross-context read."""
+    uc, _store, pub = _use_case()
+    uc.execute(_cmd(attributes={"vulnerability_id": "CVE-2025-12345", "pkg_name": "openssl"}))
+    raised = pub.published[0]
+    assert raised.vulnerability_id == "CVE-2025-12345"
+    assert raised.package == "openssl"
+
+
+def test_raised_event_vulnerability_fields_default_empty():
+    """A CSPM finding with no vulnerability identity emits empty strings (additive field)."""
+    uc, _store, pub = _use_case()
+    uc.execute(_cmd())
+    raised = pub.published[0]
+    assert raised.vulnerability_id == ""
+    assert raised.package == ""
 
 
 def test_reobservation_unchanged_bumps_last_seen_without_raising():

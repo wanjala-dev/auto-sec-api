@@ -33,6 +33,54 @@ logger = logging.getLogger(__name__)
 _SEVERITY_EMOJI = {"critical": "🚨", "high": "🔴", "medium": "🟠", "low": "🟡", "informational": "⚪"}
 
 
+def _frontend_base_url() -> str:
+    """The frontend base for HUD deep links, or "" when none is configured.
+
+    Read via the ``SettingsPort`` adapter (locally imported) — the application layer
+    never imports ``django.conf`` (same pattern as content's newsletter links).
+    ``FRONTEND_URL`` is the SSOT; ``LOCALHOST_FRONTEND_URL`` is the legacy fallback.
+    """
+    from components.shared_kernel.infrastructure.adapters.django_settings_adapter import (
+        DjangoSettingsAdapter,
+    )
+
+    adapter = DjangoSettingsAdapter()
+    base = adapter.get("FRONTEND_URL", "") or adapter.get("LOCALHOST_FRONTEND_URL", "")
+    return str(base or "").rstrip("/")
+
+
+def _finding_deep_link(event: FindingRaised) -> str:
+    """Absolute HUD deep link that opens the FINDINGS panel on this finding.
+
+    Matches the frontend route: ``/ai/v2/<workspace>?panel=findings&finding=<id>``
+    (CommandCenterV2's ``?panel=`` deep-link mechanism). "" when no base is set —
+    the adapter then simply renders no link.
+    """
+    base = _frontend_base_url()
+    if not base:
+        return ""
+    return f"{base}/ai/v2/{event.workspace_id}?panel=findings&finding={event.finding_id}"
+
+
+def _message_body(event: FindingRaised) -> str:
+    """Notification-grade summary lines only (ADR 0016 D6) — never the raw payload.
+
+    The vulnerability id + package (when the source carries them) keep lookalike
+    titles distinguishable — two "CVE-… in openssl" alerts from different images
+    read identically without them.
+    """
+    lines = []
+    if event.vulnerability_id:
+        vuln = event.vulnerability_id
+        if event.package:
+            vuln = f"{vuln} · Package: {event.package}"
+        lines.append(f"Vulnerability: {vuln}")
+    lines.append(f"Asset: `{event.asset_urn}`")
+    lines.append(f"Source: {event.source}")
+    lines.append(f"Status: {event.status}")
+    return "\n".join(lines)
+
+
 @subscribes_to(FindingRaised)
 def deliver_finding_to_slack(event: FindingRaised) -> None:
     if not event.is_new:
@@ -50,8 +98,11 @@ def deliver_finding_to_slack(event: FindingRaised) -> None:
     provider = get_delivery_channel_provider()
     message = DeliveryMessage(
         title=f"{_SEVERITY_EMOJI.get(event.severity, '•')} {event.severity.title()} finding: {event.title}"[:250],
-        body=f"Asset: `{event.asset_urn}`\nSource: {event.source}\nStatus: {event.status}",
+        body=_message_body(event),
         severity=event.severity,
+        # Deep link into the HUD on THIS finding — the Slack adapter renders it as
+        # the "View in Auto-Sec" button and appends it to the plain-text fallback.
+        link=_finding_deep_link(event),
     )
 
     delivered = 0
@@ -61,9 +112,7 @@ def deliver_finding_to_slack(event: FindingRaised) -> None:
         try:
             adapter = provider.get(connection.kind)
         except UnsupportedDeliveryChannelError:
-            logger.warning(
-                "delivery_channel_unsupported connection_id=%s kind=%s", connection.id, connection.kind
-            )
+            logger.warning("delivery_channel_unsupported connection_id=%s kind=%s", connection.id, connection.kind)
             continue
         result = adapter.deliver(connection, message)
         if result.ok:

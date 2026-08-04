@@ -18,6 +18,13 @@ class FindingStorePort(ABC):
         """Return the finding by its id (workspace-scoped), or None. Read side."""
 
     @abstractmethod
+    def get_ranked_finding(self, workspace_id: UUID, finding_id: UUID) -> RankedFinding | None:
+        """Return one finding by id paired with its contextual-risk view (or None risk if
+        unscored), or None when the id doesn't exist in the workspace. The single-finding
+        read behind deep links (e.g. a Slack alert opening the HUD on that finding) —
+        same row shape as ``list_ranked_findings`` so the detail render matches the list."""
+
+    @abstractmethod
     def list_findings(
         self,
         workspace_id: UUID,

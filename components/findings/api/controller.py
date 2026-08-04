@@ -65,6 +65,32 @@ class FindingListView(APIView):
         return Response({"success": True, "data": FindingResource.page(page)})
 
 
+class FindingDetailView(APIView):
+    """GET /findings/workspaces/<ws>/<finding_id>/ — one finding from the SSOT.
+
+    The read behind HUD deep links (a Slack alert's "View in Auto-Sec" opens
+    ``?panel=findings&finding=<id>``): fetch the exact finding regardless of which
+    list page it sorts onto. Same row shape as the list (risk + tags included);
+    membership-gated like the list; 404 when the id isn't in the workspace.
+    """
+
+    permission_classes = (permissions.IsAuthenticated,)
+    name = "findings-detail"
+
+    def get(self, request, workspace_id, finding_id):
+        from components.findings.api.resources.finding_resource import FindingResource
+        from components.findings.application.providers.finding_provider import FindingProvider
+        from components.findings.infrastructure.services.workspace_access import is_workspace_member
+
+        if not is_workspace_member(user=request.user, workspace_id=workspace_id):
+            return Response({"success": False, "error": "forbidden"}, status=403)
+
+        row = FindingProvider.build_get_finding_use_case().execute(workspace_id, finding_id)
+        if row is None:
+            return Response({"success": False, "error": "not_found"}, status=404)
+        return Response({"success": True, "data": FindingResource.from_ranked(row)})
+
+
 class FindingStatusView(APIView):
     """POST /findings/workspaces/<ws>/<finding_id>/status/ — operator lifecycle action.
 

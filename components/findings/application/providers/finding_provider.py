@@ -51,6 +51,15 @@ class FindingProvider:
         return ListFindingsUseCase(store=DjangoFindingRepository())
 
     @staticmethod
+    def build_get_finding_use_case():
+        """The single-finding read behind HUD deep links (CQRS read)."""
+        from components.findings.application.use_cases.get_finding_use_case import (
+            GetFindingUseCase,
+        )
+
+        return GetFindingUseCase(store=FindingProvider.build_finding_store())
+
+    @staticmethod
     def build_recompute_finding_risk_use_case():
         """The background contextual-risk scorer (ADR 0013): reads findings + intel +
         exposure through ports, materializes ``FindingRisk``. Wires the two cross-context

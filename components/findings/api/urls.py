@@ -7,6 +7,7 @@ from django.urls import path
 from components.findings.api.controller import (
     AttckCoverageView,
     ComplianceSummaryView,
+    FindingDetailView,
     FindingListView,
     FindingStatusView,
     FindingTagView,
@@ -15,6 +16,11 @@ from components.findings.api.controller import (
 
 urlpatterns = [
     path("workspaces/<uuid:workspace_id>/", FindingListView.as_view(), name="findings-list"),
+    path(
+        "workspaces/<uuid:workspace_id>/<uuid:finding_id>/",
+        FindingDetailView.as_view(),
+        name="findings-detail",
+    ),
     path(
         "workspaces/<uuid:workspace_id>/<uuid:finding_id>/status/",
         FindingStatusView.as_view(),

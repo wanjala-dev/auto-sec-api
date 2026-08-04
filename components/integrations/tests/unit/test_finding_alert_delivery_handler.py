@@ -58,8 +58,8 @@ class _FakeProvider:
         return self._adapter
 
 
-def _event(severity="critical", *, is_new=True):
-    return FindingRaised(
+def _event(severity="critical", *, is_new=True, **overrides):
+    kwargs = dict(
         workspace_id=uuid.uuid4(),
         finding_id=uuid.uuid4(),
         fingerprint="fp-1",
@@ -70,6 +70,8 @@ def _event(severity="critical", *, is_new=True):
         title="Public S3 bucket",
         is_new=is_new,
     )
+    kwargs.update(overrides)
+    return FindingRaised(**kwargs)
 
 
 def _connection(min_severity="high"):
@@ -132,6 +134,61 @@ def test_no_connections_is_a_noop(monkeypatch):
     h.deliver_finding_to_slack(_event("critical"))  # must not raise
 
     assert adapter.calls == []
+
+
+def test_message_carries_hud_deep_link(monkeypatch, settings):
+    """Every alert deep-links the HUD open on ITS finding (?panel=findings&finding=<id>)."""
+    settings.FRONTEND_URL = "https://hud.example"
+    repository, adapter = _FakeRepository([_connection()]), _FakeAdapter()
+    _wire(monkeypatch, repository, adapter)
+
+    event = _event("critical")
+    h.deliver_finding_to_slack(event)
+
+    _, message = adapter.calls[0]
+    assert message.link == (f"https://hud.example/ai/v2/{event.workspace_id}?panel=findings&finding={event.finding_id}")
+
+
+def test_no_frontend_base_means_no_link(monkeypatch, settings):
+    """An unconfigured frontend base renders a link-less message, never a broken URL."""
+    settings.FRONTEND_URL = ""
+    settings.LOCALHOST_FRONTEND_URL = ""
+    repository, adapter = _FakeRepository([_connection()]), _FakeAdapter()
+    _wire(monkeypatch, repository, adapter)
+
+    h.deliver_finding_to_slack(_event("critical"))
+
+    _, message = adapter.calls[0]
+    assert message.link == ""
+
+
+def test_message_body_carries_cve_and_package_when_available(monkeypatch):
+    """Twin titles ("CVE-… in openssl" across images) stay distinguishable."""
+    repository, adapter = _FakeRepository([_connection()]), _FakeAdapter()
+    _wire(monkeypatch, repository, adapter)
+
+    h.deliver_finding_to_slack(_event("critical", vulnerability_id="CVE-2025-12345", package="openssl"))
+
+    _, message = adapter.calls[0]
+    assert "CVE-2025-12345" in message.body
+    assert "openssl" in message.body
+
+
+def test_message_stays_notification_grade(monkeypatch, settings):
+    """Redaction standard (ADR 0016 D6): id/title/severity/asset/source/status/vuln/link
+    only — never a raw payload, attributes bag, or description dump."""
+    settings.FRONTEND_URL = "https://hud.example"
+    repository, adapter = _FakeRepository([_connection()]), _FakeAdapter()
+    _wire(monkeypatch, repository, adapter)
+
+    event = _event("critical", vulnerability_id="CVE-2025-12345", package="openssl")
+    h.deliver_finding_to_slack(event)
+
+    _, message = adapter.calls[0]
+    allowed_prefixes = ("Vulnerability: ", "Asset: ", "Source: ", "Status: ")
+    for line in message.body.splitlines():
+        assert line.startswith(allowed_prefixes), f"unexpected body line: {line!r}"
+    assert message.fields == {}
 
 
 def test_failed_delivery_is_recorded_on_the_connection(monkeypatch):
