@@ -8,6 +8,20 @@ block the upstream save that just happened.
 
 See ``docs/plans/REALTIME_OBSERVABILITY_PLAN.md`` Phase 7.1 and the
 ``RealtimeEventPort`` interface for the envelope shape.
+
+SECURITY CONTRACT (Option A, mirrors the REST gates in
+``components/agents/api/controller.py``): full run CONTENT — prompts
+(``goal``), tool inputs/outputs, free-text log messages — is
+OWNER-ONLY, served by the ``_is_run_owner``-gated ``retrieve`` /
+``events`` endpoints. The WS channel this bridge publishes to is
+WORKSPACE-scoped (any active member of the workspace may subscribe —
+see ``ResourceStreamConsumer._is_workspace_member``), so the envelope
+must carry only the redacted progress projection: event/status/ids/
+tool NAMES/numeric progress. ``_redact_payload`` enforces that with a
+hard allowlist — never spread a ``DeepRunLog.payload`` into the
+envelope, and never grow the allowlist with a key that can carry
+model, tool, or prompt text. Locked by
+``test_deep_run_ws_envelope_redaction.py``.
 """
 
 from __future__ import annotations
@@ -18,6 +32,45 @@ from django.db.models.signals import post_save
 
 logger = logging.getLogger(__name__)
 
+# Payload keys allowed onto the workspace-scoped WS envelope. Every key
+# here is structural (numbers, enums set by our code, or opaque ids) —
+# NEVER free text. Known-dropped content carriers, for the record:
+# ``tool_input`` / ``tool_output`` (tool_observation events),
+# ``message`` (tool_log / tool_progress narration — can echo the
+# model's own words, e.g. the retrieval query), ``question`` (clarify
+# short-circuit — model output), ``error`` (can echo tool IO),
+# ``telemetry`` and any ad-hoc key a tool attaches to an emit.
+_ALLOWED_PAYLOAD_KEYS = frozenset(
+    {
+        "progress_percent",  # int 0–100 (also lifted to the envelope top level)
+        "current",  # numeric progress counter
+        "total",  # numeric progress denominator
+        "severity",  # code-set enum: "info" / "warning" / "error"
+        "task_id",  # opaque id — links the event to a plan task
+        "plan_id",  # opaque id
+    }
+)
+
+# Defence-in-depth: even an allowlisted key must never smuggle a
+# paragraph of run content. Ids/enums are short; anything longer is
+# not the value shape we allow.
+_MAX_ALLOWED_STR_LEN = 100
+
+
+def _redact_payload(payload_dict: dict) -> dict:
+    """Project a ``DeepRunLog.payload`` down to the team-safe field set."""
+    safe: dict = {}
+    for key in _ALLOWED_PAYLOAD_KEYS:
+        if key not in payload_dict:
+            continue
+        value = payload_dict[key]
+        if isinstance(value, str) and len(value) > _MAX_ALLOWED_STR_LEN:
+            continue
+        if not isinstance(value, (str, int, float, bool, type(None))):
+            continue
+        safe[key] = value
+    return safe
+
 
 def _handle_deep_run_log_save(sender, instance, created, **kwargs):
     if not created:
@@ -26,9 +79,7 @@ def _handle_deep_run_log_save(sender, instance, created, **kwargs):
         deep_run = getattr(instance, "deep_run", None)
         if deep_run is None:
             return
-        workspace_id = (
-            str(deep_run.workspace_id) if deep_run.workspace_id else ""
-        )
+        workspace_id = str(deep_run.workspace_id) if deep_run.workspace_id else ""
         plan_id = deep_run.plan_id or str(deep_run.thread_id or "")
         if not plan_id:
             return
@@ -52,13 +103,12 @@ def _handle_deep_run_log_save(sender, instance, created, **kwargs):
 
         from django.conf import settings
         from django.db import transaction
+
         from components.shared_platform.application.providers.realtime_event_provider import (
             get_realtime_event_publisher,
         )
 
-        publisher = get_realtime_event_publisher(
-            enabled=getattr(settings, "REALTIME_EVENTS_ENABLED", True)
-        )
+        publisher = get_realtime_event_publisher(enabled=getattr(settings, "REALTIME_EVENTS_ENABLED", True))
 
         def _publish() -> None:
             try:
@@ -69,16 +119,20 @@ def _handle_deep_run_log_save(sender, instance, created, **kwargs):
                     event_name=event_type,
                     status=status_at_event,
                     progress_percent=progress_percent,
+                    # Workspace-scoped channel → redacted projection
+                    # ONLY. Owner-only detail (tool IO, prompts, log
+                    # messages) is served by the ``_is_run_owner``-gated
+                    # REST endpoints, never by this envelope.
                     payload={
                         "agent_type": agent_type_at_event,
                         "tool_name": tool_name_at_event,
                         "log_id": log_id,
                         "deep_run_id": deep_run_id,
                         "thread_id": thread_id,
-                        **payload_dict,
+                        **_redact_payload(payload_dict),
                     },
                 )
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.exception(
                     "deep_run_log_realtime_publish_failed log_id=%s",
                     log_id,
@@ -94,7 +148,7 @@ def _handle_deep_run_log_save(sender, instance, created, **kwargs):
         # race. If we're not in a transaction, ``on_commit`` calls
         # the function synchronously — same effect, no harm.
         transaction.on_commit(_publish)
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.exception(
             "deep_run_log_realtime_publish_failed log_id=%s",
             getattr(instance, "id", None),
