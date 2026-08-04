@@ -165,3 +165,65 @@ class TestFindingsReadApi:
             api_client.get(_url(ws))
 
         assert len(many.captured_queries) == len(few.captured_queries), [q["sql"] for q in many.captured_queries]
+
+
+class TestFindingDetailApi:
+    """GET /findings/workspaces/<ws>/<finding_id>/ — the deep-link read (a Slack
+    alert's "View in Auto-Sec" opens the HUD on exactly this finding)."""
+
+    def _detail_url(self, ws, finding_id):
+        return f"/api/v1/findings/workspaces/{ws.id}/{finding_id}/"
+
+    def test_member_reads_one_finding(self, api_client, workspace_factory, user_factory):
+        ws = workspace_factory()
+        member = _member(ws, user_factory)
+        row = _finding(ws, fingerprint="fp-one", title="Public S3 bucket")
+
+        api_client.force_authenticate(member)
+        resp = api_client.get(self._detail_url(ws, row.id))
+
+        assert resp.status_code == 200, resp.data
+        data = resp.data["data"]
+        assert data["id"] == str(row.id)
+        assert data["title"] == "Public S3 bucket"
+        assert data["status"] == "open"
+        assert "risk" in data  # same row shape as the list read (null until scored)
+        assert data["risk"] is None
+        assert data["tags"] == []
+
+    def test_resolved_finding_still_renders_with_its_status(self, api_client, workspace_factory, user_factory):
+        # A stale Slack link must show the finding honestly (resolved), not 404.
+        ws = workspace_factory()
+        member = _member(ws, user_factory)
+        row = _finding(ws, fingerprint="fp-res", status="resolved")
+
+        api_client.force_authenticate(member)
+        resp = api_client.get(self._detail_url(ws, row.id))
+        assert resp.status_code == 200
+        assert resp.data["data"]["status"] == "resolved"
+
+    def test_unknown_id_is_404(self, api_client, workspace_factory, user_factory):
+        import uuid
+
+        ws = workspace_factory()
+        member = _member(ws, user_factory)
+        api_client.force_authenticate(member)
+        resp = api_client.get(self._detail_url(ws, uuid.uuid4()))
+        assert resp.status_code == 404
+        assert resp.data["error"] == "not_found"
+
+    def test_other_workspaces_finding_is_404(self, api_client, workspace_factory, user_factory):
+        # Workspace-scoped by construction: an id from another tenant never resolves.
+        ws = workspace_factory()
+        other = workspace_factory()
+        member = _member(ws, user_factory)
+        theirs = _finding(other, fingerprint="fp-theirs")
+
+        api_client.force_authenticate(member)
+        assert api_client.get(self._detail_url(ws, theirs.id)).status_code == 404
+
+    def test_non_member_forbidden(self, api_client, workspace_factory, user_factory):
+        ws = workspace_factory()
+        row = _finding(ws, fingerprint="fp-x")
+        api_client.force_authenticate(user_factory())
+        assert api_client.get(self._detail_url(ws, row.id)).status_code == 403

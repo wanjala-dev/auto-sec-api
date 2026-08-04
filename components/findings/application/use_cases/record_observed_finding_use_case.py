@@ -42,6 +42,22 @@ def _as_float(value) -> float | None:
         return None
 
 
+# Attribute keys the normalizers use for the vulnerability identity (Trivy writes
+# ``vulnerability_id`` + ``pkg_name``; other normalizers may use the alternates —
+# same key set as ``contextual_risk_scorer.extract_cve``, but WITHOUT the CVE-only
+# filter: a GHSA-only advisory still disambiguates an outbound alert title).
+_VULN_ID_KEYS = ("vulnerability_id", "cve", "cve_id")
+_PACKAGE_KEYS = ("pkg_name", "package", "package_name")
+
+
+def _first_attribute(attributes: dict, keys: tuple[str, ...]) -> str:
+    for key in keys:
+        value = str((attributes or {}).get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
 class RecordObservedFindingUseCase:
     def __init__(
         self,
@@ -150,6 +166,7 @@ class RecordObservedFindingUseCase:
     def _publish_raised(self, finding: FindingEntity, *, is_new: bool) -> None:
         if self._publisher is None:
             return
+        attributes = finding.attributes or {}
         self._publisher.publish(
             FindingRaised(
                 workspace_id=finding.workspace_id,
@@ -161,5 +178,7 @@ class RecordObservedFindingUseCase:
                 source=finding.source,
                 title=finding.title,
                 is_new=is_new,
+                vulnerability_id=_first_attribute(attributes, _VULN_ID_KEYS),
+                package=_first_attribute(attributes, _PACKAGE_KEYS),
             )
         )

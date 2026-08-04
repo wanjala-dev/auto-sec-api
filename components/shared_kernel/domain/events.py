@@ -135,6 +135,12 @@ class FindingRaised(DomainEvent):
     source: str
     title: str
     is_new: bool
+    # Vulnerability identity, when the source carries one (additive; "" otherwise).
+    # SCA/CVE-shaped findings often share near-identical titles ("CVE-… in openssl"
+    # across images) — outbound alerts need the id + package to stay distinguishable
+    # without a cross-context read back into the findings store.
+    vulnerability_id: str = ""  # e.g. CVE-2024-1234 or GHSA-… (attributes["vulnerability_id"|"cve"|"cve_id"])
+    package: str = ""  # affected package name (attributes["pkg_name"|"package"|"package_name"])
 
 
 @dataclass(frozen=True, kw_only=True)

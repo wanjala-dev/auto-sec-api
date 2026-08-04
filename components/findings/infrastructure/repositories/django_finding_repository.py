@@ -52,6 +52,20 @@ class DjangoFindingRepository(FindingStorePort):
         obj = Finding.objects.filter(workspace_id=workspace_id, id=finding_id).select_related("workspace").first()
         return to_finding_entity(obj) if obj else None
 
+    def get_ranked_finding(self, workspace_id: UUID, finding_id: UUID) -> RankedFinding | None:
+        from infrastructure.persistence.findings.models import Finding
+
+        # Same eager-load shape as list_ranked_findings: risk via the OneToOne JOIN,
+        # tag chips via the prefetch — one row, constant queries.
+        obj = (
+            self._with_tag_prefetch(
+                Finding.objects.filter(workspace_id=workspace_id, id=finding_id).select_related("workspace", "risk")
+            )
+        ).first()
+        if obj is None:
+            return None
+        return RankedFinding(finding=to_finding_entity(obj), risk=_to_risk_view(getattr(obj, "risk", None)))
+
     def _filtered(self, workspace_id, *, severity, status, source, asset_urn, tag_groups=(), exclude_tag_ids=()):
         # One place builds the WHERE so list + count never drift. select_related is
         # applied on the list path; count() ignores it. Index-backed on
