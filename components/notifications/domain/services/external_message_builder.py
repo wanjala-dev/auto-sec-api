@@ -42,7 +42,9 @@ _ALLOWED_FIELDS: dict[str, tuple[str, ...]] = {
     # CVE titles ("CVE-… in openssl" across images) stay distinguishable in a channel.
     FINDING_CRITICAL: ("asset_urn", "source", "severity", "vulnerability_id", "package"),
     SCAN_FAILED: ("engine", "account_id", "reason"),
-    SCAN_DIGEST: ("engine", "critical", "high", "medium", "low", "total"),
+    # Per-severity counts live in the body headline ("10 critical / 65 high / …"),
+    # not the grid — listing them in both rendered every count twice (dedupe).
+    SCAN_DIGEST: ("engine", "account_id", "target", "total"),
     RISK_ACCEPT_EXPIRING: ("asset_urn", "expires_at"),
 }
 
@@ -108,10 +110,12 @@ def _body_for(event_key: str, *, fields: dict, meta: dict) -> str:
     if event_key == SCAN_DIGEST:
         # The batch rule made legible: ONE message per scan with counts, never one
         # message per finding (ADR 0016 D5).
-        counts = " / ".join(f"{fields[k]} {k}" for k in ("critical", "high", "medium", "low") if fields.get(k))
+        counts = " / ".join(f"{_clean(meta[k])} {k}" for k in ("critical", "high", "medium", "low") if meta.get(k))
         return counts or "No new findings."
-    lines = [f"{key.replace('_', ' ').title()}: {value}" for key, value in fields.items()]
-    return "\n".join(lines)
+    # No prose body for the other events: the title carries the headline and the
+    # adapter renders `fields` as its own grid — prose lines repeating the same
+    # keys rendered every value twice per message (dedupe, 2026-08-04).
+    return ""
 
 
 def _safe_fields(event_key: str, meta: dict) -> dict:
