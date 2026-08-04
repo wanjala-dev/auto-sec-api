@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import logging
 
+from django.utils.decorators import method_decorator
+from django.views.decorators.debug import sensitive_post_parameters
 from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -46,8 +48,15 @@ from components.integrations.api.requests.vcs_connection_request import (
     CreateVcsConnectionRequest,
     UpdateVcsConnectionRequest,
 )
+from components.integrations.api.requests.delivery_connection_request import (
+    CreateDeliveryConnectionRequest,
+    UpdateDeliveryConnectionRequest,
+)
 from components.integrations.api.resources.aws_connection_resource import (
     AwsConnectionResource,
+)
+from components.integrations.api.resources.delivery_connection_resource import (
+    DeliveryConnectionResource,
 )
 from components.integrations.api.resources.draft_pr_preview_resource import DraftPrPreviewResource
 from components.integrations.api.resources.draft_pr_resource import DraftPrResource
@@ -62,6 +71,9 @@ from components.integrations.application.aws_connection_service import (
 from components.integrations.application.providers.aws_connection_provider import (
     get_aws_connection_service,
     get_onboarding_template_use_case,
+)
+from components.integrations.application.providers.delivery_channel_provider import (
+    get_delivery_connection_service,
 )
 from components.integrations.application.providers.log_source_provider import (
     get_log_source_service,
@@ -564,3 +576,95 @@ class TriageCapabilityView(APIView):
         except NotFoundError as exc:
             return Response({"success": False, "error": str(exc)}, status=status.HTTP_404_NOT_FOUND)
         return Response({"success": True, "data": TriageCapabilityResource.from_result(result).to_dict()})
+
+
+# ── DeliveryConnection CRUD + verify (ADR 0016 D2) — Settings ▸ Integrations ▸
+#    Notification Channels. Where a workspace connects Slack (and, as adapters land,
+#    Teams / Discord / generic webhook / SMTP) so alerts reach the team where they work.
+#
+#    The credential is WRITE-ONLY throughout: it is accepted on create/update, stored in
+#    the Fernet envelope, and never returned — reads carry only ``has_secret``. Verify
+#    answers 200 on failure too, expressing the outcome as ``status="error"`` +
+#    ``last_error``, because the operator needs to see why in the panel.
+
+
+@method_decorator(sensitive_post_parameters("secret"), name="dispatch")
+class DeliveryConnectionListCreateView(APIView):
+    permission_classes = (permissions.IsAuthenticated, CanManageIntegrations)
+    name = "integrations-delivery-connections"
+
+    def get(self, request, workspace_id):
+        connections = get_delivery_connection_service().list_connections(workspace_id)
+        return Response(
+            {"success": True, "data": [DeliveryConnectionResource.from_model(c).to_dict() for c in connections]}
+        )
+
+    def post(self, request, workspace_id):
+        req = CreateDeliveryConnectionRequest.from_payload(request.data)
+        error = req.validation_error()
+        if error:
+            return Response({"success": False, "error": error}, status=status.HTTP_400_BAD_REQUEST)
+        connection = get_delivery_connection_service().create_connection(
+            workspace_id=workspace_id,
+            kind=req.kind,
+            name=req.name,
+            auth_mode=req.auth_mode,
+            secret=req.secret,
+            channel=req.channel,
+            min_severity=req.min_severity,
+            events=req.events,
+            created_by_id=getattr(request.user, "id", None),
+        )
+        return Response(
+            {"success": True, "data": DeliveryConnectionResource.from_model(connection).to_dict()},
+            status=status.HTTP_201_CREATED,
+        )
+
+
+@method_decorator(sensitive_post_parameters("secret"), name="dispatch")
+class DeliveryConnectionDetailView(APIView):
+    permission_classes = (permissions.IsAuthenticated, CanManageIntegrations)
+    name = "integrations-delivery-connection-detail"
+
+    def patch(self, request, workspace_id, connection_id):
+        service = get_delivery_connection_service()
+        connection = service.get_connection(workspace_id, connection_id)
+        if connection is None:
+            return Response({"success": False, "error": "Delivery connection not found."}, status=404)
+        req = UpdateDeliveryConnectionRequest.from_payload(request.data)
+        error = req.validation_error()
+        if error:
+            return Response({"success": False, "error": error}, status=status.HTTP_400_BAD_REQUEST)
+        connection = service.update_connection(
+            connection,
+            name=req.name,
+            auth_mode=req.auth_mode,
+            secret=req.secret,
+            channel=req.channel,
+            min_severity=req.min_severity,
+            events=req.events,
+            status=req.status,
+            is_enabled=req.is_enabled,
+        )
+        return Response({"success": True, "data": DeliveryConnectionResource.from_model(connection).to_dict()})
+
+    def delete(self, request, workspace_id, connection_id):
+        service = get_delivery_connection_service()
+        connection = service.get_connection(workspace_id, connection_id)
+        if connection is None:
+            return Response({"success": False, "error": "Delivery connection not found."}, status=404)
+        service.delete_connection(connection)
+        return Response({"success": True, "deleted": True})
+
+
+class DeliveryConnectionVerifyView(APIView):
+    permission_classes = (permissions.IsAuthenticated, CanManageIntegrations)
+    name = "integrations-delivery-connection-verify"
+
+    def post(self, request, workspace_id, connection_id):
+        service = get_delivery_connection_service()
+        connection = service.get_connection(workspace_id, connection_id)
+        if connection is None:
+            return Response({"success": False, "error": "Delivery connection not found."}, status=404)
+        connection = service.verify_connection(connection)
+        return Response({"success": True, "data": DeliveryConnectionResource.from_model(connection).to_dict()})

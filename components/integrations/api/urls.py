@@ -8,6 +8,9 @@ from components.integrations.api.controller import (
     AwsConnectionScanView,
     AwsConnectionTemplateView,
     AwsConnectionVerifyView,
+    DeliveryConnectionDetailView,
+    DeliveryConnectionListCreateView,
+    DeliveryConnectionVerifyView,
     FindingOpenDraftPrView,
     FindingPreviewDraftPrView,
     TriageCapabilityView,
@@ -97,5 +100,21 @@ urlpatterns = [
         "workspaces/<uuid:workspace_id>/triage-capabilities/",
         TriageCapabilityView.as_view(),
         name=TriageCapabilityView.name,
+    ),
+    # ── Delivery connections (ADR 0016 P1) — Settings ▸ Notification Channels ──
+    path(
+        "workspaces/<uuid:workspace_id>/delivery-connections/",
+        DeliveryConnectionListCreateView.as_view(),
+        name=DeliveryConnectionListCreateView.name,
+    ),
+    path(
+        "workspaces/<uuid:workspace_id>/delivery-connections/<uuid:connection_id>/",
+        DeliveryConnectionDetailView.as_view(),
+        name=DeliveryConnectionDetailView.name,
+    ),
+    path(
+        "workspaces/<uuid:workspace_id>/delivery-connections/<uuid:connection_id>/verify/",
+        DeliveryConnectionVerifyView.as_view(),
+        name=DeliveryConnectionVerifyView.name,
     ),
 ]

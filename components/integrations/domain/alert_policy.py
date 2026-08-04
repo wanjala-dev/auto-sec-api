@@ -9,6 +9,12 @@ _SEVERITY_RANK = {"critical": 5, "high": 4, "medium": 3, "low": 2, "informationa
 
 DEFAULT_MIN_SEVERITY = "high"
 
+# The accepted vocabulary for a connection's severity floor. Exposed so the API can
+# reject an unknown floor at the edge rather than storing one that
+# ``severity_meets_threshold`` would silently coerce back to the default — an
+# operator who typed "urgent" should get an error, not quiet reinterpretation.
+SEVERITY_NAMES: frozenset[str] = frozenset(_SEVERITY_RANK)
+
 
 def severity_meets_threshold(severity: str, min_severity: str) -> bool:
     """True when ``severity`` is at least as severe as ``min_severity``.
