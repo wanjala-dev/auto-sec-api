@@ -66,6 +66,12 @@ execute → rollback for blue/red, and control → evidence → chase-and-collec
 
 ## 2. Market context (grounded)
 
+> **Superseded in part (2026-08-03).** The funding figures below are from July 2026 and are now
+> stale, and this section predates several material events (Aikido's $1B raise into *this exact
+> buyer*, Vanta shipping draft remediation PRs, the Delve fake-evidence scandal, the EU AI Act
+> high-risk enforcement date). See **`docs/competitive/LANDSCAPE_2026-08.md`** for the current
+> market-wide scan; its §8 lists exactly which claims here are confirmed vs. stale.
+
 Three markets are **converging into one**, and Auto-Sec is natively at the center:
 
 - **CNAPP** — Gartner 2025's defining differentiator is now **graph + attack-path correlation**. The 2025
