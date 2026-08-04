@@ -76,6 +76,7 @@ api_patterns = [
     path("cloud-posture/", include("components.cloud_posture.api.urls")),
     path("container-security/", include("components.container_security.api.urls")),
     path("findings/", include("components.findings.api.urls")),
+    path("tagging/", include("components.tagging.api.urls")),
     path("cloud-graph/", include("components.cloud_graph.api.urls")),
     path("response/", include("components.response.api.urls")),
     re_path(r"^countries/ctry/(\w{0,50})", CountryDetails.as_view()),

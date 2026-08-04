@@ -31,6 +31,13 @@ class FindingEntity:
     compliance: dict = field(default_factory=dict)
     attributes: dict = field(default_factory=dict)
     resolved_at: datetime | None = None
+    # Risk-acceptance context on the suppress action (ADR 0015 D9): the "why" +
+    # optional time-box. resolve/reopen clear both; expiry ENFORCEMENT is P2.
+    status_reason: str = ""
+    suppress_expires_at: datetime | None = None
+    # Read-only projection of the finding's live tags (ADR 0015). Never written
+    # through the entity — the FindingTag join is mutated by TagFindingUseCase.
+    tags: tuple[TagRef, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.source:
@@ -76,21 +83,46 @@ class FindingEntity:
             attributes=attributes,
             status=new_status,
             resolved_at=None if reopened else self.resolved_at,
+            status_reason="" if reopened else self.status_reason,
+            suppress_expires_at=None if reopened else self.suppress_expires_at,
         )
 
     def resolved(self, *, at: datetime) -> FindingEntity:
-        """Mark the finding resolved (e.g. no longer observed / remediated)."""
-        return replace(self, status=FindingStatus.RESOLVED, resolved_at=at)
+        """Mark the finding resolved (e.g. no longer observed / remediated). Clears any
+        suppress reason/expiry (ADR 0015 D9)."""
+        return replace(
+            self,
+            status=FindingStatus.RESOLVED,
+            resolved_at=at,
+            status_reason="",
+            suppress_expires_at=None,
+        )
 
-    def suppressed(self, *, at: datetime) -> FindingEntity:
+    def suppressed(self, *, at: datetime, reason: str = "", expires_at: datetime | None = None) -> FindingEntity:
         """Dismiss the finding as accepted-risk / false-positive (terminal, reversible).
 
         This is the finding-native "delete": the record is retained (auditable, and a
         re-observation reopens it), it simply drops off the open/actionable surfaces. The
-        operator's soft-delete of a finding — never a hard row delete."""
-        return replace(self, status=FindingStatus.SUPPRESSED, resolved_at=at)
+        operator's soft-delete of a finding — never a hard row delete.
+
+        ``reason`` + optional ``expires_at`` capture the risk-acceptance context
+        (ADR 0015 D9 — the Snyk/DefectDojo semantics); expiry enforcement is P2."""
+        return replace(
+            self,
+            status=FindingStatus.SUPPRESSED,
+            resolved_at=at,
+            status_reason=reason,
+            suppress_expires_at=expires_at,
+        )
 
     def reopened(self) -> FindingEntity:
         """Reopen a terminal (resolved/suppressed) finding — the undo for a mistaken
-        resolve/dismiss. Clears ``resolved_at`` and returns it to the actionable list."""
-        return replace(self, status=FindingStatus.OPEN, resolved_at=None)
+        resolve/dismiss. Clears ``resolved_at`` (and any suppress reason/expiry) and
+        returns it to the actionable list."""
+        return replace(
+            self,
+            status=FindingStatus.OPEN,
+            resolved_at=None,
+            status_reason="",
+            suppress_expires_at=None,
+        )

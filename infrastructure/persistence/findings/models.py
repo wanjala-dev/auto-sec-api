@@ -40,6 +40,13 @@ class Finding(models.Model):
     compliance = models.JSONField(default=dict, help_text="Framework tags, e.g. {'CIS-2.0': ['2.1.5']}.")
     attributes = models.JSONField(default=dict, help_text="Pillar-specific extras.")
 
+    # Risk-acceptance context on the suppress lifecycle action (ADR 0015 D9):
+    # the operator's "why" + optional time-box. ``resolve``/``reopen`` clear both.
+    # Enforcement of the expiry (auto-reopen beat task) is P2 — the columns ship
+    # now so the data is captured from day one.
+    status_reason = models.TextField(blank=True, default="")
+    suppress_expires_at = models.DateTimeField(null=True, blank=True)
+
     # Lifecycle timestamps, set explicitly by the use case (not auto_now) so a
     # status change never spuriously rewrites the observation window.
     first_seen_at = models.DateTimeField()
@@ -61,6 +68,40 @@ class Finding(models.Model):
 
     def __str__(self) -> str:
         return f"[{self.severity}] {self.title}"
+
+
+class FindingTag(models.Model):
+    """Tag assignment on a finding (ADR 0015 D10) — an edge, not a record.
+
+    FKs the tagging context's vocabulary at the persistence ring (single-DB;
+    cross-app ORM FKs are normal here — the component boundary governs
+    ``components.*`` imports, not outermost-ring model relations).
+
+    ``workspace`` is denormalized from ``finding`` for the scoped
+    ``(workspace, tag)`` index — the use case sets it from the loaded finding,
+    never from client input. The ``finding``/``workspace`` FKs are
+    ``db_index=False`` because each is the leading column of one of the two
+    Meta indexes (a separate single-column index would be duplicate write
+    cost); the ``tag`` FK keeps Django's default FK index (the composite does
+    not prefix-cover tag-only lookups, and the FK integrity path needs it).
+    """
+
+    SOURCE_CHOICES = (("user", "User"), ("agent", "Agent"), ("rule", "Rule"), ("system", "System"))
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name="finding_tags", db_index=False)
+    finding = models.ForeignKey(Finding, on_delete=models.CASCADE, related_name="tag_links", db_index=False)
+    tag = models.ForeignKey("tagging.Tag", on_delete=models.CASCADE, related_name="finding_links")
+    applied_by = models.UUIDField(null=True, blank=True)  # actor user id; null = platform (mirrors actor_id)
+    source = models.CharField(max_length=16, choices=SOURCE_CHOICES, default="user")
+    applied_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["finding", "tag"], name="uniq_finding_tag")]
+        indexes = [models.Index(fields=["workspace", "tag"], name="findingtag_ws_tag_idx")]
+
+    def __str__(self) -> str:
+        return f"{self.finding_id} ← {self.tag_id}"
 
 
 class WorkspaceAttckCoverage(models.Model):

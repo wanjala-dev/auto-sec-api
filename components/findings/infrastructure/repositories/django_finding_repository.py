@@ -52,11 +52,13 @@ class DjangoFindingRepository(FindingStorePort):
         obj = Finding.objects.filter(workspace_id=workspace_id, id=finding_id).select_related("workspace").first()
         return to_finding_entity(obj) if obj else None
 
-    def _filtered(self, workspace_id, *, severity, status, source, asset_urn):
+    def _filtered(self, workspace_id, *, severity, status, source, asset_urn, tag_groups=(), exclude_tag_ids=()):
         # One place builds the WHERE so list + count never drift. select_related is
         # applied on the list path; count() ignores it. Index-backed on
         # (workspace, severity|status, -last_seen_at).
-        from infrastructure.persistence.findings.models import Finding
+        from django.db.models import Exists, OuterRef
+
+        from infrastructure.persistence.findings.models import Finding, FindingTag
 
         qs = Finding.objects.filter(workspace_id=workspace_id)
         if severity:
@@ -67,7 +69,34 @@ class DjangoFindingRepository(FindingStorePort):
             qs = qs.filter(source=source)
         if asset_urn:
             qs = qs.filter(asset_urn=asset_urn)
+        # Tag filter (ADR 0015 D7): ``Exists()`` subqueries — NOT chained M2M joins —
+        # so rows never multiply and no DISTINCT is needed; each subquery is one probe
+        # of findingtag_ws_tag_idx / the uniq_finding_tag index.
+        for group in tag_groups:
+            if not group:
+                # An OR-group that resolved to zero live tags matches nothing (D7).
+                return qs.none()
+            qs = qs.filter(Exists(FindingTag.objects.filter(finding=OuterRef("pk"), tag_id__in=group)))
+        for tag_id in exclude_tag_ids:
+            qs = qs.filter(~Exists(FindingTag.objects.filter(finding=OuterRef("pk"), tag_id=tag_id)))
         return qs
+
+    @staticmethod
+    def _with_tag_prefetch(qs):
+        """Chip read (ADR 0015 D7): ONE extra query per page regardless of row count —
+        the live tag links with their tags, projected by the mapper into
+        ``FindingEntity.tags``."""
+        from django.db.models import Prefetch
+
+        from infrastructure.persistence.findings.models import FindingTag
+
+        return qs.prefetch_related(
+            Prefetch(
+                "tag_links",
+                queryset=FindingTag.objects.filter(tag__is_deleted=False).select_related("tag").order_by("tag__slug"),
+                to_attr="prefetched_tag_links",
+            )
+        )
 
     def list_findings(
         self,
@@ -77,11 +106,21 @@ class DjangoFindingRepository(FindingStorePort):
         status: str | None = None,
         source: str | None = None,
         asset_urn: str | None = None,
+        tag_groups: tuple[tuple[UUID, ...], ...] = (),
+        exclude_tag_ids: tuple[UUID, ...] = (),
         limit: int = 25,
         offset: int = 0,
     ) -> list[FindingEntity]:
         qs = (
-            self._filtered(workspace_id, severity=severity, status=status, source=source, asset_urn=asset_urn)
+            self._filtered(
+                workspace_id,
+                severity=severity,
+                status=status,
+                source=source,
+                asset_urn=asset_urn,
+                tag_groups=tag_groups,
+                exclude_tag_ids=exclude_tag_ids,
+            )
             .select_related("workspace")
             .order_by("-last_seen_at", "-first_seen_at")
         )
@@ -96,6 +135,8 @@ class DjangoFindingRepository(FindingStorePort):
         status: str | None = None,
         source: str | None = None,
         asset_urn: str | None = None,
+        tag_groups: tuple[tuple[UUID, ...], ...] = (),
+        exclude_tag_ids: tuple[UUID, ...] = (),
         order_by: str = ORDER_CONTEXTUAL_RISK,
         limit: int = 25,
         offset: int = 0,
@@ -104,9 +145,18 @@ class DjangoFindingRepository(FindingStorePort):
 
         # select_related("risk") pulls the OneToOne materialized score in the same query
         # (one JOIN, no N+1); the ranked read is index-backed on (workspace, -score).
-        qs = self._filtered(
-            workspace_id, severity=severity, status=status, source=source, asset_urn=asset_urn
-        ).select_related("workspace", "risk")
+        # _with_tag_prefetch adds the chip read: one extra query per page (ADR 0015 D7).
+        qs = self._with_tag_prefetch(
+            self._filtered(
+                workspace_id,
+                severity=severity,
+                status=status,
+                source=source,
+                asset_urn=asset_urn,
+                tag_groups=tag_groups,
+                exclude_tag_ids=exclude_tag_ids,
+            ).select_related("workspace", "risk")
+        )
 
         if order_by == ORDER_CONTEXTUAL_RISK:
             # Highest score first; findings not yet scored sort last, then by recency.
@@ -152,9 +202,17 @@ class DjangoFindingRepository(FindingStorePort):
         status: str | None = None,
         source: str | None = None,
         asset_urn: str | None = None,
+        tag_groups: tuple[tuple[UUID, ...], ...] = (),
+        exclude_tag_ids: tuple[UUID, ...] = (),
     ) -> int:
         return self._filtered(
-            workspace_id, severity=severity, status=status, source=source, asset_urn=asset_urn
+            workspace_id,
+            severity=severity,
+            status=status,
+            source=source,
+            asset_urn=asset_urn,
+            tag_groups=tag_groups,
+            exclude_tag_ids=exclude_tag_ids,
         ).count()
 
     def open_finding_asset_urns(self, workspace_id: UUID, *, severities: tuple[str, ...]) -> set[str]:

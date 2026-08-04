@@ -8,9 +8,16 @@ from components.findings.application.queries.list_findings_query import (
     RankedFinding,
 )
 from components.findings.domain.entities.finding_entity import FindingEntity
+from components.shared_kernel.domain.tagging import TagRef
 
 
 class FindingResource:
+    @staticmethod
+    def tag_ref_dict(ref: TagRef) -> dict:
+        """One tag chip (ADR 0015): the id (durable identity), slug (filter handle),
+        and display fields."""
+        return {"id": str(ref.id), "slug": ref.slug, "name": ref.name, "color": ref.color}
+
     @staticmethod
     def _finding_dict(e: FindingEntity) -> dict:
         return {
@@ -26,6 +33,9 @@ class FindingResource:
             "remediation": e.remediation,
             "compliance": e.compliance,
             "attributes": e.attributes,
+            "status_reason": e.status_reason,
+            "suppress_expires_at": e.suppress_expires_at.isoformat() if e.suppress_expires_at else None,
+            "tags": [FindingResource.tag_ref_dict(ref) for ref in e.tags],
             "first_seen_at": e.first_seen_at.isoformat() if e.first_seen_at else None,
             "last_seen_at": e.last_seen_at.isoformat() if e.last_seen_at else None,
             "resolved_at": e.resolved_at.isoformat() if e.resolved_at else None,

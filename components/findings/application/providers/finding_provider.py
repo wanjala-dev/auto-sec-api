@@ -148,6 +148,31 @@ class FindingProvider:
         )
 
     @staticmethod
+    def build_tag_finding_use_case():
+        """The write behind the HUD Tag action (ADR 0015 D6): tag/untag a finding.
+        Consumes the tagging context's vocabulary ONLY through its provider-built
+        ``TagStorePort`` (C3); owns the join edges via ``FindingTagStorePort``."""
+        from components.findings.application.use_cases.tag_finding_use_case import TagFindingUseCase
+        from components.findings.infrastructure.repositories.finding_tag_repository import (
+            FindingTagRepository,
+        )
+        from components.tagging.application.providers.tagging_provider import TaggingProvider
+
+        return TagFindingUseCase(
+            finding_store=FindingProvider.build_finding_store(),
+            tag_store=TaggingProvider.build_tag_store(),
+            link_store=FindingTagRepository(),
+        )
+
+    @staticmethod
+    def build_tag_vocabulary_port():
+        """The tagging context's ``TagStorePort`` — the ONE seam findings uses to
+        resolve tag slugs for the list filter (ADR 0015 D7)."""
+        from components.tagging.application.providers.tagging_provider import TaggingProvider
+
+        return TaggingProvider.build_tag_store()
+
+    @staticmethod
     def build_finding_store() -> FindingStorePort:
         """The read/write store — the findings context's public data seam.
 

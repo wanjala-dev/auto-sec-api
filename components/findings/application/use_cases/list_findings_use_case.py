@@ -27,6 +27,8 @@ class ListFindingsUseCase:
             status=query.status,
             source=query.source,
             asset_urn=query.asset_urn,
+            tag_groups=query.tag_groups,
+            exclude_tag_ids=query.exclude_tag_ids,
             order_by=query.order_by,
             limit=query.limit,
             offset=query.offset,
@@ -37,5 +39,7 @@ class ListFindingsUseCase:
             status=query.status,
             source=query.source,
             asset_urn=query.asset_urn,
+            tag_groups=query.tag_groups,
+            exclude_tag_ids=query.exclude_tag_ids,
         )
         return FindingPage(items=items, total=total, limit=query.limit, offset=query.offset)

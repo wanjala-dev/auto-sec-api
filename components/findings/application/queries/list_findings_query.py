@@ -34,6 +34,10 @@ class ListFindingsQuery:
     status: str | None = None  # FindingStatus.value
     source: str | None = None  # pillar/scanner, e.g. "logwatch.error"
     asset_urn: str | None = None
+    # Tag filter (ADR 0015 D7): AND of OR-groups of already-slug-resolved tag ids;
+    # a group that resolved to zero tags matches nothing. ``exclude_tag_ids`` = AND-NOT.
+    tag_groups: tuple[tuple[UUID, ...], ...] = ()
+    exclude_tag_ids: tuple[UUID, ...] = ()
     order_by: str = ORDER_CONTEXTUAL_RISK
     limit: int = DEFAULT_LIMIT
     offset: int = 0
