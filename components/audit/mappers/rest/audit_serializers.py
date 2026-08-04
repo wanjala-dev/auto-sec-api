@@ -1,49 +1,33 @@
-"""REST serializers for audit log entries."""
+"""REST serializers for audit log entries.
+
+Serializes the framework-free ``AuditEntry`` domain entity returned by
+the audit use cases — the controller never touches ORM rows. The JSON
+contract is unchanged from the previous ModelSerializer:
+``id, entity_type, object_id, field_name, previous_value, new_value,
+actor, actor_display, reason, created_at``.
+"""
 
 from rest_framework import serializers
 
-from infrastructure.persistence.audit.models import EntityAuditLog
 
+class AuditEntrySerializer(serializers.Serializer):
+    """Read-only projection of ``AuditEntry`` for the REST adapter."""
 
-class EntityAuditLogSerializer(serializers.ModelSerializer):
-    entity_type = serializers.SerializerMethodField()
+    id = serializers.CharField(read_only=True)
+    entity_type = serializers.CharField(read_only=True)
+    object_id = serializers.CharField(source="entity_id", read_only=True)
+    field_name = serializers.CharField(read_only=True)
+    previous_value = serializers.JSONField(read_only=True, allow_null=True)
+    new_value = serializers.JSONField(read_only=True, allow_null=True)
+    actor = serializers.CharField(source="actor_id", read_only=True, allow_null=True)
     actor_display = serializers.SerializerMethodField()
+    reason = serializers.CharField(read_only=True, allow_blank=True)
+    created_at = serializers.DateTimeField(read_only=True)
 
-    class Meta:
-        model = EntityAuditLog
-        fields = [
-            "id",
-            "entity_type",
-            "object_id",
-            "field_name",
-            "previous_value",
-            "new_value",
-            "actor",
-            "actor_display",
-            "reason",
-            "created_at",
-        ]
-        read_only_fields = fields
-
-    def get_entity_type(self, obj):
-        ct = obj.content_type
-        return f"{ct.app_label}.{ct.model}" if ct else ""
-
-    def get_actor_display(self, obj):
-        actor = obj.actor
-        if actor is None:
-            return "System"
-        full = " ".join(
-            part
-            for part in (
-                getattr(actor, "first_name", "") or "",
-                getattr(actor, "last_name", "") or "",
-            )
-            if part
-        )
-        return (
-            full
-            or getattr(actor, "email", "")
-            or getattr(actor, "username", "")
-            or "Unknown"
-        )
+    def get_actor_display(self, entry) -> str:
+        # Contract parity with the previous ModelSerializer: system
+        # writes render as "System", actors with no resolvable name as
+        # "Unknown".
+        if entry.actor_display:
+            return entry.actor_display
+        return "System" if entry.actor_id is None else "Unknown"

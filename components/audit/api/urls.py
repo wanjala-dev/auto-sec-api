@@ -2,8 +2,9 @@
 
 from django.urls import path
 
-from components.audit.api.controller import AuditLogListView
+from components.audit.api.controller import AuditLogListView, WorkspaceAuditLogListView
 
 urlpatterns = [
     path("entries/", AuditLogListView.as_view(), name="audit-entries"),
+    path("workspace/entries/", WorkspaceAuditLogListView.as_view(), name="audit-workspace-entries"),
 ]

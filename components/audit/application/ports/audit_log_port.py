@@ -42,10 +42,34 @@ class AuditLogPort(ABC):
         *,
         entity_type: str,
         entity_id: str,
+        workspace_id: str | None = None,
         field_name: str | None = None,
         limit: int | None = None,
     ) -> list[AuditEntry]:
         """Return history for a specific entity, newest first.
 
-        Optionally narrow to a single ``field_name``.
+        Optionally narrow to a single ``field_name``. When
+        ``workspace_id`` is given the result is tenant-scoped: rows
+        written against another workspace (or with no workspace) are
+        excluded.
+        """
+
+    @abstractmethod
+    def list_for_workspace(
+        self,
+        *,
+        workspace_id: str,
+        entity_type: str | None = None,
+        field_name: str | None = None,
+        actor_id: str | None = None,
+        since: Any = None,
+        until: Any = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[AuditEntry], int]:
+        """Return ``(entries, total_count)`` for one tenant, newest first.
+
+        The workspace-wide auditor feed. ``total_count`` is the
+        filtered count before the ``limit``/``offset`` slice so the
+        caller can render page controls.
         """
