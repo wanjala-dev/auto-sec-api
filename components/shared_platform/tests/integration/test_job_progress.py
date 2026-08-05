@@ -81,7 +81,7 @@ class TestJobsReadApi:
         ws = workspace_factory()
         member = user_factory()
         WorkspaceMembership.objects.create(workspace=ws, user=member, role="member", status="active")
-        job_id = start_job(workspace_id=ws.id, job_type="cloud_posture_scan", title="CSPM scan · 123")
+        job_id = start_job(workspace_id=ws.id, job_type="cloud_posture_scan", title="prowler · 123")
         update_job(job_id=job_id, progress=40, phase="scanning")
         complete_and_hidden = start_job(workspace_id=ws.id, job_type="cloud_posture_scan")
         complete_job(job_id=complete_and_hidden)  # completed → excluded from active
@@ -93,6 +93,24 @@ class TestJobsReadApi:
         assert len(resp.data["data"]) == 1
         assert resp.data["data"][0]["progress"] == 40
         assert resp.data["data"][0]["phase"] == "scanning"
+
+    def test_active_jobs_without_type_lists_all_job_types(self, api_client, workspace_factory, user_factory):
+        # The generic ACTIVE SCANS HUD card polls with NO ?type= and must see
+        # every running job type (prowler + trivy + any future scanner) — lock
+        # the "no type = all active jobs" contract it relies on.
+        from infrastructure.persistence.workspaces.models import WorkspaceMembership
+
+        ws = workspace_factory()
+        member = user_factory()
+        WorkspaceMembership.objects.create(workspace=ws, user=member, role="member", status="active")
+        start_job(workspace_id=ws.id, job_type="cloud_posture_scan", title="prowler · 123")
+        start_job(workspace_id=ws.id, job_type="security_scan", title="trivy · alpine:3.12")
+
+        api_client.force_authenticate(member)
+        resp = api_client.get(f"/api/v1/jobs/workspaces/{ws.id}/active/")
+
+        assert resp.status_code == 200, resp.data
+        assert {j["job_type"] for j in resp.data["data"]} == {"cloud_posture_scan", "security_scan"}
 
     def test_non_member_forbidden(self, api_client, workspace_factory, user_factory):
         ws = workspace_factory()

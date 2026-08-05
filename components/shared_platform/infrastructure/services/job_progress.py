@@ -7,10 +7,18 @@ AND pushes a realtime event over the shared resource stream (``resource_type``
 ``BackgroundJob.RESOURCE_TYPE``), so ONE generic frontend renders every job type
 with no per-feature UI work.
 
+Title convention (display contract): ``"{engine} · {target}"`` — the engine /
+scanner name first, then what it runs against (``"trivy · alpine:3.12"``,
+``"prowler · 123456789012"``). The generic ACTIVE SCANS HUD card derives its
+engine badge + target line by splitting on ``" · "`` with NO per-scanner
+mapping, so any new job type that follows the convention renders correctly
+with zero frontend changes (it falls back to a humanised ``job_type`` when a
+title doesn't match).
+
 Usage::
 
     job_id = start_job(workspace_id=ws, job_type="cloud_posture_scan",
-                       title="CSPM scan · 123", phase="scanning")
+                       title="prowler · 123456789012", phase="scanning")
     update_job(job_id=job_id, progress=42, phase="scanning", detail="…")
     complete_job(job_id=job_id, detail="150 findings")
     # or fail_job(job_id=job_id, error="…")
@@ -170,7 +178,7 @@ def _publish(job, *, event_name: str) -> None:
                 progress_percent=progress,
                 payload=payload,
             )
-        except Exception:  # noqa: BLE001 — a publish failure must never break the job
+        except Exception:
             logger.exception("job_progress_publish_failed job_id=%s", resource_id)
 
     transaction.on_commit(_do)
