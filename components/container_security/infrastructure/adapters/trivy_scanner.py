@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 
 from components.container_security.domain.image_reference import validate_image_reference
 from components.container_security.infrastructure.services.trivy_normalizer import (
@@ -41,6 +42,42 @@ _TRIVY_IMAGE = os.environ.get("TRIVY_IMAGE", "aquasec/trivy:0.58.0")
 # "mkdir /.cache: read-only file system" the moment a lang-DB (e.g. a jar) is analyzed.
 _TRIVY_CACHE_DIR = os.environ.get("TRIVY_CACHE_DIR", "/tmp/.trivycache")
 
+# Trivy's client-side scan deadline (Go duration, e.g. "15m", "1h", "900s"). Trivy's own
+# default is a mere 5m — real-world fat images (node:18-bullseye, nginx:1.16.0) blow
+# through it during layer analysis and die with exit_code=1 / "context deadline exceeded".
+# We always pass it explicitly so the deadline is visible in the argv and overridable.
+_TRIVY_SCAN_TIMEOUT_DEFAULT = "15m"
+
+# Headroom the execution backend gets ON TOP of Trivy's own deadline. The backend timeout
+# (k8s Job activeDeadlineSeconds / subprocess timeout) starts before Trivy's timer does —
+# it also covers scanner-image pull + pod scheduling/startup.
+#
+# INVARIANT (the deadline relationship): backend timeout = trivy --timeout + this headroom,
+# so it strictly OUTLIVES Trivy. A genuinely slow scan is ended by Trivy itself — a clean,
+# fail-loud non-zero exit the adapter raises on — never by the Job deadline killing the pod
+# mid-scan (which would lose the engine's error output).
+_BACKEND_TIMEOUT_HEADROOM_SECONDS = 300
+
+_GO_DURATION_RE = re.compile(r"^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$")
+
+
+def _trivy_scan_timeout() -> str:
+    """The Trivy ``--timeout`` value — env-overridable, validated fail-loud."""
+    value = os.environ.get("TRIVY_SCAN_TIMEOUT", _TRIVY_SCAN_TIMEOUT_DEFAULT).strip()
+    _duration_seconds(value)  # validate eagerly; a bad env value must not reach the Job
+    return value
+
+
+def _duration_seconds(value: str) -> int:
+    """Parse a Go-style duration ("15m", "1h30m", "900s") into seconds. Fail loud on garbage."""
+    match = _GO_DURATION_RE.match(value)
+    if not match or not any(match.groups()):
+        raise ScanExecutionError(
+            f"Invalid TRIVY_SCAN_TIMEOUT duration {value!r} (expected a Go duration, e.g. '15m', '1h30m', '900s')"
+        )
+    hours, minutes, seconds = (int(g) if g else 0 for g in match.groups())
+    return hours * 3600 + minutes * 60 + seconds
+
 
 class TrivyScanner(ScannerPort):
     def __init__(self, backend: ScanExecutionBackend):
@@ -50,7 +87,22 @@ class TrivyScanner(ScannerPort):
         allowed = target.params.get("allowed_registries")
         image_ref = validate_image_reference(target.identifier, allowed_registries=allowed)
 
-        args = ["trivy", "--cache-dir", _TRIVY_CACHE_DIR, "image", "--format", "json", "--scanners", "vuln", "--quiet"]
+        trivy_timeout = _trivy_scan_timeout()
+        args = [
+            "trivy",
+            "--cache-dir",
+            _TRIVY_CACHE_DIR,
+            # Explicit scan deadline (see _TRIVY_SCAN_TIMEOUT_DEFAULT) — Trivy's implicit
+            # 5m default is too short for fat real-world images.
+            "--timeout",
+            trivy_timeout,
+            "image",
+            "--format",
+            "json",
+            "--scanners",
+            "vuln",
+            "--quiet",
+        ]
         server = os.environ.get("TRIVY_SERVER_URL")
         if server:
             args += ["--server", server]
@@ -65,6 +117,9 @@ class TrivyScanner(ScannerPort):
                 args=tuple(args),
                 # ECR pull creds (if any) — mounted as env in the Job, never in argv/logs.
                 secret_env=_aws_secret_env(target.credentials),
+                # Backend deadline (k8s Job activeDeadlineSeconds / subprocess timeout) MUST
+                # outlive Trivy's own --timeout — see _BACKEND_TIMEOUT_HEADROOM_SECONDS.
+                timeout_seconds=_duration_seconds(trivy_timeout) + _BACKEND_TIMEOUT_HEADROOM_SECONDS,
             ),
             on_progress=on_progress,
         )

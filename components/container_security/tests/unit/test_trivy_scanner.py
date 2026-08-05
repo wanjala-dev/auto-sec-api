@@ -10,6 +10,7 @@ from components.container_security.domain.image_reference import (
     InvalidImageReferenceError,
     validate_image_reference,
 )
+from components.container_security.infrastructure.adapters import trivy_scanner
 from components.container_security.infrastructure.adapters.trivy_scanner import TrivyScanner
 from components.container_security.infrastructure.services.trivy_normalizer import (
     trivy_json_to_scan_result,
@@ -225,3 +226,60 @@ class TestTrivyScanner:
         backend = _FakeBackend("", exit_code=124, timed_out=True)
         with pytest.raises(ScanExecutionError):
             TrivyScanner(backend=backend).scan(ScanTarget(identifier="nginx:latest"))
+
+
+# ── the fat-image timeout fix — explicit --timeout + backend deadline ──
+class TestTrivyScanTimeout:
+    @pytest.fixture(autouse=True)
+    def _clean_env(self, monkeypatch):
+        monkeypatch.delenv("TRIVY_SCAN_TIMEOUT", raising=False)
+
+    def _scan(self):
+        backend = _FakeBackend(json.dumps(_TRIVY_JSON))
+        TrivyScanner(backend=backend).scan(ScanTarget(identifier="nginx:latest"))
+        return backend.spec
+
+    def test_argv_carries_explicit_timeout_default_15m(self):
+        # Trivy's implicit 5m default dies on fat images (node:18-bullseye) with
+        # "context deadline exceeded"; the argv must always carry an explicit --timeout.
+        spec = self._scan()
+        args = spec.args
+        assert "--timeout" in args
+        assert args[args.index("--timeout") + 1] == "15m"
+        # --timeout is a global flag: it must precede the `image` subcommand's `--` ref gate.
+        assert args.index("--timeout") < args.index("--")
+
+    def test_timeout_env_overridable(self, monkeypatch):
+        monkeypatch.setenv("TRIVY_SCAN_TIMEOUT", "45m")
+        spec = self._scan()
+        assert spec.args[spec.args.index("--timeout") + 1] == "45m"
+        assert spec.timeout_seconds == 45 * 60 + trivy_scanner._BACKEND_TIMEOUT_HEADROOM_SECONDS
+
+    def test_backend_deadline_strictly_outlives_trivy_timeout(self):
+        # INVARIANT: Job activeDeadlineSeconds / subprocess timeout = trivy --timeout +
+        # headroom, so a slow scan is ended by Trivy's own fail-loud exit — never by the
+        # Job deadline killing the pod mid-scan.
+        spec = self._scan()
+        trivy_timeout = spec.args[spec.args.index("--timeout") + 1]
+        trivy_seconds = trivy_scanner._duration_seconds(trivy_timeout)
+        assert spec.timeout_seconds == trivy_seconds + trivy_scanner._BACKEND_TIMEOUT_HEADROOM_SECONDS
+        assert spec.timeout_seconds > trivy_seconds
+
+    def test_garbage_timeout_env_fails_loud_before_running(self, monkeypatch):
+        monkeypatch.setenv("TRIVY_SCAN_TIMEOUT", "soon-ish")
+        backend = _FakeBackend(json.dumps(_TRIVY_JSON))
+        with pytest.raises(ScanExecutionError):
+            TrivyScanner(backend=backend).scan(ScanTarget(identifier="nginx:latest"))
+        assert backend.spec is None  # never reached the backend
+
+    @pytest.mark.parametrize(
+        ("value", "seconds"),
+        [("15m", 900), ("1h", 3600), ("900s", 900), ("1h30m", 5400), ("2h5m10s", 7510)],
+    )
+    def test_duration_parser(self, value, seconds):
+        assert trivy_scanner._duration_seconds(value) == seconds
+
+    @pytest.mark.parametrize("bad", ["", "  ", "15", "m15", "15 m", "-5m", "1.5h"])
+    def test_duration_parser_rejects_garbage(self, bad):
+        with pytest.raises(ScanExecutionError):
+            trivy_scanner._duration_seconds(bad)
