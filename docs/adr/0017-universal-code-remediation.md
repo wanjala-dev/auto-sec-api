@@ -514,6 +514,72 @@ contribution loop from Remediation Memory stats (which template fixes hold, whic
    here because one repo can have N states and the consent objects differ — but it is one more
    Settings row).
 
+## Validation research (adversarial pass, 2026-08-05)
+
+An independent research pass run to *disconfirm* the locked decisions against how the production
+leaders actually build remediation. Per-decision verdicts, then the amendments the evidence forced.
+
+### Verdicts
+
+| Decision | Verdict | Deciding evidence |
+|---|---|---|
+| D0 one engine | **VALIDATED, with one boundary note** | Aikido — the closest price-class competitor — runs ONE agentic AutoFix engine where "IaC AutoFixes follow the same pattern but operate on configuration rather than application logic"[^v-aikido]. Snyk rebuilt remediation as ONE agentic architecture (Agent Fix) rolled out domain-by-domain: SCA first, "SAST, Container, and IaC in active development" on the same engine[^v-snyk]. Copilot Autofix is one LLM fix pipeline across all CodeQL languages[^v-autofix-ga]. **Boundary note:** the industry *unanimously* keeps dependency-version updating (Dependabot, Renovate, Snyk SCA) as a separate engine — because version-constraint/lockfile resolution is a solver problem, not a patch-generation problem. That is not a counterexample to D0 (no leader splits *patch-based* remediation per language); it IS a warning: when Auto-Sec adds Trivy-CVE version bumps, decide deliberately whether they are a "fix template" strategy or a distinct concern — do not force a solver into the patch engine to satisfy D0's letter. |
+| D1 seams + registries | **VALIDATED** | Internal-architecture choice; consistent with the one-engine evidence above (Aikido/Snyk extend one engine per domain exactly as D0/D1 prescribe: new domain = new resolution + validation intelligence, same pipeline). |
+| D2 resolver tiers | **AMEND — add a tag-provenance tier** | The two market leaders use two *different* mechanisms and each brags about it: **Wiz** does exactly our D2 — ingests Terraform state as "the bridge" connecting deployed resources to declarations, module/variable resolution, "no tagging required"[^v-wiz-map]. **Prisma Cloud/Bridgecrew** does the opposite — deploy-time provenance stamping via open-source **Yor** (`yor_trace` + git org/repo/file/modifier tags carried onto the cloud resource), explicitly marketed as tracing "without access to sensitive data such as plan or state files"; their drift-fix PRs are *powered by* these tags[^v-yor]. So state-join is the right default (it needs no customer adoption), but tag-reading is a nearly-free authoritative signal we were leaving on the table — see Amendment A. CFN `DescribeStackResources` stands unchallenged (AWS-authoritative, R6). |
+| D3 ladder + caching | **VALIDATED** | No leader documents a different selection shape; cheapest-authoritative-first is consistent with both mechanisms above. Amendment A slots the tag probe into the existing ladder without reordering it. |
+| D4 templates-above-LLM | **VALIDATED — strongly** | The academic evidence is decisive on the IaC/app asymmetry: SOTA models score **19–27% on Terraform generation vs >80% on general programming benchmarks**[^v-iac-taxonomy]; a 55-model IaC-Eval sweep found a 46-point drop from generation to validation driven by argument-name hallucination[^v-iac-eval]; TerraProbe documents "deceptive fixes" that satisfy the check without fixing the security property[^v-terraprobe]. Deterministic-first is the industry head-of-distribution shape (Checkov's 750+ fixed-code policies, R12). Meanwhile LLM fixes for *app* code are proven: Copilot Autofix resolves ~2/3 of addressed alerts with little/no editing[^v-autofix-ga]; Semgrep reports ~40% outright-accepted + ~40% good-starting-point[^v-semgrep]. Exactly our hybrid: templates for known checks, LLM (flagged, default-off for infra) beneath, same fail-closed validators. |
+| D4/D7 no `terraform plan` | **VALIDATED — and it is a security argument, not just cost** | Running `plan` executes arbitrary code: malicious/typo'd providers and `external` data sources achieve RCE **at plan time**, a documented attack class (Terraform-plan RCE; Snyk "GitFlops"; Atlantis's own security docs warn plan-on-untrusted-code is compromise)[^v-plan-rce]. A security vendor running plan against generated patches would be *adding* an execution surface, not safety. No evidence any remediation vendor (Wiz, Prisma, Aikido, Snyk) runs plan on its generated fixes; the customer-side plan-on-PR (Atlantis/TF Cloud/Spacelift) is the established division of responsibility, and HashiCorp's own drift detection uses refresh-only plans, not plan-on-patch (R11). `terraform validate` in a no-network ephemeral Job (P2) remains the right ceiling. |
+| D5 consent + state hygiene | **VALIDATED** | Wiz ingests customer state files as a matter of course[^v-wiz-map] — the market accepts vendor state-read; our explicit per-object `IacCodeSource` consent + in-memory-only handling is *stricter* than the observed norm. Bridgecrew's tags-not-state stance[^v-yor] additionally gives customers who refuse state-read a lower-trust path once Amendment A lands. |
+| D6 stopgap/root-fix pairing | **VALIDATED** | The auto-remediation incident literature converges on "runtime fixes without context are outage amplifiers" and prescribes reversibility + approval gates + pairing with the source-of-truth fix[^v-autorem] — which is precisely the propose/approve response framework paired with the code PR. No leader productizes the explicit pairing on one finding; it remains differentiation. |
+| D7 rescan as verification | **VALIDATED, with a named caveat** | Re-observation as fix verification matches how CSPM closes the loop (R10) and no vendor does better for merged PRs. **Caveat (TerraProbe):** a check-passing patch can be *deceptive* — satisfying the scanner's criterion without the security intent[^v-terraprobe]. Risk ≈ 0 for deterministic templates (the template encodes the intent); real for the LLM infra strategy — one more reason `feature.iac_remediation_llm` stays default-off and its patches face the strictest validator + human review framing. |
+| D8 P1 check set | **VALIDATED** | SG-ingress restriction and S3 versioning/logging sibling-blocks are canonical members of Checkov's deterministic fixed-code catalog (R12) — the archetypes are industry-proven, and the demo-provability grounding is ours. |
+
+### Amendments (forced by evidence)
+
+**A. Tag-provenance resolver tier (P2, cheap and high-value).** Read resource **tags** as a
+location signal: `aws:cloudformation:stack-name`/`logical-id` (already noted in R6),
+`yor_trace`/`git_file`/`git_repo` (Yor-stamped estates — Prisma customers have them *today*), and
+CDK's tag surface. Tags arrive with the asset/finding inventory we already collect — **zero new
+consent, zero new API calls** — and slot into the D3 ladder as a probe alongside step 1
+(tag hit → route to the matching resolver with the tag as corroborating evidence, or directly to
+repo-locate on `git_file`). Additionally, onboarding docs SHOULD recommend Yor (or plain
+`git_file`-style tagging) to customers as the stamping option that upgrades their own mapping
+precision — provenance-at-deploy beats after-the-fact joins whenever the customer will adopt it,
+and it costs us a docs paragraph[^v-yor].
+
+**B. PR-volume discipline is load-bearing, written down now.** The auto-PR fatigue data is brutal:
+~85% of automated security PRs go unmerged and rot[^v-pixee]; Dependabot's own literature documents
+teams rubber-stamping or abandoning the queue[^v-dependabot-study]. The engine's existing shape —
+operator/agent-*proposed*, contextual-risk-ranked (ADR 0013), preview-first, draft-only — is the
+correct antidote, but it must stay a rule: **never bulk-fire PRs per scan cycle; top-N by risk
+rank, on a finding the operator (or triage agent, human-gated) actually surfaced.** A remediation
+product's currency is merge rate, not PR count.
+
+**C. Honest fix-rate expectations (set with Henry before P1 ships).** Benchmarks: Copilot Autofix
+covers ~90% of alert *types* in 4 languages and ~2/3 of its fixes land with little/no editing
+[^v-autofix-cov]; Semgrep ~40% outright-accept[^v-semgrep]. For cloud-misconfig findings the
+honest funnel is narrower: finding → *mappable to code* (excludes unmanaged/console-created
+resources, deep indirection, non-code fixes like key rotation) → *templated check* → *PR opened* →
+*merged*. Expect P1 to auto-fix a **minority of cloud findings end-to-end (roughly 10–30% is the
+defensible range at first; the demo repo is deliberately in the mappable set)** — with the
+guidance tier carrying the rest honestly. The compounding levers are template count (P2) and
+Remediation Memory, not looser mapping thresholds.
+
+[^v-aikido]: Aikido AutoFix — one agentic engine, same pattern for SAST and IaC: https://help.aikido.dev/autofix-and-remediation/scope/ai-autofix-for-sast-and-iac-issues , https://help.aikido.dev/autofix-and-remediation/overview-aikido-autofix
+[^v-snyk]: Snyk Agent Fix / Remediation Agent — one agentic architecture (35k+ expert-fix corpus), SCA shipped, "SAST, Container, and IaC in active development": https://snyk.io/blog/snyk-remediation-agent-in-the-cli/ , https://docs.snyk.io/scan-fix-and-prevent/scan-with-snyk/snyk-code/manage-code-vulnerabilities/fix-code-vulnerabilities-automatically
+[^v-autofix-ga]: Copilot Autofix GA — CodeQL alert + context bundle → LLM fix; "resolves more than two-thirds of addressed alerts with little or no further editing": https://github.blog/changelog/2024-08-14-copilot-autofix-for-codeql-code-scanning-alerts-is-now-generally-available/
+[^v-autofix-cov]: Copilot agentic autofix coverage — ~90% of alert types (JS/TS/Java/Python), success rate "holds at roughly two-thirds"; security campaigns batch up to 1,000 alerts: https://github.blog/changelog/2026-07-10-agentic-autofix-for-code-scanning-alerts-in-public-preview/ , https://github.blog/changelog/2025-02-20-copilot-autofix-is-available-for-more-code-scanning-alerts/
+[^v-wiz-map]: Wiz cloud-to-code — state file as "the bridge", module/variable resolution, "no tagging required": https://www.wiz.io/blog/wiz-hcp-terraform-close-the-cloud-security-gap , https://www.wiz.io/platform/wiz-code
+[^v-yor]: Bridgecrew Yor — deploy-time `yor_trace` + git-provenance tags; tracing "without access to sensitive data such as plan or state files"; powers Prisma drift-fix PRs: https://github.com/bridgecrewio/yor , https://bridgecrew.io/blog/yor-trace-cloud-resources-iac-code/ , https://www.paloaltonetworks.com/blog/prisma-cloud/announcing-multi-cloud-drift-detection/
+[^v-iac-taxonomy]: LLM IaC generation error taxonomy — 19–27% Terraform success vs >80% on general programming benchmarks: https://arxiv.org/html/2512.14792
+[^v-iac-eval]: 55-model IaC-Eval sweep — 46-point generation→validation drop from argument-name hallucination: https://www.researchgate.net/publication/405480961_Hallucinated_Resources_Brittle_Oracles_Decoupled_Security_An_Empirical_Study_of_LLM-Generated_Terraform
+[^v-terraprobe]: TerraProbe — deceptive fixes that pass the check without fixing the security property (the APR oracle problem, applied to Terraform security repair): https://arxiv.org/html/2606.26590
+[^v-semgrep]: Semgrep Assistant — ~40% of AI fixes outright accepted, ~40% a good starting point; 95%+ triage agreement: https://semgrep.dev/blog/2024/the-tech-behind-semgrep-assistant/
+[^v-plan-rce]: `terraform plan` as an execution surface — plan-time RCE via malicious providers / `external` data sources: https://alex.kaskaso.li/post/terraform-plan-rce , https://labs.snyk.io/resources/gitflops-dangers-of-terraform-automation-platforms/ , https://www.runatlantis.io/docs/security
+[^v-autorem]: Auto-remediation incident literature — context-free runtime fixes as outage amplifiers; reversibility + approval gates: https://tamnoon.io/blog/is-automated-cloud-remediation-safe/ , https://nhimg.org/faq/what-breaks-when-remediation-is-automated-without-context/
+[^v-pixee]: Pixee — "the merge-rate problem": ~85% of automated security PRs go unmerged: https://www.pixee.ai/blog/merge-rate-problem-security-prs-ignored
+[^v-dependabot-study]: Dependabot usage studies — notification fatigue → rubber-stamping or queue abandonment: https://arxiv.org/pdf/2206.07230 , https://www.researchgate.net/publication/349641251_On_the_Use_of_Dependabot_Security_Pull_Requests
+
 [^prowler-meta]: Prowler check metadata model (`Remediation.Code`: NativeIaC / Terraform / CLI / Other; `Recommendation`) — https://github.com/prowler-cloud/prowler/blob/master/prowler/lib/check/models.py ; reporting fields (`REMEDIATION_CODE_TERRAFORM`, `REMEDIATION_CODE_NATIVEIAC`) — https://docs.prowler.com/user-guide/cli/tutorials/reporting ; custom check metadata tutorial — https://docs.prowler.com/projects/prowler-open-source/en/latest/tutorials/custom-checks-metadata/
 [^tf-mapping]: Firefly — asset↔IaC/state mapping + codification: https://docs.firefly.ai/key-features/cloud-asset-inventory , https://docs.firefly.ai/detailed-guides/codification ; ControlMonkey, "Is your AWS resource Terraformed" (physical-id → per-type id-property mapping): https://controlmonkey.io/blog/is-your-aws-resource-terraformed/ ; driftctl (scans cloud vs state, all backend types; maintenance mode): https://seifrajhi.github.io/blog/drift-detecting-in-terraform/
 [^tf-state-sec]: Terraform state security — secrets in state, read-only backend IAM, minimum exposure, audit: https://cycode.com/blog/secrets-in-terraform/ , https://oneuptime.com/blog/post/2026-02-23-how-to-use-read-only-state-access-in-terraform/view , https://www.firefly.ai/academy/secret-management-in-terraform-keeping-sensitive-data-out-of-state-files
