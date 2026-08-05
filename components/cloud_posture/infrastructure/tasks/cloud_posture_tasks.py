@@ -150,7 +150,10 @@ def run_prowler_scan_for_account(connection_id: str, account_id: str) -> dict[st
     job_id = start_job(
         workspace_id=connection.workspace_id,
         job_type="cloud_posture_scan",
-        title=f"CSPM scan · {account_id}",
+        # "{engine} · {target}" — the job-title display contract (see
+        # shared_platform job_progress docstring); the HUD derives its engine
+        # badge (PROWLER) + target from this split, same as every scanner.
+        title=f"prowler · {account_id}",
         phase="assuming_role",
         detail="Assuming the account audit role",
     )
