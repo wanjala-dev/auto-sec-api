@@ -33,12 +33,28 @@ class ScanTarget:
 
 
 @dataclass(frozen=True)
+class ScanArtifact:
+    """A scan by-product that is not a finding — an SBOM, a raw engine report.
+
+    Carried on the ``ScanResult`` so a pillar's post-ingest hook can persist it
+    (object storage + a ref row) without widening the finding pipeline. ``kind``
+    is a stable dotted key (e.g. ``"sbom.cyclonedx"``); ``content`` is the full
+    artifact body (text — JSON for every current kind).
+    """
+
+    kind: str  # e.g. "sbom.cyclonedx"
+    media_type: str  # e.g. "application/vnd.cyclonedx+json"
+    content: str
+
+
+@dataclass(frozen=True)
 class ScanResult:
     """A scanner's output: the actionable findings + scan-level counts.
 
     ``findings`` are the actionable ones (a "finding" is actionable by definition);
     the counts describe the whole run so a pillar snapshot can record pass/total even
-    though passing checks are not findings.
+    though passing checks are not findings. ``artifacts`` are optional non-finding
+    by-products (an image SBOM) a pillar's post-ingest hook persists.
     """
 
     findings: tuple[NormalizedFinding, ...]
@@ -47,6 +63,7 @@ class ScanResult:
     total_checks: int = 0
     passed_count: int = 0
     failed_count: int = 0
+    artifacts: tuple[ScanArtifact, ...] = ()
 
 
 # A progress reporter the runner may call with a float 0–100.

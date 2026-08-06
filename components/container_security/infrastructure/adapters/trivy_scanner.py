@@ -1,14 +1,33 @@
 """TrivyScanner — the container-SCA ScannerPort adapter (ADR 0006 D4).
 
-Knows *what* to run (the Trivy argv) and how to parse it; delegates *where* it runs to
-the injected ``ScanExecutionBackend`` (subprocess in dev, an ephemeral gVisor Job in
-prod). Points Trivy's client at the ``trivy-server`` (gRPC) for the vuln DB, so scan Jobs
-never download it. The untrusted image ref is validated (D5) and always passed after
-``--``.
+Knows *what* to run (the Trivy invocations) and how to parse them; delegates *where*
+they run to the injected ``ScanExecutionBackend`` (subprocess in dev, an ephemeral
+gVisor Job in prod). Points Trivy's client at the ``trivy-server`` (gRPC) for the vuln
+DB, so scan Jobs never download it. The untrusted image ref is validated (D5) and
+always passed as a positional shell parameter (``"$1"``) — never interpolated into
+the script text — and always after ``--`` in each trivy argv.
+
+The Job runs a small POSIX-sh script with TWO trivy invocations against the same
+warm cache:
+
+1. the vuln scan (``--format json --scanners vuln``) — byte-identical output to the
+   pre-SBOM pipeline; a non-zero exit fails the whole scan, loud (unchanged), and
+2. a CycloneDX SBOM pass (``--format cyclonedx``) — image analysis is already cached
+   from pass 1 so this is fast. Trivy has no dual-format single invocation
+   (``trivy convert`` exists precisely because of that, but it requires the vuln
+   JSON to carry ``--list-all-pkgs``, which would bloat the vuln report with every
+   package; the second cache-warm pass keeps the vuln output unchanged instead).
+
+Both outputs return to the worker on the Job's only channel — stdout — as ONE JSON
+envelope: ``{"autosec_trivy_envelope": 1, "vuln": {...}, "sbom": {...}|null}``.
+SBOM POLICY: a failed SBOM pass never fails the vuln scan — the envelope carries
+``"sbom": null`` and the adapter logs a warning (an honest absent state); only the
+vuln pass is fail-loud.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -24,6 +43,7 @@ from components.scanning.application.ports.scan_execution_backend import (
 from components.scanning.domain.errors import ScanExecutionError
 from components.shared_kernel.application.ports.scanner_port import (
     ProgressCallback,
+    ScanArtifact,
     ScannerPort,
     ScanResult,
     ScanTarget,
@@ -50,7 +70,8 @@ _TRIVY_SCAN_TIMEOUT_DEFAULT = "15m"
 
 # Headroom the execution backend gets ON TOP of Trivy's own deadline. The backend timeout
 # (k8s Job activeDeadlineSeconds / subprocess timeout) starts before Trivy's timer does —
-# it also covers scanner-image pull + pod scheduling/startup.
+# it also covers scanner-image pull + pod scheduling/startup (and now the fast cache-warm
+# SBOM pass after the vuln pass).
 #
 # INVARIANT (the deadline relationship): backend timeout = trivy --timeout + this headroom,
 # so it strictly OUTLIVES Trivy. A genuinely slow scan is ended by Trivy itself — a clean,
@@ -59,6 +80,48 @@ _TRIVY_SCAN_TIMEOUT_DEFAULT = "15m"
 _BACKEND_TIMEOUT_HEADROOM_SECONDS = 300
 
 _GO_DURATION_RE = re.compile(r"^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$")
+
+# The artifact kind + media type the SBOM travels under (interpreted by the
+# container_security post-ingest hook — the generic pipeline never inspects it).
+SBOM_ARTIFACT_KIND = "sbom.cyclonedx"
+SBOM_MEDIA_TYPE = "application/vnd.cyclonedx+json"
+
+_ENVELOPE_KEY = "autosec_trivy_envelope"
+
+# The in-Job orchestration script. POSIX sh (the pinned aquasec/trivy image is
+# alpine-based → busybox sh at /bin/sh). SECURITY: only trusted, validated config is
+# interpolated into the script text ({timeout} is regex-validated, {server} comes from
+# our own env); the UNTRUSTED image ref rides exclusively as the positional "$1".
+# stderr of both passes is captured to a file so the pod log / stdout carries ONLY the
+# JSON envelope; on a vuln-pass failure the captured stderr is replayed to stdout so
+# the fail-loud path keeps its diagnostics (the adapter logs a stdout snippet).
+_JOB_SCRIPT_TEMPLATE = """\
+set -u
+vuln_out=/tmp/autosec-trivy-vuln.json
+sbom_out=/tmp/autosec-trivy-sbom.cdx.json
+errlog=/tmp/autosec-trivy-stderr.log
+trivy --cache-dir "$TRIVY_CACHE_DIR" --timeout {timeout} image --format json \
+    --scanners vuln --quiet --output "$vuln_out"{server} -- "$1" 2>"$errlog"
+code=$?
+if [ "$code" -ne 0 ]; then
+  cat "$errlog"
+  exit "$code"
+fi
+sbom_ok=1
+if ! trivy --cache-dir "$TRIVY_CACHE_DIR" --timeout {timeout} image --format cyclonedx \
+    --quiet --output "$sbom_out" -- "$1" >>"$errlog" 2>&1; then
+  sbom_ok=0
+fi
+printf '{{"{envelope_key}":1,"vuln":'
+cat "$vuln_out"
+if [ "$sbom_ok" -eq 1 ]; then
+  printf ',"sbom":'
+  cat "$sbom_out"
+else
+  printf ',"sbom":null'
+fi
+printf '}}\\n'
+"""
 
 
 def _trivy_scan_timeout() -> str:
@@ -79,6 +142,22 @@ def _duration_seconds(value: str) -> int:
     return hours * 3600 + minutes * 60 + seconds
 
 
+def _job_script(*, timeout: str, server: str | None) -> str:
+    """Render the in-Job sh script from TRUSTED config only (the ref stays "$1").
+
+    ``timeout`` has already passed ``_duration_seconds`` (strict regex — no shell
+    metacharacters can survive it). ``server`` is our own deployment config
+    (TRIVY_SERVER_URL), not request input; it is still character-guarded because a
+    config typo must fail loud here, not inject into the script.
+    """
+    server_fragment = ""
+    if server:
+        if re.search(r"[\s'\"\\$`;|&<>()]", server):
+            raise ScanExecutionError(f"Invalid TRIVY_SERVER_URL {server!r} (unsafe characters)")
+        server_fragment = f" --server {server}"
+    return _JOB_SCRIPT_TEMPLATE.format(timeout=timeout, server=server_fragment, envelope_key=_ENVELOPE_KEY)
+
+
 class TrivyScanner(ScannerPort):
     def __init__(self, backend: ScanExecutionBackend):
         self._backend = backend
@@ -88,25 +167,11 @@ class TrivyScanner(ScannerPort):
         image_ref = validate_image_reference(target.identifier, allowed_registries=allowed)
 
         trivy_timeout = _trivy_scan_timeout()
-        args = [
-            "trivy",
-            "--cache-dir",
-            _TRIVY_CACHE_DIR,
-            # Explicit scan deadline (see _TRIVY_SCAN_TIMEOUT_DEFAULT) — Trivy's implicit
-            # 5m default is too short for fat real-world images.
-            "--timeout",
-            trivy_timeout,
-            "image",
-            "--format",
-            "json",
-            "--scanners",
-            "vuln",
-            "--quiet",
-        ]
-        server = os.environ.get("TRIVY_SERVER_URL")
-        if server:
-            args += ["--server", server]
-        args += ["--", image_ref]  # end-of-flags: the validated ref can never be a flag
+        script = _job_script(timeout=trivy_timeout, server=os.environ.get("TRIVY_SERVER_URL"))
+        # Fixed argv, no interpolation of the ref: the script is a literal argument,
+        # "autosec-trivy" is $0, and the validated-but-untrusted ref is $1 — it can
+        # never be parsed as script text.
+        args = ("/bin/sh", "-c", script, "autosec-trivy", image_ref)
 
         result = self._backend.run(
             ScanJobSpec(
@@ -114,7 +179,7 @@ class TrivyScanner(ScannerPort):
                 image=_TRIVY_IMAGE,
                 # A writable cache home for the read-only-rootfs Job (see _TRIVY_CACHE_DIR).
                 env={"TRIVY_CACHE_DIR": _TRIVY_CACHE_DIR, "HOME": "/tmp"},
-                args=tuple(args),
+                args=args,
                 # ECR pull creds (if any) — mounted as env in the Job, never in argv/logs.
                 secret_env=_aws_secret_env(target.credentials),
                 # Backend deadline (k8s Job activeDeadlineSeconds / subprocess timeout) MUST
@@ -140,7 +205,44 @@ class TrivyScanner(ScannerPort):
             raise ScanExecutionError(
                 f"Trivy scan of {image_ref} failed (exit_code={result.exit_code}, timed_out={result.timed_out})"
             )
-        return trivy_json_to_scan_result(result.stdout, image_ref=image_ref)
+
+        vuln_payload, sbom_content = _split_envelope(result.stdout, image_ref=image_ref)
+        scan_result = trivy_json_to_scan_result(vuln_payload, image_ref=image_ref)
+        if sbom_content is None:
+            return scan_result
+        artifact = ScanArtifact(kind=SBOM_ARTIFACT_KIND, media_type=SBOM_MEDIA_TYPE, content=sbom_content)
+        return ScanResult(
+            findings=scan_result.findings,
+            engine=scan_result.engine,
+            engine_version=scan_result.engine_version,
+            total_checks=scan_result.total_checks,
+            passed_count=scan_result.passed_count,
+            failed_count=scan_result.failed_count,
+            artifacts=(artifact,),
+        )
+
+
+def _split_envelope(stdout: str, *, image_ref: str) -> tuple[str | dict, str | None]:
+    """Split the Job's stdout envelope into (vuln payload, SBOM JSON text or None).
+
+    Tolerates legacy plain-Trivy JSON (no envelope) by treating the whole payload as
+    the vuln report — the normalizer keeps its established leniency for malformed
+    output. SBOM POLICY (honest absent state): ``"sbom": null`` → warn + return None;
+    the vuln pipeline continues untouched.
+    """
+    try:
+        data = json.loads(stdout) if (stdout or "").strip() else {}
+    except ValueError:
+        return stdout, None  # normalizer logs its own non-JSON warning
+    if not isinstance(data, dict) or data.get(_ENVELOPE_KEY) != 1:
+        return data if isinstance(data, dict) else stdout, None
+
+    vuln = data.get("vuln")
+    sbom = data.get("sbom")
+    if not isinstance(sbom, dict) or not sbom:
+        logger.warning("trivy_sbom_absent image=%s (SBOM pass failed or emitted nothing)", image_ref)
+        return vuln if isinstance(vuln, dict) else {}, None
+    return vuln if isinstance(vuln, dict) else {}, json.dumps(sbom, separators=(",", ":"))
 
 
 def _aws_secret_env(credentials: dict | None) -> dict[str, str]:

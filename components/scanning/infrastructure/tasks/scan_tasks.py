@@ -64,6 +64,7 @@ def run_scan(
     from components.scanning.application.providers.scanner_registry import (
         UnknownScannerError,
         get_scanner,
+        post_ingest_for,
     )
     from components.scanning.infrastructure.services.run_scan_service import run_scan_and_ingest
     from components.shared_kernel.application.ports.scanner_port import ScanTarget
@@ -100,6 +101,22 @@ def run_scan(
                 last["pct"] = mapped
                 update_job(job_id=job_id, progress=mapped, phase="scanning", detail=f"{target_ref} — {int(pct)}%")
 
+        # The pillar's optional post-ingest hook (e.g. container_security persisting
+        # the image SBOM). Adapted here from ORM run → primitives so the pillar's
+        # APPLICATION hook stays framework-free. Best-effort by policy (see
+        # run_scan_and_ingest) — never fails a completed scan.
+        post_ingest = post_ingest_for(source)
+        on_completed = None
+        if post_ingest is not None:
+
+            def on_completed(run, result, _hook=post_ingest):
+                _hook(
+                    run_id=run.id,
+                    workspace_id=run.workspace_id,
+                    target_ref=run.target_ref,
+                    result=result,
+                )
+
         run = run_scan_and_ingest(
             workspace_id=workspace_id,
             source=source,
@@ -108,6 +125,7 @@ def run_scan(
             connection_id=connection_id,
             account_id=account_id,
             on_progress=_on_progress,
+            on_completed=on_completed,
         )
     except Exception:
         logger.exception("run_scan failed source=%s target=%s", source, target_ref)

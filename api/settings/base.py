@@ -119,6 +119,8 @@ INSTALLED_APPS = [
     "infrastructure.persistence.provenance",
     "infrastructure.persistence.cloud_posture",
     "infrastructure.persistence.scanning",
+    # Container-security pillar records (image SBOM references — task #99 P1).
+    "infrastructure.persistence.container_security",
     "infrastructure.persistence.findings",
     "infrastructure.persistence.tagging",
     "infrastructure.persistence.cloud_graph",
@@ -584,6 +586,23 @@ REPORT_PDF_S3_REGION = os.environ.get("REPORT_PDF_S3_REGION", "us-east-1")
 REPORT_PDF_S3_ACCESS_KEY = os.environ.get("REPORT_PDF_S3_ACCESS_KEY", "wanjala")
 REPORT_PDF_S3_SECRET_KEY = os.environ.get("REPORT_PDF_S3_SECRET_KEY", "wanjaladev")
 REPORT_PDF_S3_PRESIGNED_TTL_SECONDS = int(os.environ.get("REPORT_PDF_S3_PRESIGNED_TTL_SECONDS", "600"))
+
+# ── Image SBOM object storage (container_security, task #99 P1) ────────
+# Mirrors the report-PDF conventions above (internal endpoint for writes,
+# public endpoint for browser-followed presigned URLs, bucket auto-created
+# by the adapter). Every SBOM_S3_* env falls back to its REPORT_PDF_S3_*
+# sibling so the existing MinIO deployment serves SBOMs with ZERO new
+# cluster config; only the bucket is its own (autosec-sboms).
+SBOM_S3_BUCKET = os.environ.get("SBOM_S3_BUCKET", "autosec-sboms")
+SBOM_S3_ENDPOINT = os.environ.get("SBOM_S3_ENDPOINT", os.environ.get("REPORT_PDF_S3_ENDPOINT", "http://minio:9000"))
+SBOM_S3_PUBLIC_ENDPOINT = os.environ.get(
+    "SBOM_S3_PUBLIC_ENDPOINT",
+    os.environ.get("REPORT_PDF_S3_PUBLIC_ENDPOINT", SBOM_S3_ENDPOINT),
+)
+SBOM_S3_REGION = os.environ.get("SBOM_S3_REGION", os.environ.get("REPORT_PDF_S3_REGION", "us-east-1"))
+SBOM_S3_ACCESS_KEY = os.environ.get("SBOM_S3_ACCESS_KEY", os.environ.get("REPORT_PDF_S3_ACCESS_KEY", "wanjala"))
+SBOM_S3_SECRET_KEY = os.environ.get("SBOM_S3_SECRET_KEY", os.environ.get("REPORT_PDF_S3_SECRET_KEY", "wanjaladev"))
+SBOM_S3_PRESIGNED_TTL_SECONDS = int(os.environ.get("SBOM_S3_PRESIGNED_TTL_SECONDS", "600"))
 
 # Vector store backend used by the RAG pipeline (PDF chunking,
 # document embeddings, similarity search). The lean prod stack runs
