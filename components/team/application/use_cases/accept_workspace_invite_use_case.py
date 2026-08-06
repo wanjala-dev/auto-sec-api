@@ -14,9 +14,11 @@ the ``CustomUser``/``UserProfile`` write is owned by ``identity`` (via
 ``InviteUserProvisioningPort``); the ``WorkspaceMembership``/``WorkspaceRole``/
 ``WorkspaceGroup*`` write is owned by ``workspace`` (via
 ``WorkspaceMembershipWritePort``); the ``Invitation`` write is own-context (via
-``InvitationStorePort``). This use case orchestrates them under one ``atomic()``
-and holds no ORM. (Team enrollment is a documented no-op — see the note in
-``execute`` — so it is byte-for-byte behaviour-preserving vs. ``main``.)
+``InvitationStorePort``). Team enrollment for team-attached invitations goes
+through the team-owned ``InviteTeamEnrollmentPort`` (the #60 root fix — the
+original inline enrollment ImportError'd on a renamed class and was silently
+swallowed, leaving persona-invite team enrollment a dead no-op). This use case
+orchestrates them under one ``atomic()`` and holds no ORM.
 """
 
 from __future__ import annotations
@@ -26,6 +28,9 @@ from datetime import UTC, datetime
 
 from components.shared_kernel.application.transactional import atomic
 from components.team.application.ports.invitation_store_port import InvitationStorePort
+from components.team.application.ports.invite_team_enrollment_port import (
+    InviteTeamEnrollmentPort,
+)
 from components.team.application.ports.invite_token_port import InviteTokenPort
 from components.team.application.ports.invite_user_provisioning_port import (
     InviteUserProvisioningPort,
@@ -68,6 +73,7 @@ class AcceptWorkspaceInviteUseCase:
     user_provisioning: InviteUserProvisioningPort
     membership_write: WorkspaceMembershipWritePort
     tokens: InviteTokenPort
+    team_enrollment: InviteTeamEnrollmentPort
 
     def execute(self, command: AcceptWorkspaceInviteCommand) -> AcceptWorkspaceInviteResult:
         if not command.token:
@@ -179,21 +185,24 @@ class AcceptWorkspaceInviteUseCase:
                 permission_group_ids=list(invitation.permission_group_ids or []),
             )
 
-            # NOTE — team enrollment is intentionally NOT performed here.
-            # On `main` the original inline enrollment imported a class name that
-            # no longer exists (``TeamMembershipRepository`` — the class was
-            # renamed to ``OrmTeamMembershipRepository``), so the call raised
-            # ImportError and was silently swallowed by a bare ``except
-            # Exception: pass``. Persona-invite team enrollment has therefore
-            # been a dead no-op in production. This refactor is behaviour-
-            # preserving, so it faithfully reproduces that no-op rather than
-            # resurrecting enrollment — doing so would change behaviour (e.g.
-            # flip volunteer ``is_contributor`` via the enrollment policy and
-            # start writing team-member rows) and belongs in its own reviewed
-            # PR. The active-team context the flow relied on is still parked on
-            # the profile by the identity provisioning step above. A follow-up
-            # PR should reintroduce real enrollment behind a team-owned port +
-            # a behaviour test.
+            # Team enrollment (the #60 root fix). The original inline enrollment
+            # imported a renamed class (``TeamMembershipRepository`` →
+            # ``OrmTeamMembershipRepository``); the ImportError was swallowed by
+            # a bare ``except Exception: pass``, so team-attached invites never
+            # actually enrolled anyone. Restored here through the team-owned
+            # ``InviteTeamEnrollmentPort``: a missing team/workspace is a logged
+            # no-op inside the adapter (an invite can outlive its team; the
+            # membership row above must still land), real errors propagate.
+            # ``mark_contributor`` follows the accept flow's own persona rule
+            # (only a contributor invite touches the global ``is_contributor``
+            # flag) rather than the legacy repository default of always-True.
+            if invitation.team_id:
+                self.team_enrollment.enroll(
+                    user_id=str(user_id),
+                    workspace_id=str(invitation.workspace_id),
+                    team_id=str(invitation.team_id),
+                    mark_contributor=seed_is_contributor,
+                )
 
             # Issue JWT tokens INSIDE the atomic block so any failure here rolls
             # back the user/membership/invitation writes together.
