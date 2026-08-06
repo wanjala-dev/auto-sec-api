@@ -43,6 +43,7 @@ def run_scan_and_ingest(
     account_id: str = "",
     event_publisher=None,
     on_progress: ProgressCallback | None = None,
+    on_completed=None,
 ):
     """Run *scanner* against *target*, record a ``ScanRun``, emit findings to the SSOT.
 
@@ -51,6 +52,11 @@ def run_scan_and_ingest(
     transactional, so a rolled-back finalize never emits orphan findings. A scan
     failure marks the run FAILED and re-raises so the caller (task) can react.
     Returns the ``ScanRun``.
+
+    ``on_completed(run, result)`` (optional) fires after the run row is finalized —
+    the pillar's post-ingest seam (persisting ``ScanResult.artifacts``, e.g. an image
+    SBOM). POLICY: it is best-effort — a hook failure is logged and NEVER fails the
+    completed scan (the findings + run record are already the truth).
     """
     from infrastructure.persistence.scanning.models import ScanRun
 
@@ -118,6 +124,15 @@ def run_scan_and_ingest(
         len(observed),
     )
     run.refresh_from_db()
+
+    if on_completed is not None:
+        try:
+            on_completed(run, result)
+        except Exception:
+            # Best-effort by contract: the scan is already COMPLETED and its findings
+            # emitted — a post-ingest failure (e.g. SBOM storage) must not undo that.
+            logger.exception("scan_post_ingest_failed source=%s run_id=%s", source, run.id)
+
     return run
 
 

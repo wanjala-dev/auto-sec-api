@@ -17,6 +17,8 @@ from .base import *  # noqa: F403
 # hostname for uploads; the presigned URL the browser follows must use
 # the host-reachable one so the signature + actual request URL match.
 REPORT_PDF_S3_PUBLIC_ENDPOINT = os.environ.get("REPORT_PDF_S3_PUBLIC_ENDPOINT", "http://localhost:9110")
+# The SBOM presigned URLs ride the same dev MinIO split (see SBOM_S3_* in base.py).
+SBOM_S3_PUBLIC_ENDPOINT = os.environ.get("SBOM_S3_PUBLIC_ENDPOINT", REPORT_PDF_S3_PUBLIC_ENDPOINT)
 
 
 # Build paths inside the project like this: os.path.join(BASE_DIR, ...)

@@ -14,11 +14,20 @@ from dataclasses import dataclass
 
 from components.shared_kernel.application.ports.scanner_port import ScannerPort
 
+# A pillar's optional post-ingest hook: called AFTER a run completes + its findings
+# are emitted, with (run_id, workspace_id, target_ref, result). Persists non-finding
+# by-products (``ScanResult.artifacts`` — e.g. the Trivy CycloneDX SBOM). POLICY: a
+# hook failure must never fail the scan — the caller logs and continues.
+PostIngestHook = Callable[..., None]
+
 
 @dataclass(frozen=True)
 class RegisteredScanner:
     factory: Callable[[], ScannerPort]
     queue: str
+    # Lazily resolves the pillar's PostIngestHook (via its APPLICATION provider —
+    # never its infrastructure), or None when the pillar has no post-ingest step.
+    post_ingest_factory: Callable[[], PostIngestHook] | None = None
 
 
 def _container_security_trivy() -> ScannerPort:
@@ -27,11 +36,20 @@ def _container_security_trivy() -> ScannerPort:
     return build_scanner()
 
 
+def _container_security_post_ingest() -> PostIngestHook:
+    from components.container_security.application.providers.sbom_provider import (
+        build_post_ingest_hook,
+    )
+
+    return build_post_ingest_hook()
+
+
 # source → (adapter factory, isolated worker queue). One line per pillar.
 _REGISTRY: dict[str, RegisteredScanner] = {
     "container_security.trivy": RegisteredScanner(
         factory=_container_security_trivy,
         queue="container_security",
+        post_ingest_factory=_container_security_post_ingest,
     ),
 }
 
@@ -55,6 +73,12 @@ def get_scanner(source: str) -> ScannerPort:
 def queue_for(source: str) -> str:
     """The Celery queue whose hardened worker runs *source*'s engine."""
     return _entry(source).queue
+
+
+def post_ingest_for(source: str) -> PostIngestHook | None:
+    """Build *source*'s post-ingest hook, or None when the pillar registers none."""
+    factory = _entry(source).post_ingest_factory
+    return factory() if factory is not None else None
 
 
 def is_registered(source: str) -> bool:
