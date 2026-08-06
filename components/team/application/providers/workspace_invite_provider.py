@@ -70,6 +70,14 @@ class WorkspaceInviteProvider:
 
         return SimpleJwtInviteTokenAdapter()
 
+    @staticmethod
+    def _team_enrollment():
+        from components.team.infrastructure.adapters.invite_team_enrollment_adapter import (
+            InviteTeamEnrollmentAdapter,
+        )
+
+        return InviteTeamEnrollmentAdapter()
+
     def build_create_use_case(self) -> CreateWorkspaceInviteUseCase:
         from components.team.application.use_cases.create_workspace_invite_use_case import (
             CreateWorkspaceInviteUseCase,
@@ -92,6 +100,7 @@ class WorkspaceInviteProvider:
             user_provisioning=self._user_provisioning(),
             membership_write=self._membership_write(),
             tokens=self._token(),
+            team_enrollment=self._team_enrollment(),
         )
 
 

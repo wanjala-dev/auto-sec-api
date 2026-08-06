@@ -98,6 +98,29 @@ def _stub_scan_execution(records=None):
 
 
 @pytest.fixture
+def aws_connection_factory():
+    """Build a CONNECTED ``AwsOrganizationConnection`` for a workspace — the
+    prerequisite row for log sources / scans. Shared by the log-source and
+    backbone chain suites (dry-reuse: one canonical builder, not one per module)."""
+
+    def _create(workspace, owner=None, **overrides):
+        from infrastructure.persistence.integrations.models import AwsOrganizationConnection
+
+        defaults = dict(
+            workspace=workspace,
+            management_account_id="123456789012",
+            role_name="AutoSecAuditRole",
+            external_id=f"ext-{workspace.id}",
+            status=AwsOrganizationConnection.Status.CONNECTED,
+            created_by=owner or workspace.workspace_owner,
+        )
+        defaults.update(overrides)
+        return AwsOrganizationConnection.objects.create(**defaults)
+
+    return _create
+
+
+@pytest.fixture
 def stub_org_verification():
     """Return the ``_stub_org_verification`` context manager (a fixture so tests get it
     without importing from conftest)."""
