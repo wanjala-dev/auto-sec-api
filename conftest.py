@@ -178,19 +178,30 @@ def _seed_sectors():
 def _seed_system_roles():
     """Materialise the seeded system WorkspaceRole rows (idempotent).
 
-    Imports the seed tuples straight from the ``0016_seed_system_roles``
-    migration so the test seed can never drift from the migration.
+    Imports the seed tuples straight from the canonical seed source so the test
+    seed can never drift from it: this fork's source of truth is the
+    ``seed_workspace_roles`` management command (the fork reset migrations, so
+    the source repo's ``0016_seed_system_roles`` data migration doesn't exist);
+    the migration module is kept as a fallback for the source-repo layout.
+    Without this seed every capability gate (``has_workspace_permission``)
+    resolves legacy ``role`` slugs to an empty permission bundle and denies.
     """
     import importlib
 
     try:
-        migration = importlib.import_module("infrastructure.persistence.workspaces.migrations.0016_seed_system_roles")
         WorkspaceRole = django_apps.get_model("workspaces", "WorkspaceRole")
-    except (ModuleNotFoundError, LookupError):
-        # Fork may not carry the system-roles seed migration/model yet — no-op
-        # rather than break every component test suite.
+    except LookupError:
         return
-    for slug, name, description, permissions in migration.SYSTEM_ROLE_SEEDS:
+    try:
+        seed_source = importlib.import_module("components.workspace.cli.management.commands.seed_workspace_roles")
+    except ModuleNotFoundError:
+        try:
+            seed_source = importlib.import_module(
+                "infrastructure.persistence.workspaces.migrations.0016_seed_system_roles"
+            )
+        except ModuleNotFoundError:
+            return
+    for slug, name, description, permissions in seed_source.SYSTEM_ROLE_SEEDS:
         WorkspaceRole.objects.update_or_create(
             workspace=None,
             slug=slug,
