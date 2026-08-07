@@ -13,13 +13,18 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from components.integrations.application.log_ingest_service import (
+    KIND_CLOUDWATCH,
+    KIND_S3,
+    source_adapter_config,
+)
+
 logger = logging.getLogger(__name__)
 
-# Source-kind identifiers (mirror ``WorkspaceLogSource.Kind`` values, which are the
-# same strings the ``LogSourcePort`` adapters register under). Kept as plain
-# constants here so this application service never imports the ORM enum.
-_KIND_S3 = "s3"
-_KIND_CLOUDWATCH = "cloudwatch"
+# Source-kind identifiers come from log_ingest_service (mirrors of the
+# ``WorkspaceLogSource.Kind`` values the adapters register under — plain strings
+# so this application service never imports the ORM enum).
+_AWS_BACKED_KINDS = (KIND_S3, KIND_CLOUDWATCH)
 
 
 class LogSourceConfigError(Exception):
@@ -84,31 +89,13 @@ class LogSourceService:
     # ── internals ────────────────────────────────────────────────────────
 
     def _adapter_config(self, source) -> dict:
-        """Resolve a stored source into a full adapter config. AWS-backed sources
-        (S3, CloudWatch) take their assume-role identity from the referenced AWS
-        connection; other kinds carry self-contained config (3P secrets resolved via
-        ``secret_ref`` in a later phase)."""
-        if source.kind == _KIND_S3:
-            from components.integrations.application.log_ingest_service import s3_adapter_config
-
-            return s3_adapter_config(self._connection_for(source), source)
-
-        if source.kind == _KIND_CLOUDWATCH:
-            conn = self._connection_for(source)
-            config = dict(source.config or {})
-            config.update(
-                {
-                    "management_account_id": conn.management_account_id,
-                    "role_name": conn.role_name,
-                    "external_id": conn.external_id,
-                    "source_id": str(source.id),
-                }
-            )
-            return config
-
-        config = dict(source.config or {})
-        config["source_id"] = str(source.id)
-        return config
+        """Resolve a stored source into a full adapter config via the ONE
+        canonical per-kind resolver (``source_adapter_config`` — shared with the
+        ingest read path, so verify and read can never drift apart). AWS-backed
+        sources (S3, CloudWatch) take their assume-role identity from the
+        referenced AWS connection; other kinds are self-contained."""
+        connection = self._connection_for(source) if source.kind in _AWS_BACKED_KINDS else None
+        return source_adapter_config(connection, source)
 
     def _connection_for(self, source):
         """Resolve the AWS connection an S3/CloudWatch source reads through — the

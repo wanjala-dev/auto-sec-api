@@ -20,7 +20,7 @@ from unittest import mock
 
 import pytest
 
-from components.integrations.application.log_ingest_service import LogRecord
+from components.integrations.application.log_ingest_service import LogRecord, SourceWindow
 from components.integrations.application.log_metrics_service import (
     SECURITY_METRICS,
     aggregate_security_metrics,
@@ -200,16 +200,17 @@ class TestTopSourcesAndTrend:
 
 @pytest.mark.django_db
 class TestIngestWiringFailureSafety:
-    def _window(self):
+    def _windows(self):
         msg = "ERROR boom"
         rec = LogRecord(service="web", level="ERROR", message=msg, raw=msg, ts=_HOUR)
-        return LogWindow(records=(rec,), cursor="logs/2026/window.json.gz", objects_scanned=1)
+        window = LogWindow(records=(rec,), cursor="logs/2026/window.json.gz", objects_scanned=1)
+        return [SourceWindow(source_id="", kind="s3", window=window, source=None)]
 
     def test_scan_connection_feeds_buckets(self, connection):
         from components.integrations.application.log_ingest_service import scan_connection
         from infrastructure.persistence.integrations.models import LogMetricBucket
 
-        with mock.patch(f"{_INGEST}.read_source_window", return_value=self._window()):
+        with mock.patch(f"{_INGEST}.read_source_windows", return_value=self._windows()):
             result = scan_connection(connection, only_new=False)
 
         assert result.records_parsed == 1
@@ -221,7 +222,7 @@ class TestIngestWiringFailureSafety:
         from infrastructure.persistence.integrations.models import IngestCheckpoint
 
         with (
-            mock.patch(f"{_INGEST}.read_source_window", return_value=self._window()),
+            mock.patch(f"{_INGEST}.read_source_windows", return_value=self._windows()),
             mock.patch(
                 f"{_METRICS}.aggregate_security_metrics",
                 side_effect=RuntimeError("aggregation exploded"),

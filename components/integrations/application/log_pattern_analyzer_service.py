@@ -193,7 +193,7 @@ def aggregate_workspace_log_patterns(
     counts: dict[str, int] = {}
     meta: dict[str, dict] = {}
     total_lines = 0
-    for lr in read_source_window(conn, max_objects=max_objects, after="").records:
+    for lr in read_source_window(conn, max_objects=max_objects).records:
         total_lines += 1
         kind, subject = _classify(lr.service, lr.message)
         sig = _signature(lr.service, lr.message)
