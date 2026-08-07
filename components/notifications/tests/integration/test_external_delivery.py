@@ -83,13 +83,28 @@ def _run(monkeypatch, workspace, *, adapter, event_key=FINDING_CRITICAL, metadat
 class TestDelivery:
     def test_delivers_to_a_subscribed_connection(self, workspace_factory, monkeypatch):
         workspace = workspace_factory()
-        _connection(workspace)
+        connection = _connection(workspace)
         adapter = _Recorder()
 
         result = _run(monkeypatch, workspace, adapter=adapter)
 
         assert result["delivered"] == 1
         assert len(adapter.calls) == 1
+        # The success path stamps connection health — the Settings panel's
+        # "last delivery" proof that alerts actually reach the channel.
+        connection.refresh_from_db()
+        assert connection.last_delivery_at is not None
+
+    def test_skipped_delivery_does_not_stamp_last_delivery(self, workspace_factory, monkeypatch):
+        workspace = workspace_factory()
+        connection = _connection(workspace, events=[DRAFT_PR_OPENED])  # not subscribed
+        adapter = _Recorder()
+
+        result = _run(monkeypatch, workspace, adapter=adapter)
+
+        assert result["delivered"] == 0
+        connection.refresh_from_db()
+        assert connection.last_delivery_at is None
 
     def test_redelivery_does_not_double_post(self, workspace_factory, monkeypatch):
         """The whole point of the ledger — a retried task converges instead of
@@ -140,9 +155,7 @@ class TestGates:
         _connection(workspace, min_severity="critical")
         adapter = _Recorder()
 
-        result = _run(
-            monkeypatch, workspace, adapter=adapter, metadata={"severity": "high", "finding_id": "f-1"}
-        )
+        result = _run(monkeypatch, workspace, adapter=adapter, metadata={"severity": "high", "finding_id": "f-1"})
 
         assert result["delivered"] == 0
         status, reason = self._skip_reason(workspace)
