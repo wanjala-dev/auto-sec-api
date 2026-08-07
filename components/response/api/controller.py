@@ -2,9 +2,11 @@
 
 Thin: parse → call ``ResponseActionService`` → map domain errors to status codes.
 The *approval* and *rollback* endpoints are the human-in-the-loop gate — they run
-the irreversible cloud mutation, so they are authenticated + membership-scoped and
-are the ONLY path that executes (the agent tool can only propose). No business
-logic, no ORM, no boto3 here.
+the irreversible cloud mutation, so they are the ONLY path that executes (the agent
+tool can only propose). Reads (list/detail) are membership-scoped; every lifecycle
+mutation (propose/approve/reject/rollback) additionally requires the
+``manage_cases`` capability, so read-only viewer roles cannot drive response
+actions. No business logic, no ORM, no boto3 here.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from rest_framework import permissions
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from components.membership.api.permissions import has_workspace_permission
 from components.response.api.resources.response_action_resource import ResponseActionResource
 from components.response.domain.errors import (
     IllegalTransitionError,
@@ -27,6 +30,12 @@ from components.response.infrastructure.services.workspace_access import is_work
 
 def _forbidden():
     return Response({"success": False, "error": "forbidden"}, status=403)
+
+
+# Capability gate for the response-action lifecycle mutations. Owners pass
+# structurally; admin/member roles carry ``manage_cases``; the read-only viewer
+# role does not — mirroring the ``CanManageIntegrations`` pattern in integrations.
+CanManageCases = has_workspace_permission("manage_cases")
 
 
 def _error_response(exc: Exception):
@@ -50,11 +59,9 @@ class ResponseActionProposeView(APIView):
     execution is deliberately enabled.
     """
 
-    permission_classes = (permissions.IsAuthenticated,)
+    permission_classes = (permissions.IsAuthenticated, CanManageCases)
 
     def post(self, request, workspace_id):
-        if not is_workspace_member(user=request.user, workspace_id=workspace_id):
-            return _forbidden()
         from django.conf import settings
 
         from components.response.api.requests.propose_response_action_request import (
@@ -118,11 +125,9 @@ class ResponseActionDetailView(APIView):
 class ResponseActionApproveView(APIView):
     """POST /response/workspaces/<ws>/actions/<id>/approve/ — human approves + executes."""
 
-    permission_classes = (permissions.IsAuthenticated,)
+    permission_classes = (permissions.IsAuthenticated, CanManageCases)
 
     def post(self, request, workspace_id, action_id):
-        if not is_workspace_member(user=request.user, workspace_id=workspace_id):
-            return _forbidden()
         from components.response.application.providers.response_provider import build_response_service
 
         try:
@@ -140,11 +145,9 @@ class ResponseActionApproveView(APIView):
 class ResponseActionRejectView(APIView):
     """POST /response/workspaces/<ws>/actions/<id>/reject/ — human declines."""
 
-    permission_classes = (permissions.IsAuthenticated,)
+    permission_classes = (permissions.IsAuthenticated, CanManageCases)
 
     def post(self, request, workspace_id, action_id):
-        if not is_workspace_member(user=request.user, workspace_id=workspace_id):
-            return _forbidden()
         from components.response.application.providers.response_provider import build_response_service
 
         try:
@@ -162,11 +165,9 @@ class ResponseActionRejectView(APIView):
 class ResponseActionRollbackView(APIView):
     """POST /response/workspaces/<ws>/actions/<id>/rollback/ — undo an executed action."""
 
-    permission_classes = (permissions.IsAuthenticated,)
+    permission_classes = (permissions.IsAuthenticated, CanManageCases)
 
     def post(self, request, workspace_id, action_id):
-        if not is_workspace_member(user=request.user, workspace_id=workspace_id):
-            return _forbidden()
         from components.response.application.providers.response_provider import build_response_service
 
         try:

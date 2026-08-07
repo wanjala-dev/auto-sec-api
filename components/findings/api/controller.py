@@ -12,7 +12,12 @@ from rest_framework import permissions
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from components.membership.api.permissions import IsWorkspaceOwner
+from components.membership.api.permissions import IsWorkspaceOwner, has_workspace_permission
+
+# Capability gate for finding mutations (status lifecycle + tagging). Owners pass
+# structurally; admin/member roles carry ``manage_findings``; the read-only viewer
+# role does not — mirroring the ``CanManageIntegrations`` pattern in integrations.
+CanManageFindings = has_workspace_permission("manage_findings")
 
 
 class SampleDataModeView(APIView):
@@ -96,14 +101,15 @@ class FindingStatusView(APIView):
 
     The write behind the HUD finding-detail action row: an operator resolves, suppresses
     (dismisses as accepted-risk/false-positive — the finding-native soft "delete"), or
-    reopens a finding. Membership-gated (any workspace member may act, matching the read
-    gate). Never a hard delete — findings carry a lifecycle (ADR 0004 D1); this transitions
-    the SSOT row and it stays auditable + re-observable.
+    reopens a finding. Capability-gated (``manage_findings``): owner/admin/member roles
+    may act; the read-only viewer role gets 403. Never a hard delete — findings carry a
+    lifecycle (ADR 0004 D1); this transitions the SSOT row and it stays auditable +
+    re-observable.
 
     Body: ``{"action": "resolve" | "suppress" | "reopen"}``.
     """
 
-    permission_classes = (permissions.IsAuthenticated,)
+    permission_classes = (permissions.IsAuthenticated, CanManageFindings)
     name = "findings-status"
 
     def post(self, request, workspace_id, finding_id):
@@ -114,10 +120,6 @@ class FindingStatusView(APIView):
         )
         from components.findings.application.providers.finding_provider import FindingProvider
         from components.findings.domain.errors import FindingNotFoundError, InvalidFindingActionError
-        from components.findings.infrastructure.services.workspace_access import is_workspace_member
-
-        if not is_workspace_member(user=request.user, workspace_id=workspace_id):
-            return Response({"success": False, "error": "forbidden"}, status=403)
 
         req = ChangeFindingStatusRequest.from_request(request, workspace_id, finding_id)
         try:
@@ -142,15 +144,15 @@ class FindingStatusView(APIView):
 class FindingTagView(APIView):
     """POST /findings/workspaces/<ws>/<finding_id>/tags/ — tag/untag a finding (ADR 0015 D6).
 
-    ONE endpoint, modeled 1:1 on ``FindingStatusView``: membership-gated (any
-    workspace member acts — same gate as status), single POST body
+    ONE endpoint, modeled 1:1 on ``FindingStatusView``: capability-gated
+    (``manage_findings`` — same gate as status; viewers get 403), single POST body
     ``{"add": [slugs…], "remove": [slugs…]}`` subsumes apply + remove (no separate
     DELETE route). ``add`` auto-creates user tags on first use (D4); ``remove`` of
     unknown slugs is a no-op. Returns the finding's full post-change tag set so the
     HUD chip row re-renders from the response.
     """
 
-    permission_classes = (permissions.IsAuthenticated,)
+    permission_classes = (permissions.IsAuthenticated, CanManageFindings)
     name = "findings-tags"
 
     def post(self, request, workspace_id, finding_id):
@@ -160,11 +162,7 @@ class FindingTagView(APIView):
         from components.findings.api.resources.finding_resource import FindingResource
         from components.findings.application.providers.finding_provider import FindingProvider
         from components.findings.domain.errors import FindingNotFoundError
-        from components.findings.infrastructure.services.workspace_access import is_workspace_member
         from components.shared_kernel.domain.errors import ValidationError as DomainValidationError
-
-        if not is_workspace_member(user=request.user, workspace_id=workspace_id):
-            return Response({"success": False, "error": "forbidden"}, status=403)
 
         req = TagFindingRequest.from_request(request, workspace_id, finding_id)
         try:

@@ -14,28 +14,27 @@ suite pins it so it can never silently drift):
 Endpoint                                                Gate
 ======================================================  =============================================
 GET  /findings/workspaces/<ws>/                         active membership (any role)
-POST /findings/…/<finding>/status/                      active membership (any role — documented:
-                                                        "matching the read gate")
-POST /findings/…/<finding>/tags/                        active membership (any role)
+POST /findings/…/<finding>/status/                      ``manage_findings`` permission key
+POST /findings/…/<finding>/tags/                        ``manage_findings`` permission key
 POST /findings/…/sample-data/mode/                      workspace OWNER only
-GET/POST /tagging/…/tags/                               active membership (any role)
+GET  /tagging/…/tags/                                   active membership (any role)
+POST /tagging/…/tags/                                   ``manage_findings`` permission key
 PATCH/DELETE /tagging/…/tags/<id>/                      role in (owner, admin)
 ALL  /integrations/…/{aws,log-sources,vcs,delivery}     ``manage_integrations`` permission key
                                                         (owner/admin roles; owner structural)
-GET  /response/…/actions/ (+ propose/approve/…)         active membership (any role)
+GET  /response/…/actions/ (list + detail)               active membership (any role)
+POST /response/…/actions/… (propose/approve/reject/     ``manage_cases`` permission key
+     rollback)
 POST /membership/invitations/persona/                   workspace owner or admin (RBAC role)
 POST /membership/invitations/persona/<id>/<action>/     workspace owner or admin (RBAC role)
 ======================================================  =============================================
 
-NOTE (named security-posture observation, deliberately pinned as-is, not
-"fixed" here): the seeded VIEWER role bundle carries only ``view_*`` keys, yet
-finding-status changes, finding/vocabulary tag writes, and response-action
-propose/approve are membership-gated, not capability-gated — so a viewer CAN
-mutate them. The controllers document this as intentional ("any workspace
-member may act"). If that stance changes, flip the gates to
-``has_workspace_permission("manage_findings"/"manage_cases")`` and update the
-matrix rows below — the deny assertions are already written to make that a
-one-line change.
+The read-only VIEWER gap this suite originally pinned (viewer could mutate
+finding status, tags, and response actions because those surfaces were only
+membership-gated) is CLOSED: the mutation endpoints now ride
+``has_workspace_permission("manage_findings"/"manage_cases")``, so owners
+(structural), admins, and members (analysts) keep write access while viewers
+are denied with 403.
 """
 
 from __future__ import annotations
@@ -154,25 +153,34 @@ class TestFindingsCapabilities:
         api_client.force_authenticate()
         assert api_client.get(url).status_code in (401, 403)
 
-    def test_finding_status_change_is_membership_gated(self, api_client, org):
+    def test_finding_status_change_is_capability_gated(self, api_client, org):
         finding = _finding(org.ws)
         url = f"/findings/workspaces/{org.ws.id}/{finding.id}/status/"
 
-        # DENY: an authenticated non-member can never touch the lifecycle.
+        # DENY: an authenticated non-member can never touch the lifecycle, and the
+        # read-only viewer role lacks ``manage_findings``.
         assert _as(api_client, org.outsider).post(url, {"action": "resolve"}, format="json").status_code == 403
+        assert _as(api_client, org.viewer).post(url, {"action": "resolve"}, format="json").status_code == 403
 
-        # ALLOW: analyst resolves; viewer reopens (the documented "any member" contract).
+        # ALLOW: analyst resolves; admin reopens (both carry ``manage_findings``).
         resp = _as(api_client, org.analyst).post(url, {"action": "resolve"}, format="json")
         assert resp.status_code == 200, resp.data
-        resp = _as(api_client, org.viewer).post(url, {"action": "reopen"}, format="json")
+
+        # DENY again mid-lifecycle: the viewer cannot reopen either.
+        assert _as(api_client, org.viewer).post(url, {"action": "reopen"}, format="json").status_code == 403
+        finding.refresh_from_db()
+        assert finding.status == "resolved"
+
+        resp = _as(api_client, org.admin).post(url, {"action": "reopen"}, format="json")
         assert resp.status_code == 200, resp.data
         finding.refresh_from_db()
         assert finding.status == "open"
 
-    def test_finding_tagging_is_membership_gated(self, api_client, org):
+    def test_finding_tagging_is_capability_gated(self, api_client, org):
         finding = _finding(org.ws)
         url = f"/findings/workspaces/{org.ws.id}/{finding.id}/tags/"
         assert _as(api_client, org.outsider).post(url, {"add": ["urgent"]}, format="json").status_code == 403
+        assert _as(api_client, org.viewer).post(url, {"add": ["urgent"]}, format="json").status_code == 403
         resp = _as(api_client, org.analyst).post(url, {"add": ["urgent"]}, format="json")
         assert resp.status_code == 200, resp.data
         assert [t["slug"] for t in resp.data["data"]["tags"]] == ["urgent"]
@@ -194,10 +202,16 @@ class TestTagVocabularyCapabilities:
         assert resp.status_code == 201, resp.data
         return resp.data["data"]["id"]
 
-    def test_tag_create_member_gated(self, api_client, org):
+    def test_tag_create_capability_gated(self, api_client, org):
         url = f"/tagging/workspaces/{org.ws.id}/tags/"
         assert _as(api_client, org.outsider).post(url, {"name": "nope"}, format="json").status_code == 403
-        assert _as(api_client, org.viewer).post(url, {"name": "viewer-tag"}, format="json").status_code == 201
+        assert _as(api_client, org.viewer).post(url, {"name": "viewer-tag"}, format="json").status_code == 403
+        assert _as(api_client, org.analyst).post(url, {"name": "analyst-tag"}, format="json").status_code == 201
+
+    def test_tag_list_stays_readable_for_viewer(self, api_client, org):
+        url = f"/tagging/workspaces/{org.ws.id}/tags/"
+        assert _as(api_client, org.viewer).get(url).status_code == 200
+        assert _as(api_client, org.outsider).get(url).status_code == 403
 
     def test_tag_rename_and_delete_admin_gated(self, api_client, org):
         tag_id = self._create_tag(api_client, org)
@@ -240,25 +254,32 @@ class TestIntegrationsCapabilities:
 
 
 class TestResponseActionCapabilities:
-    def test_actions_are_membership_gated(self, api_client, org):
+    def test_action_reads_are_membership_gated(self, api_client, org):
+        base = f"/response/workspaces/{org.ws.id}/actions/"
+        # DENY: outsider is walled off the list.
+        assert _as(api_client, org.outsider).get(base).status_code == 403
+        # ALLOW: any member — viewer included — can read the action ledger.
+        assert _as(api_client, org.analyst).get(base).status_code == 200
+        assert _as(api_client, org.viewer).get(base).status_code == 200
+
+    def test_action_mutations_are_capability_gated(self, api_client, org):
         import uuid
 
         base = f"/response/workspaces/{org.ws.id}/actions/"
-        # DENY: outsider is walled off list + approve.
-        assert _as(api_client, org.outsider).get(base).status_code == 403
-        assert (
-            _as(api_client, org.outsider)
-            .post(f"{base}{uuid.uuid4()}/approve/", {"justification": "x"}, format="json")
-            .status_code
-            == 403
-        )
-        # ALLOW past the gate: members (any role — the human-in-the-loop gate is
-        # membership, not capability) reach the service; an unknown id is a 404,
-        # never a 403.
-        assert _as(api_client, org.analyst).get(base).status_code == 200
-        assert _as(api_client, org.viewer).get(base).status_code == 200
-        resp = _as(api_client, org.viewer).post(f"{base}{uuid.uuid4()}/approve/", {"justification": "x"}, format="json")
-        assert resp.status_code != 403, resp.data
+        approve = f"{base}{uuid.uuid4()}/approve/"
+        body = {"justification": "x"}
+
+        # DENY: outsider and read-only viewer cannot drive the lifecycle —
+        # neither approve nor propose nor rollback.
+        assert _as(api_client, org.outsider).post(approve, body, format="json").status_code == 403
+        assert _as(api_client, org.viewer).post(approve, body, format="json").status_code == 403
+        assert _as(api_client, org.viewer).post(f"{base}propose/", {}, format="json").status_code == 403
+        assert _as(api_client, org.viewer).post(f"{base}{uuid.uuid4()}/rollback/", {}, format="json").status_code == 403
+
+        # ALLOW past the gate: the analyst carries ``manage_cases`` and reaches
+        # the service — an unknown id is a 404, never a 403.
+        resp = _as(api_client, org.analyst).post(approve, body, format="json")
+        assert resp.status_code == 404, resp.data
 
 
 class TestInvitationCapabilities:
