@@ -206,8 +206,69 @@ def _build_container_security_card(finding, event, mapping) -> dict:
     }
 
 
+def _build_code_security_card(finding, event, mapping) -> dict:
+    """Build the SOC-board card for an Opengrep SAST finding (ADR 0019 P1).
+
+    Born SSOT-native. Card copy leads with the rule + ``path:line`` (the SAST
+    analogue of the CSPM check + ARN). Operator-reading material for P1
+    (``agent_type`` = ``ai_teammate``, like cloud_posture): routing to the triage
+    agent + the draft-PR loop is P2 — "routable without a tool is a silent no-op",
+    so the ROUTABLE entry ships together with its tool, not here.
+    """
+    attrs = finding.attributes or {}
+    severity = finding.severity.value
+    rule_id = attrs.get("rule_id", "")
+    path = attrs.get("path", "")
+    start_line = attrs.get("start_line", 0)
+    repo = attrs.get("repo", "")
+    location = f"{path}:{start_line}" if path else "unknown location"
+    rule_label = rule_id.rsplit(".", 1)[-1] if rule_id else "finding"
+    lookup_key = finding.fingerprint
+    title = f"{severity.title()}: {rule_label} — {location}"[:255]
+    summary = (f"{finding.title} {repo} {location}. {finding.remediation}").strip()
+    payload = {
+        "lookup_key": lookup_key,
+        "signal": finding.title,
+        "confidence": attrs.get("confidence", "high"),
+        "severity": severity,
+        "rule_id": rule_id,
+        "rule_source": attrs.get("rule_source", ""),
+        "repo": repo,
+        "commit_sha": attrs.get("commit_sha", ""),
+        "path": path,
+        "start_line": start_line,
+        "end_line": attrs.get("end_line", 0),
+        "cwe": attrs.get("cwe", []),
+        "language": attrs.get("language", ""),
+        "remediation": finding.remediation,
+        "evidence": [
+            f"rule: {rule_id}",
+            f"location: {repo} {location} @ {str(attrs.get('commit_sha', ''))[:12]}",
+            f"severity: {severity}",
+        ],
+        "finding_id": str(finding.id),
+    }
+    return {
+        "title": title,
+        "summary": (summary or finding.description)[:2000],
+        "source_type": mapping["source_type"],
+        "agent_type": "ai_teammate",  # operator-reading in P1; triage routing is P2
+        "detector_key": mapping["detector_key"],
+        "payload": payload,
+        "context": {
+            "kind": "code_security",
+            "workspace_id": str(event.workspace_id),
+            "finding_id": str(finding.id),
+        },
+        "impact_score": _IMPACT.get(severity, 40),
+        "lookup_key": lookup_key,
+    }
+
+
 # Per finding-source board config: the legacy labels + card builder, plus the cutover
 # flag (None = graduated, always surfaces). Extend as more pillars surface findings.
+# ``min_severity`` (optional) is the board floor (ADR 0019 D4 layer 2): findings
+# below it stay SSOT-only (HUD findings panel) and never become cards.
 _SOURCE_BOARD = {
     "cloud_posture.prowler": {
         "source_type": "ai.cloud_posture",
@@ -226,6 +287,13 @@ _SOURCE_BOARD = {
         "detector_key": "ai_findings.container_security",
         "flag": None,  # graduated (operator-reading; CVE triage routing is the next slice)
         "build": _build_container_security_card,
+    },
+    "code_security.opengrep": {
+        "source_type": "ai.code_security",
+        "detector_key": "ai_findings.code_security",
+        "flag": None,  # born SSOT-native; the pillar itself is dark behind feature.code_security
+        "min_severity": "high",  # board floor (ADR 0019 D4/OQ4 default: high+critical)
+        "build": _build_code_security_card,
     },
     "logwatch.error": {
         "source_type": "ai.log_watch",
@@ -290,6 +358,18 @@ def handle_finding_raised_board(event: FindingRaised) -> None:
             event.finding_id,
         )
         return
+
+    floor = mapping.get("min_severity")
+    if floor and _IMPACT.get(finding.severity.value, 0) < _IMPACT.get(floor, 0):
+        logger.info(
+            "finding_raised_board_below_floor workspace_id=%s finding_id=%s source=%s severity=%s floor=%s",
+            event.workspace_id,
+            event.finding_id,
+            event.source,
+            finding.severity.value,
+            floor,
+        )
+        return  # SSOT-only: visible in the findings panel, no board card (ADR 0019 D4)
 
     card = mapping["build"](finding, event, mapping)
     board = ensure_agents_board(workspace)

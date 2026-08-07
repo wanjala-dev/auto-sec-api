@@ -80,6 +80,15 @@ DEFAULT_FLAGS = [
         "GA; per-workspace opt-in. See docs/adr/0006-scanner-execution-substrate.md.",
     ),
     (
+        "feature.code_security",
+        False,
+        "Code security (SAST) — Opengrep-as-engine scans of allowlisted VCS repos "
+        "(ADR 0019) run as ephemeral, hardened Kubernetes Jobs on the "
+        "ScanExecutionBackend → NormalizedFindings (file/line/rule/snippet) in the "
+        "SSOT + board cards at the high+critical floor. Off in prod until GA; "
+        "per-workspace opt-in. See docs/adr/0019-sast-code-scanning-pillar.md.",
+    ),
+    (
         "feature.cloud_asset_graph",
         False,
         "Cloud asset graph (ADR 0004 / CNAPP): the code-to-cloud resource graph "
@@ -115,6 +124,7 @@ PROD_DISABLED_FLAGS = (
     "feature.provenance_graph",
     "feature.cloud_posture",
     "feature.container_security",
+    "feature.code_security",
     "feature.sample_data_mode",
 )
 

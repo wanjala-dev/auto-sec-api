@@ -20,6 +20,14 @@ from components.shared_kernel.application.ports.scanner_port import ScannerPort
 # hook failure must never fail the scan — the caller logs and continues.
 PostIngestHook = Callable[..., None]
 
+# A pillar's optional credential vendor: called BEFORE the scan with
+# (workspace_id, target_ref, connection_id, account_id, params) keywords; returns
+# the opaque credential envelope for ``ScanTarget.credentials`` (or None). Pillars
+# without one use the task's default AWS assume-role vend — this seam exists so a
+# non-AWS pillar (code_security → a VCS read token) plugs in without the generic
+# task learning any pillar's credential shape.
+CredentialsVendor = Callable[..., dict | None]
+
 
 @dataclass(frozen=True)
 class RegisteredScanner:
@@ -28,6 +36,8 @@ class RegisteredScanner:
     # Lazily resolves the pillar's PostIngestHook (via its APPLICATION provider —
     # never its infrastructure), or None when the pillar has no post-ingest step.
     post_ingest_factory: Callable[[], PostIngestHook] | None = None
+    # Lazily resolves the pillar's CredentialsVendor, or None for the AWS default.
+    credentials_factory: Callable[[], CredentialsVendor] | None = None
 
 
 def _container_security_trivy() -> ScannerPort:
@@ -44,12 +54,40 @@ def _container_security_post_ingest() -> PostIngestHook:
     return build_post_ingest_hook()
 
 
+def _code_security_opengrep() -> ScannerPort:
+    from components.code_security.application.providers.scanner_provider import build_scanner
+
+    return build_scanner()
+
+
+def _code_security_post_ingest() -> PostIngestHook:
+    from components.code_security.application.providers.snapshot_provider import (
+        build_post_ingest_hook,
+    )
+
+    return build_post_ingest_hook()
+
+
+def _code_security_credentials() -> CredentialsVendor:
+    from components.code_security.application.providers.scanner_provider import (
+        vend_scan_credentials,
+    )
+
+    return vend_scan_credentials
+
+
 # source → (adapter factory, isolated worker queue). One line per pillar.
 _REGISTRY: dict[str, RegisteredScanner] = {
     "container_security.trivy": RegisteredScanner(
         factory=_container_security_trivy,
         queue="container_security",
         post_ingest_factory=_container_security_post_ingest,
+    ),
+    "code_security.opengrep": RegisteredScanner(
+        factory=_code_security_opengrep,
+        queue="code_security",
+        post_ingest_factory=_code_security_post_ingest,
+        credentials_factory=_code_security_credentials,
     ),
 }
 
@@ -78,6 +116,12 @@ def queue_for(source: str) -> str:
 def post_ingest_for(source: str) -> PostIngestHook | None:
     """Build *source*'s post-ingest hook, or None when the pillar registers none."""
     factory = _entry(source).post_ingest_factory
+    return factory() if factory is not None else None
+
+
+def credentials_vendor_for(source: str) -> CredentialsVendor | None:
+    """Build *source*'s credential vendor, or None → the task's default AWS vend."""
+    factory = _entry(source).credentials_factory
     return factory() if factory is not None else None
 
 

@@ -121,6 +121,8 @@ INSTALLED_APPS = [
     "infrastructure.persistence.scanning",
     # Container-security pillar records (image SBOM references — task #99 P1).
     "infrastructure.persistence.container_security",
+    # Code-security pillar records (per-repo SAST scan snapshots — ADR 0019 P1).
+    "infrastructure.persistence.code_security",
     "infrastructure.persistence.findings",
     "infrastructure.persistence.tagging",
     "infrastructure.persistence.cloud_graph",
@@ -154,6 +156,7 @@ INSTALLED_APPS = [
     "components.workflow.cli",
     "components.sign_off.cli",
     "components.container_security.cli",
+    "components.code_security.cli",
     "components.cloud_graph.cli",
     # SaaS billing CLI/ready() wiring (subscription tiers + payments/Stripe).
     "components.subscription.cli",

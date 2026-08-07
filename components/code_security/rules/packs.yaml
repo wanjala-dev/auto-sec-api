@@ -1,0 +1,27 @@
+# The curated code-security ruleset manifest (ADR 0019 D1/D4) — the per-pack
+# license audit record. Every pack the scanner mounts MUST be listed here with
+# provenance + license; adding a pack is a reviewed change, never a default.
+#
+# LICENSING GUARDRAIL (ADR 0019 R1/R4): NOTHING published under the Semgrep Rules
+# License v1.0 (the 2024-12-13 relicense) may enter this directory — it forbids use
+# in a competing security SaaS, which is exactly what Auto-Sec is. Permitted sources:
+# (a) first-party rules (ours), (b) the pre-relicense opengrep-rules snapshot after a
+# per-rule license check, (c) consortium packs under permissive licenses.
+#
+# P1 ships FIRST-PARTY ONLY — the audit is trivially clean and rule freshness is
+# owned by us from day one. Severity ceiling: no P1 rule carries
+# security-severity >= 9.0 (critical); pattern rules without reachability context
+# don't earn "critical", and the board/notification funnel treats criticals as
+# individually-alertable (ADR 0016 D5). A fitness test enforces both invariants.
+packs:
+  - id: autosec-p1-core
+    file: packs/autosec_p1_core.yaml
+    source: first-party
+    license: autosec-first-party (proprietary, authored for Auto-Sec)
+    audited: "2026-08-07"
+    notes: >-
+      15 high-confidence security rules for the ICP languages (Python/Django,
+      JS/TS/React, Go): command/code/SQL injection, unsafe deserialization
+      (yaml/pickle), disabled TLS/JWT verification, XSS sinks (mark_safe,
+      dangerouslySetInnerHTML), insecure tempfiles. Every rule was validated
+      against a positive+negative corpus with opengrep v1.26.0 before shipping.

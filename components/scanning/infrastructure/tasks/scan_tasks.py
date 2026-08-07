@@ -63,6 +63,7 @@ def run_scan(
     """Run the scanner registered for *source* against *target_ref*; ingest to the SSOT."""
     from components.scanning.application.providers.scanner_registry import (
         UnknownScannerError,
+        credentials_vendor_for,
         get_scanner,
         post_ingest_for,
     )
@@ -90,7 +91,20 @@ def run_scan(
     )
 
     try:
-        credentials = _vend_credentials(connection_id=connection_id, account_id=account_id)
+        # Per-source credential vend (registry seam) — e.g. code_security vends a VCS
+        # read token through the ADR 0010 connection; pillars without a vendor use
+        # the default AWS assume-role path below.
+        vendor = credentials_vendor_for(source)
+        if vendor is not None:
+            credentials = vendor(
+                workspace_id=workspace_id,
+                target_ref=target_ref,
+                connection_id=connection_id,
+                account_id=account_id,
+                params=params or {},
+            )
+        else:
+            credentials = _vend_credentials(connection_id=connection_id, account_id=account_id)
         update_job(job_id=job_id, progress=15, phase="scanning", detail=f"Running {source}")
 
         last = {"pct": 15}

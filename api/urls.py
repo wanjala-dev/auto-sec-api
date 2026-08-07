@@ -75,6 +75,7 @@ api_patterns = [
     path("provenance/", include("components.provenance.api.urls")),
     path("cloud-posture/", include("components.cloud_posture.api.urls")),
     path("container-security/", include("components.container_security.api.urls")),
+    path("code-security/", include("components.code_security.api.urls")),
     path("findings/", include("components.findings.api.urls")),
     path("tagging/", include("components.tagging.api.urls")),
     path("cloud-graph/", include("components.cloud_graph.api.urls")),

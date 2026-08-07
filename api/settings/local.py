@@ -515,6 +515,13 @@ CELERY_BEAT_SCHEDULE = {
         "task": "container_security.schedule_container_scans",
         "schedule": crontab(hour=3, minute=0),
     },
+    # Nightly Opengrep SAST rescan (ADR 0019 D3) — fans out per allowlisted repo of
+    # opted-in workspaces (feature.code_security). Dark until opt-in; self-gates on
+    # the flag. Fingerprint identity makes the re-scan a cheap last_seen bump.
+    "schedule_repo_scans": {
+        "task": "code_security.schedule_repo_scans",
+        "schedule": crontab(hour=3, minute=30),
+    },
     # Hourly Remediation Memory capture reconciler (ADR 0012 P4a) — merge-checks
     # findings with an open draft PR via VcsPort, resolves the merged ones, and
     # offers them to the gated corpus capture. The driver of the capture loop:

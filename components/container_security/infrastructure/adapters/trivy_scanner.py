@@ -52,8 +52,13 @@ from components.shared_kernel.application.ports.scanner_port import (
 logger = logging.getLogger(__name__)
 
 # The scanner image the K8sJobBackend runs (LocalSubprocessBackend ignores it — `trivy`
-# is on the worker PATH). Pin a version for reproducible + supply-chain-controlled scans.
-_TRIVY_IMAGE = os.environ.get("TRIVY_IMAGE", "aquasec/trivy:0.58.0")
+# is on the worker PATH). Pinned by version AND digest (we execute this image —
+# pin-versions.md rule #2; the multi-arch manifest-list digest for 0.58.0, resolved
+# 2026-08-07 — a re-pushed tag can no longer change what we run).
+_TRIVY_IMAGE = os.environ.get(
+    "TRIVY_IMAGE",
+    "aquasec/trivy:0.58.0@sha256:b88012e2a0a309d6a8a00463d4e63e5e513377fb74eccbc8f9b0f8f81940ebeb",
+)
 
 # Where Trivy caches (its main DB in non-server mode + the separate language/Java DB it
 # ALWAYS downloads locally, even in --server mode). The hardened Job runs with a read-only

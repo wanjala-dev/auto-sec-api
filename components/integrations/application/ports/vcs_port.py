@@ -104,6 +104,15 @@ class VcsPort(ABC):
         """Return the decoded content + blob SHA of ``path`` at ``ref``."""
 
     @abstractmethod
+    def get_archive_url(self, repo: str, ref: str) -> str:
+        """Return the HTTPS URL of the repo's tarball archive at ``ref`` (ADR 0019).
+
+        The SAST scan Job fetches the repo content in ONE call from this URL
+        (authorized with the connection's token) — shallow by construction, no
+        ``git`` binary in the Job. ``ref`` is a resolved commit SHA, never a
+        moving branch name, so the scanned tree is exactly the recorded one."""
+
+    @abstractmethod
     def list_tree(self, repo: str, ref: str) -> list[str]:
         """Return every blob (file) path in ``repo`` at ``ref``, recursively.
 
