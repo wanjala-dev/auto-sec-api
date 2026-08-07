@@ -80,7 +80,8 @@ def deliver_external(self, *, workspace_id, event_key, verb="", metadata=None, l
 
     metadata = metadata or {}
     ledger = ExternalDeliveryRepository()
-    connections = get_delivery_connection_repository().enabled_for_workspace(workspace_id)
+    connection_repo = get_delivery_connection_repository()
+    connections = connection_repo.enabled_for_workspace(workspace_id)
     if not connections:
         return {"delivered": 0, "skipped": 0, "connections": 0}
 
@@ -128,6 +129,10 @@ def deliver_external(self, *, workspace_id, event_key, verb="", metadata=None, l
         result = adapter.deliver(connection, message)
         if result.ok:
             ledger.mark_sent(record.id)
+            # Stamp connection health so the Settings panel can show "last
+            # delivery" — the operator's proof that alerts actually reach the
+            # channel without opening Slack.
+            connection_repo.mark_delivered(connection.id)
             delivered += 1
             continue
 
