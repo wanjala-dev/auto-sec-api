@@ -18,22 +18,35 @@ class LogSourceRepository:
     def get(self, workspace_id, source_id) -> WorkspaceLogSource | None:
         return WorkspaceLogSource.objects.filter(id=source_id, workspace_id=workspace_id).first()
 
-    def active_s3_source_for_connection(self, connection) -> WorkspaceLogSource | None:
-        """The active S3 log source a connection reads through (ADR 0008 D7).
+    def active_sources_for_connection(self, connection) -> list[WorkspaceLogSource]:
+        """Every ACTIVE log source that reads through this connection — the rows
+        the ingest tick fans out over (ADR 0008 D6), oldest-first for stable
+        ordering. The location lives on these owned rows, so a connection
+        re-verify can no longer blank where logs are read from (the "logs
+        silently stopped" regression).
 
-        The S3 *location* lives on this owned row, so a connection re-verify can no
-        longer blank where logs are read from (the "logs silently stopped"
-        regression). Oldest-first is stable when a workspace has more than one."""
-        return (
+        S3 is capped to the single oldest active source: its ingest cursor still
+        bridges through the one per-connection ``IngestCheckpoint`` (which cannot
+        serve two buckets). The cap lifts when the S3 cursor migrates onto the
+        per-source ``cursor`` field (the ADR 0008 "migrate or bridge" follow-up).
+        """
+        sources = list(
             WorkspaceLogSource.objects.filter(
                 workspace_id=connection.workspace_id,
-                kind=WorkspaceLogSource.Kind.S3,
                 status=WorkspaceLogSource.Status.ACTIVE,
                 config__aws_connection_id=str(connection.id),
-            )
-            .order_by("created_at")
-            .first()
+            ).order_by("created_at")
         )
+        first_s3 = next((s for s in sources if s.kind == WorkspaceLogSource.Kind.S3), None)
+        return [s for s in sources if s.kind != WorkspaceLogSource.Kind.S3 or s is first_s3]
+
+    def advance_cursor(self, source: WorkspaceLogSource, cursor: str) -> WorkspaceLogSource:
+        """Advance a source's per-row ingest cursor (ADR 0008 D3) — the non-S3
+        analog of ``IngestCheckpointRepository.advance`` (a CloudWatch nextToken,
+        a Datadog/Splunk time cursor), so re-reads stay idempotent per source."""
+        source.cursor = cursor
+        source.save(update_fields=["cursor", "updated_at"])
+        return source
 
     def find_connection_for_source(self, source):
         """Resolve the AWS connection an S3/CloudWatch source reads through — the

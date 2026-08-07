@@ -16,6 +16,10 @@ import hashlib
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:  # runtime import lives in-function: the port module imports LogRecord from here
+    from components.integrations.application.ports.log_source_port import LogWindow
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +27,16 @@ logger = logging.getLogger(__name__)
 # and explicit; the agent adds nuance downstream.
 _ERROR_LEVELS = {"ERROR", "CRITICAL", "FATAL"}
 _ERROR_MARKERS = ("Traceback (most recent call last)", "Exception", "500 Internal")
+
+# Source-kind identifiers (mirror ``WorkspaceLogSource.Kind`` values, which are the
+# same strings the ``LogSourcePort`` adapters register under). Plain constants so
+# the application layer never imports the ORM enum.
+KIND_S3 = "s3"
+KIND_CLOUDWATCH = "cloudwatch"
+
+# ``SourceWindow.source_id`` for the deprecated ``trail_s3_*`` fallback read (the
+# pre-seed-migration shape with no WorkspaceLogSource row behind it).
+FALLBACK_SOURCE_ID = ""
 
 
 @dataclass
@@ -61,28 +75,6 @@ def _is_error(r: LogRecord) -> bool:
     return any(m in r.raw for m in _ERROR_MARKERS)
 
 
-def _s3_config_from_connection(connection) -> dict:
-    """The S3 source's config: bucket/prefix from the WorkspaceLogSource, creds
-    from the AWS connection (ADR 0008 D7).
-
-    The S3 *location* now lives on a first-class ``WorkspaceLogSource`` row, so a
-    connection re-verify can no longer blank where logs are read from — the fix
-    for the "logs silently stopped" regression. The connection still vends the
-    assume-role identity (management account / role / ExternalId). A transitional
-    fallback to the deprecated ``trail_s3_*`` fields keeps envs that predate the
-    seed migration working; it is removed once every env is migrated.
-
-    The active-source lookup goes through the ``LogSourceRepository`` so this
-    application service stays ORM-free (the repository is the only ORM slot).
-    """
-    from components.integrations.infrastructure.repositories.log_source_repository import (
-        LogSourceRepository,
-    )
-
-    source = LogSourceRepository().active_s3_source_for_connection(connection)
-    return s3_adapter_config(connection, source)
-
-
 def s3_adapter_config(connection, source=None) -> dict:
     """Assemble the S3 adapter's config: assume-role creds from the AWS connection,
     bucket/prefix from the WorkspaceLogSource (or the deprecated trail fields when
@@ -109,48 +101,189 @@ def s3_adapter_config(connection, source=None) -> dict:
     }
 
 
-def read_source_window(connection, *, max_objects: int = 20, after: str = "") -> LogWindow:
-    """Read the newest window of records for a connection's log source(s).
+def cloudwatch_adapter_config(connection, source) -> dict:
+    """Assemble the CloudWatch adapter's config: log group/region from the
+    WorkspaceLogSource, assume-role identity from the AWS connection. The one
+    canonical place this is built — shared by the verify path (LogSourceService)
+    and the ingest read path (``read_source_windows``)."""
+    config = dict(source.config or {})
+    config.update(
+        {
+            "management_account_id": connection.management_account_id,
+            "role_name": connection.role_name,
+            "external_id": connection.external_id,
+            "source_id": str(source.id),
+        }
+    )
+    return config
 
-    The shared read seam both the error scan (``scan_connection``) and the
-    temporal aggregator (``log_pattern_analyzer``) go through — it resolves the
-    source adapter from the provider and drives it via ``LogSourcePort`` (ADR
-    0008). Checkpoint-free (the caller decides whether to advance a cursor), so
-    the aggregator can re-read overlapping windows without disturbing the error
-    scan's cursor. Phase 1: one S3 source per connection.
+
+def source_adapter_config(connection, source) -> dict:
+    """Resolve a ``WorkspaceLogSource`` row into its adapter config — the ONE
+    per-kind resolver, shared by verify (``LogSourceService``) and the ingest
+    read path. AWS-backed kinds (S3, CloudWatch) take their assume-role identity
+    from the connection; other kinds are self-contained (3P secrets ride on
+    ``secret_ref``, resolved in a later phase) and ignore ``connection``."""
+    if source.kind == KIND_S3:
+        return s3_adapter_config(connection, source)
+    if source.kind == KIND_CLOUDWATCH:
+        return cloudwatch_adapter_config(connection, source)
+    config = dict(source.config or {})
+    config["source_id"] = str(source.id)
+    return config
+
+
+@dataclass(frozen=True)
+class SourceWindow:
+    """One source's read in a multi-source ingest tick: which log source produced
+    the window, plus the window itself — so the caller can advance each source's
+    cursor independently. ``source`` is the WorkspaceLogSource row (opaque to this
+    layer; ``None`` for the deprecated ``trail_s3_*`` fallback read)."""
+
+    source_id: str
+    kind: str
+    window: LogWindow
+    source: Any = None
+
+
+def read_source_windows(
+    connection,
+    *,
+    max_objects: int = 20,
+    since_by_source: dict[str, str] | None = None,
+    sources: list | None = None,
+) -> list[SourceWindow]:
+    """Read the newest window of EVERY active log source behind a connection.
+
+    The shared read seam (ADR 0008 D6): resolves each source's adapter from the
+    ``LogSourceProvider`` registry by the source's ``kind`` — the same resolution
+    the verify path uses — so an ACTIVE CloudWatch source is read exactly like the
+    S3 one, and adding a source kind is an adapter + a registry line, never a
+    change here. Checkpoint-free: the caller supplies each source's cursor via
+    ``since_by_source`` (keyed by source id) and decides whether to advance it.
+
+    A source whose adapter isn't registered (feature flag off) is logged and
+    skipped — never fatal to the other sources. When no source rows exist, falls
+    back to the deprecated connection ``trail_s3_*`` fields (pre-seed-migration
+    envs; ADR 0008 D7), keyed ``FALLBACK_SOURCE_ID``. ``sources`` lets a caller
+    that already fetched the active rows avoid a second lookup; the lookup goes
+    through ``LogSourceRepository`` so this service stays ORM-free.
     """
     from components.integrations.application.providers.log_source_provider import (
+        UnsupportedLogSourceError,
         get_log_source_provider,
     )
 
-    source = get_log_source_provider().get("s3")
-    return source.read_window(_s3_config_from_connection(connection), since=after, limit=max_objects)
+    provider = get_log_source_provider()
+    if sources is None:
+        from components.integrations.infrastructure.repositories.log_source_repository import (
+            LogSourceRepository,
+        )
+
+        sources = LogSourceRepository().active_sources_for_connection(connection)
+    since_by_source = since_by_source or {}
+
+    windows: list[SourceWindow] = []
+    for source in sources:
+        try:
+            adapter = provider.get(source.kind)
+        except UnsupportedLogSourceError:
+            logger.warning(
+                "log_source_adapter_unavailable connection_id=%s source_id=%s kind=%s",
+                connection.id,
+                source.id,
+                source.kind,
+            )
+            continue
+        window = adapter.read_window(
+            source_adapter_config(connection, source),
+            since=since_by_source.get(str(source.id), ""),
+            limit=max_objects,
+        )
+        windows.append(SourceWindow(source_id=str(source.id), kind=source.kind, window=window, source=source))
+
+    if not sources and connection.trail_s3_bucket:
+        # Deprecated fallback (ADR 0008 D7): envs that predate the seed migration
+        # still read the connection's own trail fields, cursored by the legacy
+        # per-connection IngestCheckpoint.
+        window = provider.get(KIND_S3).read_window(
+            s3_adapter_config(connection, None),
+            since=since_by_source.get(FALLBACK_SOURCE_ID, ""),
+            limit=max_objects,
+        )
+        windows.append(SourceWindow(source_id=FALLBACK_SOURCE_ID, kind=KIND_S3, window=window, source=None))
+    return windows
+
+
+def read_source_window(connection, *, max_objects: int = 20) -> LogWindow:
+    """Merged, cursor-free read across every active log source of a connection.
+
+    The temporal aggregator's seam (``log_pattern_analyzer``): it re-reads the
+    full recent window each run and must never disturb the error scan's cursors.
+    The error scan uses ``read_source_windows`` directly (per-source cursors).
+    The merged window carries no cursor — a single opaque cursor cannot represent
+    N heterogeneous sources.
+    """
+    from components.integrations.application.ports.log_source_port import LogWindow
+
+    records: list[LogRecord] = []
+    objects_scanned = 0
+    for sw in read_source_windows(connection, max_objects=max_objects):
+        records.extend(sw.window.records)
+        objects_scanned += sw.window.objects_scanned
+    return LogWindow(records=tuple(records), cursor="", objects_scanned=objects_scanned)
 
 
 def scan_connection(connection, *, max_objects: int = 20, only_new: bool = True) -> DetectionResult:
-    """Assume the role, read up to ``max_objects`` newest batches, detect errors.
+    """Read every active log source's newest window, detect errors, advance cursors.
 
-    ``only_new`` advances the IngestCheckpoint so subsequent runs skip already-
-    processed keys (the Celery path). Set False for an ad-hoc full re-scan.
-    The cursor is read/advanced through the ``IngestCheckpointRepository`` so
-    this service stays ORM-free.
+    ``only_new`` advances each source's ingest cursor so subsequent runs skip
+    already-processed batches (the Celery path); set False for an ad-hoc full
+    re-scan. Cursor storage is per source kind: S3 still bridges through the
+    legacy per-connection ``IngestCheckpoint`` (ADR 0008 — "migrate or bridge";
+    live envs carry their S3 cursor there), while every other kind advances the
+    per-source ``WorkspaceLogSource.cursor`` field the model was given for this.
+    All cursor I/O goes through repositories so this service stays ORM-free.
     """
     from components.integrations.infrastructure.repositories.ingest_checkpoint_repository import (
         IngestCheckpointRepository,
     )
+    from components.integrations.infrastructure.repositories.log_source_repository import (
+        LogSourceRepository,
+    )
 
     checkpoint_repo = IngestCheckpointRepository()
+    source_repo = LogSourceRepository()
     checkpoint = checkpoint_repo.get_or_create_s3_list(connection)
-    after = checkpoint.last_object_key if only_new else ""
+    sources = source_repo.active_sources_for_connection(connection)
 
-    window = read_source_window(connection, max_objects=max_objects, after=after)
+    since_by_source: dict[str, str] = {}
+    if only_new:
+        since_by_source[FALLBACK_SOURCE_ID] = checkpoint.last_object_key
+        for source in sources:
+            since_by_source[str(source.id)] = (
+                checkpoint.last_object_key if source.kind == KIND_S3 else (source.cursor or "")
+            )
+
+    source_windows = read_source_windows(
+        connection, max_objects=max_objects, since_by_source=since_by_source, sources=sources
+    )
 
     result = DetectionResult()
-    result.objects_scanned = window.objects_scanned
-    result.newest_key = window.cursor
+    window_records: list[LogRecord] = []
+    s3_objects = s3_records = 0
+    for sw in source_windows:
+        result.objects_scanned += sw.window.objects_scanned
+        window_records.extend(sw.window.records)
+        if sw.kind == KIND_S3:
+            # ``newest_key`` keeps its historical meaning: the S3 cursor that
+            # feeds the IngestCheckpoint bridge (and the finding evidence).
+            result.newest_key = sw.window.cursor
+            s3_objects += sw.window.objects_scanned
+            s3_records += len(sw.window.records)
+
     seen_hashes: set[str] = set()
-    window_records: list[LogRecord] = list(window.records)
-    for lr in window.records:
+    for lr in window_records:
         result.records_parsed += 1
         result.tail.append(lr)
         if len(result.tail) > 150:
@@ -176,13 +309,19 @@ def scan_connection(connection, *, max_objects: int = 20, only_new: bool = True)
         except Exception:
             logger.exception("log_metrics_aggregation_failed connection_id=%s", connection.id)
 
-    if only_new and result.newest_key:
-        checkpoint_repo.advance(
-            checkpoint,
-            last_object_key=result.newest_key,
-            objects_processed=result.objects_scanned,
-            events_processed=result.records_parsed,
-        )
+    if only_new:
+        for sw in source_windows:
+            if sw.source is None or sw.kind == KIND_S3:
+                continue  # S3 (incl. the trail fallback) advances through the IngestCheckpoint below
+            if sw.window.cursor and sw.window.cursor != (sw.source.cursor or ""):
+                source_repo.advance_cursor(sw.source, sw.window.cursor)
+        if result.newest_key:
+            checkpoint_repo.advance(
+                checkpoint,
+                last_object_key=result.newest_key,
+                objects_processed=s3_objects,
+                events_processed=s3_records,
+            )
 
     logger.info(
         "logwatch_scan connection_id=%s objects=%s records=%s errors=%s",

@@ -14,12 +14,14 @@ that matters afterwards:
         * the ``IngestCheckpoint`` cursor advances, and the next tick resumes
           AFTER it (idempotent — no double-alerting).
 
-CloudWatch gets the same endpoint chain (create → verify → ACTIVE via the
-CloudWatch adapter). NOTE the pinned gap: the ingest READ path
-(``log_ingest_service.read_source_window``) still resolves only the "s3"
-adapter — an ACTIVE CloudWatch source verifies but is never read by the error
-scan. Named in the suite so the ADR 0008 phase that wires it has its landing
-spot; do not fake it here.
+CloudWatch gets the same chain end-to-end: create → verify → ACTIVE via the
+CloudWatch adapter, then the ingest tick reads it through the registry
+(``read_source_windows`` resolves the adapter by the source's kind — the gap
+where an ACTIVE CloudWatch source verified but was never read is closed) and
+advances the per-source ``WorkspaceLogSource.cursor`` (the CloudWatch
+``nextToken``), independent of the S3 IngestCheckpoint bridge. A mixed
+S3 + CloudWatch workspace is read in ONE tick, each source through its own
+adapter and cursor.
 """
 
 from __future__ import annotations
@@ -50,9 +52,9 @@ def owner_ws(workspace_factory):
     return ws, ws.workspace_owner
 
 
-class _RecordingS3Reader:
-    """Stands in for ``S3LogSourceAdapter.read_window`` — records the config +
-    cursor of every call and serves scripted windows."""
+class _RecordingReader:
+    """Stands in for an adapter's ``read_window`` — records the config + cursor
+    of every call and serves scripted windows."""
 
     def __init__(self, windows: list[LogWindow]):
         self.windows = list(windows)
@@ -78,27 +80,44 @@ def _error_window() -> LogWindow:
     return LogWindow(records=records, cursor="logs/2026/08/05/batch-002.gz", objects_scanned=2)
 
 
+def _cw_error_window(cursor: str = "cw-tok-001") -> LogWindow:
+    records = (
+        LogRecord(
+            service="lambda/acme",
+            level="ERROR",
+            raw="ERROR Task timed out after 30.03 seconds",
+            message="Task timed out after 30.03 seconds",
+            source_kind="cloudwatch",
+        ),
+    )
+    return LogWindow(records=records, cursor=cursor, objects_scanned=1)
+
+
+def _activate_s3_source(api_client, ws, owner, conn):
+    api_client.force_authenticate(owner)
+    created = api_client.post(
+        _base(ws.id),
+        {
+            "kind": "s3",
+            "name": "prod trail",
+            "config": {"aws_connection_id": str(conn.id), "bucket": "acme-logs", "prefix": "logs/"},
+        },
+        format="json",
+    )
+    assert created.status_code == 201, created.data
+    source = created.data["data"]
+    assert source["status"] == "draft"
+
+    with mock.patch(f"{_S3_ADAPTER}.verify", return_value=LogSourceHealth(ok=True)):
+        verified = api_client.post(f"{_base(ws.id)}{source['id']}/verify/", {}, format="json")
+    assert verified.status_code == 200, verified.data
+    assert verified.data["data"]["status"] == "active"
+    return source
+
+
 class TestS3SourceEndpointToIngestChain:
     def _activate_source(self, api_client, ws, owner, conn):
-        api_client.force_authenticate(owner)
-        created = api_client.post(
-            _base(ws.id),
-            {
-                "kind": "s3",
-                "name": "prod trail",
-                "config": {"aws_connection_id": str(conn.id), "bucket": "acme-logs", "prefix": "logs/"},
-            },
-            format="json",
-        )
-        assert created.status_code == 201, created.data
-        source = created.data["data"]
-        assert source["status"] == "draft"
-
-        with mock.patch(f"{_S3_ADAPTER}.verify", return_value=LogSourceHealth(ok=True)):
-            verified = api_client.post(f"{_base(ws.id)}{source['id']}/verify/", {}, format="json")
-        assert verified.status_code == 200, verified.data
-        assert verified.data["data"]["status"] == "active"
-
+        source = _activate_s3_source(api_client, ws, owner, conn)
         listed = api_client.get(_base(ws.id))
         assert [row["status"] for row in listed.data["data"]] == ["active"]
         return source
@@ -108,7 +127,7 @@ class TestS3SourceEndpointToIngestChain:
         conn = aws_connection_factory(ws)
         source = self._activate_source(api_client, ws, owner, conn)
 
-        reader = _RecordingS3Reader([_error_window()])
+        reader = _RecordingReader([_error_window()])
         with mock.patch(f"{_S3_ADAPTER}.read_window", new=reader):
             findings = scan_workspace_for_errors(ws.id)
 
@@ -143,7 +162,7 @@ class TestS3SourceEndpointToIngestChain:
         conn = aws_connection_factory(ws)
         self._activate_source(api_client, ws, owner, conn)
 
-        reader = _RecordingS3Reader([_error_window()])  # second call → empty window
+        reader = _RecordingReader([_error_window()])  # second call → empty window
         with mock.patch(f"{_S3_ADAPTER}.read_window", new=reader):
             first = scan_workspace_for_errors(ws.id)
             second = scan_workspace_for_errors(ws.id)
@@ -212,3 +231,114 @@ class TestCloudWatchSourceEndpointChain:
 
         assert verified.data["data"]["status"] == "error"
         assert "AccessDeniedException" in verified.data["data"]["last_error"]
+
+
+def _activate_cloudwatch_source(api_client, ws, owner, conn):
+    api_client.force_authenticate(owner)
+    created = api_client.post(
+        _base(ws.id),
+        {
+            "kind": "cloudwatch",
+            "name": "lambda logs",
+            "config": {
+                "aws_connection_id": str(conn.id),
+                "log_group": "/aws/lambda/acme",
+                "region": "us-east-1",
+            },
+        },
+        format="json",
+    )
+    assert created.status_code == 201, created.data
+    source = created.data["data"]
+    with mock.patch(f"{_CW_ADAPTER}.verify", return_value=LogSourceHealth(ok=True)):
+        verified = api_client.post(f"{_base(ws.id)}{source['id']}/verify/", {}, format="json")
+    assert verified.status_code == 200, verified.data
+    assert verified.data["data"]["status"] == "active"
+    return source
+
+
+class TestCloudWatchSourceIngestChain:
+    """The closed gap: an ACTIVE CloudWatch source IS read by the ingest tick —
+    resolved from the registry by kind — and cursored on its own row."""
+
+    def test_ingest_tick_reads_cloudwatch_and_advances_the_row_cursor(
+        self, api_client, owner_ws, aws_connection_factory
+    ):
+        ws, owner = owner_ws
+        conn = aws_connection_factory(ws)
+        source = _activate_cloudwatch_source(api_client, ws, owner, conn)
+
+        reader = _RecordingReader([_cw_error_window()])
+        with mock.patch(f"{_CW_ADAPTER}.read_window", new=reader):
+            findings = scan_workspace_for_errors(ws.id)
+
+        assert len(findings) == 1
+        assert findings[0].service == "lambda/acme"
+        assert findings[0].signal == "ERROR in lambda/acme"
+
+        # The CloudWatch adapter received the SOURCE row's log group + the
+        # connection's assume-role identity (the canonical config resolver).
+        config, since = reader.calls[0]
+        assert since == ""
+        assert config["log_group"] == "/aws/lambda/acme"
+        assert config["region"] == "us-east-1"
+        assert config["source_id"] == source["id"]
+        assert config["management_account_id"] == conn.management_account_id
+        assert config["external_id"] == conn.external_id
+
+        # The nextToken landed on the per-source cursor (ADR 0008 D3), NOT on
+        # the S3 IngestCheckpoint bridge.
+        from infrastructure.persistence.integrations.models import IngestCheckpoint, WorkspaceLogSource
+
+        row = WorkspaceLogSource.objects.get(id=source["id"])
+        assert row.cursor == "cw-tok-001"
+        checkpoint = IngestCheckpoint.objects.get(connection=conn, channel=IngestCheckpoint.Channel.S3_LIST)
+        assert checkpoint.last_object_key == ""
+
+    def test_second_tick_resumes_after_the_row_cursor_and_stays_silent(
+        self, api_client, owner_ws, aws_connection_factory
+    ):
+        ws, owner = owner_ws
+        conn = aws_connection_factory(ws)
+        _activate_cloudwatch_source(api_client, ws, owner, conn)
+
+        reader = _RecordingReader([_cw_error_window()])  # second call → empty window
+        with mock.patch(f"{_CW_ADAPTER}.read_window", new=reader):
+            first = scan_workspace_for_errors(ws.id)
+            second = scan_workspace_for_errors(ws.id)
+
+        assert len(first) == 1
+        assert second == [], "a re-run re-alerted on an already-processed window"
+        assert reader.calls[1][1] == "cw-tok-001"
+
+
+class TestMixedSourcesIngestChain:
+    def test_one_tick_reads_s3_and_cloudwatch_each_through_its_own_adapter(
+        self, api_client, owner_ws, aws_connection_factory
+    ):
+        ws, owner = owner_ws
+        conn = aws_connection_factory(ws)
+        s3_source = _activate_s3_source(api_client, ws, owner, conn)
+        cw_source = _activate_cloudwatch_source(api_client, ws, owner, conn)
+
+        s3_reader = _RecordingReader([_error_window()])
+        cw_reader = _RecordingReader([_cw_error_window()])
+        with (
+            mock.patch(f"{_S3_ADAPTER}.read_window", new=s3_reader),
+            mock.patch(f"{_CW_ADAPTER}.read_window", new=cw_reader),
+        ):
+            findings = scan_workspace_for_errors(ws.id)
+
+        # One tick, both sources read, findings from BOTH streams.
+        assert {f.service for f in findings} == {"celery_worker", "lambda/acme"}
+        assert s3_reader.calls[0][0]["bucket"] == "acme-logs"
+        assert cw_reader.calls[0][0]["log_group"] == "/aws/lambda/acme"
+
+        # Each source advanced ITS OWN cursor: S3 through the IngestCheckpoint
+        # bridge, CloudWatch on its WorkspaceLogSource row.
+        from infrastructure.persistence.integrations.models import IngestCheckpoint, WorkspaceLogSource
+
+        checkpoint = IngestCheckpoint.objects.get(connection=conn, channel=IngestCheckpoint.Channel.S3_LIST)
+        assert checkpoint.last_object_key == "logs/2026/08/05/batch-002.gz"
+        assert WorkspaceLogSource.objects.get(id=s3_source["id"]).cursor == ""
+        assert WorkspaceLogSource.objects.get(id=cw_source["id"]).cursor == "cw-tok-001"
