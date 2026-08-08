@@ -14,6 +14,13 @@ DB_USE_DIRECT=1 python manage.py migrate
 # attach. Idempotent. `|| true` swallows the "already seeded" case.
 python manage.py seed_subscription_tiers || true
 
+# Demo environment: idempotently (re)establish the seeded demo logins, the
+# demo workspace + memberships, and its workspace-scoped feature-flag rules.
+# No-op (changed=0) when everything already matches; prints a manual-reconnect
+# checklist for secret-bearing integrations (AWS / GitHub / Slack — never
+# seedable). Safe for every boot.
+python manage.py seed_demo_workspace || true
+
 # octopus-security fork: the nonprofit `bootstrap_dev` (personas + subscription
 # tiers + workspace defaults) is retired. For now we create a minimal superuser
 # so the admin/API is reachable. A security-appropriate dev-seed command will
