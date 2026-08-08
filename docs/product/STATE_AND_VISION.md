@@ -26,6 +26,10 @@ Management, and the brand-new Agentic AI SOC category — and its **wedge is rea
 that _owns the cloud graph_.** Wiz/Orca have the graph but no analyst; Dropzone/Prophet have the analyst
 but no graph. Auto-Sec has both.
 
+Stated as the operating thesis (§1.1, added 2026-08-08): **Auto-Sec is judgment enforcement for
+AI-written systems** — a consequence that arrives unasked, with evidence attached and a human holding
+the approval. That page is also the decision filter for what we refuse to build.
+
 The honest gaps: the CNAPP engine is **flag-gated dark by default** (per-workspace opt-in — though the
 demo workspace already has cloud-posture + asset-graph un-darkened on real data), ATT&CK / compliance
 tagging is **Prowler-only** (logs + containers untagged), the **red-team lens is cosmetic**, and there is
@@ -61,6 +65,111 @@ The lens is chosen in the HUD via a **"Teams" selector** (a lunar callout listin
 
 And an **AI agent arm** closes the loop on all three: detect → triage → propose fix → (human approves) →
 execute → rollback for blue/red, and control → evidence → chase-and-collect → assemble for compliance.
+
+### 1.1 The operating thesis: enforce judgment, don't teach it
+
+> **Added 2026-08-08.** Provenance: `docs/plans/ARCHITECTURE_ONBOARDING_IDEA_RESEARCH_2026-08-08.md`
+> (5 research sweeps, 3 candidate shapes, 4 adversarial judges, plus in-repo verification).
+> §1 says what Auto-Sec **is** structurally. This says **why anyone pays for it** — and it exists to be
+> the filter every future product idea runs through, so the same idea stops being re-researched.
+
+#### The observation
+
+AI collapsed the cost of *producing* code without collapsing the cost of *judging* it. The resulting
+failure is measured, and it lands at the **design layer**, not the syntax layer:
+
+- **Apiiro** (Fortune 50, 2026-04): AI-assisted developers commit 3–4× faster; monthly security findings
+  went ~1,000 → >10,000; privilege-escalation paths **+322%**; **architectural design flaws +153%**.
+- **GitClear** (Jan 2026, 623M changes, 2023–2026): refactoring fell from **21% of changed lines (2022)
+  to 3.8%**; block
+  duplication **+81%**. Copy-paste overtook refactor ~5:1, reversing a 2:1 preference the other way.
+- **Anthropic RCT** (2026-01, 52 junior engineers): AI-assisted learners scored **50% vs 67%** on
+  comprehension, steepest decline in debugging — *except* participants who used AI to ask conceptual
+  questions, who retained far more. Delivery mechanism, not content, decided whether AI taught or de-skilled.
+- **METR** (2025): experienced developers were **19% slower** with AI while believing they were 20–24%
+  *faster*. If experts misjudge their own throughput by ~40 points, novices have no calibration at all.
+- **Veracode** (2025, 100+ models): **45%** of AI-generated code introduces an OWASP Top 10 flaw, and
+  newer/larger models did not improve.
+
+Throughput rose; the judgment that used to arrive attached to the code did not. **That gap is the market.**
+
+#### The correction
+
+The instinct is to *teach* the missing judgment — courses, maps, guides, an advisor you consult. Teaching
+is the half that keeps dying, and the cause of death is specific: it sells a **one-time-consumption
+knowledge good**. Value lands once, at setup, and never recurs — so no retention, no expansion, no budget
+owner. CodeSee sunset (2024-02), StackShare's enterprise product discontinued, Swimm pivoted to mainframe
+modernization, Stack Overflow questions −78% YoY (3,862 posted in December 2025, its lowest since 2009),
+roadmap.sh at 2.8M registered users ≈ $0, Val Town
+pivoted monetization off individual users entirely. Every survivor migrated to a recurring enforcement
+surface or was absorbed.
+
+Enforcement is the half that pays — roughly a **30× spread on the same underlying knowledge**
+(CodeRabbit ~$40M ARR gating a team's pull requests vs Boot.dev ~$1.3M ARR teaching individuals). The
+difference is not content quality. Enforcement **runs unasked** (on someone else's PR, including an
+agent's at 2am), **holds durable state** (what was allowed, when, at what count), and **produces a
+consequence with an owner and an audit trail**. A chat session satisfies none of the three.
+
+> **Auto-Sec is judgment enforcement for AI-written systems.**
+> Not advice you have to already know to ask for — a consequence that arrives on its own, at the moment
+> of work, with evidence attached and a human holding the approval.
+>
+> The comply lens (§2.2) is the same shape pointed at a different reader: evidence with provenance *is* a
+> consequence with an owner and an audit trail. This names the wedge, not the boundary of the product.
+
+#### We already ship the canonical instance
+
+This is not aspiration; it is the loop in production, proven end-to-end on a real dogfood draft PR for
+cloud and container findings: **scan → Findings SSOT → contextual risk rank (ADR 0013) → AI triage with
+grounded verification → guardrailed draft PR carrying the fix and one sentence of why → human merges →
+provenance stamped on the board → outcome captured in Remediation Memory (ADR 0012).** Every clause is
+enforcement, not advice. The one sentence of *why* in the PR body is the entire teaching layer, and it is
+the only form the Anthropic RCT supports — delivered in-flow, unasked.
+
+One honest caveat, and it is the clause this section's own evidence is about: **SAST/code findings reach
+the SSOT and the board but are not yet routed to triage** — `ai.code_security` is absent from
+`ROUTABLE_SOURCE_TYPES` and SAST P2 is in flight — so for AI-written *code* specifically, this loop is
+days from closing, not closed.
+
+#### The moat, in one sentence
+
+> *"This handler has no authorization check"* is a commodity finding — Sonar, CodeRabbit, Greptile and
+> Cursor all say it. *"…**and it is internet-reachable via this IAM path**"* can only be said by something
+> holding the cloud graph, and Auto-Sec holds it.
+
+That is a **severity function**, not a knowledge product, and it is the one capability here that a funded
+competitor cannot copy this year. The design instruction that follows: **write exposure-anchored rules,
+never absence-anchored ones** — match the missing guard *joined to* reachability in the asset graph. This
+converts a precision problem (hard) into a filter problem (tractable), and the filter is the moat.
+
+#### What this thesis rules out
+
+The useful half of a thesis is what it forbids. Under this one, the following are **already answered — no**:
+
+- A **standalone destination**, sold as its own product, that people must visit and ask (self-serve
+  architecture advisor, guidance portal, "ask us anything" site). If a user cannot form the query, a
+  query-shaped product is unreachable by construction — and six incumbents give that guidance away free,
+  permanently. *This does not forbid an ask surface **inside** an enforcement loop: the compliance Q&A /
+  policy drafter (§2.2 gap 7) is permitted precisely because it answers from the live graph and emits
+  provenance-stamped evidence — a consequence with an owner, not advice.*
+- A course, curriculum, LMS, or certification track sold as its own product.
+- Scaffolding/generators as a product line (commodity: Cookiecutter 10.18M/mo, create-next-app 1.82M/mo;
+  the *opinionated* ones are the ones dying).
+- Anything **sold on** value that lands once, at setup. (Setup surfaces *inside* a recurring loop — the
+  AWS connect wizard, sample-data mode per ADR 0011 — are onboarding for an enforcement product, not the
+  product.)
+
+Permitted, and worth building when a loop demands it: **rules that fail a build**, **findings with an
+owner**, **gates with an approval**, **evidence with provenance**, and **memory of what was decided**.
+Teaching is allowed only as a by-product of enforcement firing — the sentence in the PR body, the reason
+on the blocked gate — never as the product.
+
+**Standing note (2026-08-08):** three ideas in ~6 weeks — institutional-memory training, ADR 0018's
+judgment flywheel, and architecture self-serve — are one idea, and all three independently researched to
+*feature, not company* (ADR 0018 found the precedent: Huntress bought Curricula for $22M as a platform
+feature). The next idea of this shape should cost an hour against this page, not another research fleet.
+*(ADR 0018 remains permitted as a deferred feature — it is drills generated by enforcement firing, not a
+product.)*
 
 ---
 
@@ -241,7 +350,8 @@ dormant scaffold — not an active liability.
   *This is precisely the "notes don't cite ATT&CK" gap.*
 - **Compliance:** Prowler-only, 9 frameworks (CIS/PCI/SOC2/ISO/NIST/HIPAA/GDPR/FedRAMP/AWS-FSBP),
   failing-controls-only (no fabricated %). Aggregation, no compute engine.
-- **No contextual-risk scoring yet** (ADR 0004 Phase 6).
+- **Contextual-risk scoring shipped** (ADR 0013 — CVSS + EPSS + CISA KEV + graph exposure, materialized
+  in `FindingRisk`, now the default finding sort). This closes ADR 0004 Phase 6.
 
 ### 4.4 Observability — **richer than expected, under-surfaced** 🟡
 
@@ -301,6 +411,8 @@ recycle-bin/forecast stubs are the remaining trust gaps.
 |---|---|
 | Platform (auth, tenancy, RBAC, billing, flags, audit, recycle-bin, branding) | ✅ **mature** |
 | Findings SSOT + lifecycle + board sync | ✅ **real** |
+| Contextual risk scoring (CVSS + EPSS + KEV + exposure) | ✅ **real** (ADR 0013) |
+| SAST code scanning (Opengrep) → SSOT → board | ✅ real, **triage routing in flight (P2)** |
 | Prowler CSPM, Trivy SCA (hardened K8s Jobs) | ✅ real, **flag-gated off** |
 | Asset graph + attack paths | ✅ built, **dark + not UI-wired** |
 | MITRE ATT&CK coverage heatmap | ✅ built, **tagging Prowler/attack-path only; 5 techniques** |
