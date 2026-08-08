@@ -23,6 +23,9 @@ def _as_utc(value: datetime) -> datetime:
 
 class ListRepoScanStatusUseCase:
     def execute(self, *, workspace_id, cooldown_seconds: int) -> list[dict]:
+        from components.code_security.application.providers.snapshot_provider import (
+            latest_snapshots_by_repo,
+        )
         from components.integrations.application.providers.vcs_scan_access_provider import (
             list_scannable_repos,
         )
@@ -30,6 +33,11 @@ class ListRepoScanStatusUseCase:
 
         repos = list_scannable_repos(workspace_id)
         history = latest_runs_for(workspace_id, SOURCE, [repo for repo, _ in repos])
+        # The latest completed run's severity counts per repo (ADR 0019 P1 snapshots)
+        # so every repo row can show its vulnerability state without a click —
+        # joined here (2 queries total, constant in repo count), never fetched
+        # per-repo by the frontend.
+        snapshots = latest_snapshots_by_repo(workspace_id, [repo for repo, _ in repos])
 
         now = datetime.now(UTC)
         rows: list[dict] = []
@@ -52,6 +60,7 @@ class ListRepoScanStatusUseCase:
                     "triggered_by_id": facts.get("triggered_by_id"),
                     "in_flight": bool(facts.get("in_flight")),
                     "cooldown_remaining": cooldown_remaining,
+                    "last_snapshot": snapshots.get(repo),
                 }
             )
         return rows
