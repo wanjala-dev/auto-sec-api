@@ -1,25 +1,20 @@
 import { test, expect } from '@playwright/test';
-import { execSync } from 'node:child_process';
+
+import { sh } from './helpers/backend';
 
 /**
  * auth recovery smoke — the pages reached from email links:
  *   - password reset-confirm (/identity/password-reset-confirm/<uid>/<token>/)
  *   - email confirmation (/identity/email-confirmed?token=…)
  *
- * Idempotent: each test provisions its own user and mints a REAL token via the
- * running container (the glue that replaces reading an inbox — the product path
- * is still exercised). Requires the auto-sec stack (:8020) + frontend (:3001).
+ * Idempotent: each test provisions its own throwaway user and mints a REAL
+ * token via the live api pod (the glue that replaces reading an inbox — the
+ * product path is still exercised). Never touches the demo logins.
  */
-const CONTAINER = process.env.QA_WEB_CONTAINER || 'octopus_security-web-1';
-const sh = (py: string): string =>
-  execSync(
-    `docker exec ${CONTAINER} python manage.py shell -c "${py}"`
-  ).toString();
-
 test('password reset-confirm: token → new password → success → new password logs in', async ({
   page
 }) => {
-  const email = 'reset-e2e@octopus.local';
+  const email = 'reset-e2e@qa.autosec.local';
   const py = [
     'from infrastructure.persistence.users.models import CustomUser',
     'from django.utils.http import urlsafe_base64_encode',
@@ -52,7 +47,7 @@ test('password reset-confirm: token → new password → success → new passwor
 });
 
 test('email confirmation: token → verified', async ({ page }) => {
-  const email = 'verify-e2e@octopus.local';
+  const email = 'verify-e2e@qa.autosec.local';
   const py = [
     'from infrastructure.persistence.users.models import CustomUser',
     'from rest_framework_simplejwt.tokens import RefreshToken',

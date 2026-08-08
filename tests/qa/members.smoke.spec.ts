@@ -1,30 +1,27 @@
 import { test, expect, Page } from '@playwright/test';
-import { execSync } from 'node:child_process';
+
+import { sh } from './helpers/backend';
+import { HUD_ROOT_RE } from './helpers/env';
 
 /**
  * Members & access smoke — Settings ▸ Workspace ▸ Members: roster, role change,
  * the permission matrix (direct grants), and inviting an operator.
  *
- * Provisions an owner + two members (member, viewer) in a dedicated workspace,
- * then drives the HUD and verifies role/permission writes landed in the DB.
+ * Provisions a throwaway owner + two members (member, viewer) in a dedicated
+ * workspace, then drives the HUD and verifies role/permission writes landed in
+ * the DB. Never touches the demo workspace's memberships.
  */
-const OWNER = 'members-e2e@octopus.local';
+const OWNER = 'members-e2e@qa.autosec.local';
 const PASSWORD = 'MembersPass123!';
-const M1 = 'members-e2e-analyst@octopus.local';
-const M2 = 'members-e2e-viewer@octopus.local';
-const CONTAINER = process.env.QA_WEB_CONTAINER || 'auto_sec-web-1';
-
-const sh = (py: string): string =>
-  execSync(
-    `docker exec ${CONTAINER} python manage.py shell -c "${py}"`
-  ).toString();
+const M1 = 'members-e2e-analyst@qa.autosec.local';
+const M2 = 'members-e2e-viewer@qa.autosec.local';
 
 async function login(page: Page) {
   await page.goto('/identity/login');
   await page.getByRole('textbox', { name: 'Email' }).fill(OWNER);
   await page.getByRole('textbox', { name: 'Password' }).fill(PASSWORD);
   await page.getByRole('button', { name: 'SIGN IN', exact: true }).click();
-  await expect(page).toHaveURL(/localhost:3001\/$/);
+  await expect(page).toHaveURL(HUD_ROOT_RE);
 }
 
 async function openMembers(page: Page) {
@@ -113,7 +110,7 @@ test('toggling a permission persists a direct grant', async ({ page }) => {
   const out = sh(
     [
       'from infrastructure.persistence.workspaces.models import WorkspacePermissionGrant, Workspace',
-      "from infrastructure.persistence.users.models import CustomUser",
+      'from infrastructure.persistence.users.models import CustomUser',
       `a=CustomUser.objects.get(email='${M1}')`,
       "print('GRANTS=' + str(WorkspacePermissionGrant.objects.filter(user_id=a.id).count()))"
     ].join('; ')
@@ -126,7 +123,7 @@ test('inviting an operator surfaces a pending invite', async ({ page }) => {
   await openMembers(page);
 
   await page.getByRole('tab', { name: /INVITES/ }).click();
-  const email = `invitee+${Date.now().toString().slice(-6)}@octopus.local`;
+  const email = `invitee+${Date.now().toString().slice(-6)}@qa.autosec.local`;
   await page.getByPlaceholder('operator@org.com').fill(email);
   await page.getByRole('button', { name: /Invite/ }).dispatchEvent('click');
 

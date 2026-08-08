@@ -1,17 +1,15 @@
 import { test, expect } from '@playwright/test';
-import { execSync } from 'node:child_process';
+
+import { sh } from './helpers/backend';
+import { HUD_ROOT_RE } from './helpers/env';
 
 /**
  * Sessions smoke — Settings ▸ Sessions. Lists the operator's active sessions
- * (current one flagged THIS DEVICE) and signs out all others.
+ * (current one flagged THIS DEVICE) and signs out all others. Throwaway user —
+ * never revokes the demo logins' sessions.
  */
-const EMAIL = 'sessions-e2e@octopus.local';
+const EMAIL = 'sessions-e2e@qa.autosec.local';
 const PASSWORD = 'SessPass123!';
-const CONTAINER = process.env.QA_WEB_CONTAINER || 'octopus_security-web-1';
-const sh = (py: string): string =>
-  execSync(
-    `docker exec ${CONTAINER} python manage.py shell -c "${py}"`
-  ).toString();
 
 test('sessions list + sign out others', async ({ page }) => {
   sh(
@@ -32,13 +30,15 @@ test('sessions list + sign out others', async ({ page }) => {
   await page.getByRole('textbox', { name: 'Email' }).fill(EMAIL);
   await page.getByRole('textbox', { name: 'Password' }).fill(PASSWORD);
   await page.getByRole('button', { name: 'SIGN IN', exact: true }).click();
-  await expect(page).toHaveURL(/localhost:3001\/$/);
+  await expect(page).toHaveURL(HUD_ROOT_RE);
 
   // Settings is a panel over the HUD (single-screen); open it, then Sessions tab.
   await page.goto('/?panel=settings');
   await page.getByRole('tab', { name: 'SESSIONS' }).click();
   await expect(page.getByText('ACTIVE SESSIONS')).toBeVisible();
-  await expect(page.getByText('THIS DEVICE')).toBeVisible();
+  // "THIS DEVICE" renders in both the summary strip and the session row —
+  // scope to the first match (strict mode).
+  await expect(page.getByText('THIS DEVICE').first()).toBeVisible();
 
   // If there are other sessions, sign them out; the current one always remains.
   const signOutOthers = page.getByRole('button', { name: 'SIGN OUT OTHERS' });
@@ -46,5 +46,5 @@ test('sessions list + sign out others', async ({ page }) => {
     await signOutOthers.click();
     await expect(signOutOthers).toBeHidden();
   }
-  await expect(page.getByText('THIS DEVICE')).toBeVisible();
+  await expect(page.getByText('THIS DEVICE').first()).toBeVisible();
 });

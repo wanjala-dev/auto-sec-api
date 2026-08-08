@@ -1,17 +1,15 @@
 import { test, expect } from '@playwright/test';
-import { execSync } from 'node:child_process';
+
+import { sh } from './helpers/backend';
+import { HUD_ROOT_RE } from './helpers/env';
 
 /**
  * Profile smoke — Settings ▸ Profile: edit identity (name/title) and change
- * password. Idempotent: the user is provisioned + reset before the run.
+ * password. Idempotent: a throwaway user is provisioned + reset before the run
+ * (the password change never touches the demo logins).
  */
-const EMAIL = 'profile-e2e@octopus.local';
+const EMAIL = 'profile-e2e@qa.autosec.local';
 const PASSWORD = 'ProfilePass123!';
-const CONTAINER = process.env.QA_WEB_CONTAINER || 'octopus_security-web-1';
-const sh = (py: string): string =>
-  execSync(
-    `docker exec ${CONTAINER} python manage.py shell -c "${py}"`
-  ).toString();
 
 test('edit profile name + change password', async ({ page }) => {
   sh(
@@ -32,7 +30,7 @@ test('edit profile name + change password', async ({ page }) => {
   await page.getByRole('textbox', { name: 'Email' }).fill(EMAIL);
   await page.getByRole('textbox', { name: 'Password' }).fill(PASSWORD);
   await page.getByRole('button', { name: 'SIGN IN', exact: true }).click();
-  await expect(page).toHaveURL(/localhost:3001\/$/);
+  await expect(page).toHaveURL(HUD_ROOT_RE);
 
   // Settings is a panel over the HUD (single-screen), opened via ?panel=.
   await page.goto('/?panel=settings');

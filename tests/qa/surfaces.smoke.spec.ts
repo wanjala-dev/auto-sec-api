@@ -1,24 +1,23 @@
 import { test, expect, Page } from '@playwright/test';
-import { execSync } from 'node:child_process';
+
+import { sh } from './helpers/backend';
+import { HUD_ROOT_RE } from './helpers/env';
 
 /**
  * HUD surfaces smoke — the Reports studio (draft create + save; NO live LLM
  * call — generation is deliberately not exercised in e2e to keep the suite
  * deterministic and free), the Workflows panel, and the dark ⇄ light toggle.
+ * Throwaway operator in its own workspace.
  */
-const EMAIL = 'surfaces-e2e@octopus.local';
+const EMAIL = 'surfaces-e2e@qa.autosec.local';
 const PASSWORD = 'SurfacesPass123!';
-const CONTAINER = process.env.QA_WEB_CONTAINER || 'auto_sec-web-1';
-
-const sh = (py: string): string =>
-  execSync(`docker exec ${CONTAINER} python manage.py shell -c "${py}"`).toString();
 
 async function login(page: Page) {
   await page.goto('/identity/login');
   await page.getByRole('textbox', { name: 'Email' }).fill(EMAIL);
   await page.getByRole('textbox', { name: 'Password' }).fill(PASSWORD);
   await page.getByRole('button', { name: 'SIGN IN', exact: true }).click();
-  await expect(page).toHaveURL(/localhost:3001\/$/);
+  await expect(page).toHaveURL(HUD_ROOT_RE);
 }
 
 test.beforeAll(() => {
@@ -63,10 +62,12 @@ test('Reports studio: create draft + edit title + save persists', async ({
   expect(out).toContain('DRAFT=True');
 });
 
-test('Workflows panel opens with list or empty state', async ({ page }) => {
+test('Workflows panel opens onto the inline builder', async ({ page }) => {
   await login(page);
   await page.getByRole('button', { name: 'WORKFLOWS', exact: true }).click();
-  await expect(page.getByText('AUTOMATIONS')).toBeVisible();
+  // The panel IS the builder now (rendered inline, no separate list view /
+  // "AUTOMATIONS" header). The AI ASSIST rail notch is unique builder chrome.
+  await expect(page.getByText('AI ASSIST')).toBeVisible({ timeout: 20_000 });
 });
 
 test('dark ⇄ light toggle flips tokens and persists', async ({ page }) => {
