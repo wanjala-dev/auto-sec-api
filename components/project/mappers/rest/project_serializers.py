@@ -501,18 +501,22 @@ class TaskSerializer(WritableNestedModelSerializer, serializers.ModelSerializer)
         reshape — no domain logic. Reads ``metadata.log_watch`` first for
         back-compat, then ``metadata.payload``.
         """
-        # Both detector kinds share the evidence-contract payload shape, so ONE
-        # card renders both — an error finding (triage agent fills the fix) and
-        # an optimization finding (optimization agent fills the recommendation).
-        if (getattr(obj, "source_type", "") or "") not in ("ai.log_watch", "ai.log_optimization"):
+        # The finding kinds share the evidence-contract payload shape, so ONE
+        # card renders all of them — an error finding (triage agent fills the
+        # fix), an optimization finding (optimization agent fills the
+        # recommendation), and a SAST finding (code_security agent fills the
+        # before/after fix; ADR 0019 P2 rides the same field so the frontend's
+        # existing finding-card seam lights up without a parallel serializer).
+        source_type = getattr(obj, "source_type", "") or ""
+        if source_type not in ("ai.log_watch", "ai.log_optimization", "ai.code_security"):
             return None
         meta = getattr(obj, "metadata", None) or {}
         payload = meta.get("log_watch") or meta.get("payload")
         if not payload:
             return None
         triage = meta.get("triage") or payload.get("triage") or {}
-        return {
-            "kind": payload.get("kind") or "error",
+        data = {
+            "kind": "code_security" if source_type == "ai.code_security" else (payload.get("kind") or "error"),
             "signal": payload.get("signal") or "",
             "service": payload.get("service") or "",
             "level": payload.get("level") or "",
@@ -539,6 +543,27 @@ class TaskSerializer(WritableNestedModelSerializer, serializers.ModelSerializer)
             # approve affordance for triaged, grounded findings without one.
             "draft_pr": payload.get("draft_pr") or None,
         }
+        if source_type == "ai.code_security":
+            # SAST extras (ADR 0019 P2): the rule + location header, the matched
+            # snippet (already masked upstream for secret-class rules, D8), the
+            # before/after fix the advisor grounded, and the snippet's language
+            # so HudCodeBlock highlights without auto-detect guessing.
+            data.update(
+                {
+                    "rule_id": payload.get("rule_id") or "",
+                    "repo": payload.get("repo") or "",
+                    "path": payload.get("path") or "",
+                    "start_line": payload.get("start_line") or 0,
+                    "end_line": payload.get("end_line") or 0,
+                    "commit_sha": (payload.get("commit_sha") or "")[:12],
+                    "cwe": payload.get("cwe") or [],
+                    "snippet": payload.get("snippet") or "",
+                    "fix_before": payload.get("fix_before") or "",
+                    "fix_after": payload.get("fix_after") or "",
+                    "suggested_fix_language": payload.get("language") or "",
+                }
+            )
+        return data
 
     def get_provenance(self, obj):
         """Expose the provenance trail for any agent-filed board task.

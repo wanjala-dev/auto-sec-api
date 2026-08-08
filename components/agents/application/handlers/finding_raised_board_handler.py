@@ -207,13 +207,13 @@ def _build_container_security_card(finding, event, mapping) -> dict:
 
 
 def _build_code_security_card(finding, event, mapping) -> dict:
-    """Build the SOC-board card for an Opengrep SAST finding (ADR 0019 P1).
+    """Build the SOC-board card for an Opengrep SAST finding (ADR 0019 P1/P2).
 
     Born SSOT-native. Card copy leads with the rule + ``path:line`` (the SAST
-    analogue of the CSPM check + ARN). Operator-reading material for P1
-    (``agent_type`` = ``ai_teammate``, like cloud_posture): routing to the triage
-    agent + the draft-PR loop is P2 — "routable without a tool is a silent no-op",
-    so the ROUTABLE entry ships together with its tool, not here.
+    analogue of the CSPM check + ARN). P2: routed to the ``code_security_agent``
+    specialist, whose ``triage_code_finding`` tool grounds a fix suggestion and
+    drives the draft-PR loop — the ROUTABLE entry ships in the same change as
+    the tool ("routable without a tool is a silent no-op").
     """
     attrs = finding.attributes or {}
     severity = finding.severity.value
@@ -240,6 +240,11 @@ def _build_code_security_card(finding, event, mapping) -> dict:
         "end_line": attrs.get("end_line", 0),
         "cwe": attrs.get("cwe", []),
         "language": attrs.get("language", ""),
+        # The matched region (already masked upstream for secret-class rules,
+        # ADR 0019 D8) — the triage advisor + verifier ground on it and the HUD
+        # callout renders it through the sanitized HudCodeBlock primitive.
+        "snippet": attrs.get("snippet", ""),
+        "message": finding.title,
         "remediation": finding.remediation,
         "evidence": [
             f"rule: {rule_id}",
@@ -252,11 +257,67 @@ def _build_code_security_card(finding, event, mapping) -> dict:
         "title": title,
         "summary": (summary or finding.description)[:2000],
         "source_type": mapping["source_type"],
-        "agent_type": "ai_teammate",  # operator-reading in P1; triage routing is P2
+        "agent_type": "code_security_agent",  # routed to the SAST specialist (P2)
         "detector_key": mapping["detector_key"],
         "payload": payload,
         "context": {
             "kind": "code_security",
+            "workspace_id": str(event.workspace_id),
+            "finding_id": str(finding.id),
+        },
+        "impact_score": _IMPACT.get(severity, 40),
+        "lookup_key": lookup_key,
+    }
+
+
+def _build_planted_instructions_card(finding, event, mapping) -> dict:
+    """Board card for AI-targeted instructions planted in repository content.
+
+    The novel signal the SAST pillar raises when the remediation advisor's
+    consent-checked file read trips the injection heuristic: someone wrote text
+    into the customer's codebase intended to be READ AS INSTRUCTIONS by an AI
+    assistant. Operator-reading material (``agent_type`` = ``ai_teammate``) — the
+    response is a human investigation (`git log -p` on the file), not an
+    auto-generated patch, so there is deliberately no triage tool and no
+    ROUTABLE entry for this source.
+
+    The suspicious TEXT is never carried onto the card (ADR 0019 D8 discipline
+    generalized): reproducing a planted instruction into the board, the
+    notifications and every projection would spread the payload.
+    """
+    attrs = finding.attributes or {}
+    severity = finding.severity.value
+    repo = attrs.get("repo", "")
+    path = attrs.get("path", "")
+    lookup_key = finding.fingerprint
+    title = f"{severity.title()}: AI-targeted instructions in {path or 'repository content'}"[:255]
+    payload = {
+        "lookup_key": lookup_key,
+        "signal": finding.title,
+        "confidence": "medium",  # heuristic match — a human confirms
+        "severity": severity,
+        "repo": repo,
+        "path": path,
+        "commit_sha": attrs.get("commit_sha", ""),
+        "category": attrs.get("category", "planted_ai_instructions"),
+        "triggering_rule_id": attrs.get("triggering_rule_id", ""),
+        "remediation": finding.remediation,
+        "evidence": [
+            f"file: {repo} {path}",
+            "detector: prompt-injection heuristic over repository content",
+            "note: the matched text is deliberately not reproduced here",
+        ],
+        "finding_id": str(finding.id),
+    }
+    return {
+        "title": title,
+        "summary": (finding.description or title)[:2000],
+        "source_type": mapping["source_type"],
+        "agent_type": "ai_teammate",  # operator investigation, not an auto-fix
+        "detector_key": mapping["detector_key"],
+        "payload": payload,
+        "context": {
+            "kind": "planted_instructions",
             "workspace_id": str(event.workspace_id),
             "finding_id": str(finding.id),
         },
@@ -294,6 +355,12 @@ _SOURCE_BOARD = {
         "flag": None,  # born SSOT-native; the pillar itself is dark behind feature.code_security
         "min_severity": "high",  # board floor (ADR 0019 D4/OQ4 default: high+critical)
         "build": _build_code_security_card,
+    },
+    "code_security.planted_instructions": {
+        "source_type": "ai.planted_instructions",
+        "detector_key": "ai_findings.planted_instructions",
+        "flag": None,  # born SSOT-native; rides the code_security pillar's own flag
+        "build": _build_planted_instructions_card,
     },
     "logwatch.error": {
         "source_type": "ai.log_watch",

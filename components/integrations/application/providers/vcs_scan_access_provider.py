@@ -44,3 +44,13 @@ def vend_repo_read_access(*, workspace_id, repo: str, connection_id: str | None 
     )
 
     return _vend(workspace_id=workspace_id, repo=repo, connection_id=connection_id)
+
+
+def read_repo_file(*, workspace_id, repo: str, path: str, ref: str = "") -> str | None:
+    """Read one file from an allowlisted repo (fail closed) — the SAST advisor's
+    grounding read (ADR 0019 P2). ``ref`` pins the scanned commit SHA."""
+    from components.integrations.infrastructure.adapters.vcs_scan_access import (
+        read_repo_file as _read,
+    )
+
+    return _read(workspace_id=workspace_id, repo=repo, path=path, ref=ref)

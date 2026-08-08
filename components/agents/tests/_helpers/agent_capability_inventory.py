@@ -76,6 +76,13 @@ SHARED_TOOLS: dict[str, frozenset[str]] = {
     "assign_task": frozenset({"task_agent", "triage_agent"}),
     "get_team_members": frozenset({"task_agent", "triage_agent"}),
     "get_members_without_tasks": frozenset({"task_agent", "triage_agent"}),
+    # ONE draft-PR engine, two specialists that can drive it (ADR 0017 D0):
+    # both registrations delegate to the IDENTICAL
+    # ``triage_agent.open_draft_pr`` tool function → the identical
+    # ``OpenDraftPrUseCase``. Each owns different finding sources (log-watch /
+    # cloud / CVE vs SAST), but the remediation capability itself is shared —
+    # forking a second per-source PR tool is exactly what D0 forbids.
+    "open_draft_pr": frozenset({"triage_agent", "code_security_agent"}),
 }
 
 
@@ -173,6 +180,20 @@ CANONICAL_TOOLS: dict[str, set[str]] = {
         "assign_task",
         "get_team_members",
         "get_members_without_tasks",
+    },
+    "code_security_agent": {
+        # SAST specialist (ADR 0019 P2). Aliases: ``code_security``, ``sast``,
+        # ``sast_agent``, ``code_scanner``. Deterministic repo-risk reads over
+        # the code_security pillar's own use cases, plus the triage tool that
+        # grounds a before/after fix on the flagged file and (rung-1 HITL,
+        # SHARED with triage_agent) opens the draft PR through the ONE engine.
+        "rank_repos_by_risk",
+        "get_repo_scan_status",
+        "get_scan_history",
+        "get_repo_findings",
+        "list_pending_code_findings",
+        "triage_code_finding",
+        "open_draft_pr",
     },
     "log_watch_agent": {
         # Log anomaly specialist. Aliases: ``log_watch``, ``logwatch``,
@@ -341,6 +362,11 @@ ROUTING_EXPECTATIONS: dict[str, str] = {
     "generate a pentest report": "report_agent",
     "write the security report": "report_agent",
     "produce a client-ready penetration test report": "report_agent",
+    # code_security_agent — SAST findings over connected repos: which repo is
+    # most vulnerable, what the last code scan found, triage a code finding
+    "which repo is most vulnerable": "code_security_agent",
+    "triage the pending code security findings": "code_security_agent",
+    "what did the last code scan find": "code_security_agent",
     # workflow_agent — draft a SOC automation playbook from a chat request
     "create a workflow for this alert": "workflow_agent",
     "build a playbook for critical findings": "workflow_agent",
