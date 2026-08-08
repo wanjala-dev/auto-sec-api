@@ -658,11 +658,50 @@ class ProjectEntrySerializer(WritableNestedModelSerializer, serializers.ModelSer
 class ColumnSerializer(WritableNestedModelSerializer, serializers.ModelSerializer):
     team = serializers.SlugRelatedField(queryset=Team.objects.all(), slug_field="id")  # Team by id
     created_by = serializers.SlugRelatedField(queryset=CustomUser.objects.all(), slug_field="id")  # User by id
+    # Project by id — optional AND nullable with an explicit default: a
+    # team-board column has project=None. The conditional UniqueConstraint on
+    # Column (uniq_board_column_title_per_team, condition project__isnull=True)
+    # makes DRF auto-generate a UniqueTogetherValidator whose condition field
+    # ("project") is force-required unless the serializer field carries a
+    # default — without it, POST /project/columns/ rejected every team-board
+    # column ("project: This field is required." when omitted, "may not be
+    # null." when null), breaking the HUD's + Add Column on team boards.
     project = serializers.SlugRelatedField(
-        queryset=Project.objects.all(), slug_field="id", required=False
-    )  # Project by id, now optional
+        queryset=Project.objects.all(), slug_field="id", required=False, allow_null=True, default=None
+    )
     workspace = serializers.SlugRelatedField(queryset=Workspace.objects.all(), slug_field="id")  # Workspace by id
     tasks = serializers.SerializerMethodField()  # Related tasks in board order
+
+    def validate(self, attrs):
+        """Explicit duplicate-title guard for TEAM-BOARD columns (project=None).
+
+        DRF's auto-generated conditional ``UniqueTogetherValidator`` evaluates
+        its condition via ``Q.check()``, which silently returns False for this
+        constraint shape — so without this guard a duplicate team-board title
+        surfaces as a 500 (DB IntegrityError) instead of a 400. The DB
+        constraint (``uniq_board_column_title_per_team``) remains the
+        concurrency backstop; this is the user-facing validation.
+        """
+        attrs = super().validate(attrs)
+
+        def _resolved(name):
+            if name in attrs:
+                return attrs[name]
+            return getattr(self.instance, name, None) if self.instance is not None else None
+
+        project = _resolved("project")
+        team = _resolved("team")
+        workspace = _resolved("workspace")
+        title = _resolved("title")
+        if project is None and team is not None and workspace is not None and title:
+            duplicates = Column.objects.filter(team=team, workspace=workspace, title=title, project__isnull=True)
+            if self.instance is not None:
+                duplicates = duplicates.exclude(pk=self.instance.pk)
+            if duplicates.exists():
+                raise serializers.ValidationError(
+                    {"title": "A column with this title already exists on the team board."}
+                )
+        return attrs
 
     def get_tasks(self, obj):
         # Task.Meta.ordering is ['-created_at'], so the bare `tasks.all` used
