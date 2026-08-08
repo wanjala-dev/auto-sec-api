@@ -43,13 +43,20 @@ def _iter_candidate_tasks(workspace_id: str | None):
 
     A persistence read of the ``project`` model (allowed — reading another context's
     persistence is not importing its infrastructure). The ``draft_pr`` presence is
-    filtered in the DB (a candidate-narrowing query, never a whole-table scan); the
+    filtered in the DB (a candidate-narrowing query, never a whole-table scan) via
+    the CANONICAL accessor exported next to the writer's port
+    (``record_finding_draft_pr_port.draft_pr_candidate_filter``) — the query can no
+    longer drift from the shape ``OrmRecordFindingDraftPrRepository`` writes. The
     resolved marker is screened in Python (it lives under two possible JSON keys),
     so a resolved finding is never re-processed.
     """
+    from components.project.application.ports.record_finding_draft_pr_port import (
+        draft_pr_candidate_filter,
+        get_draft_pr,
+    )
     from infrastructure.persistence.project.models import Task
 
-    qs = Task.objects.filter(metadata__payload__draft_pr__isnull=False)
+    qs = Task.objects.filter(**draft_pr_candidate_filter())
     if workspace_id is not None:
         qs = qs.filter(workspace_id=workspace_id)
     qs = qs.only("id", "workspace_id", "title", "metadata").order_by("id")
@@ -57,7 +64,7 @@ def _iter_candidate_tasks(workspace_id: str | None):
     for task in qs.iterator(chunk_size=_CHUNK):
         meta = task.metadata or {}
         payload = meta.get("payload") or {}
-        draft_pr = payload.get("draft_pr") or {}
+        draft_pr = get_draft_pr(meta)
         pr_url = draft_pr.get("url")
         if not pr_url:
             continue

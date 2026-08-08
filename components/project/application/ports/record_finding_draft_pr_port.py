@@ -16,6 +16,62 @@ from __future__ import annotations
 import abc
 from dataclasses import dataclass
 
+# ── Canonical draft-PR metadata location ────────────────────────────────────
+# The ONE definition of where the draft-PR record lives on a finding Task's
+# ``metadata`` JSON column. The writer (``OrmRecordFindingDraftPrRepository``)
+# and every reader — the remediation reconciler's candidate query, the
+# task-lookup seam — MUST address the path through these helpers. Before this,
+# the reconciler hand-typed ``metadata__payload__draft_pr`` while the writer
+# hand-built the nested dict, so a writer-side move of the record would have
+# silently emptied the reconciler's candidate set. The round-trip integration
+# test (components/remediation/tests/integration/test_reconcile_roundtrip_guard
+# .py) locks writer and reader together through this single definition.
+#
+# Lives in the PORT module (not the ORM repository) deliberately: the metadata
+# shape is part of the recording CONTRACT, and ``application/ports`` is the one
+# surface other contexts may import (architecture-manifesto Rule 3) — the
+# reconciler could never reach a helper inside ``project``'s infrastructure.
+
+DRAFT_PR_METADATA_PATH: tuple[str, ...] = ("payload", "draft_pr")
+
+DRAFT_PR_JSON_LOOKUP: str = "metadata__" + "__".join(DRAFT_PR_METADATA_PATH)
+
+
+def draft_pr_candidate_filter() -> dict[str, bool]:
+    """ORM filter kwargs selecting Tasks that CARRY a draft-PR record.
+
+    Use as ``Task.objects.filter(**draft_pr_candidate_filter())`` — derived
+    from ``DRAFT_PR_METADATA_PATH`` so the query can never drift from the
+    written shape. (Plain strings only — no Django import; the application
+    layer stays framework-free.)
+    """
+    return {f"{DRAFT_PR_JSON_LOOKUP}__isnull": False}
+
+
+def get_draft_pr(metadata: object) -> dict:
+    """Read the draft-PR record off a Task's ``metadata`` (missing/malformed → ``{}``)."""
+    node = metadata
+    for key in DRAFT_PR_METADATA_PATH:
+        if not isinstance(node, dict):
+            return {}
+        node = node.get(key)
+    return node if isinstance(node, dict) else {}
+
+
+def set_draft_pr(metadata: dict, record: dict) -> None:
+    """Write the draft-PR record at the canonical path, creating parent nodes.
+
+    Mutates ``metadata`` in place (the writer re-assigns the column afterwards).
+    """
+    node = metadata
+    for key in DRAFT_PR_METADATA_PATH[:-1]:
+        child = node.get(key)
+        if not isinstance(child, dict):
+            child = {}
+            node[key] = child
+        node = child
+    node[DRAFT_PR_METADATA_PATH[-1]] = record
+
 
 @dataclass(frozen=True)
 class RecordFindingDraftPrCommand:

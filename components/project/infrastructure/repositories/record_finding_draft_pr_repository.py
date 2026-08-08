@@ -24,6 +24,8 @@ from components.project.application.ports.record_finding_draft_pr_port import (
     RecordFindingDraftPrCommand,
     RecordFindingDraftPrPort,
     RecordFindingDraftPrResult,
+    get_draft_pr,
+    set_draft_pr,
 )
 
 
@@ -37,19 +39,22 @@ class OrmRecordFindingDraftPrRepository(RecordFindingDraftPrPort):
             return RecordFindingDraftPrResult(recorded=False)
 
         meta = task.metadata or {}
-        payload = meta.get("payload") or {}
-        if (payload.get("draft_pr") or {}).get("url"):
+        if get_draft_pr(meta).get("url"):
             return RecordFindingDraftPrResult(recorded=False)
 
         opened_at = datetime.now(UTC).isoformat()
-        payload["draft_pr"] = {
-            "url": command.pr_url,
-            "repo": command.pr_repo,
-            "branch": command.branch,
-            "opened_by": str(command.performed_by),
-            "opened_at": opened_at,
-        }
-        meta["payload"] = payload
+        # Written through the canonical accessor so readers filtering on the
+        # same path (the remediation reconciler) can never drift from the shape.
+        set_draft_pr(
+            meta,
+            {
+                "url": command.pr_url,
+                "repo": command.pr_repo,
+                "branch": command.branch,
+                "opened_by": str(command.performed_by),
+                "opened_at": opened_at,
+            },
+        )
 
         # Same growable provenance shape the detector/triage pipeline appends to.
         provenance = meta.get("provenance") or {"events": []}
