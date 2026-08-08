@@ -121,6 +121,15 @@ class GitHubVcsAdapter(VcsPort):
             raise VcsApiError(f"Could not decode {path} from {repo}", status_code=None) from exc
         return RepoFile(path=path, content=content, sha=data.get("sha") or "")
 
+    def get_archive_url(self, repo: str, ref: str) -> str:
+        """The GitHub tarball endpoint for ``repo`` at ``ref`` (a resolved SHA).
+
+        ``GET /repos/{repo}/tarball/{ref}`` answers 302 to a short-lived
+        codeload URL; ``curl -L`` in the scan Job follows it (curl drops the
+        Authorization header on the cross-host redirect, which is fine — the
+        redirect target embeds its own one-time token)."""
+        return f"{self._base_url}/repos/{repo}/tarball/{ref}"
+
     def list_tree(self, repo: str, ref: str) -> list[str]:
         """List every blob path in ``repo`` at ``ref`` (recursive git-tree read).
 

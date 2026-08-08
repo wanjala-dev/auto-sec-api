@@ -1,0 +1,271 @@
+# Auto-Sec first-party P1 core security pack (ADR 0019 D1/D4).
+# NOTE: no YAML anchors/merge-keys — opengrep's OCaml YAML parser resolves them
+# differently from PyYAML (an anchor's values clobbered per-rule overrides in
+# v1.26.0), so every rule carries fully explicit metadata.
+rules:
+- id: autosec.python.subprocess-shell-true
+  languages:
+  - python
+  severity: ERROR
+  message: subprocess called with shell=True on a dynamic command string — user-influenced input reaches
+    a shell, enabling command injection. Build an argv list and drop shell=True.
+  patterns:
+  - pattern: subprocess.$F($CMD, ..., shell=True, ...)
+  - pattern-not: subprocess.$F("...", ..., shell=True, ...)
+  metadata:
+    pack: autosec-p1-core
+    license: autosec-first-party
+    confidence: HIGH
+    category: security
+    cwe:
+    - CWE-78
+    security-severity: '8.8'
+- id: autosec.python.os-system-dynamic
+  languages:
+  - python
+  severity: ERROR
+  message: os.system() invoked with a dynamic command string — command injection risk. Use subprocess
+    with an argv list instead.
+  patterns:
+  - pattern: os.system($CMD)
+  - pattern-not: os.system("...")
+  metadata:
+    pack: autosec-p1-core
+    license: autosec-first-party
+    confidence: HIGH
+    category: security
+    cwe:
+    - CWE-78
+    security-severity: '8.8'
+- id: autosec.python.eval-exec-dynamic
+  languages:
+  - python
+  severity: ERROR
+  message: eval()/exec() on a dynamic expression — arbitrary code execution if any part of the input is
+    attacker-influenced. Use ast.literal_eval or an explicit dispatch map.
+  patterns:
+  - pattern-either:
+    - pattern: eval($X)
+    - pattern: exec($X)
+  - pattern-not: eval("...")
+  - pattern-not: exec("...")
+  metadata:
+    pack: autosec-p1-core
+    license: autosec-first-party
+    confidence: HIGH
+    category: security
+    cwe:
+    - CWE-95
+    security-severity: '8.8'
+- id: autosec.python.yaml-load-unsafe
+  languages:
+  - python
+  severity: ERROR
+  message: yaml.load() without an explicit safe Loader can instantiate arbitrary Python objects from the
+    document. Use yaml.safe_load() or Loader=yaml.SafeLoader.
+  patterns:
+  - pattern: yaml.load(...)
+  - pattern-not: yaml.load($X, $LOADER, ...)
+  - pattern-not: yaml.load($X, Loader=$L)
+  - pattern-not: yaml.load($X, ..., Loader=$L, ...)
+  metadata:
+    pack: autosec-p1-core
+    license: autosec-first-party
+    confidence: HIGH
+    category: security
+    cwe:
+    - CWE-502
+    security-severity: '8.1'
+- id: autosec.python.pickle-load-untrusted
+  languages:
+  - python
+  severity: WARNING
+  message: pickle deserialization executes arbitrary code when the payload is attacker controlled. Never
+    unpickle data that crosses a trust boundary; prefer JSON.
+  pattern-either:
+  - pattern: pickle.loads(...)
+  - pattern: pickle.load(...)
+  metadata:
+    pack: autosec-p1-core
+    license: autosec-first-party
+    confidence: MEDIUM
+    category: security
+    cwe:
+    - CWE-502
+    security-severity: '6.5'
+- id: autosec.python.sql-execute-format
+  languages:
+  - python
+  severity: ERROR
+  message: SQL executed from a string built with f-string/%/.format() — SQL injection risk. Use parameterized
+    queries (execute(sql, params)).
+  patterns:
+  - pattern-either:
+    - pattern: $C.execute(f"...", ...)
+    - pattern: $C.execute($S % $ARGS, ...)
+    - pattern: $C.execute($S.format(...), ...)
+  metadata:
+    pack: autosec-p1-core
+    license: autosec-first-party
+    confidence: HIGH
+    category: security
+    cwe:
+    - CWE-89
+    security-severity: '8.6'
+- id: autosec.python.requests-verify-disabled
+  languages:
+  - python
+  severity: ERROR
+  message: TLS certificate verification disabled (verify=False) — the connection is open to man-in-the-middle
+    interception. Pin or install the CA instead.
+  pattern: requests.$F(..., verify=False, ...)
+  metadata:
+    pack: autosec-p1-core
+    license: autosec-first-party
+    confidence: HIGH
+    category: security
+    cwe:
+    - CWE-295
+    security-severity: '7.4'
+- id: autosec.python.jwt-verify-disabled
+  languages:
+  - python
+  severity: ERROR
+  message: JWT accepted without signature verification — any caller can forge an identity token. Verify
+    the signature with the expected key and algorithm.
+  pattern-either:
+  - pattern: jwt.decode(..., verify=False, ...)
+  - pattern: 'jwt.decode(..., options={..., "verify_signature": False, ...}, ...)'
+  metadata:
+    pack: autosec-p1-core
+    license: autosec-first-party
+    confidence: HIGH
+    category: security
+    cwe:
+    - CWE-347
+    security-severity: '8.9'
+- id: autosec.python.django-mark-safe-dynamic
+  languages:
+  - python
+  severity: WARNING
+  message: mark_safe() on a dynamic value bypasses Django's autoescaping — XSS if any part is user-influenced.
+    Use format_html() or escape first.
+  patterns:
+  - pattern: mark_safe($X)
+  - pattern-not: mark_safe("...")
+  metadata:
+    pack: autosec-p1-core
+    license: autosec-first-party
+    confidence: MEDIUM
+    category: security
+    cwe:
+    - CWE-79
+    security-severity: '6.1'
+- id: autosec.python.tempfile-mktemp
+  languages:
+  - python
+  severity: WARNING
+  message: tempfile.mktemp() is race-prone (the name can be claimed between creation and use). Use NamedTemporaryFile/mkstemp.
+  pattern: tempfile.mktemp(...)
+  metadata:
+    pack: autosec-p1-core
+    license: autosec-first-party
+    confidence: HIGH
+    category: security
+    cwe:
+    - CWE-377
+    security-severity: '4.7'
+- id: autosec.javascript.eval-dynamic
+  languages:
+  - javascript
+  - typescript
+  severity: ERROR
+  message: eval()/new Function() on a dynamic expression — arbitrary code execution if the input is attacker-influenced.
+  patterns:
+  - pattern-either:
+    - pattern: eval($X)
+    - pattern: new Function($ARG)
+  - pattern-not: eval("...")
+  - pattern-not: new Function("...")
+  metadata:
+    pack: autosec-p1-core
+    license: autosec-first-party
+    confidence: HIGH
+    category: security
+    cwe:
+    - CWE-95
+    security-severity: '8.8'
+- id: autosec.javascript.child-process-exec-template
+  languages:
+  - javascript
+  - typescript
+  severity: ERROR
+  message: child_process exec/execSync with an interpolated template string — command injection risk.
+    Use execFile/spawn with an argv array.
+  pattern-either:
+  - pattern: exec(`...${$X}...`, ...)
+  - pattern: execSync(`...${$X}...`, ...)
+  - pattern: $CP.exec(`...${$X}...`, ...)
+  - pattern: $CP.execSync(`...${$X}...`, ...)
+  metadata:
+    pack: autosec-p1-core
+    license: autosec-first-party
+    confidence: HIGH
+    category: security
+    cwe:
+    - CWE-78
+    security-severity: '8.8'
+- id: autosec.javascript.dangerously-set-inner-html-dynamic
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: dangerouslySetInnerHTML with a dynamic value — XSS if the HTML is not sanitized. Sanitize (e.g.
+    DOMPurify) or render as text.
+  patterns:
+  - pattern: '{ __html: $X }'
+  - pattern-not: '{ __html: "..." }'
+  - pattern-inside: <$EL dangerouslySetInnerHTML={...} ... />
+  metadata:
+    pack: autosec-p1-core
+    license: autosec-first-party
+    confidence: MEDIUM
+    category: security
+    cwe:
+    - CWE-79
+    security-severity: '6.1'
+- id: autosec.go.sql-query-sprintf
+  languages:
+  - go
+  severity: ERROR
+  message: SQL executed from an fmt.Sprintf-built string — SQL injection risk. Use parameterized queries
+    with placeholder arguments.
+  pattern-either:
+  - pattern: $DB.Query(fmt.Sprintf(...), ...)
+  - pattern: $DB.QueryRow(fmt.Sprintf(...), ...)
+  - pattern: $DB.Exec(fmt.Sprintf(...), ...)
+  - pattern: $DB.QueryContext($CTX, fmt.Sprintf(...), ...)
+  - pattern: $DB.ExecContext($CTX, fmt.Sprintf(...), ...)
+  metadata:
+    pack: autosec-p1-core
+    license: autosec-first-party
+    confidence: HIGH
+    category: security
+    cwe:
+    - CWE-89
+    security-severity: '8.6'
+- id: autosec.go.tls-insecure-skip-verify
+  languages:
+  - go
+  severity: ERROR
+  message: TLS certificate verification disabled (InsecureSkipVerify) — the connection is open to man-in-the-middle
+    interception.
+  pattern: 'tls.Config{..., InsecureSkipVerify: true, ...}'
+  metadata:
+    pack: autosec-p1-core
+    license: autosec-first-party
+    confidence: HIGH
+    category: security
+    cwe:
+    - CWE-295
+    security-severity: '7.4'
