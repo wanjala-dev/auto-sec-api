@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from components.project.application.ports.record_finding_draft_pr_port import get_draft_pr
 from components.project.application.ports.task_lookup_port import (
     DraftPrFinding,
     TaskLookupPort,
@@ -51,9 +52,7 @@ class OrmTaskLookupRepository(TaskLookupPort):
             .iterator(chunk_size=500)
         )
         for task in tasks:
-            meta = task.metadata if isinstance(task.metadata, dict) else {}
-            payload = meta.get("payload") if isinstance(meta.get("payload"), dict) else {}
-            draft_pr = payload.get("draft_pr") if isinstance(payload.get("draft_pr"), dict) else {}
+            draft_pr = get_draft_pr(task.metadata)
             if not draft_pr.get("url"):
                 continue
             findings.append(
