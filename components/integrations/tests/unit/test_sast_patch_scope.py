@@ -184,3 +184,44 @@ class TestUntrustedFraming:
             )
             is None
         )
+
+
+class TestDelimiterEcho:
+    """Layer 2 must not trip layer 1 (observed live 2026-08-08).
+
+    Asked to return the corrected FULL FILE, a model echoed the
+    ``<untrusted_code>`` framing back into ``updated_content`` — the committed
+    file would have started with a tag and failed the parse guard. The framing
+    delimiters are scaffolding; they are stripped on the way out.
+    """
+
+    def test_echoed_delimiters_are_stripped_from_the_proposal(self):
+        echoed = f"{'<untrusted_code>'}\n{_fixed_in_place()}\n{'</untrusted_code>'}"
+
+        class _EchoLlm:
+            def chat(self, messages):
+                import json as _json
+
+                from types import SimpleNamespace
+
+                return SimpleNamespace(
+                    content=_json.dumps(
+                        {"path": _PAYLOAD["path"], "updated_content": echoed, "change_summary": "Parameterized."}
+                    )
+                )
+
+        proposal = SastPatchAdvisor(llm_port=_EchoLlm()).propose(
+            payload=_PAYLOAD, path=_PAYLOAD["path"], current_content=_INJECTED_FILE
+        )
+        assert proposal is not None
+        assert "untrusted_code" not in proposal.updated_content
+        # ...and the cleaned patch still passes the scope guard + parses.
+        import ast
+
+        ast.parse(proposal.updated_content)
+        validate_patch_scope(
+            original_content=_INJECTED_FILE,
+            updated_content=proposal.updated_content,
+            path=_PAYLOAD["path"],
+            payload=_PAYLOAD,
+        )

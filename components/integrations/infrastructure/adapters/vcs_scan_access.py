@@ -83,9 +83,11 @@ def read_repo_file(*, workspace_id, repo: str, path: str, ref: str = "") -> str 
         return None
     adapter = get_vcs_adapter(connection.provider, token)
     try:
-        if ref:
-            return adapter.get_file(repo, clean_path, ref=ref).content
-        return adapter.get_file(repo, clean_path).content
+        # ``ref`` is REQUIRED by the port (an implicit "whatever HEAD is now" read
+        # would silently ground a fix on different content than was scanned). A
+        # caller with no scanned SHA falls back to the resolved default branch.
+        resolved_ref = ref or adapter.get_default_branch(repo).name
+        return adapter.get_file(repo, clean_path, ref=resolved_ref).content
     except VcsApiError:
         logger.warning("vcs_file_read_failed workspace_id=%s repo=%s path=%s", workspace_id, repo, clean_path)
         return None
