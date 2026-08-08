@@ -1,5 +1,8 @@
 import { test, expect, Page } from '@playwright/test';
 
+import { sh } from './helpers/backend';
+import { E2E, HUD_ROOT_RE } from './helpers/env';
+
 /**
  * auto-sec auth lifecycle smoke — the HUD auth gate on /identity/login.
  *
@@ -7,16 +10,16 @@ import { test, expect, Page } from '@playwright/test';
  * regression net as the auth surface grows:
  *   - auth guard bounces an unauthenticated visitor to /identity/login
  *   - password field masks by DEFAULT (never plaintext — the anti-pattern we fixed)
- *   - password login → HUD → sign out → back to login
- *   - register (+ terms gate) → success notice
+ *   - password login → HUD → sign out → back to login (demo admin, read-only)
+ *   - register (+ terms gate) → success notice (throwaway user, cleaned after)
  *   - forgot-password (reset request) → confirmation
- *   - a wrong password does NOT authenticate (stays on the login route)
+ *   - a wrong password does NOT authenticate (throwaway user — never the demo
+ *     admin, so repeated failed attempts can't trip the lockout policy on it)
  *
- * Assumes the auto-sec stack is up (:8020) with a verified admin from boot and
- * the frontend dev server on :3001.
+ * Requires the live k8s stack + the frontend dev server (see playwright.config).
  */
-const ADMIN_EMAIL = process.env.QA_ADMIN_EMAIL || 'admin@octopus.local';
-const ADMIN_PASSWORD = process.env.QA_ADMIN_PASSWORD || 'octopus-admin-local';
+const THROWAWAY_EMAIL = 'auth-e2e@qa.autosec.local';
+const THROWAWAY_PASSWORD = 'AuthE2ePass123!';
 
 const gotoLogin = async (page: Page) => {
   await page.goto('/identity/login');
@@ -30,6 +33,21 @@ const fillLogin = async (page: Page, email: string, password: string) => {
 };
 
 test.describe('auth lifecycle', () => {
+  test.beforeAll(() => {
+    // Throwaway fixture for the wrong-password probe — verified + onboarded so
+    // a correct-credential control login would land on the HUD, but we never
+    // point failed attempts at the demo admin.
+    sh(
+      [
+        'from infrastructure.persistence.users.models import CustomUser',
+        `u,_=CustomUser.objects.get_or_create(email='${THROWAWAY_EMAIL}', defaults={'username':'authe2e'})`,
+        "u.username='authe2e'; u.is_verified=True; u.is_active=True; u.is_onboard_complete=True",
+        `u.set_password('${THROWAWAY_PASSWORD}'); u.save()`,
+        "print('ready')",
+      ].join('; ')
+    );
+  });
+
   test('auth guard redirects an unauthenticated visitor to the login', async ({
     page,
   }) => {
@@ -48,16 +66,16 @@ test.describe('auth lifecycle', () => {
 
   test('wrong password does not authenticate', async ({ page }) => {
     await gotoLogin(page);
-    await fillLogin(page, ADMIN_EMAIL, 'definitely-the-wrong-password');
+    await fillLogin(page, THROWAWAY_EMAIL, 'definitely-the-wrong-password');
     // Stays on the login route (no token issued).
     await expect(page).toHaveURL(/\/identity\/login$/);
   });
 
   test('login → HUD → sign out → login', async ({ page }) => {
     await gotoLogin(page);
-    await fillLogin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await fillLogin(page, E2E.email, E2E.password);
     // Lands on the command center.
-    await expect(page).toHaveURL(/localhost:3001\/$/);
+    await expect(page).toHaveURL(HUD_ROOT_RE);
     await expect(page.getByText('AUTO-SEC').first()).toBeVisible();
     // Sign out returns to the login gate.
     await page.getByRole('button', { name: /SIGN OUT/i }).click();
@@ -69,7 +87,7 @@ test.describe('auth lifecycle', () => {
   }) => {
     await gotoLogin(page);
     await page.getByRole('tab', { name: 'REGISTER' }).click();
-    const email = `qa+${Date.now()}@octopus.local`;
+    const email = `qa-register+${Date.now()}@qa.autosec.local`;
     await page.getByRole('textbox', { name: 'Full name' }).fill('QA Operator');
     await page.getByRole('textbox', { name: 'Email' }).fill(email);
     await page.getByRole('textbox', { name: 'Password' }).fill('QaSecurePass123!');
@@ -83,6 +101,15 @@ test.describe('auth lifecycle', () => {
 
     // Success renders in BOTH an inline notice and a toast — scope to the first.
     await expect(page.getByText(/Account created\./i).first()).toBeVisible();
+
+    // Clean the throwaway registration back out of the live DB.
+    sh(
+      [
+        'from infrastructure.persistence.users.models import CustomUser',
+        `CustomUser.objects.filter(email='${email}').delete()`,
+        "print('cleaned')",
+      ].join('; ')
+    );
   });
 
   test('forgot password sends a reset link confirmation', async ({ page }) => {
@@ -90,7 +117,7 @@ test.describe('auth lifecycle', () => {
     await page.getByRole('button', { name: 'Forgot password?' }).click();
     await page
       .getByRole('textbox', { name: 'Email' })
-      .fill(`qa+${Date.now()}@octopus.local`);
+      .fill(`qa-reset+${Date.now()}@qa.autosec.local`);
     await page.getByRole('button', { name: /SEND RESET LINK/i }).click();
     await expect(page.getByText(/reset link is on its way/i)).toBeVisible();
   });

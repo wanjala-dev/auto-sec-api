@@ -1,19 +1,18 @@
 import { test, expect } from '@playwright/test';
-import { execSync } from 'node:child_process';
+
+import { sh } from './helpers/backend';
+import { HUD_ROOT_RE } from './helpers/env';
 
 /**
  * 2FA setup smoke — Settings ▸ Security. Enable via the real QR/verify flow
  * (the live TOTP code is computed from the provisioned device via django_otp in
- * the container — the glue that replaces holding a phone). Idempotent: the user
- * is reset (onboarded, 2FA off) before, and 2FA is torn down after.
+ * the api pod — the glue that replaces holding a phone). Idempotent: the
+ * throwaway user is reset (onboarded, 2FA off) before AND torn back down after,
+ * so 2FA never lingers on. The demo logins are never touched (no 2FA on
+ * test@autosec.local — hard rule).
  */
-const EMAIL = 'twofa-e2e@octopus.local';
+const EMAIL = 'twofa-e2e@qa.autosec.local';
 const PASSWORD = 'TwoFaPass123!';
-const CONTAINER = process.env.QA_WEB_CONTAINER || 'octopus_security-web-1';
-const sh = (py: string): string =>
-  execSync(
-    `docker exec ${CONTAINER} python manage.py shell -c "${py}"`
-  ).toString();
 
 const resetUser = () =>
   sh(
@@ -48,6 +47,12 @@ const liveTotp = (): string => {
   return out.match(/CODE=(\d{6})/)![1];
 };
 
+test.afterAll(() => {
+  // Tear 2FA back down so the throwaway fixture is re-runnable and no stray
+  // TOTP device outlives the run.
+  resetUser();
+});
+
 test('enable 2FA end-to-end via the Settings security UI', async ({ page }) => {
   resetUser();
 
@@ -55,7 +60,7 @@ test('enable 2FA end-to-end via the Settings security UI', async ({ page }) => {
   await page.getByRole('textbox', { name: 'Email' }).fill(EMAIL);
   await page.getByRole('textbox', { name: 'Password' }).fill(PASSWORD);
   await page.getByRole('button', { name: 'SIGN IN', exact: true }).click();
-  await expect(page).toHaveURL(/localhost:3001\/$/);
+  await expect(page).toHaveURL(HUD_ROOT_RE);
 
   // Settings is a panel over the HUD (single-screen); open it, then Security tab.
   await page.goto('/?panel=settings');

@@ -1,30 +1,27 @@
 import { test, expect, Page } from '@playwright/test';
-import { execSync } from 'node:child_process';
+
+import { sh } from './helpers/backend';
+import { HUD_ROOT_RE } from './helpers/env';
 
 /**
  * Kanban / boards smoke — the SOC triage board across the full stack:
  * team → project → column → task, plus the Team↔Project board switcher and the
  * in-place add-column / add-task write paths.
  *
- * Provisions a self-contained org (its own owner, team, project, columns, a
- * seeded finding) via the Django shell, then drives the HUD and verifies writes
- * landed in the DB. Idempotent: get_or_create everywhere; safe to re-run.
+ * Provisions a self-contained org (its own throwaway owner, team, project,
+ * columns, a seeded finding) via the Django shell in the api pod, then drives
+ * the HUD and verifies writes landed in the DB. Idempotent: get_or_create
+ * everywhere; safe to re-run. Never touches the demo workspace.
  */
-const EMAIL = 'kanban-e2e@octopus.local';
+const EMAIL = 'kanban-e2e@qa.autosec.local';
 const PASSWORD = 'KanbanPass123!';
-const CONTAINER = process.env.QA_WEB_CONTAINER || 'auto_sec-web-1';
-
-const sh = (py: string): string =>
-  execSync(
-    `docker exec ${CONTAINER} python manage.py shell -c "${py}"`
-  ).toString();
 
 async function login(page: Page) {
   await page.goto('/identity/login');
   await page.getByRole('textbox', { name: 'Email' }).fill(EMAIL);
   await page.getByRole('textbox', { name: 'Password' }).fill(PASSWORD);
   await page.getByRole('button', { name: 'SIGN IN', exact: true }).click();
-  await expect(page).toHaveURL(/localhost:3001\/$/);
+  await expect(page).toHaveURL(HUD_ROOT_RE);
 }
 
 async function openKanban(page: Page) {
@@ -99,7 +96,14 @@ test('add-column persists a new lane', async ({ page }) => {
   await page
     .getByRole('button', { name: '+ Add Column' })
     .dispatchEvent('click');
-  await page.getByPlaceholder('Column title…').fill(title);
+  const titleInput = page.getByPlaceholder('Column title…');
+  await titleInput.pressSequentially(title);
+  await expect(titleInput).toHaveValue(title);
+  // Controlled-input settle: an immediate Enter after typing can beat the
+  // React re-render that refreshes the onKeyDown closure, so submit reads an
+  // empty title and silently no-ops (measured live, 2026-08-08). One short
+  // settle makes the Enter deterministic.
+  await page.waitForTimeout(300);
   // Await the create POST so the DB assertion below isn't racing the write
   // (removes the retry-only flake).
   const [createResp] = await Promise.all([
@@ -108,7 +112,7 @@ test('add-column persists a new lane', async ({ page }) => {
         r.url().includes('/project/columns/') &&
         r.request().method() === 'POST'
     ),
-    page.getByPlaceholder('Column title…').press('Enter')
+    titleInput.press('Enter')
   ]);
   expect(createResp.ok()).toBeTruthy();
 

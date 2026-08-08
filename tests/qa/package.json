@@ -1,7 +1,7 @@
 {
-  "name": "wanjala-gtm-qa",
+  "name": "autosec-qa",
   "private": true,
-  "description": "GTM end-to-end QA — Playwright Test runner (locators + web-first assertions + API verification). Driven by the qa-agent (.claude/agents/qa-agent.md).",
+  "description": "auto-sec deep identity/admin E2E QA — Playwright Test runner (locators + web-first assertions + kubectl-backed DB verification).",
   "scripts": {
     "test": "playwright test",
     "test:headed": "playwright test --headed",

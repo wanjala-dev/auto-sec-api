@@ -1,25 +1,29 @@
 import { test, expect, Page } from '@playwright/test';
-import { execSync } from 'node:child_process';
+
+import { sh } from './helpers/backend';
+import { HUD_ROOT_RE } from './helpers/env';
 
 /**
  * Collaboration smoke — Direct Messages + the operator social feed:
  * DM thread renders + send persists; feed post/like/comment persist.
- * Provisions its own operator + workspace + a DM counterpart. Idempotent.
+ * Provisions its own throwaway operator + workspace + a DM counterpart.
+ *
+ * Both surfaces are HUD overlay panels reached via the ?panel= deep link
+ * (messaging / social) — the old header entry buttons ("Direct messages" /
+ * "Operator feed") no longer exist. The social feed is server-gated behind
+ * feature.social_feed, so the fixture seeds a workspace-scoped flag rule for
+ * its own throwaway workspace (never a global rule).
  */
-const EMAIL = 'collab-e2e@octopus.local';
+const EMAIL = 'collab-e2e@qa.autosec.local';
 const PASSWORD = 'CollabPass123!';
-const PEER = 'collab-peer@octopus.local';
-const CONTAINER = process.env.QA_WEB_CONTAINER || 'auto_sec-web-1';
-
-const sh = (py: string): string =>
-  execSync(`docker exec ${CONTAINER} python manage.py shell -c "${py}"`).toString();
+const PEER = 'collab-peer@qa.autosec.local';
 
 async function login(page: Page) {
   await page.goto('/identity/login');
   await page.getByRole('textbox', { name: 'Email' }).fill(EMAIL);
   await page.getByRole('textbox', { name: 'Password' }).fill(PASSWORD);
   await page.getByRole('button', { name: 'SIGN IN', exact: true }).click();
-  await expect(page).toHaveURL(/localhost:3001\/$/);
+  await expect(page).toHaveURL(HUD_ROOT_RE);
 }
 
 test.beforeAll(() => {
@@ -39,22 +43,60 @@ test.beforeAll(() => {
       "ConversationParticipant.objects.get_or_create(conversation=c, user=u, defaults={'role':'owner'})",
       "ConversationParticipant.objects.get_or_create(conversation=c, user=p, defaults={'role':'member'})",
       "Message.objects.get_or_create(conversation=c, sender=p, body='E2E seed message', defaults={'message_type':'text'})",
+      // The social feed is gated behind feature.social_feed — enable it for
+      // THIS throwaway workspace only (workspace-scoped rule, no global bleed).
+      'from infrastructure.persistence.core.models import FeatureFlag, FeatureFlagRule',
+      'from components.shared_platform.infrastructure.services.feature_flags import bump_feature_flags_version',
+      "f,_=FeatureFlag.objects.get_or_create(key='feature.social_feed', defaults={'default_enabled': False})",
+      "FeatureFlagRule.objects.get_or_create(flag=f, scope='workspace', workspace=ws, defaults={'enabled': True})",
+      'bump_feature_flags_version()',
       "print('ready')"
     ].join('; ')
   );
 });
 
 test('DM: thread renders + send persists', async ({ page }) => {
+  // MessageSendThrottle is 60/min PER USER (anti-spam, correct product
+  // behaviour). Repeated harness runs exhaust the fixture user's bucket and the
+  // send 429s — so clear just this user's throttle key first. Test-environment
+  // setup through the same api-pod glue as the fixtures; the throttle itself is
+  // never weakened.
+  sh(
+    [
+      'from django.core.cache import cache',
+      'from infrastructure.persistence.users.models import CustomUser',
+      `u=CustomUser.objects.get(email='${EMAIL}')`,
+      "cache.delete('throttle_user_%s' % u.pk)",
+      "print('throttle-cleared')"
+    ].join('; ')
+  );
+
   await login(page);
-  await page.locator('button[title="Direct messages"]').click();
+  // Messaging is a HUD overlay panel — deep-link it open.
+  await page.goto('/?panel=messaging');
   const row = page.locator('button.border-l-2', { hasText: 'Nova' }).first();
   await expect(row).toBeVisible();
   await row.dispatchEvent('click');
 
   const body = `Ping ${Date.now().toString().slice(-5)}`;
   await page.locator('input[placeholder="Message…"]').fill(body);
-  await page.locator('input[placeholder="Message…"]').press('Enter');
-  await expect(page.getByText(body)).toBeVisible();
+  // Send via the button, not Enter: it stays disabled until the controlled
+  // input's state committed, so clicking it can never race the React render.
+  const send = page.getByRole('button', { name: 'Send' });
+  await expect(send).toBeEnabled();
+  // Await the send POST and assert it succeeded — a silent backend failure
+  // (throttle, 4xx) otherwise surfaces as an unexplained "message not visible".
+  const [sendResp] = await Promise.all([
+    page.waitForResponse(
+      (r) => r.request().method() === 'POST' && r.url().includes('/messages/send/')
+    ),
+    send.click()
+  ]);
+  expect(sendResp.ok()).toBeTruthy();
+
+  // Scoped .first(): the body renders in BOTH the thread bubble and the
+  // conversation-list last-message preview (strict mode).
+  await expect(page.getByText(body).first()).toBeVisible();
 
   const out = sh(
     [
@@ -67,13 +109,15 @@ test('DM: thread renders + send persists', async ({ page }) => {
 
 test('Feed: post + like + comment persist', async ({ page }) => {
   await login(page);
-  await page.locator('button[title="Operator feed"]').click();
+  // The operator feed is a HUD overlay panel — deep-link it open.
+  await page.goto('/?panel=social');
 
   const body = `E2E status ${Date.now().toString().slice(-5)}`;
   await page
     .locator('textarea[placeholder="Share an update, IOC, or hand-off…"]')
     .fill(body);
-  await page.getByRole('button', { name: 'Post' }).dispatchEvent('click');
+  // exact: the nav's POSTURE / CLOUD POSTURE buttons also match "Post".
+  await page.getByRole('button', { name: 'Post', exact: true }).dispatchEvent('click');
   await expect(page.getByText(body)).toBeVisible();
 
   // Like + comment on the new post's card (stable aria-labels).
