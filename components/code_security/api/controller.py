@@ -64,14 +64,55 @@ class RepoScanView(APIView):
         req = RepoScanRequest.from_data(request.data)
         try:
             dispatched = TriggerRepoScanUseCase().execute(
-                workspace_id=workspace_id, repo=req.repo, connection_id=req.connection_id
+                workspace_id=workspace_id,
+                repo=req.repo,
+                connection_id=req.connection_id,
+                triggered_by=request.user.id,  # provenance: who pressed SCAN
             )
         except RepoScanRejected as exc:
+            # Budget rejections are 429 (retriable, with Retry-After); consent
+            # failures stay 4xx.
+            if exc.code in ("scan_cooldown", "scan_already_running"):
+                body = {"success": False, "error": exc.code, "detail": str(exc)}
+                if exc.retry_after is not None:
+                    body["retry_after"] = exc.retry_after
+                response = Response(body, status=429)
+                if exc.retry_after is not None:
+                    response["Retry-After"] = str(exc.retry_after)
+                return response
             status = 400 if exc.code == "invalid_repo" else 403
             return Response({"success": False, "error": exc.code, "detail": str(exc)}, status=status)
 
         resource = RepoScanResource(task_id=dispatched["task_id"], repo=dispatched["repo"], source=_SOURCE)
         return Response({"success": True, "data": resource.to_dict()}, status=202)
+
+
+class RepoScanStatusListView(APIView):
+    """GET /code-security/workspaces/<ws>/repos/ — the CODE REPOS card's read.
+
+    Every scannable (allowlisted) repo with its scan provenance: last-scanned
+    timestamp + status + duration + who/what triggered it, whether a scan is in
+    flight, and the remaining anti-spam cooldown so the UI can disable SCAN with
+    a countdown instead of bouncing off the server gate.
+    """
+
+    name = "code-security-repos"
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get(self, request, workspace_id):
+        from components.code_security.application.use_cases.list_repo_scan_status_use_case import (
+            ListRepoScanStatusUseCase,
+        )
+        from components.code_security.application.use_cases.trigger_repo_scan_use_case import (
+            COOLDOWN_SECONDS,
+        )
+
+        denied = _gate(request, workspace_id)
+        if denied is not None:
+            return denied
+
+        rows = ListRepoScanStatusUseCase().execute(workspace_id=workspace_id, cooldown_seconds=COOLDOWN_SECONDS)
+        return Response({"success": True, "data": rows, "cooldown_seconds": COOLDOWN_SECONDS})
 
 
 class RepoScanSnapshotListView(APIView):

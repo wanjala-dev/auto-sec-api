@@ -64,6 +64,7 @@ class ContainerScanView(APIView):
             target_ref=image,
             connection_id=req.connection_id,
             account_id=req.account_id,
+            triggered_by=str(request.user.id),  # provenance: who pressed scan-now
             params=req.params,
         )
         resource = ContainerScanResource(task_id=result.id, image=image, source=_SOURCE)

@@ -47,6 +47,7 @@ def schedule_container_scans() -> dict[str, Any]:
                 target_ref=image_ref,
                 connection_id=connection_id,
                 account_id=account_id,
+                trigger="schedule",  # provenance: the nightly beat, not an operator
             )
             scheduled += 1
 
