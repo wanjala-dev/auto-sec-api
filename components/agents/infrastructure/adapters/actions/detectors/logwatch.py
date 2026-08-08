@@ -185,7 +185,13 @@ class AiFindingRouterDetector(BaseDetector):
     # entry's findings route by their declared metadata.agent_type. Adding
     # ``ai.log_optimization`` here is the ENTIRE routing change needed to support
     # the new optimization specialist — the dispatch logic below is untouched.
-    ROUTABLE_SOURCE_TYPES = ("ai.log_watch", "ai.log_optimization", "ai.cloud_exposure", "ai.container_security")
+    ROUTABLE_SOURCE_TYPES = (
+        "ai.log_watch",
+        "ai.log_optimization",
+        "ai.cloud_exposure",
+        "ai.container_security",
+        "ai.code_security",
+    )
     # Findings targeting the orchestrator itself are not re-dispatched here.
     _NON_SPECIALIST = {"", "ai_teammate", "ai_teammate_agent", "orchestrator"}
 

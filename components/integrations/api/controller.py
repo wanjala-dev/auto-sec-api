@@ -34,6 +34,10 @@ from rest_framework.views import APIView
 from components.integrations.api.requests.create_aws_connection_request import (
     CreateAwsConnectionRequest,
 )
+from components.integrations.api.requests.delivery_connection_request import (
+    CreateDeliveryConnectionRequest,
+    UpdateDeliveryConnectionRequest,
+)
 from components.integrations.api.requests.log_source_request import (
     CreateLogSourceRequest,
     UpdateLogSourceRequest,
@@ -47,10 +51,6 @@ from components.integrations.api.requests.triage_capability_request import (
 from components.integrations.api.requests.vcs_connection_request import (
     CreateVcsConnectionRequest,
     UpdateVcsConnectionRequest,
-)
-from components.integrations.api.requests.delivery_connection_request import (
-    CreateDeliveryConnectionRequest,
-    UpdateDeliveryConnectionRequest,
 )
 from components.integrations.api.resources.aws_connection_resource import (
     AwsConnectionResource,
@@ -222,6 +222,10 @@ class FindingOpenDraftPrView(APIView):
         "repo_not_allowlisted": status.HTTP_409_CONFLICT,
         "finding_not_triaged": status.HTTP_409_CONFLICT,
         "finding_needs_human": status.HTTP_409_CONFLICT,
+        # SAST gates (ADR 0019 D5): low-confidence fixes never become PRs; the
+        # per-repo open-PR throttle is retriable once open PRs merge/close.
+        "low_confidence": status.HTTP_409_CONFLICT,
+        "sast_pr_throttled": status.HTTP_429_TOO_MANY_REQUESTS,
         "capability_disabled": status.HTTP_403_FORBIDDEN,
         "no_candidate_path": status.HTTP_422_UNPROCESSABLE_ENTITY,
         "no_grounded_patch": status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -233,6 +237,9 @@ class FindingOpenDraftPrView(APIView):
         "patch_does_not_parse": status.HTTP_422_UNPROCESSABLE_ENTITY,
         "patch_removes_definitions": status.HTTP_422_UNPROCESSABLE_ENTITY,
         "patch_too_destructive": status.HTTP_422_UNPROCESSABLE_ENTITY,
+        # Untrusted-repo-content guard: a SAST patch that reaches outside the
+        # flagged file / finding window is refused mechanically.
+        "patch_out_of_scope": status.HTTP_422_UNPROCESSABLE_ENTITY,
     }
 
     def post(self, request, workspace_id, task_id):

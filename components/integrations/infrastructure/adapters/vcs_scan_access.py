@@ -55,6 +55,45 @@ def list_scannable_repos(workspace_id) -> list[tuple[str, str]]:
 
 
 @sensitive_variables("token")
+def read_repo_file(*, workspace_id, repo: str, path: str, ref: str = "") -> str | None:
+    """Read ONE file from an allowlisted repo, or ``None`` (fail closed).
+
+    The SAST triage advisor's read seam (ADR 0019 P2): ground the fix suggestion
+    on the REAL file content at the scanned commit. Same consent boundary as the
+    scan vend — a repo off the ``repo_allowlist`` never reaches the VCS API, and a
+    traversal-shaped path is refused before any call. Every failure degrades to
+    ``None`` (a suggestion is an enhancement, never a gate on triage).
+    """
+    from components.integrations.application.ports.vcs_port import VcsApiError
+    from components.integrations.application.providers.secret_envelope_provider import decrypt_secret
+    from components.integrations.application.providers.vcs_provider import get_vcs_adapter
+
+    clean_path = (path or "").strip().lstrip("/")
+    # Traversal guard (same rule as ``resolve_repo_path``): an absolute path or a
+    # ``.``/``..`` segment could climb out of the repo-scoped contents URL.
+    normalized = clean_path.replace("\\", "/")
+    if not clean_path or any(seg in (".", "..") for seg in normalized.split("/")):
+        return None
+    connection = resolve_scan_connection(workspace_id, repo)
+    if connection is None:
+        logger.warning("vcs_file_read_denied workspace_id=%s repo=%s (not allowlisted)", workspace_id, repo)
+        return None
+    token = decrypt_secret(connection.token_ciphertext)
+    if not token:
+        return None
+    adapter = get_vcs_adapter(connection.provider, token)
+    try:
+        # ``ref`` is REQUIRED by the port (an implicit "whatever HEAD is now" read
+        # would silently ground a fix on different content than was scanned). A
+        # caller with no scanned SHA falls back to the resolved default branch.
+        resolved_ref = ref or adapter.get_default_branch(repo).name
+        return adapter.get_file(repo, clean_path, ref=resolved_ref).content
+    except VcsApiError:
+        logger.warning("vcs_file_read_failed workspace_id=%s repo=%s path=%s", workspace_id, repo, clean_path)
+        return None
+
+
+@sensitive_variables("token")
 def vend_repo_read_access(*, workspace_id, repo: str, connection_id: str | None = None) -> dict | None:
     """Vend the scan-Job credential envelope for ``repo``, or ``None`` (fail closed).
 

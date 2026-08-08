@@ -199,7 +199,12 @@ def test_board_card_created_at_the_severity_floor(workspace_factory, django_capt
 
     card = cards.filter(metadata__payload__finding_id=str(high.id)).first()
     assert card is not None
-    assert card.metadata["agent_type"] == "ai_teammate"  # operator-reading in P1 (triage = P2)
+    # P2: the card is ROUTED to the SAST specialist (P1 filed it operator-reading).
+    # The routing entry and the specialist's triage tool shipped together — a
+    # routable source with no tool is a silent no-op.
+    assert card.metadata["agent_type"] == "code_security_agent"
     assert card.metadata["payload"]["rule_id"]
     assert card.metadata["payload"]["path"]
+    # The matched region rides the card so the advisor + HUD callout can ground on it.
+    assert "snippet" in card.metadata["payload"]
     assert ":" in card.title  # rule — path:line copy

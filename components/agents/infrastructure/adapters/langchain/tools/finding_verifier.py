@@ -20,6 +20,7 @@ of them; when it can't decide, it passes (never over-blocks a real fix).
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 # The salient-token heuristic moved to the shared kernel so the integrations
@@ -32,6 +33,45 @@ _LOG_WATCH_SOURCE = "ai.log_watch"
 _LOG_OPTIMIZATION_SOURCE = "ai.log_optimization"
 _CLOUD_EXPOSURE_SOURCE = "ai.cloud_exposure"
 _CONTAINER_SECURITY_SOURCE = "ai.container_security"
+_CODE_SECURITY_SOURCE = "ai.code_security"
+
+# Language keywords carry no finding-specific signal — a fix saying "return" or
+# "table" proves nothing about THIS finding.
+_CODE_KEYWORDS = frozenset(
+    {
+        "true",
+        "false",
+        "none",
+        "null",
+        "self",
+        "this",
+        "from",
+        "import",
+        "return",
+        "class",
+        "def",
+        "func",
+        "function",
+        "const",
+        "let",
+        "var",
+        "public",
+        "private",
+        "static",
+        "void",
+        "with",
+        "else",
+        "elif",
+        "then",
+        "while",
+        "table",
+        "select",
+        "where",
+        "value",
+        "string",
+        "print",
+    }
+)
 
 # A concrete optimization change (vs "reduce noise" hand-waving).
 _CONCRETE_CHANGE = (
@@ -68,6 +108,20 @@ class VerifyResult:
 def _salient_tokens(text: str) -> set[str]:
     """Code-like identifiers from the finding's ground truth (message/evidence)."""
     return salient_tokens(text)
+
+
+def _code_identifiers(code: str) -> set[str]:
+    """Lower-cased identifiers from a code snippet, for SAST grounding.
+
+    Keeps dotted/underscored names of 4+ chars (``cursor.execute``, ``mark_safe``,
+    ``os.system``) and drops language keywords, which carry no finding-specific
+    signal. Deterministic, zero LLM — the same discipline as ``_salient_tokens``,
+    just tuned for code rather than tracebacks.
+    """
+    if not code:
+        return set()
+    raw = re.findall(r"[A-Za-z_][A-Za-z0-9_]{3,}(?:\.[A-Za-z_][A-Za-z0-9_]+)*", code)
+    return {token.lower() for token in raw if token.lower() not in _CODE_KEYWORDS}
 
 
 def _ground_text_for_triage(payload: dict) -> str:
@@ -151,6 +205,37 @@ def verify_suggestion(*, source_type: str, payload: dict, suggestion_text: str) 
             reason=(
                 f"The remediation names none of the CVE's specifics ({sample}) and reads as generic. "
                 "Name the affected package, the CVE id, or the fixed version to upgrade to."
+            ),
+        )
+
+    if source_type == _CODE_SECURITY_SOURCE:
+        # For a SAST finding the grounding anchors are the scanner's own facts:
+        # the rule id, the flagged file, and the matched snippet's identifiers. A
+        # fix that references none of them is boilerplate that fits any finding.
+        rule_id = str(payload.get("rule_id") or "").strip().lower()
+        rule_label = rule_id.rsplit(".", 1)[-1] if rule_id else ""
+        path = str(payload.get("path") or "").strip().lower()
+        path_base = path.rsplit("/", 1)[-1] if path else ""
+        snippet = str(payload.get("snippet") or "")
+        # Code identifiers, not log symbols: ``salient_tokens`` targets dotted
+        # module paths / underscored names from tracebacks and returns nothing for
+        # an ordinary code line like ``cursor.execute("DROP TABLE %s" % table)``.
+        # SAST evidence IS code, so extract its identifiers directly.
+        anchors = {a for a in (rule_id, rule_label, path, path_base) if a} | _code_identifiers(snippet)
+        if not anchors:
+            return VerifyResult(grounded=True, reason="")  # no checkable specifics
+        if any(a in text_l for a in anchors):
+            return VerifyResult(grounded=True, reason="")
+        # A fix that quotes the offending line verbatim is grounded by construction.
+        snippet_norm = " ".join(snippet.split()).lower()
+        if len(snippet_norm) >= 12 and snippet_norm[:160] in " ".join(text_l.split()):
+            return VerifyResult(grounded=True, reason="")
+        sample = ", ".join(s for s in (rule_label or rule_id, path_base or path) if s)
+        return VerifyResult(
+            grounded=False,
+            reason=(
+                f"The fix references none of the finding's specifics (e.g. {sample}) and reads as "
+                "generic. Name the rule, the flagged file, or an identifier from the matched snippet."
             ),
         )
 

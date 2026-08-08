@@ -77,6 +77,11 @@ ALL_CAPS_TECHNICAL_WHITELIST: frozenset[str] = frozenset(
         "SOC",
         "SOAR",
         "SIEM",
+        # Static Application Security Testing — the code_security_agent's own
+        # domain vocabulary ("the SAST specialist"), which also flows into
+        # planner.system through {agent_catalog}. A technical acronym, not an
+        # urgency marker.
+        "SAST",
         # ``NOT`` is allowed when used as a routing-clarifier between two
         # named agents (e.g. ``task_agent, NOT workspace_agent``). It is
         # only 3 characters so the ``\b[A-Z]{4,}\b`` regex below would not
