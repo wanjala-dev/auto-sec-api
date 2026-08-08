@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import UTC
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,42 @@ def list_recent_snapshots(workspace_id, *, repo: str = "", limit: int = 20):
     if repo:
         queryset = queryset.filter(repo=repo)
     return list(queryset[: max(1, min(int(limit), 100))])
+
+
+def utc_isoformat(value) -> str:
+    """Aware-UTC ISO stamp for a snapshot timestamp.
+
+    Deployments run ``USE_TZ=False`` (naive rows whose values ARE UTC) while tests
+    run aware — normalizing here keeps every API stamp unambiguous for clients
+    (the repo-status read already normalizes the same way)."""
+    return (value.replace(tzinfo=UTC) if value.tzinfo is None else value).isoformat()
+
+
+def latest_snapshots_by_repo(workspace_id, repos: list[str]) -> dict[str, dict]:
+    """The newest snapshot summary per repo — the repo-status read's counts join.
+
+    Constant query count regardless of repo count (the repository does it in two
+    queries) — never a per-repo fetch. The ORM lives in the repository; this
+    composition-root slot only shapes the API-facing dicts.
+    """
+    from components.code_security.infrastructure.repositories.repo_scan_snapshot_repository import (
+        latest_snapshot_rows_by_repo,
+    )
+
+    return {
+        repo: {
+            "scan_run_id": str(row.scan_run_id),
+            "commit_sha": row.commit_sha,
+            "engine_version": row.engine_version,
+            "total_findings": row.total_findings,
+            "critical_count": row.critical_count,
+            "high_count": row.high_count,
+            "medium_count": row.medium_count,
+            "low_count": row.low_count,
+            "created_at": utc_isoformat(row.created_at),
+        }
+        for repo, row in latest_snapshot_rows_by_repo(workspace_id, repos).items()
+    }
 
 
 def _scan_meta(result) -> dict:

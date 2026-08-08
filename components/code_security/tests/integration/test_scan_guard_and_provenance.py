@@ -248,3 +248,89 @@ def test_repo_status_read_never_scanned(workspace_factory):
     assert row["last_scanned_at"] is None
     assert row["cooldown_remaining"] == 0
     assert row["in_flight"] is False
+    assert row["last_snapshot"] is None
+
+
+def _snapshot(ws, repo, *, total, critical=0, high=0, medium=0, low=0, age=timedelta()):
+    from infrastructure.persistence.code_security.models import RepoScanSnapshot
+
+    row = RepoScanSnapshot.objects.create(
+        workspace=ws,
+        scan_run_id=uuid4(),
+        repo=repo,
+        commit_sha="a" * 40,
+        engine_version="1.26.0",
+        total_findings=total,
+        critical_count=critical,
+        high_count=high,
+        medium_count=medium,
+        low_count=low,
+    )
+    if age:
+        # auto_now_add stamps creation time; push older rows back explicitly.
+        RepoScanSnapshot.objects.filter(pk=row.pk).update(created_at=timezone.now() - age)
+        row.refresh_from_db()
+    return row
+
+
+def test_repo_status_read_carries_latest_snapshot_counts(workspace_factory):
+    """Every repo row surfaces its LATEST completed run's severity counts inline
+    (the admin sees vulnerability state without a click) — newest snapshot wins."""
+    ws = workspace_factory()
+    _connection(ws)
+    _run(ws, status=ScanRun.Status.COMPLETED, completed_delta=timedelta(minutes=10))
+    _snapshot(ws, _REPO, total=9, critical=3, high=6, age=timedelta(hours=2))
+    newest = _snapshot(ws, _REPO, total=16, medium=16)
+
+    rows = ListRepoScanStatusUseCase().execute(workspace_id=ws.id, cooldown_seconds=_COOLDOWN)
+    row = next(r for r in rows if r["repo"] == _REPO)
+    snapshot = row["last_snapshot"]
+    assert snapshot is not None
+    assert snapshot["scan_run_id"] == str(newest.scan_run_id)
+    assert snapshot["total_findings"] == 16
+    assert snapshot["critical_count"] == 0
+    assert snapshot["medium_count"] == 16
+    assert snapshot["commit_sha"] == "a" * 40
+    assert snapshot["engine_version"] == "1.26.0"
+    # Aware-UTC stamp — never a naive ISO the frontend would parse as local time.
+    assert snapshot["created_at"].endswith("+00:00")
+
+
+def test_repo_status_read_query_count_is_constant_in_repo_count(workspace_factory):
+    """The snapshot join is 2 queries TOTAL (max-per-repo + rows), never per-repo:
+    the read is polled every 30s by three surfaces, so an N+1 here compounds."""
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    ws = workspace_factory()
+    repos = [f"wanjala-dev/repo-{i}" for i in range(1, 4)]
+    VcsConnection.objects.create(
+        workspace=ws,
+        provider=VcsConnection.Provider.GITHUB,
+        name="GitHub",
+        repo_allowlist=[_REPO],
+        status=VcsConnection.Status.CONNECTED,
+    )
+    _snapshot(ws, _REPO, total=1, low=1)
+
+    with CaptureQueriesContext(connection) as one_repo:
+        ListRepoScanStatusUseCase().execute(workspace_id=ws.id, cooldown_seconds=_COOLDOWN)
+
+    VcsConnection.objects.create(
+        workspace=ws,
+        provider=VcsConnection.Provider.GITHUB,
+        name="GitHub 2",
+        repo_allowlist=repos,
+        status=VcsConnection.Status.CONNECTED,
+    )
+    for repo in repos:
+        _snapshot(ws, repo, total=2, high=1, low=1, age=timedelta(hours=1))
+        _snapshot(ws, repo, total=3, medium=3)
+
+    with CaptureQueriesContext(connection) as four_repos:
+        rows = ListRepoScanStatusUseCase().execute(workspace_id=ws.id, cooldown_seconds=_COOLDOWN)
+
+    assert len(rows) == 4
+    assert all(r["last_snapshot"] is not None for r in rows)
+    assert {r["last_snapshot"]["total_findings"] for r in rows if r["repo"] != _REPO} == {3}
+    assert len(four_repos) == len(one_repo)

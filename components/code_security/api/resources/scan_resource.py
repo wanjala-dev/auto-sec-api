@@ -33,6 +33,8 @@ class RepoScanSnapshotResource:
 
     @classmethod
     def from_model(cls, row) -> RepoScanSnapshotResource:
+        from components.code_security.application.providers.snapshot_provider import utc_isoformat
+
         return cls(
             id=str(row.id),
             scan_run_id=str(row.scan_run_id),
@@ -44,7 +46,9 @@ class RepoScanSnapshotResource:
             high_count=row.high_count,
             medium_count=row.medium_count,
             low_count=row.low_count,
-            created_at=row.created_at.isoformat(),
+            # Aware-UTC (USE_TZ=False deployments store naive-UTC rows) so clients
+            # never parse the stamp as local time.
+            created_at=utc_isoformat(row.created_at),
         )
 
     def to_dict(self) -> dict:
