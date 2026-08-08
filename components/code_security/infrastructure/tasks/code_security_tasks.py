@@ -49,6 +49,7 @@ def schedule_repo_scans() -> dict[str, Any]:
                 workspace_id=str(workspace.id),
                 target_ref=repo,
                 connection_id=connection_id,
+                trigger="schedule",  # provenance: the nightly beat, not an operator
             )
             scheduled += 1
 

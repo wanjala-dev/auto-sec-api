@@ -44,6 +44,13 @@ class ScanRun(models.Model):
     connection_id = models.UUIDField(null=True, blank=True)
     account_id = models.CharField(max_length=32, blank=True, default="")
 
+    # Provenance: WHO caused this run. ``trigger`` is the coarse origin
+    # ("manual" = an operator pressed scan-now, "schedule" = a beat fan-out);
+    # ``triggered_by_id`` is the operator's user id for manual runs (soft
+    # reference — no cross-context FK), null for system-initiated ones.
+    trigger = models.CharField(max_length=16, default="manual")
+    triggered_by_id = models.UUIDField(null=True, blank=True)
+
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
     engine = models.CharField(max_length=32, blank=True, default="")
     engine_version = models.CharField(max_length=64, blank=True, default="")

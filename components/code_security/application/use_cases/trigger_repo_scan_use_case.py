@@ -1,16 +1,26 @@
 """Trigger one Opengrep scan of an allowlisted repo (ADR 0019 D3).
 
-The trigger-time half of the consent gate: validate the ``owner/repo`` shape and
-confirm the workspace's VcsConnection allowlists it (via the integrations seam)
-BEFORE anything is enqueued — a fast, honest rejection instead of a queued scan
-that fails at vend time. The scan-time vend re-checks the allowlist fail-closed
-(``vcs_scan_access_provider``), so a race with an allowlist edit cannot scan an
-unconsented repo.
+The trigger-time gates, in order — every rejection is a fast, honest 4xx before
+anything is enqueued:
+
+1. **Consent** — validate the ``owner/repo`` shape and confirm the workspace's
+   VcsConnection allowlists it (via the integrations seam). The scan-time vend
+   re-checks fail-closed, so a race with an allowlist edit cannot scan an
+   unconsented repo.
+2. **Budget (anti-spam)** — the scanning context's dispatch gate: at most ONE
+   in-flight scan per repo, and one completed scan per cooldown window
+   (default 1 hour, ``CODE_SECURITY_SCAN_COOLDOWN_SECONDS``). Back-to-back SCAN
+   clicks are rejected server-side with ``scan_already_running`` /
+   ``scan_cooldown`` (+ ``retry_after``); failed scans do NOT start a cooldown.
+
+Provenance: manual triggers stamp ``triggered_by`` (the operator's user id) and
+``trigger="manual"`` onto the run row via the shared scan choreography.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 
 from components.code_security.domain.repo_reference import (
     InvalidRepoReferenceError,
@@ -21,18 +31,26 @@ logger = logging.getLogger(__name__)
 
 SOURCE = "code_security.opengrep"
 
+# One user-visible scan per repo per hour by default (Henry, 2026-08-08: "lock
+# repo scans so a user can only scan a repo once an hour — so we don't spam our
+# system"). Env-overridable per deployment.
+COOLDOWN_SECONDS = int(os.environ.get("CODE_SECURITY_SCAN_COOLDOWN_SECONDS", "3600"))
+
 
 class RepoScanRejected(Exception):
-    """The scan request failed the trigger-time gate. ``code`` is the API error token."""
+    """The scan request failed a trigger-time gate. ``code`` is the API error token;
+    ``retry_after`` (seconds) rides on budget rejections so surfaces can render a
+    countdown."""
 
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, retry_after: int | None = None):
         super().__init__(message)
         self.code = code
+        self.retry_after = retry_after
 
 
 class TriggerRepoScanUseCase:
     def prepare(self, *, workspace_id, repo: str, connection_id: str | None = None) -> dict:
-        """Validate + gate, returning the ``dispatch_scan`` kwargs (no side effects)."""
+        """Consent-gate only (no lock taken) — for callers that dispatch inline."""
         from components.integrations.application.providers.vcs_scan_access_provider import (
             resolve_scan_connection,
         )
@@ -55,16 +73,50 @@ class TriggerRepoScanUseCase:
             "connection_id": str(connection.id),
         }
 
-    def execute(self, *, workspace_id, repo: str, connection_id: str | None = None) -> dict:
-        """Gate + enqueue. Returns ``{"task_id", "repo", "source"}``."""
+    def execute(self, *, workspace_id, repo: str, connection_id: str | None = None, triggered_by=None) -> dict:
+        """Gate (consent + budget) + enqueue. Returns ``{"task_id", "repo", "source"}``."""
         from components.scanning.application.providers.scan_dispatch_provider import dispatch_scan
+        from components.scanning.application.providers.scan_gate_provider import (
+            check_and_lock_dispatch,
+            release_dispatch_lock,
+        )
 
         kwargs = self.prepare(workspace_id=workspace_id, repo=repo, connection_id=connection_id)
-        async_result = dispatch_scan(**kwargs)
+
+        gate = check_and_lock_dispatch(
+            workspace_id=kwargs["workspace_id"],
+            source=SOURCE,
+            target_ref=kwargs["target_ref"],
+            cooldown_seconds=COOLDOWN_SECONDS,
+        )
+        if not gate["allowed"]:
+            if gate["reason"] == "cooldown":
+                minutes = max(1, int((gate["retry_after"] or 0) / 60))
+                raise RepoScanRejected(
+                    "scan_cooldown",
+                    f"{kwargs['target_ref']} was scanned recently — next scan available in ~{minutes} min.",
+                    retry_after=gate["retry_after"],
+                )
+            raise RepoScanRejected(
+                "scan_already_running",
+                f"A scan of {kwargs['target_ref']} is already queued or running.",
+            )
+
+        try:
+            async_result = dispatch_scan(
+                **kwargs,
+                trigger="manual",
+                triggered_by=str(triggered_by) if triggered_by else None,
+            )
+        except Exception:
+            # The enqueue itself failed — free the lock so the operator can retry.
+            release_dispatch_lock(workspace_id=kwargs["workspace_id"], source=SOURCE, target_ref=kwargs["target_ref"])
+            raise
         logger.info(
-            "code_security_scan_dispatched workspace_id=%s repo=%s task_id=%s",
+            "code_security_scan_dispatched workspace_id=%s repo=%s task_id=%s triggered_by=%s",
             workspace_id,
             kwargs["target_ref"],
             async_result.id,
+            triggered_by,
         )
         return {"task_id": str(async_result.id), "repo": kwargs["target_ref"], "source": SOURCE}

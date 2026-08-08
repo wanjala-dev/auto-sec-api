@@ -41,6 +41,8 @@ def run_scan_and_ingest(
     scanner: ScannerPort,
     connection_id: UUID | None = None,
     account_id: str = "",
+    trigger: str = "manual",
+    triggered_by: str | None = None,
     event_publisher=None,
     on_progress: ProgressCallback | None = None,
     on_completed=None,
@@ -67,6 +69,9 @@ def run_scan_and_ingest(
         target_ref=target.identifier[:512],
         connection_id=connection_id,
         account_id=str(account_id or "")[:32],
+        # Provenance (who caused this run) — rides every pillar's history row.
+        trigger=(trigger or "manual")[:16],
+        triggered_by_id=triggered_by or None,
         status=ScanRun.Status.RUNNING,
         started_at=now,
     )

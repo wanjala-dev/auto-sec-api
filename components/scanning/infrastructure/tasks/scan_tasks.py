@@ -27,9 +27,16 @@ def dispatch_scan(
     target_ref: str,
     connection_id: str | None = None,
     account_id: str = "",
+    trigger: str = "manual",
+    triggered_by: str | None = None,
     params: dict | None = None,
 ):
-    """Enqueue a scan onto the pillar's isolated queue. Returns the AsyncResult."""
+    """Enqueue a scan onto the pillar's isolated queue. Returns the AsyncResult.
+
+    ``trigger`` / ``triggered_by`` are the provenance the run row records: the
+    coarse origin ("manual" / "schedule") and, for manual runs, the operator's
+    user id.
+    """
     from components.scanning.application.providers.scanner_registry import queue_for
 
     return run_scan.apply_async(
@@ -39,6 +46,8 @@ def dispatch_scan(
             "target_ref": target_ref,
             "connection_id": connection_id,
             "account_id": account_id,
+            "trigger": trigger,
+            "triggered_by": triggered_by,
             "params": params or {},
         },
         queue=queue_for(source),
@@ -58,6 +67,8 @@ def run_scan(
     target_ref: str,
     connection_id: str | None = None,
     account_id: str = "",
+    trigger: str = "manual",
+    triggered_by: str | None = None,
     params: dict | None = None,
 ) -> dict[str, Any]:
     """Run the scanner registered for *source* against *target_ref*; ingest to the SSOT."""
@@ -138,11 +149,14 @@ def run_scan(
             scanner=scanner,
             connection_id=connection_id,
             account_id=account_id,
+            trigger=trigger,
+            triggered_by=triggered_by,
             on_progress=_on_progress,
             on_completed=on_completed,
         )
     except Exception:
         logger.exception("run_scan failed source=%s target=%s", source, target_ref)
+        _release_dispatch_lock(workspace_id=workspace_id, source=source, target_ref=target_ref)
         fail_job(job_id=job_id, error="scan_failed")
         _publish_scan_failed(
             workspace_id=workspace_id,
@@ -159,6 +173,19 @@ def run_scan(
         detail=f"{run.failed_count} findings",
     )
     return {"success": True, "run_id": str(run.id), "findings": run.failed_count}
+
+
+def _release_dispatch_lock(*, workspace_id, source: str, target_ref: str) -> None:
+    """Free the anti-spam dispatch lock on a FAILED run — a transient engine
+    failure must not cooldown-lock the target (the gate's contract). Loss-tolerant."""
+    try:
+        from components.scanning.application.providers.scan_gate_provider import (
+            release_dispatch_lock,
+        )
+
+        release_dispatch_lock(workspace_id=workspace_id, source=source, target_ref=target_ref)
+    except Exception:
+        logger.exception("run_scan_lock_release_failed source=%s target=%s", source, target_ref)
 
 
 def _publish_scan_failed(*, workspace_id, source: str, run_id: str, target_ref: str, account_id: str) -> None:
