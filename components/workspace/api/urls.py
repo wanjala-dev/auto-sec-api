@@ -18,6 +18,7 @@ from components.membership.api.groups_controller import (
     WorkspaceGroupListCreateView,
     WorkspaceGroupMemberRemoveView,
     WorkspaceGroupMembersView,
+    WorkspaceMemberRemoveView,
     WorkspaceMemberRoleView,
     WorkspaceMembersEffectivePermissionsView,
     WorkspaceMyPermissionsView,
@@ -270,6 +271,11 @@ urlpatterns = [
         "<uuid:workspace_id>/members/<uuid:user_id>/role/",
         WorkspaceMemberRoleView.as_view(),
         name="workspace-member-role",
+    ),
+    path(
+        "<uuid:workspace_id>/members/<uuid:user_id>/",
+        WorkspaceMemberRemoveView.as_view(),
+        name="workspace-member-remove",
     ),
     # ========================================================================
     # Cross-Context Includes

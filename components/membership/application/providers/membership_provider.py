@@ -31,6 +31,9 @@ from components.membership.application.use_cases.prepare_invitation_use_case imp
 from components.membership.application.use_cases.process_invitation_batch_use_case import (
     ProcessInvitationBatchUseCase,
 )
+from components.membership.application.use_cases.remove_workspace_member_use_case import (
+    RemoveWorkspaceMemberUseCase,
+)
 from components.membership.infrastructure.adapters.invitation_notification_adapter import (
     InvitationNotificationAdapter,
 )
@@ -155,3 +158,12 @@ class MembershipProvider:
         return EstablishWorkspaceRelationshipUseCase(
             port=OrmWorkspaceRelationshipRepository(),
         )
+
+    # ── Member removal (revoke membership / leave workspace) ──────────
+
+    def build_remove_workspace_member_use_case(self) -> RemoveWorkspaceMemberUseCase:
+        from components.membership.infrastructure.repositories.workspace_member_removal_repository import (
+            OrmWorkspaceMemberRemovalRepository,
+        )
+
+        return RemoveWorkspaceMemberUseCase(port=OrmWorkspaceMemberRemovalRepository())

@@ -129,6 +129,34 @@ def _is_workspace_admin(workspace, user):
     ).exists()
 
 
+def _actor_can_manage_users(workspace, user) -> bool:
+    """True when *user* may administer this workspace's members.
+
+    ONE definition of the ``manage_users`` gate, shared by the role-change and
+    member-removal endpoints (they must never drift apart — a role that can
+    demote a member must be exactly the role that can remove one). Resolution
+    order mirrors ``has_workspace_permission``: owner short-circuits, then a
+    direct/group grant, then the capability carried by the actor's active
+    membership role.
+    """
+    if _is_workspace_owner(workspace, user):
+        return True
+    if _user_has_permission(workspace, user, "manage_users"):
+        return True
+
+    from components.membership.application.services.membership_permission_service import (
+        membership_has_permission,
+    )
+
+    _WM = get_workspaces_models_provider().WorkspaceMembership
+    actor_membership = (
+        _WM.objects.filter(workspace=workspace, user=user, status=_WM.Status.ACTIVE)
+        .select_related("workspace_role")
+        .first()
+    )
+    return bool(membership_has_permission(actor_membership, "manage_users"))
+
+
 def _check_manage_permissions(workspace, user):
     """Return an error Response if the user cannot manage permissions, else None."""
     if (
@@ -887,26 +915,11 @@ class WorkspaceMemberRoleView(APIView):
         # Gate on the capability so any role carrying ``manage_users``
         # (not just owner/admin) can reassign roles. Owner short-circuits
         # the same way ``has_workspace_permission`` does.
-        if not _is_workspace_owner(workspace, request.user):
-            if not _user_has_permission(workspace, request.user, "manage_users"):
-                from components.membership.application.services.membership_permission_service import (
-                    membership_has_permission,
-                )
-                from components.workspace.application.providers.workspaces_models_provider import (
-                    get_workspaces_models_provider,
-                )
-
-                _WM = get_workspaces_models_provider().WorkspaceMembership
-                actor_membership = (
-                    _WM.objects.filter(workspace=workspace, user=request.user, status=_WM.Status.ACTIVE)
-                    .select_related("workspace_role")
-                    .first()
-                )
-                if not membership_has_permission(actor_membership, "manage_users"):
-                    return Response(
-                        {"detail": "You do not have permission to change member roles."},
-                        status=status.HTTP_403_FORBIDDEN,
-                    )
+        if not _actor_can_manage_users(workspace, request.user):
+            return Response(
+                {"detail": "You do not have permission to change member roles."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
         role_slug = (request.data.get("role_slug") or "").strip()
         if not role_slug:
@@ -1006,6 +1019,74 @@ class WorkspaceMemberRoleView(APIView):
                 "role_slug": target_role.slug,
                 "role_name": target_role.name,
                 "role_permissions": sorted(target_role.permissions or []),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class WorkspaceMemberRemoveView(APIView):
+    """DELETE /workspaces/<ws>/members/<user_id>/ — remove a member.
+
+    Revocation is a SOFT status flip (the membership status machine's
+    suspended/revoked state), never a row delete — re-inviting restores them.
+
+    Authorization mirrors ``WorkspaceMemberRoleView``: the ``manage_users``
+    capability (owner short-circuits), EXCEPT that any member may remove
+    themselves — "leave workspace" needs no admin right. The workspace owner
+    can never be removed here (ownership is transferred, not revoked).
+
+    Idempotent: removing an already-revoked member returns 200 with
+    ``removed=false``. Persona is NEVER consulted (ADR 0002).
+    """
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def delete(self, request, workspace_id, user_id):
+        from components.membership.application.ports.workspace_member_removal_port import (
+            RemoveWorkspaceMemberCommand,
+        )
+        from components.membership.application.providers.membership_provider import (
+            MembershipProvider,
+        )
+        from components.shared_kernel.domain.errors import (
+            AuthorizationError,
+            NotFoundError,
+            ValidationError,
+        )
+
+        workspace = _get_workspace_or_404(workspace_id)
+        is_self_removal = str(request.user.id) == str(user_id)
+
+        command = RemoveWorkspaceMemberCommand(
+            workspace_id=str(workspace.id),
+            target_user_id=str(user_id),
+            performed_by=str(request.user.id),
+            is_self_removal=is_self_removal,
+            reason=(request.data or {}).get("reason", "") if hasattr(request, "data") else "",
+        )
+
+        try:
+            result = (
+                MembershipProvider()
+                .build_remove_workspace_member_use_case()
+                .execute(
+                    command=command,
+                    actor_can_manage_users=_actor_can_manage_users(workspace, request.user),
+                )
+            )
+        except NotFoundError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+        except ValidationError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except AuthorizationError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_403_FORBIDDEN)
+
+        return Response(
+            {
+                "user_id": result.target_user_id,
+                "workspace_id": result.workspace_id,
+                "removed": result.removed,
+                "already_revoked": result.already_revoked,
             },
             status=status.HTTP_200_OK,
         )
