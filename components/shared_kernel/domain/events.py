@@ -113,6 +113,12 @@ class FindingObserved(DomainEvent):
     remediation: str = ""
     compliance: dict = field(default_factory=dict)  # framework tags (JSON-safe)
     attributes: dict = field(default_factory=dict)  # pillar-specific extras (JSON-safe)
+    # The ScanRun that observed this finding (str(ScanRun.id)), or "" for sources
+    # with no run record (detector cycles, log ingest). Carrying it across the
+    # event boundary is what lets a Finding answer "which run found this — who
+    # triggered it, when, with which engine version" (scanner-architecture audit
+    # R2; the SARIF result→invocation link).
+    scan_run_id: str = ""
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -180,9 +186,9 @@ class AttackPathDetected(DomainEvent):
 class ScanCompleted(DomainEvent):
     """A scan run finished and its findings were handed to the SSOT.
 
-    Emitted once per completed scan by the pillar's ingest choreography —
-    cloud_posture's ``ingest_scan_result`` and the generic
-    ``run_scan_and_ingest`` (container_security and future pillars). The
+    Emitted once per completed scan by the ONE ingest choreography — the
+    generic ``run_scan_and_ingest`` (every spine pillar; cloud_posture's
+    legacy ingest path is deleted, audit R2). The
     notifications context subscribes and dispatches the ONE-per-scan external
     digest (``soc.scan_completed`` → ``scan_digest``, ADR 0016 D5) — never one
     message per finding. Fields are JSON-safe primitives (wire format, like the

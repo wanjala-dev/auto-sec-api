@@ -181,7 +181,9 @@ class TestVercelScanEndToEnd:
         for finding in findings:
             assert finding.asset_urn.startswith("urn:vercel:") or finding.asset_urn.startswith(f"urn:vercel:{_TEAM_ID}")
             assert finding.attributes["team_id"] == _TEAM_ID
-            assert finding.attributes["scan_run_id"] == str(run.id)
+            # First-class run provenance (audit R2) — supersedes the interim
+            # attributes carry #286 shipped.
+            assert finding.scan_run_id == str(run.id)
         # The MANUAL firewall check surfaced honestly (not PASS, not vanished).
         manual = findings.get(attributes__check_id="security_waf_enabled")
         assert manual.attributes["check_status"] == "manual"

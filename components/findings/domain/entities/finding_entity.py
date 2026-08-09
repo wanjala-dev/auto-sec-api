@@ -30,6 +30,10 @@ class FindingEntity:
     remediation: str = ""
     compliance: dict = field(default_factory=dict)
     attributes: dict = field(default_factory=dict)
+    # The ScanRun of the LAST observation (str(ScanRun.id), "" for run-less
+    # sources). Updated on every re-observation, like ``last_seen_at`` — the
+    # finding's provenance link to trigger/user/engine-version (audit R2).
+    scan_run_id: str = ""
     resolved_at: datetime | None = None
     # Risk-acceptance context on the suppress action (ADR 0015 D9): the "why" +
     # optional time-box. resolve/reopen clear both; expiry ENFORCEMENT is P2.
@@ -63,12 +67,15 @@ class FindingEntity:
         remediation: str,
         compliance: dict,
         attributes: dict,
+        scan_run_id: str = "",
     ) -> FindingEntity:
         """Refresh this finding from a new observation of the same fingerprint.
 
         Bumps ``last_seen_at``, refreshes the mutable descriptive fields to the latest
         observed values, and **reopens** the finding if it had been resolved/suppressed
         (a re-observed misconfiguration is not fixed). ``first_seen_at`` is preserved.
+        ``scan_run_id`` tracks the last observing run; an empty value (a run-less
+        source re-observing) keeps the previous link rather than erasing provenance.
         """
         reopened = self.status.is_terminal
         new_status = FindingStatus.OPEN if reopened else self.status
@@ -81,6 +88,7 @@ class FindingEntity:
             remediation=remediation,
             compliance=compliance,
             attributes=attributes,
+            scan_run_id=scan_run_id or self.scan_run_id,
             status=new_status,
             resolved_at=None if reopened else self.resolved_at,
             status_reason="" if reopened else self.status_reason,

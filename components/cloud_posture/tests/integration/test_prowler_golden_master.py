@@ -8,9 +8,10 @@ PRE-migration normalizer on main; these tests prove:
 
 1. the normalizer still produces byte-identical output for the recorded OCSF
    sample (the frozen contract), and
-2. the NEW spine path (``run_scan_and_ingest``) persists exactly the same SSOT
-   rows as the LEGACY pipeline (``ingest_prowler_scan``) did — same
-   fingerprints, sources, URNs, severities, attributes.
+2. the spine path (``run_scan_and_ingest``) persists SSOT rows exactly equal
+   to the golden findings — same fingerprints, sources, URNs, severities,
+   attributes. (The legacy pipeline this was originally diffed against is
+   deleted; the golden file IS its recorded output.)
 
 If a change legitimately needs to alter this output (it almost never should),
 regenerate the golden file IN THE SAME COMMIT and explain the identity impact.

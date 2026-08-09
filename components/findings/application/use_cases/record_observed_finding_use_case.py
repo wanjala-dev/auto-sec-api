@@ -89,6 +89,7 @@ class RecordObservedFindingUseCase:
                 remediation=command.remediation,
                 compliance=dict(command.compliance or {}),
                 attributes=dict(command.attributes or {}),
+                scan_run_id=command.scan_run_id,
             )
             self._store.upsert(finding)
             self._stamp_provisional_risk(finding, at=command.observed_at)
@@ -112,6 +113,7 @@ class RecordObservedFindingUseCase:
             remediation=command.remediation,
             compliance=dict(command.compliance or {}),
             attributes=dict(command.attributes or {}),
+            scan_run_id=command.scan_run_id,
         )
         self._store.upsert(updated)
 
