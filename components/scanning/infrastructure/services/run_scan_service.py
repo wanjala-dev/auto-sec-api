@@ -87,7 +87,7 @@ def run_scan_and_ingest(
         )
         raise
 
-    observed = [_finding_observed(workspace_id, f) for f in result.findings]
+    observed = [_finding_observed(workspace_id, f, run_id=str(run.id)) for f in result.findings]
 
     # One ScanCompleted per run — the anti-flood digest signal (ADR 0016 D5): the
     # notifications context turns it into ONE external message per completed scan.
@@ -141,8 +141,13 @@ def run_scan_and_ingest(
     return run
 
 
-def _finding_observed(workspace_id: UUID, finding: NormalizedFinding) -> FindingObserved:
-    """Map a ``NormalizedFinding`` (any engine) to a ``FindingObserved`` for the SSOT."""
+def _finding_observed(workspace_id: UUID, finding: NormalizedFinding, *, run_id: str = "") -> FindingObserved:
+    """Map a ``NormalizedFinding`` (any engine) to a ``FindingObserved`` for the SSOT.
+
+    ``run_id`` stamps the originating ``ScanRun`` first-class onto the event
+    (audit R2): finding → run → trigger/user/engine-version becomes a plain
+    lookup for every spine pillar.
+    """
     return FindingObserved(
         workspace_id=workspace_id,
         source=finding.source,
@@ -154,6 +159,7 @@ def _finding_observed(workspace_id: UUID, finding: NormalizedFinding) -> Finding
         remediation=finding.remediation,
         compliance=dict(finding.compliance),
         attributes=dict(finding.attributes),
+        scan_run_id=run_id,
     )
 
 

@@ -35,5 +35,6 @@ def handle_finding_observed(event: FindingObserved) -> None:
             remediation=event.remediation,
             compliance=dict(event.compliance or {}),
             attributes=dict(event.attributes or {}),
+            scan_run_id=str(event.scan_run_id or ""),
         )
     )
