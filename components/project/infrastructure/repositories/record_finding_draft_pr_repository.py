@@ -55,6 +55,10 @@ class OrmRecordFindingDraftPrRepository(RecordFindingDraftPrPort):
                 "opened_at": opened_at,
                 "verification": command.verification,
                 "verification_gap": command.verification_gap,
+                # The patch itself — rendered inline on the HUD callouts.
+                "path": command.path,
+                "diff": command.diff,
+                "change_summary": command.change_summary,
             },
         )
 

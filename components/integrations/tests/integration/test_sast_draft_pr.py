@@ -116,12 +116,12 @@ def _sast_finding(workspace, owner, team, column, *, confidence="high", extra=No
     )
 
 
-def _connection(workspace, owner):
+def _connection(workspace, owner, *, allowlist=None):
     return VcsConnection.objects.create(
         workspace=workspace,
         provider=VcsConnection.Provider.GITHUB,
         name="GitHub",
-        repo_allowlist=[_REPO],
+        repo_allowlist=allowlist if allowlist is not None else [_REPO],
         token_ciphertext=encrypt_secret("ghp_test_token"),
         status=VcsConnection.Status.CONNECTED,
         created_by=owner,
@@ -428,3 +428,104 @@ class TestSastPreview:
             _use_case().preview(workspace_id=str(workspace.id), task_id=str(task.id), performed_by=str(owner.id))
 
         assert exc.value.reason == "patch_out_of_scope"
+
+
+@pytest.mark.django_db
+class TestTargetRepoResolution:
+    """Named regression — the live cross-repo near-miss (2026-08-09): with a
+    multi-repo allowlist headed by the dogfood repo, the engine resolved EVERY
+    finding's target to ``allowlist[0]``, ignoring the finding's own
+    ``payload.repo``. An auto-sec-infra SAST finding's patch would have been
+    committed into api-v0.2.0 (the monorepo tree-resolve happily finds a
+    same-named file in the wrong repo). The finding's repo now WINS, and a
+    finding whose repo is off the allowlist is a typed refusal — never a
+    silent redirect to a different repository."""
+
+    _DECOY_HEAD = "wanjala-dev/decoy-head"
+
+    def test_finding_repo_wins_over_the_allowlist_head(self, workspace_factory, team_factory):
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _sast_finding(workspace, owner, team, column)  # payload.repo == _REPO
+        _connection(workspace, owner, allowlist=[self._DECOY_HEAD, _REPO])  # decoy is the head
+        _capability(workspace, owner)
+        fake = _FakeGitHub()
+
+        with mock.patch(_REQUESTS_PATH, new=fake), mock.patch(_SAST_PROPOSE, return_value=_PATCH):
+            result = _use_case().execute(
+                workspace_id=str(workspace.id), task_id=str(task.id), performed_by=str(owner.id)
+            )
+
+        assert result.repo == _REPO
+        # EVERY GitHub call hit the finding's own repo — none touched the head.
+        assert fake.calls
+        assert all(f"/repos/{_REPO}" in url for _, url in fake.calls)
+        task.refresh_from_db()
+        assert task.metadata["payload"]["draft_pr"]["repo"] == _REPO
+
+    def test_finding_repo_off_allowlist_is_refused_never_redirected(self, workspace_factory, team_factory):
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _sast_finding(workspace, owner, team, column)  # payload.repo == _REPO
+        _connection(workspace, owner, allowlist=[self._DECOY_HEAD])  # finding's repo NOT allowlisted
+        _capability(workspace, owner)
+        fake = _FakeGitHub()
+
+        with mock.patch(_REQUESTS_PATH, new=fake), pytest.raises(DraftPrPreconditionError) as exc:
+            _use_case().execute(workspace_id=str(workspace.id), task_id=str(task.id), performed_by=str(owner.id))
+
+        assert exc.value.reason == "finding_repo_not_allowlisted"
+        assert _REPO in str(exc.value)  # the refusal names the finding's repo
+        assert fake.calls == []  # zero API calls — nothing was redirected
+
+    def test_explicit_repo_conflicting_with_finding_repo_is_refused(self, workspace_factory, team_factory):
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _sast_finding(workspace, owner, team, column)
+        _connection(workspace, owner, allowlist=[self._DECOY_HEAD, _REPO])
+        _capability(workspace, owner)
+        fake = _FakeGitHub()
+
+        with mock.patch(_REQUESTS_PATH, new=fake), pytest.raises(DraftPrPreconditionError) as exc:
+            _use_case().execute(
+                workspace_id=str(workspace.id),
+                task_id=str(task.id),
+                performed_by=str(owner.id),
+                repo=self._DECOY_HEAD,
+            )
+
+        assert exc.value.reason == "finding_repo_mismatch"
+        assert fake.calls == []
+
+    def test_preview_applies_the_same_repo_resolution(self, workspace_factory, team_factory):
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _sast_finding(workspace, owner, team, column)
+        _connection(workspace, owner, allowlist=[self._DECOY_HEAD])
+        _capability(workspace, owner)
+        fake = _FakeGitHub()
+
+        with mock.patch(_REQUESTS_PATH, new=fake), pytest.raises(DraftPrPreconditionError) as exc:
+            _use_case().preview(workspace_id=str(workspace.id), task_id=str(task.id), performed_by=str(owner.id))
+
+        assert exc.value.reason == "finding_repo_not_allowlisted"
+        assert fake.calls == []
+
+
+@pytest.mark.django_db
+class TestOpenedPrStoresThePatchInline:
+    def test_open_persists_path_diff_and_summary_on_the_record(self, workspace_factory, team_factory):
+        """The callout renders the code change INLINE for an already-opened PR —
+        the patch must survive the open (it used to exist only in the preview)."""
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _sast_finding(workspace, owner, team, column)
+        _connection(workspace, owner)
+        _capability(workspace, owner)
+        fake = _FakeGitHub()
+
+        with mock.patch(_REQUESTS_PATH, new=fake), mock.patch(_SAST_PROPOSE, return_value=_PATCH):
+            _use_case().execute(workspace_id=str(workspace.id), task_id=str(task.id), performed_by=str(owner.id))
+
+        task.refresh_from_db()
+        record = task.metadata["payload"]["draft_pr"]
+        assert record["path"] == _PATCH.path
+        assert record["change_summary"] == _PATCH.change_summary
+        # A real unified diff of the committed change, bounded like the preview's.
+        assert record["diff"].startswith(f"--- a/{_PATCH.path}")
+        assert "+from psycopg import sql" in record["diff"]

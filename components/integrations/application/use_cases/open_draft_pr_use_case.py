@@ -273,10 +273,16 @@ class OpenDraftPrUseCase:
         repo: str | None = None,
     ) -> DraftPrResult:
         connection = self._require_connection(workspace_id)
-        target_repo = self._require_allowlisted_repo(connection, repo)
         task = self._require_actionable_finding(workspace_id, task_id)
 
         payload = (task.metadata or {}).get("payload") or {}
+        # The finding's OWN repo wins the target resolution — falling back to the
+        # allowlist head cross-repo-misdirects a finding scanned from any other
+        # repo (the live near-miss: an auto-sec-infra SAST finding would have
+        # been patched into api-v0.2.0, the allowlist head, via the monorepo
+        # tree-resolve). Resolved AFTER the finding read so the payload's repo
+        # fact is available.
+        target_repo = self._require_allowlisted_repo(connection, repo, finding_repo=str(payload.get("repo") or ""))
         existing = payload.get("draft_pr") or {}
         if existing.get("url"):
             # Idempotent: the PR already exists — return it, zero API calls.
@@ -351,6 +357,13 @@ class OpenDraftPrUseCase:
             branch=branch,
             verification=verification,
             verification_gap=verification_gap,
+            # The patch itself rides the record so the HUD can show the code
+            # change INLINE on the finding/board callouts (same bounded unified
+            # diff the preview renders) — the operator reviews without leaving
+            # for GitHub; the PR link stays the secondary action.
+            path=proposal.path,
+            diff=self._unified_diff(repo_file.content, proposal.updated_content, proposal.path),
+            change_summary=proposal.change_summary or "",
         )
         self._notify_draft_pr_opened(
             workspace_id=workspace_id,
@@ -396,10 +409,12 @@ class OpenDraftPrUseCase:
         approval path. It posts the preview to the board as provenance (every AI action
         shows on the card)."""
         connection = self._require_connection(workspace_id)
-        target_repo = self._require_allowlisted_repo(connection, repo)
         task = self._require_actionable_finding(workspace_id, task_id)
 
         payload = (task.metadata or {}).get("payload") or {}
+        # Same repo resolution as ``execute`` — the finding's own repo wins, and
+        # a preview can never be generated against a different repository.
+        target_repo = self._require_allowlisted_repo(connection, repo, finding_repo=str(payload.get("repo") or ""))
         existing = payload.get("draft_pr") or {}
         if existing.get("url"):
             # A draft PR already exists — nothing left to preview; surface it.
@@ -732,14 +747,44 @@ class OpenDraftPrUseCase:
         return connection
 
     @staticmethod
-    def _require_allowlisted_repo(connection, repo: str | None) -> str:
+    def _require_allowlisted_repo(connection, repo: str | None, *, finding_repo: str = "") -> str:
+        """Resolve the ONE repository this finding's PR may target.
+
+        The finding's own repo (``payload.repo`` — the scanner's fact, mirroring
+        the asset URN) WINS. Falling back to the allowlist head was a cross-repo
+        misdirection bug: with a multi-repo allowlist, every SAST finding's PR
+        targeted ``allowlist[0]`` regardless of which repository it was scanned
+        from, and the monorepo tree-resolve would happily locate a same-named
+        file in the wrong repo and patch it. Hard guard, never a fallback: a
+        finding whose repo is not on the allowlist is a typed refusal — the fix
+        is to allowlist that repo, not to patch a different one. Findings that
+        carry no repo fact (log_watch — the traceback names no repository) keep
+        the explicit-request-or-allowlist-head behavior.
+        """
         allowlist = [r for r in (connection.repo_allowlist or []) if isinstance(r, str) and r.strip()]
         if not allowlist:
             raise DraftPrPreconditionError(
                 "repo_not_allowlisted",
                 "The GitHub connection has an empty repo allowlist — nothing to open PRs against.",
             )
-        target = (repo or "").strip() or allowlist[0]
+        requested = (repo or "").strip()
+        owned = (finding_repo or "").strip()
+        if owned:
+            if requested and requested != owned:
+                raise DraftPrPreconditionError(
+                    "finding_repo_mismatch",
+                    f"This finding was scanned from '{owned}' but the request targets "
+                    f"'{requested}' — a finding's PR only ever targets its own repository.",
+                )
+            if owned not in allowlist:
+                raise DraftPrPreconditionError(
+                    "finding_repo_not_allowlisted",
+                    f"This finding's repository '{owned}' is not on the connection's allowlist — "
+                    "refusing to open its PR against a different repository. Allowlist "
+                    f"'{owned}' to enable the draft-PR path for this finding.",
+                )
+            return owned
+        target = requested or allowlist[0]
         if target not in allowlist:
             raise DraftPrPreconditionError(
                 "repo_not_allowlisted",

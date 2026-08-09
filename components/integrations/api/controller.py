@@ -263,6 +263,12 @@ class FindingOpenDraftPrView(APIView):
         "connection_not_connected": status.HTTP_409_CONFLICT,
         "no_github_token": status.HTTP_409_CONFLICT,
         "repo_not_allowlisted": status.HTTP_409_CONFLICT,
+        # The finding's own repo wins target resolution; these are the hard
+        # guards that replaced the allowlist-head fallback (cross-repo
+        # misdirection): the finding's repo missing from the allowlist, or an
+        # explicit request targeting a different repo than the finding's own.
+        "finding_repo_not_allowlisted": status.HTTP_409_CONFLICT,
+        "finding_repo_mismatch": status.HTTP_409_CONFLICT,
         "finding_not_triaged": status.HTTP_409_CONFLICT,
         # SAST gate (ADR 0019 D5): the per-repo open-PR throttle is retriable
         # once open PRs merge/close. (The old ``finding_needs_human`` /
