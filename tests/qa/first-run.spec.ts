@@ -478,13 +478,45 @@ test.describe.serial('first-run customer journey', () => {
     // cards must exist.
     // The finding→card chain is ASYNC (FindingObserved → SSOT row →
     // FindingRaised → board handler, each a queued event), so cards can land
-    // minutes after the scan completes; the panel fetches on mount, so poll
-    // by reloading the deep link until the first card exists.
+    // minutes after the scan completes. They are filed on the AI teammate's
+    // team under its "AI Findings" project board (ensure_agents_board) — NOT
+    // the default team board the panel opens on — and the team's name follows
+    // the teammate's display name, so walk the board switcher to whichever
+    // team offers an "AI Findings" board. The panel fetches on mount, so each
+    // probe reloads the deep link.
     await expect
       .poll(
         async () => {
           await page.goto('/?panel=kanban');
-          return modal.locator('[data-kanban-card]').count();
+          // A from-zero workspace has exactly ONE team (the AI teammate's own
+          // "Agents" team, created when the first finding filed) — the Team
+          // switcher only renders for 2+ teams, so the panel auto-picks it.
+          // When multiple teams exist, walk each until one offers the board.
+          const boardSelect = modal.getByRole('combobox', { name: 'Board' });
+          const teamSelect = modal.getByRole('combobox', { name: 'Team' });
+          const teamValues = (await teamSelect.count())
+            ? await teamSelect
+                .first()
+                .locator('option')
+                .evaluateAll((opts) => opts.map((o) => o.value))
+            : [null];
+          for (const value of teamValues) {
+            if (value !== null) await teamSelect.first().selectOption(value);
+            try {
+              await boardSelect
+                .first()
+                .selectOption({ label: 'AI Findings' }, { timeout: 5_000 });
+            } catch {
+              continue; // this team has no AI Findings board (yet)
+            }
+            // Column fetch is async — give the board a beat to render cards.
+            for (let i = 0; i < 3; i += 1) {
+              const cards = await modal.locator('[data-kanban-card]').count();
+              if (cards > 0) return cards;
+              await page.waitForTimeout(3_000);
+            }
+          }
+          return 0;
         },
         { timeout: 300_000, intervals: [10_000] }
       )
@@ -494,14 +526,19 @@ test.describe.serial('first-run customer journey', () => {
     await expect(sast).toBeVisible();
     await expect(sast.getByText('Matched code')).toBeVisible();
 
-    // The draft-PR affordance: either the fix is already proposed (FIX READY
-    // → VIEW DRAFT PR / preview affordance) or the owner sees the DRAFT FIX
-    // PR trigger. Whichever state triage is in, an owner-facing affordance
-    // must exist — its absence is the bug this walk exists to catch.
+    // The draft-PR affordance — or the HONEST triage state. In a from-zero
+    // workspace the AI teammate is not yet enabled, so triage dispatch is
+    // gated (immediate_dispatch_gated) and the callout's truthful state is
+    // the "awaiting triage" line (per-finding triage honesty, #276); with
+    // triage live it progresses QUEUED → DRAFTING → the PREVIEW & OPEN DRAFT
+    // PR trigger (capability-gated, triaged+grounded only). Whichever state
+    // triage is in, an owner-facing affordance must exist — the absence of
+    // ALL of them is the bug this walk exists to catch.
     const affordance = page
       .getByTestId('draft-fix-pr')
       .or(page.getByTestId('draft-pr-preview-trigger'))
-      .or(page.getByText(/VIEW DRAFT PR|PREVIEW & OPEN DRAFT PR|QUEUED FOR TRIAGE|DRAFTING FIX/i));
+      .or(page.getByText(/VIEW DRAFT PR|PREVIEW & OPEN DRAFT PR|QUEUED FOR TRIAGE|DRAFTING FIX/i))
+      .or(page.getByText(/awaiting triage — the code-security agent/i));
     await expect(affordance.first()).toBeVisible({ timeout: 180_000 });
   });
 
