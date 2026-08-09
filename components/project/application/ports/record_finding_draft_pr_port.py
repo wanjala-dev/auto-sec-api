@@ -88,6 +88,12 @@ class RecordFindingDraftPrCommand:
     pr_url: str
     pr_repo: str
     branch: str
+    #: "verified" | "unverified" | "" — the confidence LABEL the engine stamped on
+    #: the PR. Recorded on the card so the HUD renders "FIX DRAFTED — UNVERIFIED"
+    #: (never a bare dead-end flag) and the comment carries the warning.
+    verification: str = ""
+    #: The named evidence gap when ``verification == "unverified"``.
+    verification_gap: str = ""
 
 
 @dataclass(frozen=True)

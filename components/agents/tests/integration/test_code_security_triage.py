@@ -164,20 +164,23 @@ class TestCodeSecurityTriagePipeline:
         assert payload["fix_after"] == _GROUNDED.fix_after
         assert payload["confidence"] == "high"
         assert payload.get("needs_human") is not True
+        assert payload["verification"] == "verified"
         assert meta["triage"]["status"] == "triaged"
         assert meta["triage"]["agent"] == "code_security_agent"
         assert meta["triage"]["needs_human"] is False
+        assert meta["triage"]["verification"] == "verified"
         assert task.column.title == "Triage"
         comment = TaskComment.objects.filter(task=task).first()
         assert comment is not None and _GROUNDED.fix_before in comment.comment
         events = meta["provenance"]["events"]
         assert any(e["actor"] == "agent:code_security_agent" for e in events)
 
-    def test_ungrounded_suggestion_is_flagged_needs_human(self, workspace_factory, team_factory):
+    def test_ungrounded_suggestion_is_labeled_unverified_with_the_gap(self, workspace_factory, team_factory):
         workspace, owner, team, intake = _board(workspace_factory, team_factory)
         task = _sast_task(workspace, owner, team, intake)
         # A generic suggestion whose fix snippet doesn't anchor to the file either
-        # — the verifier fails it, ONE re-advise runs, still generic → needs_human.
+        # — the verifier fails it, ONE re-advise runs, still generic → labeled
+        # ``unverified`` with the named gap (a label, not a withheld artifact).
         agent = _agent(workspace, owner)
 
         with mock.patch(_SUGGEST_PATH, return_value=_GENERIC) as suggest:
@@ -187,15 +190,20 @@ class TestCodeSecurityTriagePipeline:
         assert suggest.call_count == 2  # initial + one grounded re-advise
         task.refresh_from_db()
         meta = task.metadata
-        assert meta["triage"]["needs_human"] is True
+        assert meta["triage"]["verification"] == "unverified"
+        assert meta["triage"]["verification_gap"]  # the named evidence gap
+        assert meta["triage"]["needs_human"] is True  # backlog-metric compat flag
+        assert meta["payload"]["verification"] == "unverified"
         assert meta["payload"]["needs_human"] is True
-        assert meta["payload"]["confidence"] == "low"
+        # The suggestion is preserved verbatim — the advisor's own confidence is
+        # no longer clobbered to "low"; the verification label carries the doubt.
+        assert meta["payload"]["suggested_fix"] == _GENERIC.suggested_fix
 
-    def test_already_triaged_is_a_noop(self, workspace_factory, team_factory):
+    def test_already_triaged_with_a_suggestion_is_a_noop(self, workspace_factory, team_factory):
         workspace, owner, team, intake = _board(workspace_factory, team_factory)
         task = _sast_task(workspace, owner, team, intake)
         meta = task.metadata
-        meta["triage"] = {"status": "triaged", "agent": "code_security_agent"}
+        meta["triage"] = {"status": "triaged", "agent": "code_security_agent", "suggested": True}
         task.metadata = meta
         task.save(update_fields=["metadata"])
         agent = _agent(workspace, owner)
@@ -205,6 +213,27 @@ class TestCodeSecurityTriagePipeline:
 
         assert "already handled" in result
         suggest.assert_not_called()
+
+    def test_triaged_no_fix_outcome_is_reattemptable(self, workspace_factory, team_factory):
+        """A NO FIX outcome is never a dead end: the operator's retry (the
+        on-demand draft-fix action re-invoking this tool) re-runs the advisor
+        instead of bouncing off "already handled"."""
+        workspace, owner, team, intake = _board(workspace_factory, team_factory)
+        task = _sast_task(workspace, owner, team, intake)
+        meta = task.metadata
+        meta["triage"] = {"status": "triaged", "agent": "code_security_agent", "suggested": False}
+        task.metadata = meta
+        task.save(update_fields=["metadata"])
+        agent = _agent(workspace, owner)
+
+        with mock.patch(_SUGGEST_PATH, return_value=_GROUNDED) as suggest:
+            result = code_security_tools.triage_code_finding(agent, str(task.id))
+
+        assert "Handled" in result
+        assert suggest.call_count >= 1  # the retry actually re-advised
+        task.refresh_from_db()
+        assert task.metadata["triage"]["suggested"] is True
+        assert task.metadata["payload"]["suggested_fix"] == _GROUNDED.suggested_fix
 
 
 _INJECTED_FILE = '''"""Schema migration helpers."""
@@ -325,9 +354,9 @@ class TestAdvisorFlagsUntrustedRepoContent:
 
 @pytest.mark.django_db
 class TestPlantedInstructionsSignal:
-    """A flagged source file becomes its own finding AND holds the fix for a human."""
+    """A flagged source file becomes its own finding AND downgrades the fix's label."""
 
-    def test_triage_flags_needs_human_and_raises_the_finding(self, workspace_factory, team_factory):
+    def test_triage_labels_unverified_and_raises_the_finding(self, workspace_factory, team_factory):
         workspace, owner, team, intake = _board(workspace_factory, team_factory)
         task = _sast_task(workspace, owner, team, intake)
         agent = _agent(workspace, owner)
@@ -353,10 +382,12 @@ class TestPlantedInstructionsSignal:
         assert "Handled" in result
         task.refresh_from_db()
         payload = task.metadata["payload"]
-        # The fix is held for a human — it can never reach the PR engine
-        # (open_draft_pr's needs_human precondition reads payload.needs_human).
+        # The fix is labeled, not held: the PR engine opens it marked [UNVERIFIED]
+        # with this gap named; validate_patch_scope stays the mechanical guard.
         assert payload["source_flagged"] is True
         assert payload["needs_human"] is True
+        assert payload["verification"] == "unverified"
+        assert "prompt injection" in payload["verification_gap"].lower()
         assert "prompt injection" in payload["needs_human_reason"].lower()
         comment = TaskComment.objects.filter(task=task).first()
         assert "INSTRUCTIONS TO AN AI ASSISTANT" in comment.comment

@@ -14,6 +14,11 @@ class DraftPrPreviewResource:
     repo: str
     already_opened: bool
     pr_url: str
+    #: The confidence LABEL the open step will stamp ("verified" | "unverified"
+    #: | "") — shown in the preview so the operator sees "this will open as
+    #: [UNVERIFIED]" before confirming.
+    verification: str = ""
+    verification_gap: str = ""
 
     @classmethod
     def from_result(cls, result) -> DraftPrPreviewResource:
@@ -25,6 +30,8 @@ class DraftPrPreviewResource:
             repo=result.repo,
             already_opened=result.already_opened,
             pr_url=result.pr_url,
+            verification=getattr(result, "verification", "") or "",
+            verification_gap=getattr(result, "verification_gap", "") or "",
         )
 
     def to_dict(self) -> dict:
@@ -36,4 +43,6 @@ class DraftPrPreviewResource:
             "repo": self.repo,
             "already_opened": self.already_opened,
             "pr_url": self.pr_url,
+            "verification": self.verification,
+            "verification_gap": self.verification_gap,
         }

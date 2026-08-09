@@ -247,10 +247,11 @@ class FindingOpenDraftPrView(APIView):
 
     The rung-1 HITL path for the triage agent's draft-PR capability: a human
     operator approves, and the use case (the single choke point for EVERY
-    precondition — installed connection, repo allowlist, finding triaged and
-    not needs_human, agent capability enabled) opens the draft PR. Thin:
-    parse → use case → serialize. Idempotent — a finding that already has a
-    draft PR returns the existing URL with 200.
+    precondition — installed connection, repo allowlist, finding triaged, agent
+    capability enabled) opens the draft PR. An ungrounded/low-confidence fix is
+    NOT a refusal any more: it opens labeled [UNVERIFIED] (verification is a
+    label, not a gate). Thin: parse → use case → serialize. Idempotent — a
+    finding that already has a draft PR returns the existing URL with 200.
     """
 
     permission_classes = (permissions.IsAuthenticated, CanManageIntegrations)
@@ -263,10 +264,10 @@ class FindingOpenDraftPrView(APIView):
         "no_github_token": status.HTTP_409_CONFLICT,
         "repo_not_allowlisted": status.HTTP_409_CONFLICT,
         "finding_not_triaged": status.HTTP_409_CONFLICT,
-        "finding_needs_human": status.HTTP_409_CONFLICT,
-        # SAST gates (ADR 0019 D5): low-confidence fixes never become PRs; the
-        # per-repo open-PR throttle is retriable once open PRs merge/close.
-        "low_confidence": status.HTTP_409_CONFLICT,
+        # SAST gate (ADR 0019 D5): the per-repo open-PR throttle is retriable
+        # once open PRs merge/close. (The old ``finding_needs_human`` /
+        # ``low_confidence`` refusals became the [UNVERIFIED] label — the PR
+        # opens, marked, instead of being withheld.)
         "sast_pr_throttled": status.HTTP_429_TOO_MANY_REQUESTS,
         "capability_disabled": status.HTTP_403_FORBIDDEN,
         "no_candidate_path": status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -383,10 +384,13 @@ class FindingDraftFixView(APIView):
     a second, more permissive door onto a write into the customer's repository —
     a privilege escalation, not a convenience. Read-only viewers get 403.
 
-    Safety invariant: a fix that fails ANY guardrail — ungrounded (``needs_human``),
-    low confidence, out-of-patch-scope, untrusted repo content, over the per-repo
-    SAST throttle — opens NO pull request. The reason is recorded on the card and
-    surfaced in the finding's triage state instead.
+    Safety invariant: a fix that fails a HARD guardrail — out-of-patch-scope,
+    destructive/broken patch, over the per-repo SAST throttle, no connection /
+    allowlist / capability — opens NO pull request; the reason is recorded on
+    the card and surfaced in the finding's triage state. An ungrounded or
+    low-confidence fix is NOT a hard failure: its draft PR opens labeled
+    [UNVERIFIED] with the named evidence gap (verification is a label, not a
+    gate — the draft PR is the human review surface).
     """
 
     permission_classes = (permissions.IsAuthenticated, CanManageFindings, CanManageIntegrations)

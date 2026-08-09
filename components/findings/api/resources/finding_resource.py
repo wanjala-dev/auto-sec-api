@@ -65,9 +65,11 @@ class FindingResource:
 
         The HUD renders this on every finding so there is never an unexplained gap:
         QUEUED names the next cadence pass, DRAFTING says a specialist is working
-        now, FIX READY carries the suggestion + the draft-PR affordance, NEEDS HUMAN
-        and NO FIX carry the reason the pipeline already recorded, and NOT ROUTED
-        says plainly that this kind of finding has no automated fix path.
+        now, FIX READY carries the verified suggestion + the draft-PR affordance,
+        FIX UNVERIFIED carries the suggestion + the named evidence gap + the
+        [UNVERIFIED]-labeled draft PR, NO FIX carries WHY plus the retry
+        affordance, and NOT ROUTED says plainly that this kind of finding has no
+        automated fix path.
         """
         if triage is None:
             return None
@@ -80,6 +82,8 @@ class FindingResource:
             "triaged_at": triage.triaged_at,
             "suggested_fix": triage.suggested_fix,
             "confidence": triage.confidence,
+            "verification": triage.verification,
+            "verification_gap": triage.verification_gap,
             "draft_pr": triage.draft_pr,
             "blocked_reason": triage.blocked_reason,
             "can_draft_fix": triage.can_draft_fix,

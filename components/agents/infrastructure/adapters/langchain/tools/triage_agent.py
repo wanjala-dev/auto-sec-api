@@ -297,7 +297,8 @@ def open_draft_pr(agent, input_str: str) -> str:
 
     Thin delegation to the integrations use case (the single choke point that
     enforces EVERY precondition: installed connection, repo allowlist, finding
-    triaged + not needs_human, capability enabled). The risk gate denies
+    triaged, capability enabled — and that LABELS an ungrounded/low-confidence
+    fix's PR [UNVERIFIED] instead of withholding it). The risk gate denies
     autonomous runs before this body executes; ``performed_by`` is therefore
     the approving human principal driving this run.
     """
@@ -330,4 +331,10 @@ def open_draft_pr(agent, input_str: str) -> str:
 
     if not result.created:
         return f"A draft PR already exists for this finding: {result.url}"
+    if getattr(result, "verification", "") == "unverified":
+        return (
+            f"Opened draft PR {result.url} (repo {result.repo}, branch {result.branch}) "
+            f"labeled UNVERIFIED — {result.verification_gap or 'the fix could not be grounded'}; "
+            "a human must review it carefully before merging."
+        )
     return f"Opened draft PR {result.url} (repo {result.repo}, branch {result.branch})."

@@ -124,10 +124,11 @@ class TestOptimizationPipeline:
         assert "already handled" in second.lower()
         assert TaskComment.objects.filter(task=task).count() == 1  # no duplicate
 
-    def test_ungrounded_suggestion_is_flagged_needs_human(self, workspace_factory, team_factory):
+    def test_ungrounded_suggestion_is_labeled_unverified(self, workspace_factory, team_factory):
         # A vague recommendation (no concrete change) fails the grounded verifier;
-        # after a re-advise it's still vague → committed but downgraded + flagged
-        # for a human, never shipped as a confident fix.
+        # after a re-advise it's still vague → committed with the verification
+        # LABEL downgraded (unverified + the named gap) — never presented as a
+        # verified fix, and never withheld either.
         from components.agents.infrastructure.adapters.langchain.tools import optimization_agent as tools
         from components.integrations.application.log_optimization_advisor_service import OptimizationSuggestion
 
@@ -146,12 +147,16 @@ class TestOptimizationPipeline:
         ):
             result = tools.advise_optimization(agent, str(task.id))
 
-        assert "human review" in result.lower()
+        assert "unverified" in result.lower()
         task.refresh_from_db()
         meta = task.metadata
-        assert meta["triage"]["needs_human"] is True
+        assert meta["triage"]["verification"] == "unverified"
+        assert meta["triage"]["verification_gap"]  # the named gap, verbatim
+        assert meta["triage"]["needs_human"] is True  # backlog-metric compat flag
+        assert meta["payload"]["verification"] == "unverified"
         assert meta["payload"]["needs_human"] is True
-        assert meta["payload"]["confidence"] == "low"  # downgraded from "high"
+        # The advisor's own confidence is preserved — the label carries the doubt.
+        assert meta["payload"]["confidence"] == "high"
 
 
 @pytest.mark.django_db

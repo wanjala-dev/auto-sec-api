@@ -8,14 +8,25 @@ HITL endpoints are thin callers, so no path can skip a gate:
 1. A VCS connection exists for the workspace and is ``connected``.
 2. The target repo is on the connection's ``repo_allowlist`` (consent boundary).
 3. The finding exists, is an actionable source (``ai.log_watch`` or
-   ``ai.code_security``), is triaged, and is NOT ``needs_human`` (the
-   grounded-verifier precondition — an ungrounded fix never becomes a PR).
+   ``ai.code_security``) and is triaged.
 4. The workspace's triage agent row has
    ``config.capabilities.open_draft_pr == true``.
 5. SAST findings only (ADR 0019 D5 — the highest-volume source the engine will
-   ever see): the suggestion's confidence must not be ``low``, and at most
-   ``settings.CODE_SECURITY_MAX_OPEN_DRAFT_PRS`` (default 3) SAST draft PRs may
-   be open per repo at once — merge rate, not PR count, is the metric.
+   ever see): at most ``settings.CODE_SECURITY_MAX_OPEN_DRAFT_PRS`` (default 3)
+   SAST draft PRs may be open per repo at once — merge rate, not PR count, is
+   the metric.
+
+Verification is a LABEL, not a gate. A fix the grounded verifier could not
+anchor in the finding's evidence (``needs_human``/``verification: unverified``,
+including the untrusted-source-content flag) or whose confidence is ``low``
+STILL opens its draft PR — title-prefixed ``[UNVERIFIED]`` with a "Review
+carefully" section naming the evidence gap, and the label recorded on the
+card's ``draft_pr`` stamp. A finding in a connected repo always carries its
+artifact; the draft PR cannot merge itself, so the PR is the human review
+surface. The fail-closed gates that remain are the SAFETY ones:
+``validate_patch`` + ``validate_patch_scope`` (D2 — a destructive, broken, or
+out-of-scope patch never reaches a commit), the throttle, the allowlist, and
+the capability switch.
 
 Patch strategy per source (ADR 0017 D4 — one advisor seam, two strategies):
 ``ai.log_watch`` derives its file from traceback evidence and patches through
@@ -95,6 +106,11 @@ class DraftPrResult:
     repo: str
     branch: str
     created: bool  # False → idempotent hit (PR already existed)
+    #: "verified" | "unverified" | "" — the confidence LABEL stamped on the PR
+    #: (title prefix + body section) and on the card's ``draft_pr`` record.
+    verification: str = ""
+    #: The named evidence gap when ``verification == "unverified"``.
+    verification_gap: str = ""
 
 
 @dataclass(frozen=True)
@@ -127,6 +143,10 @@ class DraftPrPreviewResult:
     repo: str
     already_opened: bool = False
     pr_url: str = ""
+    #: The confidence LABEL the open step will stamp — surfaced in the preview so
+    #: the operator sees "this will open as [UNVERIFIED]" BEFORE confirming.
+    verification: str = ""
+    verification_gap: str = ""
 
 
 class OpenDraftPrUseCase:
@@ -265,10 +285,13 @@ class OpenDraftPrUseCase:
                 repo=existing.get("repo") or target_repo,
                 branch=existing.get("branch") or "",
                 created=False,
+                verification=str(existing.get("verification") or ""),
+                verification_gap=str(existing.get("verification_gap") or ""),
             )
 
         self._require_capability(workspace_id)
-        self._require_sast_gates(workspace_id, task, payload, target_repo)
+        self._require_sast_gates(workspace_id, task, target_repo)
+        verification, verification_gap = self._verification_label(task, payload)
 
         # Shared choreography (dry-reuse): resolve the file, run the grounded advisor,
         # and FAIL CLOSED on validate_patch — identical to what ``preview`` runs, so an
@@ -282,7 +305,12 @@ class OpenDraftPrUseCase:
         proposal = prepared.proposal
 
         branch = f"autosec/finding-{task_id}"
-        title = f"[Auto-Sec] {task.title[:180]}"
+        # The confidence label lives ON the artifact: an unverified fix is
+        # title-prefixed so it can never be mistaken for a grounded one in the
+        # PR list, and the body section below names the exact evidence gap.
+        unverified = verification == "unverified"
+        title_prefix = "[Auto-Sec][UNVERIFIED]" if unverified else "[Auto-Sec]"
+        title = f"{title_prefix} {task.title[:180]}"
         commit_author = self._resolve_commit_author(connection, performed_by)
         adapter.create_branch(target_repo, branch, from_sha=default_branch.head_sha)
         adapter.commit_file(
@@ -299,7 +327,13 @@ class OpenDraftPrUseCase:
             head=branch,
             base=default_branch.name,
             title=title,
-            body=self._build_pr_body(task, prepared.payload, proposal),
+            body=self._build_pr_body(
+                task,
+                prepared.payload,
+                proposal,
+                verification=verification,
+                verification_gap=verification_gap,
+            ),
         )
 
         # C2: the finding-provenance write is ``project.Task`` data → delegate to
@@ -315,6 +349,8 @@ class OpenDraftPrUseCase:
             pr_url=pr.url,
             pr_repo=pr.repo,
             branch=branch,
+            verification=verification,
+            verification_gap=verification_gap,
         )
         self._notify_draft_pr_opened(
             workspace_id=workspace_id,
@@ -324,14 +360,22 @@ class OpenDraftPrUseCase:
             repo=target_repo,
         )
         logger.info(
-            "open_draft_pr opened task_id=%s workspace_id=%s repo=%s pr=%s performed_by=%s",
+            "open_draft_pr opened task_id=%s workspace_id=%s repo=%s pr=%s performed_by=%s verification=%s",
             task_id,
             workspace_id,
             target_repo,
             pr.url,
             performed_by,
+            verification or "verified",
         )
-        return DraftPrResult(url=pr.url, repo=target_repo, branch=branch, created=True)
+        return DraftPrResult(
+            url=pr.url,
+            repo=target_repo,
+            branch=branch,
+            created=True,
+            verification=verification,
+            verification_gap=verification_gap,
+        )
 
     def preview(
         self,
@@ -370,7 +414,8 @@ class OpenDraftPrUseCase:
             )
 
         self._require_capability(workspace_id)
-        self._require_sast_gates(workspace_id, task, payload, target_repo)
+        self._require_sast_gates(workspace_id, task, target_repo)
+        verification, verification_gap = self._verification_label(task, payload)
 
         prepared = self._prepare_validated_proposal(
             connection=connection, target_repo=target_repo, task=task, task_id=task_id, workspace_id=workspace_id
@@ -408,6 +453,8 @@ class OpenDraftPrUseCase:
             change_summary=proposal.change_summary,
             grounding=grounding,
             repo=target_repo,
+            verification=verification,
+            verification_gap=verification_gap,
         )
 
     def _prepare_validated_proposal(
@@ -712,18 +759,13 @@ class OpenDraftPrUseCase:
             )
         meta = finding.metadata or {}
         triage = meta.get("triage") or {}
-        payload = meta.get("payload") or {}
         if triage.get("status") != "triaged":
             raise DraftPrPreconditionError(
                 "finding_not_triaged",
                 "The finding has not been triaged yet — triage it before opening a PR.",
             )
-        if triage.get("needs_human") or payload.get("needs_human"):
-            raise DraftPrPreconditionError(
-                "finding_needs_human",
-                "The finding's suggestion is flagged needs_human (ungrounded) — a human must "
-                "resolve it; it never becomes an automatic PR.",
-            )
+        # Deliberately NO needs_human/ungrounded gate: verification is a label
+        # (``_verification_label``), never a reason to withhold the artifact.
         return finding
 
     def _require_capability(self, workspace_id: str) -> None:
@@ -738,27 +780,22 @@ class OpenDraftPrUseCase:
                 "The triage agent's open_draft_pr capability is not enabled for this workspace.",
             )
 
-    def _require_sast_gates(self, workspace_id: str, task, payload: dict, target_repo: str) -> None:
+    def _require_sast_gates(self, workspace_id: str, task, target_repo: str) -> None:
         """ADR 0019 D5 discipline for the engine's highest-volume source. No-op for
         non-SAST findings.
 
-        1. Confidence gate — a ``low``-confidence suggestion never reaches the PR
-           engine (the grounded verifier's ``needs_human`` gate already blocked
-           ungrounded ones; this blocks the honest-but-unsure tier too).
-        2. Per-repo throttle — at most N OPEN SAST draft PRs per repo (default
-           ``_SAST_MAX_OPEN_PRS_DEFAULT``, ``settings.CODE_SECURITY_MAX_OPEN_DRAFT_PRS``
-           overrides). ~85% of automated security PRs rot unmerged industry-wide;
-           merged PRs resolve their finding via the reconciler and free the window.
+        Per-repo throttle — at most N OPEN SAST draft PRs per repo (default
+        ``_SAST_MAX_OPEN_PRS_DEFAULT``, ``settings.CODE_SECURITY_MAX_OPEN_DRAFT_PRS``
+        overrides). ~85% of automated security PRs rot unmerged industry-wide;
+        merged PRs resolve their finding via the reconciler and free the window.
+
+        (The old low-confidence GATE moved into ``_verification_label``: a
+        low-confidence suggestion now opens its PR labeled [UNVERIFIED] instead
+        of being withheld — the label carries the doubt, the operator gets the
+        artifact.)
         """
         if getattr(task, "source_type", "") != _CODE_SECURITY_SOURCE:
             return
-        confidence = str(payload.get("confidence") or "").strip().lower()
-        if confidence == "low":
-            raise DraftPrPreconditionError(
-                "low_confidence",
-                "The suggested fix's confidence is low — it never becomes an automatic PR. "
-                "Review the finding and fix it manually, or re-triage for a stronger suggestion.",
-            )
         limit = SAST_MAX_OPEN_PRS_PER_REPO
         open_prs = self._finding_facts_port().count_open_draft_prs(
             workspace_id=str(workspace_id), source_type=_CODE_SECURITY_SOURCE, repo=target_repo
@@ -770,6 +807,36 @@ class OpenDraftPrUseCase:
                 "Merge or close the open Auto-Sec PRs to free the window — merge rate, not PR "
                 "count, is the goal.",
             )
+
+    @staticmethod
+    def _verification_label(task, payload: dict) -> tuple[str, str]:
+        """The confidence LABEL for this finding's fix: ``(verification, gap)``.
+
+        ``unverified`` + the named evidence gap when the grounded verifier could
+        not anchor the suggestion (``verification: unverified`` / the legacy
+        ``needs_human`` rows), the source content tripped the untrusted-content
+        heuristic, or the advisor's own confidence is ``low``. These used to be
+        GATES that withheld the PR; now they downgrade the label on it — the
+        dogfood counter-example (finding #866: a plausible but semantically
+        wrong CREATE SCHEMA parameterization fix) still gets its draft PR, one
+        that says loudly it is unverified and why.
+        """
+        meta = getattr(task, "metadata", None) or {}
+        triage = meta.get("triage") or {}
+        gap = str(payload.get("verification_gap") or payload.get("needs_human_reason") or "").strip()
+        if str(payload.get("verification") or "").strip().lower() == "unverified":
+            return "unverified", gap or "The suggested fix could not be grounded in the finding's own evidence."
+        if triage.get("needs_human") or payload.get("needs_human"):
+            # Legacy rows stamped before verification labels existed.
+            return "unverified", gap or "The suggested fix could not be grounded in the finding's own evidence."
+        if payload.get("source_flagged"):
+            return "unverified", gap or (
+                "The source file contains text shaped like instructions to an AI assistant "
+                "(possible prompt injection planted in the repository)."
+            )
+        if str(payload.get("confidence") or "").strip().lower() == "low":
+            return "unverified", gap or "The advisor's own confidence in this fix is low."
+        return "verified", ""
 
     def _advisor_for(self, source_type: str):
         """The patch STRATEGY for this finding source (ADR 0017 D4) — one engine,
@@ -835,12 +902,24 @@ class OpenDraftPrUseCase:
     # ── Output ────────────────────────────────────────────────────────
 
     @staticmethod
-    def _build_pr_body(task, payload: dict, proposal) -> str:
+    def _build_pr_body(task, payload: dict, proposal, *, verification: str = "", verification_gap: str = "") -> str:
+        warning = ""
+        if verification == "unverified":
+            warning = (
+                "## ⚠️ Review carefully — UNVERIFIED\n"
+                "This fix could not be grounded against the finding's own evidence:\n\n"
+                f"> {verification_gap or 'No named evidence anchored the suggestion.'}\n\n"
+                "Auto-Sec opens the draft anyway — a draft PR cannot merge itself, and the "
+                "artifact is more useful than a dead-end flag — but treat this patch as a "
+                "starting point, not a vetted fix. Verify the change against the finding "
+                "before merging.\n\n"
+            )
         if getattr(task, "source_type", "") == _CODE_SECURITY_SOURCE:
             location = f"{payload.get('path') or '?'}:{payload.get('start_line') or '?'}"
             commit = str(payload.get("commit_sha") or "")[:12]
             cwe = ", ".join(payload.get("cwe") or []) or "(none tagged)"
             return (
+                f"{warning}"
                 f"## Finding\n{task.title}\n\n"
                 f"**Rule:** `{payload.get('rule_id') or 'unknown'}` · "
                 f"**Severity:** {payload.get('severity') or 'unknown'} · "
@@ -858,6 +937,7 @@ class OpenDraftPrUseCase:
                 evidence_lines.append(f"- **{ev.get('type') or 'evidence'}**: `{(ev.get('detail') or '')[:300]}`")
         evidence = "\n".join(evidence_lines) or "- (none recorded)"
         return (
+            f"{warning}"
             f"## Finding\n{task.title}\n\n"
             f"**Service:** {payload.get('service') or 'unknown'} · "
             f"**Level:** {payload.get('level') or 'ERROR'} · "

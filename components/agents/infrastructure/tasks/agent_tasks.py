@@ -620,13 +620,16 @@ def draft_fix_for_finding(
     LLM planner is a codified failure mode: it re-routes by keyword to an agent
     without the right tools, which then fabricates success silently (2026-07-19).
 
-    Safety invariant — an unverified patch never reaches a repository. The PR step
-    is ``OpenDraftPrUseCase``, the ONE draft-PR engine, and every precondition lives
-    inside it: triaged, not ``needs_human`` (the grounded-verifier gate, which the
-    untrusted-repo-content path also trips), confidence not low, patch-scope
-    enforcement, the per-repo SAST open-PR throttle, the connection + repo allowlist,
-    and the agent's ``open_draft_pr`` capability. A failure of ANY of them records
-    the reason on the card and opens nothing.
+    Safety invariant — an unsafe patch never reaches a repository, and an
+    unverified one never reaches it UNLABELED. The PR step is
+    ``OpenDraftPrUseCase``, the ONE draft-PR engine: the hard preconditions
+    (triaged, patch-scope enforcement, ``validate_patch``, the per-repo SAST
+    open-PR throttle, the connection + repo allowlist, and the agent's
+    ``open_draft_pr`` capability) still refuse and record WHY on the card. The
+    grounded-verifier / confidence signals are LABELS, not gates: an ungrounded
+    or low-confidence fix still opens its draft PR, title-prefixed [UNVERIFIED]
+    with the named evidence gap in the body — the draft PR is the human review
+    surface, so the label downgrades where the old gate withheld.
     """
     from components.agents.application.services.detector_cycle import _delegate_to_agent
     from components.agents.infrastructure.services import finding_dispatch_service as fds
@@ -666,13 +669,18 @@ def draft_fix_for_finding(
     fds.stamp_dispatch_in_flight(workspace_id, specialist, trigger="on_demand", task_ids=[task_id])
     # Every AI action is posted to the board as provenance — including the human ask
     # that started it, so the card records WHO requested the fix and when.
-    _append_finding_provenance(
-        task_id, actor=f"user:{performed_by}", action=f"requested a fix draft from {specialist}"
-    )
+    _append_finding_provenance(task_id, actor=f"user:{performed_by}", action=f"requested a fix draft from {specialist}")
 
-    triaged = (meta.get("triage") or {}).get("status") == "triaged"
+    # Re-run the specialist unless a suggestion already exists: a triaged card
+    # whose outcome was NO FIX stays re-attemptable (the operator's retry runs a
+    # fresh pass with fresh context instead of bouncing off "already handled").
+    triage_stamp = meta.get("triage") or {}
+    payload_stamp = meta.get("payload") or {}
+    has_suggestion = triage_stamp.get("status") == "triaged" and (
+        bool(triage_stamp.get("suggested")) or bool(str(payload_stamp.get("suggested_fix") or "").strip())
+    )
     run_id = ""
-    if not triaged:
+    if not has_suggestion:
         # Full deep run so the operator gets the DeepRun record, the per-step
         # DeepRunLog trace, the LIVE RUN progress surface, telemetry/cost capture,
         # and the rubric/critic verification pass — the machinery already built.
@@ -719,20 +727,14 @@ def _open_draft_pr_for_finding(*, workspace_id: str, task_id: str, performed_by:
     )
 
     triage = metadata.get("triage") or {}
-    payload = metadata.get("payload") or {}
     if triage.get("status") != "triaged":
         return _record_draft_pr_blocked(
             workspace_id, task_id, "finding_not_triaged", "The specialist did not produce a triaged fix."
         )
-    if triage.get("needs_human") or payload.get("needs_human"):
-        # The grounded verifier (or the untrusted-repo-content control) held it.
-        return _record_draft_pr_blocked(
-            workspace_id,
-            task_id,
-            "finding_needs_human",
-            str(payload.get("needs_human_reason") or "")
-            or "The suggested fix could not be grounded in the finding's evidence — a human decides.",
-        )
+    # No ``needs_human`` gate here: an ungrounded/unverified fix still opens its
+    # draft PR — labeled [UNVERIFIED] by the engine — because the draft PR is the
+    # human review surface. The engine's hard preconditions (scope, validate_patch,
+    # throttle, allowlist, capability) still refuse below.
 
     try:
         result = get_open_draft_pr_use_case().execute(

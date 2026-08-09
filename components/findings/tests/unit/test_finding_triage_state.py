@@ -94,9 +94,32 @@ def test_fix_ready_with_an_open_pr_no_longer_offers_to_draft_one():
     assert state.can_draft_fix is False
 
 
-def test_ungrounded_fix_is_needs_human_and_carries_the_recorded_reason():
-    """The grounded verifier's decision must reach the operator verbatim — a
-    confident-but-ungrounded fix never becomes a PR, and they must see why."""
+def test_ungrounded_fix_is_fix_unverified_with_the_gap_and_the_affordance():
+    """The verifier's verdict is a LABEL, not a gate: an unverified fix still
+    carries its artifact path — the state names the gap, keeps the suggestion,
+    and the draft-PR affordance stays live (never a bare dead-end chip)."""
+    state = derive_triage_state(
+        card=_card(
+            metadata={
+                "triage": {"status": "triaged", "suggested": True, "verification": "unverified"},
+                "payload": {
+                    "verification": "unverified",
+                    "verification_gap": "The fix references none of the finding's specifics",
+                    "suggested_fix": "Use parameterised queries",
+                },
+            }
+        )
+    )
+    assert state.state == TriageState.FIX_UNVERIFIED.value
+    assert state.verification == "unverified"
+    assert "references none of the finding's specifics" in state.reason
+    assert state.suggested_fix == "Use parameterised queries"
+    assert state.can_draft_fix is True  # the artifact path stays live
+
+
+def test_legacy_needs_human_rows_map_to_fix_unverified_not_a_dead_end():
+    """Cards stamped before verification labels existed (needs_human=True) must
+    read as FIX UNVERIFIED — history never renders as a bare NEEDS HUMAN."""
     state = derive_triage_state(
         card=_card(
             metadata={
@@ -109,14 +132,54 @@ def test_ungrounded_fix_is_needs_human_and_carries_the_recorded_reason():
             }
         )
     )
-    assert state.state == TriageState.NEEDS_HUMAN.value
+    assert state.state == TriageState.FIX_UNVERIFIED.value
     assert "instructions to an AI assistant" in state.reason
+    assert state.can_draft_fix is True
 
 
-def test_triaged_without_a_suggestion_is_no_fix():
+def test_unverified_fix_with_an_open_pr_links_it_and_stops_offering_to_draft():
+    """FIX DRAFTED — UNVERIFIED: the chip must be a door to the PR."""
+    state = derive_triage_state(
+        card=_card(
+            metadata={
+                "triage": {"status": "triaged", "suggested": True, "verification": "unverified"},
+                "payload": {
+                    "verification": "unverified",
+                    "verification_gap": "no named anchor",
+                    "suggested_fix": "x",
+                    "draft_pr": {"url": "https://github.com/o/r/pull/9", "verification": "unverified"},
+                },
+            }
+        )
+    )
+    assert state.state == TriageState.FIX_UNVERIFIED.value
+    assert state.draft_pr["url"].endswith("/pull/9")
+    assert state.can_draft_fix is False
+
+
+def test_triaged_without_a_suggestion_is_no_fix_with_why_and_retry():
+    state = derive_triage_state(
+        card=_card(
+            metadata={
+                "triage": {
+                    "status": "triaged",
+                    "suggested": False,
+                    "no_fix_reason": "reviewed; no confident fix from the rule and file",
+                }
+            }
+        )
+    )
+    assert state.state == TriageState.NO_FIX.value
+    assert "no confident fix from the rule and file" in state.reason  # WHY
+    assert "Retry available" in state.reason  # not a dead end
+    assert state.can_draft_fix is True  # the retry affordance
+
+
+def test_no_fix_without_a_recorded_reason_still_explains_and_offers_retry():
     state = derive_triage_state(card=_card(metadata={"triage": {"status": "triaged", "suggested": False}}))
     assert state.state == TriageState.NO_FIX.value
-    assert "could not derive a confident fix" in state.reason
+    assert "could not derive a confident" in state.reason
+    assert state.can_draft_fix is True
 
 
 def test_a_blocked_pull_request_is_visible_not_silent():

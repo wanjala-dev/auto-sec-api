@@ -87,6 +87,23 @@ def pending_findings_qs(workspace_id, source_type, limit=50):
     )
 
 
+def _handled_with_suggestion(metadata: dict) -> bool:
+    """True when this finding was already triaged AND a suggestion was recorded.
+
+    The idempotency guard for ``process_pending_finding``. A triaged card whose
+    outcome was NO FIX (``suggested`` falsy and nothing in ``payload.suggested_fix``)
+    deliberately does NOT count as handled: the no-fix state is re-attemptable —
+    the operator's retry re-runs the advisor with fresh context instead of
+    bouncing off "already handled".
+    """
+    meta = metadata or {}
+    triage = meta.get("triage") or {}
+    if triage.get("status") != "triaged":
+        return False
+    payload = meta.get("payload") or {}
+    return bool(triage.get("suggested")) or bool(str(payload.get("suggested_fix") or "").strip())
+
+
 def _parse_task_id(input_str):
     raw = (input_str or "").strip()
     try:
@@ -126,9 +143,13 @@ def process_pending_finding(
             suggestion. When provided, enables the GROUNDED verifier — the
             suggestion is checked against the finding's evidence (deterministic,
             no LLM); an ungrounded suggestion triggers ONE grounded re-advise,
-            and if still ungrounded the card is committed but confidence is
-            downgraded and it is flagged ``needs_human`` (never ship a confident
-            but ungrounded fix). See finding_verifier.py + the ICLR-2024 rationale.
+            and if still ungrounded the card is committed with the verification
+            LABEL downgraded to ``unverified`` + the named evidence gap. The
+            verifier is a labeler, not a gate: the fix still flows to a draft PR
+            (loudly marked UNVERIFIED) because a draft PR cannot merge itself —
+            the PR is the human review surface. A confident-but-ungrounded fix
+            is never presented as verified. See finding_verifier.py + the
+            ICLR-2024 rationale.
     """
     from django.db import transaction
 
@@ -148,9 +169,12 @@ def process_pending_finding(
         return f"No {source_type} finding {task_id} on this workspace's board."
 
     meta = task.metadata or {}
-    # Fast path — already handled (avoids a wasted LLM call when a prior run, or
-    # an overlapping cycle, already processed this finding).
-    if (meta.get("triage") or {}).get("status") == "triaged":
+    # Fast path — already handled WITH a suggestion (avoids a wasted LLM call when
+    # a prior run, or an overlapping cycle, already processed this finding). A
+    # triaged card that ended in NO FIX stays re-attemptable: the operator's
+    # retry (the on-demand draft-fix action) must be able to re-run the advisor
+    # rather than dead-ending on "already handled".
+    if _handled_with_suggestion(meta):
         return f"Finding {task_id} was already handled."
 
     payload = meta.get("payload") or {}
@@ -160,10 +184,12 @@ def process_pending_finding(
 
     # Grounded verification (L2 core) — check the suggestion against the finding's
     # EVIDENCE, not the model's own belief. An ungrounded suggestion gets ONE
-    # grounded re-advise; if still ungrounded we flag needs_human rather than ship
-    # a confident-but-baseless fix. Deterministic; only runs when a text extractor
-    # is supplied. See finding_verifier.py (Huang et al., ICLR 2024).
-    needs_human = False
+    # grounded re-advise; if still ungrounded the suggestion is LABELED
+    # ``unverified`` with the named evidence gap — never presented as verified,
+    # and never withheld (the label, not a missing artifact, is the honest
+    # signal). Deterministic; only runs when a text extractor is supplied. See
+    # finding_verifier.py (Huang et al., ICLR 2024).
+    verification = ""
     verify_reason = ""
     if suggestion is not None and suggestion_text is not None:
         from components.agents.infrastructure.adapters.langchain.tools.finding_verifier import verify_suggestion
@@ -178,27 +204,30 @@ def process_pending_finding(
                 vr = verify_suggestion(
                     source_type=source_type, payload=payload, suggestion_text=suggestion_text(retry) or ""
                 )
-            if not vr.grounded:
-                needs_human = True
-                verify_reason = vr.reason
-                logger.info(
-                    "process_finding ungrounded task_id=%s agent=%s reason=%s",
-                    task_id,
-                    acting_agent,
-                    vr.reason,
-                )
+        verification = "verified" if vr.grounded else "unverified"
+        if not vr.grounded:
+            verify_reason = vr.reason
+            logger.info(
+                "process_finding ungrounded task_id=%s agent=%s reason=%s",
+                task_id,
+                acting_agent,
+                vr.reason,
+            )
+    unverified = verification == "unverified"
 
     creator = _resolve_user(agent)
     workspace = Workspace.objects.all_objects().filter(id=agent.workspace_id).first()
 
     comment_body = build_comment(suggestion)
     action_phrase = describe_action(suggestion)
-    if needs_human:
+    if unverified:
         comment_body += (
             "\n\n⚠️ This suggestion could not be grounded in the finding's evidence "
-            f"({verify_reason}) — flagged for human review."
+            f"({verify_reason}). It still flows to a draft PR — clearly labeled "
+            "UNVERIFIED — because the draft PR is the human review surface; review "
+            "it carefully before merging."
         )
-        action_phrase = f"{action_phrase} (flagged for human review — ungrounded)"
+        action_phrase = f"{action_phrase} (unverified — could not be grounded)"
     actions = [action_phrase]
 
     # Serialize the board mutation on the finding row: two overlapping cycles
@@ -217,17 +246,28 @@ def process_pending_finding(
         if locked is None:
             return f"No {source_type} finding {task_id} on this workspace's board."
         lmeta = locked.metadata or {}
-        if (lmeta.get("triage") or {}).get("status") == "triaged":
+        if _handled_with_suggestion(lmeta):
             return f"Finding {task_id} was already handled (concurrent run)."
 
         lpayload = lmeta.get("payload") or {}
         if suggestion is not None:
             apply_payload(lpayload, suggestion)
-        if needs_human:
-            # Ungrounded after a re-advise — commit it (so the operator sees the
-            # attempt) but downgrade confidence and flag for human review.
+        # The verifier's verdict is a LABEL on the suggestion, not a gate in
+        # front of the artifact: ``unverified`` + the named gap ride the payload
+        # so the draft-PR engine can mark the PR (title/body) and the HUD can say
+        # "review carefully" — the fix itself still ships. ``apply_payload`` may
+        # have already downgraded (e.g. untrusted source content); a downgrade
+        # always wins over the verifier's pass.
+        if verification and lpayload.get("verification") != "unverified":
+            lpayload["verification"] = verification
+            lpayload["verification_gap"] = verify_reason
+        final_verification = str(lpayload.get("verification") or verification)
+        final_gap = str(lpayload.get("verification_gap") or verify_reason)
+        unverified = final_verification == "unverified"
+        if unverified:
+            # Kept for the posture/run-quality consumers that count the
+            # "needs a careful human" backlog — same fact, richer label above.
             lpayload["needs_human"] = True
-            lpayload["confidence"] = "low"
 
         if creator is not None:
             TaskComment.objects.create(task=locked, author=creator, comment=comment_body)
@@ -249,7 +289,14 @@ def process_pending_finding(
             "triaged_at": handled_at,
             "actions": actions,
             "suggested": suggestion is not None,
-            "needs_human": needs_human,
+            # ``verification``/``verification_gap`` are the honest labels; the
+            # boolean stays for the posture/run-quality backlog consumers.
+            "verification": final_verification,
+            "verification_gap": final_gap,
+            "needs_human": unverified,
+            # NO-FIX outcomes carry WHY (the specialist's own phrase) so the
+            # state the HUD derives is informative, never a dead-end blank.
+            "no_fix_reason": action_phrase if suggestion is None else "",
         }
         # Append to the growable provenance audit trail (created by the detector
         # at file time) — records that THIS agent acted, and when.

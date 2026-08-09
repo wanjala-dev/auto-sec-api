@@ -147,8 +147,9 @@ class CodeSecurityAgent(WorkspaceContextMixin, BaseAgent):
             "Open a DRAFT pull request that patches the file flagged by a triaged "
             "code-security finding. Requires an installed VCS connection (with "
             "the repo on its allowlist) AND the open_draft_pr capability enabled. "
-            "Only works on findings that are already triaged, NOT needs_human, "
-            "and not low confidence; at most a few SAST draft PRs may be open per "
+            "Only works on findings that are already triaged; an ungrounded or "
+            "low-confidence fix still opens, labeled [UNVERIFIED] for careful "
+            "human review; at most a few SAST draft PRs may be open per "
             "repo at once (merge rate over PR count). Irreversible tier: needs "
             "explicit human approval; autonomous runs are denied and must surface "
             'the finding instead. Input: JSON {"task_id": "<id>", "repo": '

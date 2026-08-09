@@ -32,12 +32,20 @@ class TriageState(str, Enum):
     QUEUED = "queued"
     #: A specialist run is in flight for this finding right now.
     DRAFTING = "drafting"
-    #: The specialist produced a grounded fix; the draft-PR affordance is live.
+    #: The specialist produced a grounded, verified fix; the draft-PR affordance
+    #: is live.
     FIX_READY = "fix_ready"
-    #: A fix was produced but could not be grounded (or the source content is
-    #: untrusted) — a person decides. It never becomes an automatic pull request.
-    NEEDS_HUMAN = "needs_human"
+    #: A fix was produced but could not be VERIFIED against the finding's own
+    #: evidence (or the source content is untrusted). The artifact still ships —
+    #: the draft PR opens, loudly labeled UNVERIFIED with the named evidence gap —
+    #: because a draft PR cannot merge itself: the PR *is* the human review
+    #: surface. The label downgrades; it never withholds. (Replaces the old
+    #: dead-end ``needs_human`` state, which held the fix and left the operator
+    #: a chip with no artifact.)
+    FIX_UNVERIFIED = "fix_unverified"
     #: The specialist ran and honestly could not derive a fix from the evidence.
+    #: Carries WHY (what was missing) and stays re-attemptable — the on-demand
+    #: draft-fix action re-runs the specialist rather than dead-ending.
     NO_FIX = "no_fix"
     #: This finding has no automated fix path at all — an operator-reading finding
     #: (cloud posture, planted instructions) or one below the board threshold.

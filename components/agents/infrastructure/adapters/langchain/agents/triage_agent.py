@@ -225,8 +225,9 @@ class TriageAgent(WorkspaceContextMixin, BaseAgent):
             "by a triaged Log-Watch finding. Requires an installed GitHub "
             "connection (with the target repo on its allowlist) AND the triage "
             "agent's open_draft_pr capability enabled in its settings. Only "
-            "works on findings that are already triaged and NOT flagged "
-            "needs_human. Irreversible tier: needs explicit human approval; "
+            "works on findings that are already triaged; an ungrounded fix "
+            "still opens, labeled [UNVERIFIED] for careful human review. "
+            "Irreversible tier: needs explicit human approval; "
             "autonomous runs are denied and must surface the finding instead. "
             'Input: JSON {"task_id": "<id>", "repo": "<owner/repo>" (optional '
             "— defaults to the connection's first allowlisted repo)}."
