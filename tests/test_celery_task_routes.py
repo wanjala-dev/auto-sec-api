@@ -31,17 +31,18 @@ from infrastructure.celery.routes import TASK_ROUTES
 #     celery-ai-teammate-worker: /start-celeryworker-ai-teammate
 #       (docker/scripts/celery/start-ai-teammate.sh) -> `-Q ai_teammate`
 #   k8s/bases/scanning/scanning-worker.yaml
-#     scanning-worker: `-Q cloud_posture,container_security`
+#     scanning-worker: `-Q cloud_posture,container_security,code_security`
 # Only extend this set together with a worker Deployment that consumes the new
 # queue — never to make a test pass.
-CONSUMED_QUEUES = {"default", "ai_teammate", "cloud_posture", "container_security"}
+CONSUMED_QUEUES = {"default", "ai_teammate", "cloud_posture", "container_security", "code_security"}
 
 # Queues pinned outside the route table AND outside task decorators, at dynamic
 # dispatch sites (grep `queue=`): the scanner registry's per-pillar queue, used
 # by dispatch_scan's apply_async(queue=queue_for(source)) in
 # components/scanning/application/providers/scanner_registry.py. (cloud_posture
-# is decorator-pinned and covered by the registered-task sweep below.)
-DISPATCH_PINNED_QUEUES = {"container_security"}
+# is decorator-pinned and covered by the registered-task sweep below.) Kept in
+# lockstep with the registry by tests/test_scanner_registration_fitness.py.
+DISPATCH_PINNED_QUEUES = {"container_security", "code_security"}
 
 
 def test_task_routes_setting_actually_applies():
