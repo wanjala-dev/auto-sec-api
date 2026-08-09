@@ -89,21 +89,22 @@ test('add-column persists a new lane', async ({ page }) => {
   await openKanban(page);
 
   const title = `Escalated ${Date.now().toString().slice(-5)}`;
+  const addColumn = page.getByRole('button', { name: '+ Add Column' });
+  // The board paints its lanes before the team resolves, so the control is
+  // disabled until a create can actually succeed. Waiting on that affordance
+  // is the whole point — it replaces the old blind sleep, and it fails loudly
+  // if the board ever offers the button while it still can't create.
+  await expect(addColumn).toBeEnabled();
   // The board renders inside the nav flyout's stacking context — the Test
   // runner's hit-test reads the flyout wrapper as an interceptor even though a
   // real click reaches the button (verified via CDP). dispatchEvent fires the
   // handler directly, which is what we're actually asserting on.
-  await page
-    .getByRole('button', { name: '+ Add Column' })
-    .dispatchEvent('click');
+  await addColumn.dispatchEvent('click');
   const titleInput = page.getByPlaceholder('Column title…');
   await titleInput.pressSequentially(title);
   await expect(titleInput).toHaveValue(title);
-  // Controlled-input settle: an immediate Enter after typing can beat the
-  // React re-render that refreshes the onKeyDown closure, so submit reads an
-  // empty title and silently no-ops (measured live, 2026-08-08). One short
-  // settle makes the Enter deterministic.
-  await page.waitForTimeout(300);
+  // Enter fires with NO settle: once the board is ready, an Enter straight
+  // after typing must create the column. A sleep here would hide a regression.
   // Await the create POST so the DB assertion below isn't racing the write
   // (removes the retry-only flake).
   const [createResp] = await Promise.all([
