@@ -1,0 +1,90 @@
+[
+  {
+    "metadata": { "event_code": "project_environment_no_secrets_in_plain_type", "product": { "name": "Prowler" } },
+    "severity": "High",
+    "status_code": "FAIL",
+    "status_detail": "Project web-app has 2 secret-like environment variables stored as plain text.",
+    "finding_info": {
+      "uid": "prowler-vercel-project_environment_no_secrets_in_plain_type-team_abc123DEF456-global-prj_a1b2c3d4e5f6",
+      "title": "Vercel project has no secret-like environment variables stored as plain text",
+      "desc": "Secret-like environment variables stored as plain text are readable by anyone with project access and were the April 2026 breach class."
+    },
+    "resources": [
+      {
+        "uid": "prj_a1b2c3d4e5f6",
+        "name": "web-app",
+        "type": "Project",
+        "region": "global",
+        "group": { "name": "project" }
+      }
+    ],
+    "cloud": { "provider": "vercel", "account": { "uid": "team_abc123DEF456" }, "region": "global" },
+    "remediation": { "desc": "Re-create the environment variables with the Sensitive type so their values are encrypted." },
+    "unmapped": { "check_id": "project_environment_no_secrets_in_plain_type", "compliance": { "CIS-Controls-8.1": ["3.11"] } }
+  },
+  {
+    "metadata": { "event_code": "project_directory_listing_disabled", "product": { "name": "Prowler" } },
+    "severity": "Medium",
+    "status_code": "PASS",
+    "status_detail": "Project web-app has directory listing disabled.",
+    "finding_info": {
+      "uid": "prowler-vercel-project_directory_listing_disabled-team_abc123DEF456-global-prj_a1b2c3d4e5f6",
+      "title": "Vercel project has directory listing disabled",
+      "desc": "Directory listing exposes the file structure of deployments."
+    },
+    "resources": [
+      {
+        "uid": "prj_a1b2c3d4e5f6",
+        "name": "web-app",
+        "type": "Project",
+        "region": "global",
+        "group": { "name": "project" }
+      }
+    ],
+    "cloud": { "provider": "vercel", "account": { "uid": "team_abc123DEF456" }, "region": "global" }
+  },
+  {
+    "metadata": { "event_code": "security_waf_enabled", "product": { "name": "Prowler" } },
+    "severity": "High",
+    "status_code": "MANUAL",
+    "status_detail": "The firewall configuration endpoint is not accessible with the provided token; verify the Web Application Firewall manually.",
+    "finding_info": {
+      "uid": "prowler-vercel-security_waf_enabled-team_abc123DEF456-global-prj_a1b2c3d4e5f6",
+      "title": "Vercel project has the Web Application Firewall enabled",
+      "desc": "Without the WAF, deployments have no managed protection against common attacks."
+    },
+    "resources": [
+      {
+        "uid": "prj_a1b2c3d4e5f6",
+        "name": "web-app",
+        "type": "Project",
+        "region": "global",
+        "group": { "name": "security" }
+      }
+    ],
+    "cloud": { "provider": "vercel", "account": { "uid": "team_abc123DEF456" }, "region": "global" },
+    "remediation": { "desc": "Enable the Web Application Firewall for the project in the Vercel dashboard." }
+  },
+  {
+    "metadata": { "event_code": "team_member_role_least_privilege", "product": { "name": "Prowler" } },
+    "severity": "Medium",
+    "status_code": "FAIL",
+    "status_detail": "Team acme has 5 of 6 members with the owner role.",
+    "finding_info": {
+      "uid": "prowler-vercel-team_member_role_least_privilege-team_abc123DEF456-global",
+      "title": "Vercel team follows least privilege with a limited number of owner roles",
+      "desc": "Over-broad owner roles widen the blast radius of any compromised member account."
+    },
+    "resources": [
+      {
+        "uid": "team_abc123DEF456",
+        "name": "acme",
+        "type": "Team",
+        "region": "global",
+        "group": { "name": "team" }
+      }
+    ],
+    "cloud": { "provider": "vercel", "account": { "uid": "team_abc123DEF456" }, "region": "global" },
+    "remediation": { "desc": "Downgrade members who do not need the owner role to member or viewer." }
+  }
+]

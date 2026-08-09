@@ -87,7 +87,7 @@ def run_scan_and_ingest(
         )
         raise
 
-    observed = [_finding_observed(workspace_id, f) for f in result.findings]
+    observed = [_finding_observed(workspace_id, f, run_id=str(run.id)) for f in result.findings]
 
     # One ScanCompleted per run — the anti-flood digest signal (ADR 0016 D5): the
     # notifications context turns it into ONE external message per completed scan.
@@ -141,8 +141,18 @@ def run_scan_and_ingest(
     return run
 
 
-def _finding_observed(workspace_id: UUID, finding: NormalizedFinding) -> FindingObserved:
-    """Map a ``NormalizedFinding`` (any engine) to a ``FindingObserved`` for the SSOT."""
+def _finding_observed(workspace_id: UUID, finding: NormalizedFinding, *, run_id: str = "") -> FindingObserved:
+    """Map a ``NormalizedFinding`` (any engine) to a ``FindingObserved`` for the SSOT.
+
+    ``run_id`` stamps the originating ``ScanRun`` into the finding's attributes
+    (``scan_run_id``) so finding → run → trigger/user/engine-version provenance is
+    carried for EVERY spine pillar. A first-class ``FindingObserved.scan_run_id``
+    field + indexed ``Finding`` column is the named follow-up (scanner-architecture
+    audit R2) — the attributes carry is the additive, non-breaking half.
+    """
+    attributes = dict(finding.attributes)
+    if run_id:
+        attributes.setdefault("scan_run_id", run_id)
     return FindingObserved(
         workspace_id=workspace_id,
         source=finding.source,
@@ -153,7 +163,7 @@ def _finding_observed(workspace_id: UUID, finding: NormalizedFinding) -> Finding
         description=finding.description,
         remediation=finding.remediation,
         compliance=dict(finding.compliance),
-        attributes=dict(finding.attributes),
+        attributes=attributes,
     )
 
 
