@@ -22,6 +22,7 @@ from rest_framework.response import Response
 from rest_framework.status import HTTP_200_OK
 from rest_framework.views import APIView
 
+from components.membership.api.permissions import IsActiveWorkspaceMember
 from components.team.application.facades.serializer_facade import (
     TeamSerializer,
     TeamSummaryWithMembersSerializer,
@@ -1116,9 +1117,14 @@ class WorkspaceContributionMeansAssignmentView(APIView):
 
 
 class WorkspaceSetupStatusView(APIView):
-    """Get workspace setup status."""
+    """Get workspace setup status.
 
-    permission_classes = (IsUnauthenticatedOrAdminOrStaff,)
+    Members only: the payload names the workspace and describes its security
+    posture funnel (cloud connected? scanned? Slack wired?) — recon gold for
+    an outsider, so it is never readable across tenants or unauthenticated.
+    """
+
+    permission_classes = (IsActiveWorkspaceMember,)
 
     def get(self, request, workspace):
         workspace_setup_query_service = workspace_service.get_workspace_setup_query_service()
