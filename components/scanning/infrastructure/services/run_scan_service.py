@@ -146,7 +146,9 @@ def _finding_observed(workspace_id: UUID, finding: NormalizedFinding, *, run_id:
 
     ``run_id`` stamps the originating ``ScanRun`` first-class onto the event
     (audit R2): finding → run → trigger/user/engine-version becomes a plain
-    lookup for every spine pillar.
+    lookup for every spine pillar. This is the follow-up #286's interim
+    attributes-carry named — superseded here by the first-class field
+    (ONE mechanism; the attributes copy is gone).
     """
     return FindingObserved(
         workspace_id=workspace_id,

@@ -51,6 +51,10 @@ Env (all optional; mirrors `e2e/helpers/env.ts`):
 | `E2E_PASSWORD` (legacy `QA_ADMIN_PASSWORD`) | `AutoSecTest2026!` |
 | `QA_KUBE_NS` | `autosec` |
 | `QA_KUBE_TARGET` | `deploy/api` |
+| `E2E_API_URL` (first-run only) | `http://autosec.local` |
+| `E2E_GITHUB_PAT` (first-run only) | unset — GitHub connect legs skip loudly |
+| `E2E_GITHUB_REPO` (first-run only) | unset — `owner/repo` on the PAT's allowlist |
+| `E2E_SLACK_WEBHOOK` (first-run only) | unset — Slack verify leg skips loudly (posts a REAL message) |
 
 ## Suites
 
@@ -66,6 +70,7 @@ Env (all optional; mirrors `e2e/helpers/env.ts`):
 | `members.smoke.spec.ts` | roster + owner badge · role change · permission-matrix grant persists · invite operator |
 | `collab.smoke.spec.ts` | DMs (deep-linked `?panel=messaging`) + operator feed (`?panel=social`, seeds its own workspace-scoped `feature.social_feed` rule) |
 | `surfaces.smoke.spec.ts` | Reports studio draft save (no live LLM) · Workflows panel (inline builder) · dark⇄light toggle |
+| `first-run.spec.ts` | The from-zero customer journey: UI register → verification gate (minted token) → guided workspace create → default-desk sanity + SETUP 0/5 funnel → invite a viewer → token accept → viewer deny → setup chip ticks 1/5 → GitHub connect + repo scan → finding/triage-chip/snippet/draft-PR affordance (needs `E2E_GITHUB_PAT`/`E2E_GITHUB_REPO`, else skips loudly) → Slack fail-loud validation + real webhook verify (needs `E2E_SLACK_WEBHOOK`) → AWS wizard to the role handoff + fail-loud verify · torn down after |
 
 ## Adding specs
 

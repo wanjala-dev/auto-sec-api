@@ -89,6 +89,17 @@ DEFAULT_FLAGS = [
         "per-workspace opt-in. See docs/adr/0019-sast-code-scanning-pillar.md.",
     ),
     (
+        "feature.vercel_posture",
+        False,
+        "Vercel posture (ADR 0021) — Prowler `vercel`-provider scans of a "
+        "workspace's ONE consented Vercel team (VercelConnection, token-shaped) "
+        "run as ephemeral hardened Kubernetes Jobs on the scanning spine → "
+        "NormalizedFindings with urn:vercel: URNs in the SSOT + board cards at "
+        "the high+critical floor. A deliberate SIBLING of feature.cloud_posture, "
+        "never a reuse — AWS CSPM opt-in is not Vercel consent. Off in prod until "
+        "GA; per-workspace opt-in. See docs/adr/0021-vercel-posture-provider.md.",
+    ),
+    (
         "feature.cloud_asset_graph",
         False,
         "Cloud asset graph (ADR 0004 / CNAPP): the code-to-cloud resource graph "
@@ -126,6 +137,7 @@ PROD_DISABLED_FLAGS = (
     "feature.container_security",
     "feature.code_security",
     "feature.sample_data_mode",
+    "feature.vercel_posture",
 )
 
 

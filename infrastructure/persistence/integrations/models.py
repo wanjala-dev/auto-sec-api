@@ -405,6 +405,66 @@ class VcsConnection(models.Model):
         return f"{self.name} [{self.provider}] ({self.workspace_id})"
 
 
+class VercelConnection(models.Model):
+    """Workspace-scoped Vercel access for posture scanning (ADR 0021 D2).
+
+    Token-shaped like :class:`VcsConnection` (the GitHub-PAT precedent), NOT the AWS
+    role-assumption outlier: an encrypted Vercel API token via the ONE integrations
+    Fernet envelope (``secret_envelope_provider``) — NEVER plaintext. The documented
+    ask is a token minted from a **Viewer-role seat**, scoped to ONE team, **with an
+    expiration** (least-privilege by the role system, since Vercel tokens have no
+    read-only variant).
+
+    ``credential_kind`` is the day-one discriminator so the OAuth connectable
+    integration (ADR 0021 P4) lands later as an additive kind on the same row —
+    the log-source ``Kind`` precedent. The named team is the CONSENT boundary:
+    scans are always pinned to it (``VERCEL_TEAM``); an unpinned token would make
+    Prowler scan every team the token's user belongs to (ADR 0021 D3).
+    """
+
+    class CredentialKind(models.TextChoices):
+        TOKEN = "token", "API token"
+        OAUTH_INTEGRATION = "oauth_integration", "OAuth connectable integration (P4 — not yet available)"
+
+    class Status(models.TextChoices):
+        CONNECTED = "connected", "Connected"
+        DISABLED = "disabled", "Disabled"
+        ERROR = "error", "Error"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name="vercel_connections")
+    name = models.CharField(max_length=120, default="Vercel")
+    # The ONE team this connection consents to scan. The operator supplies an id
+    # (``team_…``) or a slug; verify() resolves + records the canonical trio.
+    team_id = models.CharField(max_length=64, blank=True, default="")
+    team_slug = models.CharField(max_length=64, blank=True, default="")
+    team_name = models.CharField(max_length=255, blank=True, default="")
+    credential_kind = models.CharField(max_length=24, choices=CredentialKind.choices, default=CredentialKind.TOKEN)
+    # Encrypted API token — Fernet envelope at the application layer (same envelope
+    # as VcsConnection/DeliveryConnection secrets); NEVER plaintext.
+    token_ciphertext = models.TextField(blank=True, default="")
+    # Recorded by verify() when the Vercel API exposes it — the expiry-nag surface
+    # (D2: we ask for an expiring token, so we must warn before it lapses).
+    token_expires_at = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.CONNECTED)
+    last_verified_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.TextField(blank=True, default="")
+    created_by = models.ForeignKey("users.CustomUser", null=True, blank=True, on_delete=models.SET_NULL)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["workspace", "status"])]
+
+    def __str__(self):
+        return f"{self.name} ({self.team_slug or self.team_id or 'no team'}) [{self.workspace_id}]"
+
+    @property
+    def team_ref(self) -> str:
+        """The scan/verify target: the canonical id when known, else the slug."""
+        return self.team_id or self.team_slug
+
+
 def default_delivery_events() -> list[str]:
     """Event keys a new connection subscribes to (ADR 0016 D4 — sane defaults, all on).
 
