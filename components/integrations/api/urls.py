@@ -18,6 +18,10 @@ from components.integrations.api.controller import (
     VcsConnectionDetailView,
     VcsConnectionListCreateView,
     VcsConnectionVerifyView,
+    VercelConnectionDetailView,
+    VercelConnectionListCreateView,
+    VercelConnectionScanView,
+    VercelConnectionVerifyView,
     WorkspaceLogSourceDetailView,
     WorkspaceLogSourceListCreateView,
     WorkspaceLogSourceVerifyView,
@@ -103,6 +107,27 @@ urlpatterns = [
         "workspaces/<uuid:workspace_id>/vcs-connections/<uuid:connection_id>/verify/",
         VcsConnectionVerifyView.as_view(),
         name=VcsConnectionVerifyView.name,
+    ),
+    # ── Vercel connections (ADR 0021 D2/D3) — Settings ▸ Integrations ▸ Vercel ──
+    path(
+        "workspaces/<uuid:workspace_id>/vercel-connections/",
+        VercelConnectionListCreateView.as_view(),
+        name=VercelConnectionListCreateView.name,
+    ),
+    path(
+        "workspaces/<uuid:workspace_id>/vercel-connections/<uuid:connection_id>/",
+        VercelConnectionDetailView.as_view(),
+        name=VercelConnectionDetailView.name,
+    ),
+    path(
+        "workspaces/<uuid:workspace_id>/vercel-connections/<uuid:connection_id>/verify/",
+        VercelConnectionVerifyView.as_view(),
+        name=VercelConnectionVerifyView.name,
+    ),
+    path(
+        "workspaces/<uuid:workspace_id>/vercel-connections/<uuid:connection_id>/scan/",
+        VercelConnectionScanView.as_view(),
+        name=VercelConnectionScanView.name,
     ),
     # ── Triage-agent capability toggle (ADR 0010) — owner-gated ──
     path(

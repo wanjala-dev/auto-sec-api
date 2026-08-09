@@ -76,7 +76,32 @@ def _code_security_credentials() -> CredentialsVendor:
     return vend_scan_credentials
 
 
+def _cloud_posture_vercel() -> ScannerPort:
+    # The SAME ProwlerScanner adapter as the AWS CSPM path — the provider dimension
+    # (argv word / source / URN namespace / credential env) resolves off
+    # ScanTarget.params["provider"] via the PostureProvider registry (ADR 0021 D1).
+    from components.cloud_posture.application.providers.scanner_provider import build_scanner
+
+    return build_scanner()
+
+
+def _cloud_posture_vercel_credentials() -> CredentialsVendor:
+    # Third use of the credentials seam (after the AWS assume-role default and the
+    # code_security VCS token): the integrations context decrypts the connection's
+    # Vercel token into the opaque envelope. The ONE vending path — no
+    # pillar-internal vend exists for Vercel.
+    from components.integrations.application.providers.vercel_provider import (
+        vend_vercel_scan_credentials,
+    )
+
+    return vend_vercel_scan_credentials
+
+
 # source → (adapter factory, isolated worker queue). One line per pillar.
+# NOTE: the AWS CSPM source ("cloud_posture.prowler") is deliberately ABSENT — it
+# still runs on the legacy cloud_posture task path; migrating it onto this spine is
+# the named follow-up (scanner-architecture audit R1), at which point it becomes a
+# sibling entry resolving PostureProvider("aws") — the ADR 0021 convergence seam.
 _REGISTRY: dict[str, RegisteredScanner] = {
     "container_security.trivy": RegisteredScanner(
         factory=_container_security_trivy,
@@ -88,6 +113,11 @@ _REGISTRY: dict[str, RegisteredScanner] = {
         queue="code_security",
         post_ingest_factory=_code_security_post_ingest,
         credentials_factory=_code_security_credentials,
+    ),
+    "cloud_posture.prowler.vercel": RegisteredScanner(
+        factory=_cloud_posture_vercel,
+        queue="cloud_posture",
+        credentials_factory=_cloud_posture_vercel_credentials,
     ),
 }
 
