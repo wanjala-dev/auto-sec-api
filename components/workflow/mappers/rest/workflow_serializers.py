@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from django.utils.text import slugify
 from rest_framework import serializers
 
+from components.workflow.domain.constants import TARGET_TYPES, TRIGGER_CATALOG
+from components.workflow.domain.validators import validate_graph
 from infrastructure.persistence.workspaces.models import Workspace
 from infrastructure.persistence.workspaces.workflows.models import (
     Workflow,
@@ -21,9 +23,6 @@ from infrastructure.persistence.workspaces.workflows.models import (
     WorkflowTemplate,
     WorkflowVersion,
 )
-from components.workflow.domain.constants import TARGET_TYPES, TRIGGER_CATALOG
-from components.workflow.domain.validators import validate_graph
-
 
 # Catch-all goals impose NO trigger constraint. "general" is the default a
 # workflow gets when the author hasn't picked a specific goal chip
@@ -84,36 +83,29 @@ class WorkflowTemplateSerializer(serializers.ModelSerializer):
         )
         read_only_fields = ("created_by", "created_at", "updated_at")
 
-    def validate_default_graph(self, value: Dict[str, Any]) -> Dict[str, Any]:
+    def validate_default_graph(self, value: dict[str, Any]) -> dict[str, Any]:
         errors = validate_graph(value)
         if errors:
             raise serializers.ValidationError(errors)
         return value
 
-    def validate(self, attrs: Dict[str, Any]) -> Dict[str, Any]:
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
         is_system = attrs.get("is_system")
         workspace = attrs.get("workspace")
         if is_system and workspace:
-            raise serializers.ValidationError(
-                {"workspace_id": "System templates cannot be tied to a workspace."}
-            )
+            raise serializers.ValidationError({"workspace_id": "System templates cannot be tied to a workspace."})
         # Only enforce workspace requirement on creation, not partial updates
         if self.instance is None and is_system is False and workspace is None:
             # Try to resolve workspace from request context
             request = self.context.get("request")
             workspace_id = None
             if request:
-                workspace_id = (
-                    request.data.get("workspace_id")
-                    or request.query_params.get("workspace_id")
-                )
+                workspace_id = request.data.get("workspace_id") or request.query_params.get("workspace_id")
             if not workspace_id:
-                raise serializers.ValidationError(
-                    {"workspace_id": "Workspace is required for custom templates."}
-                )
+                raise serializers.ValidationError({"workspace_id": "Workspace is required for custom templates."})
         return attrs
 
-    def get_suggested_trigger_ids(self, obj: WorkflowTemplate) -> List[str]:
+    def get_suggested_trigger_ids(self, obj: WorkflowTemplate) -> list[str]:
         category = str(getattr(obj, "category", "") or "").lower()
         trigger_map = {
             "sponsorship": ["contact_added", "donation_received", "sponsorship_started"],
@@ -129,14 +121,12 @@ class WorkflowTemplateSerializer(serializers.ModelSerializer):
                 return True
         return False
 
-    def to_representation(self, instance: WorkflowTemplate) -> Dict[str, Any]:
+    def to_representation(self, instance: WorkflowTemplate) -> dict[str, Any]:
         data = super().to_representation(instance)
-        data["visible_to_group_ids"] = list(
-            instance.visible_to_groups.values_list("id", flat=True)
-        )
+        data["visible_to_group_ids"] = list(instance.visible_to_groups.values_list("id", flat=True))
         return data
 
-    def create(self, validated_data: Dict[str, Any]) -> WorkflowTemplate:
+    def create(self, validated_data: dict[str, Any]) -> WorkflowTemplate:
         group_ids = validated_data.pop("visible_to_group_ids", [])
         request = self.context.get("request")
         if request and request.user and request.user.is_authenticated:
@@ -156,7 +146,7 @@ class WorkflowTemplateSerializer(serializers.ModelSerializer):
             instance.visible_to_groups.set(group_ids)
         return instance
 
-    def update(self, instance: WorkflowTemplate, validated_data: Dict[str, Any]) -> WorkflowTemplate:
+    def update(self, instance: WorkflowTemplate, validated_data: dict[str, Any]) -> WorkflowTemplate:
         group_ids = validated_data.pop("visible_to_group_ids", None)
         instance = super().update(instance, validated_data)
         if group_ids is not None:
@@ -175,6 +165,10 @@ class WorkflowSummarySerializer(serializers.ModelSerializer):
     # repository. None when the workflow has no active schedule.
     next_run_at = serializers.DateTimeField(read_only=True, allow_null=True)
     is_scheduled = serializers.SerializerMethodField()
+    # Most-recent run (annotated by the repository) so the workflows index can
+    # show "last run + how it went" per row without an N+1.
+    last_run_at = serializers.DateTimeField(read_only=True, allow_null=True)
+    last_run_status = serializers.CharField(read_only=True, allow_null=True)
     # Run-completion summary ({total, completed, pct}) from the total_runs /
     # completed_runs subquery annotations, so the board card can show a REAL
     # progress bar (completed runs ÷ all runs) instead of a fabricated one.
@@ -196,6 +190,8 @@ class WorkflowSummarySerializer(serializers.ModelSerializer):
             "updated_at",
             "next_run_at",
             "is_scheduled",
+            "last_run_at",
+            "last_run_status",
             "run_completion",
             "created_by",
         )
@@ -203,33 +199,21 @@ class WorkflowSummarySerializer(serializers.ModelSerializer):
     def get_is_scheduled(self, obj) -> bool:
         return getattr(obj, "next_run_at", None) is not None
 
-    def get_run_completion(self, obj) -> Dict[str, int]:
+    def get_run_completion(self, obj) -> dict[str, int]:
         total = int(getattr(obj, "total_runs", 0) or 0)
         completed = int(getattr(obj, "completed_runs", 0) or 0)
         pct = round((completed / total) * 100) if total else 0
         return {"total": total, "completed": completed, "pct": pct}
 
-    def get_created_by(self, obj) -> Optional[Dict[str, Any]]:
+    def get_created_by(self, obj) -> dict[str, Any] | None:
         user = getattr(obj, "created_by", None)
         if not user:
             return None
         get_full_name = getattr(user, "get_full_name", None)
         full_name = get_full_name() if callable(get_full_name) else None
-        name = (
-            (full_name or "").strip()
-            or getattr(user, "username", "")
-            or getattr(user, "email", "")
-            or "Owner"
-        )
-        avatar = (
-            getattr(user, "photo_url", None)
-            or getattr(user, "avatar_url", None)
-            or getattr(user, "avatar", None)
-        )
-        initials = (
-            "".join(part[0] for part in str(name).split()[:2] if part).upper()
-            or "?"
-        )
+        name = (full_name or "").strip() or getattr(user, "username", "") or getattr(user, "email", "") or "Owner"
+        avatar = getattr(user, "photo_url", None) or getattr(user, "avatar_url", None) or getattr(user, "avatar", None)
+        initials = "".join(part[0] for part in str(name).split()[:2] if part).upper() or "?"
         return {
             "id": str(getattr(user, "id", "") or getattr(user, "pk", "")),
             "name": name,
@@ -277,7 +261,7 @@ class WorkflowSerializer(serializers.ModelSerializer):
         )
         read_only_fields = ("is_custom", "version", "created_by", "created_at", "updated_at")
 
-    def validate_graph(self, value: Dict[str, Any]) -> Dict[str, Any]:
+    def validate_graph(self, value: dict[str, Any]) -> dict[str, Any]:
         # Drafts are incomplete by nature — a user picks a template (whose nodes
         # are intentionally stub configs) and saves before filling in channels /
         # delays / branch labels. So on create/update we only require the graph
@@ -304,7 +288,7 @@ class WorkflowSerializer(serializers.ModelSerializer):
             )
         return value
 
-    def validate(self, attrs: Dict[str, Any]) -> Dict[str, Any]:
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
         if self.instance is None and not attrs.get("workspace"):
             raise serializers.ValidationError({"workspace_id": "workspace_id is required."})
 
@@ -315,11 +299,7 @@ class WorkflowSerializer(serializers.ModelSerializer):
 
         if isinstance(graph, dict) and goal:
             start_node = next(
-                (
-                    node
-                    for node in (graph.get("nodes") or [])
-                    if isinstance(node, dict) and node.get("type") == "start"
-                ),
+                (node for node in (graph.get("nodes") or []) if isinstance(node, dict) and node.get("type") == "start"),
                 None,
             )
             start_config = (start_node or {}).get("config") or {}
@@ -335,16 +315,12 @@ class WorkflowSerializer(serializers.ModelSerializer):
                 if invalid:
                     joined = "', '".join(invalid)
                     raise serializers.ValidationError(
-                        {
-                            "graph": (
-                                f"Start trigger '{joined}' is not valid for workflow goal '{goal}'."
-                            )
-                        }
+                        {"graph": (f"Start trigger '{joined}' is not valid for workflow goal '{goal}'.")}
                     )
 
         return attrs
 
-    def create(self, validated_data: Dict[str, Any]) -> Workflow:
+    def create(self, validated_data: dict[str, Any]) -> Workflow:
         request = self.context.get("request")
         template = validated_data.get("template")
         graph = validated_data.get("graph")
@@ -357,7 +333,7 @@ class WorkflowSerializer(serializers.ModelSerializer):
             validated_data["created_by"] = request.user
         return super().create(validated_data)
 
-    def update(self, instance: Workflow, validated_data: Dict[str, Any]) -> Workflow:
+    def update(self, instance: Workflow, validated_data: dict[str, Any]) -> Workflow:
         if validated_data.get("graph") is None:
             validated_data.pop("graph", None)
         return super().update(instance, validated_data)
@@ -394,22 +370,23 @@ class WorkflowBindingSerializer(serializers.ModelSerializer):
         )
         read_only_fields = ("created_at", "updated_at")
 
-    def validate(self, attrs: Dict[str, Any]) -> Dict[str, Any]:
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
         source_type = attrs.get("source_type")
         trigger_type = attrs.get("trigger_type")
         allowed = {(trigger.id, trigger.source_type) for trigger in TRIGGER_CATALOG}
         if (trigger_type, source_type) not in allowed:
-            raise serializers.ValidationError(
-                {"trigger_type": "Trigger type is not valid for the source type."}
-            )
+            raise serializers.ValidationError({"trigger_type": "Trigger type is not valid for the source type."})
         workflow = attrs.get("workflow")
         source_id = attrs.get("source_id")
-        if workflow and WorkflowBinding.objects.filter(
-            workflow=workflow,
-            source_type=source_type,
-            source_id=source_id,
-            trigger_type=trigger_type,
-        ).exists():
+        if (
+            workflow
+            and WorkflowBinding.objects.filter(
+                workflow=workflow,
+                source_type=source_type,
+                source_id=source_id,
+                trigger_type=trigger_type,
+            ).exists()
+        ):
             raise serializers.ValidationError(
                 {"workflow_id": "A binding already exists for this workflow and trigger."}
             )
@@ -434,12 +411,17 @@ class WorkflowRunSerializer(serializers.ModelSerializer):
     """Serialize workflow runs for read endpoints."""
 
     workflow_id = serializers.PrimaryKeyRelatedField(source="workflow", read_only=True)
+    # The owning workflow's name, so run rows (e.g. the index's recent-runs
+    # strip) can label themselves without a second fetch. The run querysets
+    # already select_related("workflow") — no N+1.
+    workflow_name = serializers.CharField(source="workflow.name", read_only=True)
 
     class Meta:
         model = WorkflowRun
         fields = (
             "id",
             "workflow_id",
+            "workflow_name",
             "status",
             "trigger_type",
             "trigger_payload",
@@ -482,7 +464,7 @@ class WorkflowGraphValidateSerializer(serializers.Serializer):
 
     graph = serializers.JSONField()
 
-    def validate_graph(self, value: Dict[str, Any]) -> Dict[str, Any]:
+    def validate_graph(self, value: dict[str, Any]) -> dict[str, Any]:
         errors = validate_graph(value)
         if errors:
             raise serializers.ValidationError(errors)
@@ -563,26 +545,16 @@ class WorkflowScheduleSerializer(serializers.ModelSerializer):
     def validate_days_of_week(self, value):
         if value in (None, ""):
             return []
-        if not isinstance(value, list) or any(
-            not isinstance(d, int) or d < 0 or d > 6 for d in value
-        ):
-            raise serializers.ValidationError(
-                "days_of_week must be a list of integers 0 (Mon) to 6 (Sun)."
-            )
+        if not isinstance(value, list) or any(not isinstance(d, int) or d < 0 or d > 6 for d in value):
+            raise serializers.ValidationError("days_of_week must be a list of integers 0 (Mon) to 6 (Sun).")
         return sorted(set(value))
 
     def validate_audience(self, value):
         if not isinstance(value, list):
             raise serializers.ValidationError("audience must be a list of targets.")
         for target in value:
-            if (
-                not isinstance(target, dict)
-                or not target.get("target_type")
-                or not target.get("target_id")
-            ):
-                raise serializers.ValidationError(
-                    "each audience target needs target_type and target_id."
-                )
+            if not isinstance(target, dict) or not target.get("target_type") or not target.get("target_id"):
+                raise serializers.ValidationError("each audience target needs target_type and target_id.")
         return value
 
     def validate(self, attrs):
@@ -616,23 +588,13 @@ class WorkflowScheduleSerializer(serializers.ModelSerializer):
         else:
             # Fixed-time cadences require a time-of-day.
             if run_time is None:
-                raise serializers.ValidationError(
-                    {"run_time": "A time of day is required for this cadence."}
-                )
+                raise serializers.ValidationError({"run_time": "A time of day is required for this cadence."})
             if cadence == WorkflowSchedule.Cadence.WEEKLY and not days:
                 raise serializers.ValidationError(
-                    {
-                        "days_of_week": (
-                            "Pick at least one weekday for a weekly schedule."
-                        )
-                    }
+                    {"days_of_week": ("Pick at least one weekday for a weekly schedule.")}
                 )
             if cadence == WorkflowSchedule.Cadence.MONTHLY and not dom:
-                raise serializers.ValidationError(
-                    {"day_of_month": "Pick a day of month for a monthly schedule."}
-                )
+                raise serializers.ValidationError({"day_of_month": "Pick a day of month for a monthly schedule."})
             if dom is not None and (dom < 1 or dom > 28):
-                raise serializers.ValidationError(
-                    {"day_of_month": "day_of_month must be between 1 and 28."}
-                )
+                raise serializers.ValidationError({"day_of_month": "day_of_month must be between 1 and 28."})
         return attrs

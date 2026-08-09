@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
-import uuid
+from typing import Any
 
 from django.db import router, transaction
-from django.utils import timezone
-
 from django.db.models import Q
+from django.utils import timezone
 
 from infrastructure.persistence.workspaces.workflows.models import (
     Workflow,
@@ -34,10 +32,10 @@ class WorkflowRepository:
 
     @staticmethod
     def get_templates(
-        scope: Optional[str] = None,
-        workspace_id: Optional[str] = None,
-        user: Optional[Any] = None,
-    ) -> "QuerySet":
+        scope: str | None = None,
+        workspace_id: str | None = None,
+        user: Any | None = None,
+    ) -> QuerySet:
         """Retrieve workflow templates filtered by scope, workspace, and group visibility.
 
         Args:
@@ -64,11 +62,8 @@ class WorkflowRepository:
             # Use Q objects instead of |-ing querysets to avoid the
             # "Cannot combine a unique query with a non-unique query"
             # error when _apply_group_visibility adds .distinct().
-            from django.db.models import Q
 
-            system_ids = list(
-                queryset.filter(is_system=True).values_list("id", flat=True)
-            )
+            system_ids = list(queryset.filter(is_system=True).values_list("id", flat=True))
             org_qs = queryset.filter(workspace_id=workspace_id, is_system=False)
             org_qs = WorkflowRepository._apply_group_visibility(org_qs, workspace_id, user)
             org_ids = list(org_qs.values_list("id", flat=True))
@@ -79,10 +74,10 @@ class WorkflowRepository:
 
     @staticmethod
     def _apply_group_visibility(
-        queryset: "QuerySet",
-        workspace_id: Optional[str],
-        user: Optional[Any],
-    ) -> "QuerySet":
+        queryset: QuerySet,
+        workspace_id: str | None,
+        user: Any | None,
+    ) -> QuerySet:
         """Filter templates by group-based visibility.
 
         - Templates with no visible_to_groups are visible to everyone.
@@ -101,17 +96,14 @@ class WorkflowRepository:
             return queryset
 
         # Get the user's group IDs within this workspace
-        user_group_ids = user.workspace_groups.filter(
-            workspace_id=workspace_id
-        ).values_list("id", flat=True)
+        user_group_ids = user.workspace_groups.filter(workspace_id=workspace_id).values_list("id", flat=True)
 
         return queryset.filter(
-            Q(visible_to_groups__isnull=True)
-            | Q(visible_to_groups__id__in=user_group_ids)
+            Q(visible_to_groups__isnull=True) | Q(visible_to_groups__id__in=user_group_ids)
         ).distinct()
 
     @staticmethod
-    def get_template_by_id(template_id: str) -> Optional[WorkflowTemplate]:
+    def get_template_by_id(template_id: str) -> WorkflowTemplate | None:
         """Retrieve a single template by ID.
 
         Args:
@@ -130,9 +122,9 @@ class WorkflowRepository:
         category: str = "",
         version: str = "1",
         is_system: bool = False,
-        default_graph: Dict[str, Any] = None,
-        workspace_id: Optional[str] = None,
-        created_by: Optional[Any] = None,
+        default_graph: dict[str, Any] = None,
+        workspace_id: str | None = None,
+        created_by: Any | None = None,
     ) -> WorkflowTemplate:
         """Create a new workflow template.
 
@@ -168,13 +160,13 @@ class WorkflowRepository:
 
     @staticmethod
     def get_workflows(
-        workspace_id: Optional[str] = None,
-        status: Optional[str] = None,
-        goal: Optional[str] = None,
-        template_id: Optional[str] = None,
-        scheduled: Optional[bool] = None,
+        workspace_id: str | None = None,
+        status: str | None = None,
+        goal: str | None = None,
+        template_id: str | None = None,
+        scheduled: bool | None = None,
         exclude_deleted: bool = True,
-    ) -> "QuerySet":
+    ) -> QuerySet:
         """Retrieve workflows with optional filters.
 
         Each row is annotated with ``next_run_at`` — the soonest fire time
@@ -192,8 +184,9 @@ class WorkflowRepository:
         Returns:
             QuerySet of Workflow
         """
-        from django.db.models import Count, IntegerField, Min, OuterRef, Subquery
+        from django.db.models import CharField, Count, DateTimeField, IntegerField, Min, OuterRef, Subquery
         from django.db.models.functions import Coalesce
+
         from infrastructure.persistence.workspaces.workflows.models import (
             WorkflowRun,
         )
@@ -225,22 +218,27 @@ class WorkflowRepository:
             ),
             total_runs=Coalesce(
                 Subquery(
-                    _runs.values("workflow_id")
-                    .annotate(c=Count("id"))
-                    .values("c"),
+                    _runs.values("workflow_id").annotate(c=Count("id")).values("c"),
                     output_field=IntegerField(),
                 ),
                 0,
             ),
             completed_runs=Coalesce(
                 Subquery(
-                    _runs.filter(status="completed")
-                    .values("workflow_id")
-                    .annotate(c=Count("id"))
-                    .values("c"),
+                    _runs.filter(status="completed").values("workflow_id").annotate(c=Count("id")).values("c"),
                     output_field=IntegerField(),
                 ),
                 0,
+            ),
+            # Most-recent run (when + how it went) so the workflows index can
+            # show a real "last run" column without an N+1 per row.
+            last_run_at=Subquery(
+                _runs.order_by("-created_at").values("created_at")[:1],
+                output_field=DateTimeField(),
+            ),
+            last_run_status=Subquery(
+                _runs.order_by("-created_at").values("status")[:1],
+                output_field=CharField(),
             ),
         )
         if scheduled is True:
@@ -249,7 +247,7 @@ class WorkflowRepository:
         return queryset.select_related("workspace", "template", "created_by")
 
     @staticmethod
-    def get_workflow_by_id(workflow_id: str) -> Optional[Workflow]:
+    def get_workflow_by_id(workflow_id: str) -> Workflow | None:
         """Retrieve a single workflow by ID.
 
         Args:
@@ -258,9 +256,7 @@ class WorkflowRepository:
         Returns:
             Workflow or None
         """
-        return Workflow.objects.select_related("workspace", "template").filter(
-            id=workflow_id, is_deleted=False
-        ).first()
+        return Workflow.objects.select_related("workspace", "template").filter(id=workflow_id, is_deleted=False).first()
 
     @staticmethod
     def create_workflow(
@@ -268,12 +264,12 @@ class WorkflowRepository:
         name: str,
         description: str = "",
         goal: str = "",
-        template_id: Optional[str] = None,
+        template_id: str | None = None,
         is_custom: bool = False,
         status: str = "draft",
         version: int = 1,
-        graph: Dict[str, Any] = None,
-        created_by: Optional[Any] = None,
+        graph: dict[str, Any] = None,
+        created_by: Any | None = None,
     ) -> Workflow:
         """Create a new workflow.
 
@@ -306,10 +302,7 @@ class WorkflowRepository:
         )
 
     @staticmethod
-    def update_workflow(
-        workflow: Workflow,
-        **kwargs
-    ) -> Workflow:
+    def update_workflow(workflow: Workflow, **kwargs) -> Workflow:
         """Update a workflow with the given fields.
 
         Args:
@@ -319,11 +312,8 @@ class WorkflowRepository:
         Returns:
             Updated Workflow instance
         """
-        allowed_fields = {
-            "name", "description", "goal", "template_id",
-            "is_custom", "status", "version", "graph"
-        }
-        update_fields = [k for k in kwargs.keys() if k in allowed_fields]
+        allowed_fields = {"name", "description", "goal", "template_id", "is_custom", "status", "version", "graph"}
+        update_fields = [k for k in kwargs if k in allowed_fields]
 
         if update_fields:
             for field, value in kwargs.items():
@@ -337,7 +327,7 @@ class WorkflowRepository:
     def publish_workflow(
         workflow: Workflow,
         notes: str = "",
-        created_by: Optional[Any] = None,
+        created_by: Any | None = None,
     ) -> Workflow:
         """Publish a workflow version.
 
@@ -399,7 +389,7 @@ class WorkflowRepository:
     @staticmethod
     def clone_workflow(
         workflow: Workflow,
-        created_by: Optional[Any] = None,
+        created_by: Any | None = None,
     ) -> Workflow:
         """Clone a workflow.
 
@@ -430,11 +420,11 @@ class WorkflowRepository:
 
     @staticmethod
     def get_bindings(
-        workflow_id: Optional[str] = None,
-        source_type: Optional[str] = None,
-        source_id: Optional[str] = None,
-        workspace_id: Optional[str] = None,
-    ) -> "QuerySet":
+        workflow_id: str | None = None,
+        source_type: str | None = None,
+        source_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> QuerySet:
         """Retrieve workflow bindings with optional filters.
 
         Args:
@@ -460,7 +450,7 @@ class WorkflowRepository:
         return queryset
 
     @staticmethod
-    def get_binding_by_id(binding_id: str) -> Optional[WorkflowBinding]:
+    def get_binding_by_id(binding_id: str) -> WorkflowBinding | None:
         """Retrieve a single binding by ID.
 
         Args:
@@ -469,17 +459,15 @@ class WorkflowRepository:
         Returns:
             WorkflowBinding or None
         """
-        return WorkflowBinding.objects.select_related("workflow").filter(
-            id=binding_id
-        ).first()
+        return WorkflowBinding.objects.select_related("workflow").filter(id=binding_id).first()
 
     @staticmethod
     def create_binding(
         workflow_id: str,
         source_type: str,
         trigger_type: str,
-        source_id: Optional[str] = None,
-        config: Dict[str, Any] = None,
+        source_id: str | None = None,
+        config: dict[str, Any] = None,
         is_active: bool = True,
     ) -> WorkflowBinding:
         """Create a new workflow binding.
@@ -524,9 +512,9 @@ class WorkflowRepository:
         publish so it appears in the gallery but does not fire until an admin
         turns it on. Returns the number of bindings updated.
         """
-        return WorkflowBinding.objects.filter(
-            workflow_id=workflow_id, source_id__isnull=True
-        ).update(is_active=is_active)
+        return WorkflowBinding.objects.filter(workflow_id=workflow_id, source_id__isnull=True).update(
+            is_active=is_active
+        )
 
     @staticmethod
     def sync_workflow_bindings(workflow_id, triggers) -> int:
@@ -542,9 +530,7 @@ class WorkflowRepository:
         Returns the number of active trigger bindings after the sync.
         """
         wanted = {(str(s), str(t)) for s, t in triggers if s and t}
-        existing = list(
-            WorkflowBinding.objects.filter(workflow_id=workflow_id, source_id__isnull=True)
-        )
+        existing = list(WorkflowBinding.objects.filter(workflow_id=workflow_id, source_id__isnull=True))
         existing_by_trigger = {b.trigger_type: b for b in existing}
 
         for source_type, trigger_type in wanted:
@@ -578,11 +564,11 @@ class WorkflowRepository:
     @staticmethod
     def create_run_with_idempotency(
         workflow: Workflow,
-        targets: List[Dict[str, str]],
+        targets: list[dict[str, str]],
         trigger_type: str,
-        trigger_payload: Dict[str, Any] = None,
-        idempotency_key: Optional[str] = None,
-    ) -> List[str]:
+        trigger_payload: dict[str, Any] = None,
+        idempotency_key: str | None = None,
+    ) -> list[str]:
         """Create workflow runs with idempotency support.
 
         Creates a run for each target, checking idempotency key first.
@@ -608,12 +594,16 @@ class WorkflowRepository:
 
                 existing = None
                 if key:
-                    existing = WorkflowRunIdempotency.objects.filter(
-                        workflow=workflow,
-                        target_type=target_type,
-                        target_id=target_id,
-                        idempotency_key=key,
-                    ).select_related("run").first()
+                    existing = (
+                        WorkflowRunIdempotency.objects.filter(
+                            workflow=workflow,
+                            target_type=target_type,
+                            target_id=target_id,
+                            idempotency_key=key,
+                        )
+                        .select_related("run")
+                        .first()
+                    )
 
                 if existing:
                     run_ids.append(str(existing.run_id))
@@ -643,7 +633,7 @@ class WorkflowRepository:
         return run_ids
 
     @staticmethod
-    def get_run_by_id(run_id: str) -> Optional[WorkflowRun]:
+    def get_run_by_id(run_id: str) -> WorkflowRun | None:
         """Retrieve a single run by ID.
 
         Args:
@@ -652,20 +642,21 @@ class WorkflowRepository:
         Returns:
             WorkflowRun or None
         """
-        return WorkflowRun.objects.select_related("workflow").filter(
-            id=run_id
-        ).first()
+        return WorkflowRun.objects.select_related("workflow").filter(id=run_id).first()
 
     @staticmethod
     def get_runs(
-        workflow_id: Optional[str] = None,
-        status: Optional[str] = None,
-    ) -> "QuerySet":
+        workflow_id: str | None = None,
+        status: str | None = None,
+        workspace_id: str | None = None,
+    ) -> QuerySet:
         """Retrieve workflow runs with optional filters.
 
         Args:
             workflow_id: Filter by workflow
             status: Filter by run status
+            workspace_id: Filter by the owning workflow's workspace (the
+                workspace-wide recent-runs strip on the workflows index)
 
         Returns:
             QuerySet of WorkflowRun
@@ -676,6 +667,8 @@ class WorkflowRepository:
             queryset = queryset.filter(workflow_id=workflow_id)
         if status:
             queryset = queryset.filter(status=status)
+        if workspace_id:
+            queryset = queryset.filter(workflow__workspace_id=workspace_id)
 
         return queryset.select_related("workflow")
 
@@ -710,14 +703,9 @@ class WorkflowRepository:
         alias = router.db_for_write(WorkflowRun)
         with transaction.atomic(using=alias):
             failed_state = (
-                WorkflowStepState.objects.using(alias)
-                .filter(run=run, status="failed")
-                .order_by("-updated_at")
-                .first()
+                WorkflowStepState.objects.using(alias).filter(run=run, status="failed").order_by("-updated_at").first()
             )
-            resume_node_id = (
-                failed_state.node_id if failed_state else None
-            ) or run.current_node_id or ""
+            resume_node_id = (failed_state.node_id if failed_state else None) or run.current_node_id or ""
 
             if failed_state is not None:
                 failed_state.status = "pending"
@@ -785,7 +773,7 @@ class WorkflowRepository:
     def complete_step(
         run: WorkflowRun,
         node_id: str,
-        output: Dict[str, Any],
+        output: dict[str, Any],
         event_type: str = "completed",
     ) -> None:
         """Complete a workflow step with output.
@@ -800,20 +788,20 @@ class WorkflowRepository:
             event_type: Event type (e.g., "completed")
         """
         graph = run.workflow.graph or {}
-        nodes = {
-            node.get("id"): node
-            for node in graph.get("nodes", [])
-            if isinstance(node, dict)
-        }
+        nodes = {node.get("id"): node for node in graph.get("nodes", []) if isinstance(node, dict)}
         node = nodes.get(node_id)
 
         # Route the atomic to the tenant DB the model lives on (TenantRouter); a bare atomic() only covers 'default' and select_for_update would fail. See donation_payment_repository.py for the same fix.
         db_alias = router.db_for_write(WorkflowStepState)
         with transaction.atomic(using=db_alias):
-            state, _ = WorkflowStepState.objects.using(db_alias).select_for_update().get_or_create(
-                run=run,
-                node_id=node_id,
-                defaults={"status": "pending"},
+            state, _ = (
+                WorkflowStepState.objects.using(db_alias)
+                .select_for_update()
+                .get_or_create(
+                    run=run,
+                    node_id=node_id,
+                    defaults={"status": "pending"},
+                )
             )
             state.output = output
             state.status = "completed"
@@ -870,7 +858,7 @@ class WorkflowRepository:
     @staticmethod
     def get_step_events(
         run: WorkflowRun,
-    ) -> "QuerySet":
+    ) -> QuerySet:
         """Retrieve step events for a run.
 
         Args:
@@ -887,10 +875,10 @@ class WorkflowRepository:
 
     @staticmethod
     def get_enrollments(
-        workflow_id: Optional[str] = None,
-        status: Optional[str] = None,
-        target_type: Optional[str] = None,
-    ) -> "QuerySet":
+        workflow_id: str | None = None,
+        status: str | None = None,
+        target_type: str | None = None,
+    ) -> QuerySet:
         """Retrieve workflow enrollments with optional filters.
 
         Args:
@@ -940,8 +928,8 @@ class WorkflowRepository:
     @staticmethod
     def enroll_targets(
         workflow_id: str,
-        targets: List[Dict[str, str]],
-    ) -> List[WorkflowEnrollment]:
+        targets: list[dict[str, str]],
+    ) -> list[WorkflowEnrollment]:
         """Idempotently create enrollment rows for the given targets.
 
         Uses get_or_create so re-enrolling the same target does not raise on the
@@ -961,7 +949,7 @@ class WorkflowRepository:
     @staticmethod
     def delete_enrollments(
         workflow_id: str,
-        targets: List[Dict[str, str]],
+        targets: list[dict[str, str]],
     ) -> int:
         """Delete workflow enrollments for given targets.
 
@@ -987,7 +975,7 @@ class WorkflowRepository:
     # ========================
 
     @staticmethod
-    def list_due_workflow_schedule_ids(now) -> List[str]:
+    def list_due_workflow_schedule_ids(now) -> list[str]:
         """IDs of enabled schedules whose next_run_at has arrived."""
         alias = router.db_for_write(WorkflowSchedule)
         return [
@@ -1026,21 +1014,11 @@ class WorkflowRepository:
             if schedule is None:
                 return False
 
-            workflow = (
-                Workflow.objects.using(alias)
-                .filter(id=schedule.workflow_id, is_deleted=False)
-                .first()
-            )
+            workflow = Workflow.objects.using(alias).filter(id=schedule.workflow_id, is_deleted=False).first()
             targets = schedule.audience or []
             fired_slot = schedule.next_run_at
-            if (
-                workflow is not None
-                and workflow.status == Workflow.Status.PUBLISHED
-                and targets
-            ):
-                WorkflowRepository.enroll_targets(
-                    workflow_id=str(workflow.id), targets=targets
-                )
+            if workflow is not None and workflow.status == Workflow.Status.PUBLISHED and targets:
+                WorkflowRepository.enroll_targets(workflow_id=str(workflow.id), targets=targets)
                 WorkflowRepository.create_run_with_idempotency(
                     workflow=workflow,
                     targets=targets,
@@ -1062,9 +1040,7 @@ class WorkflowRepository:
                 day_of_month=schedule.day_of_month,
                 interval_minutes=schedule.interval_minutes,
             )
-            schedule.save(
-                update_fields=["last_run_at", "next_run_at", "updated_at"]
-            )
+            schedule.save(update_fields=["last_run_at", "next_run_at", "updated_at"])
             return True
 
     @staticmethod
@@ -1074,12 +1050,10 @@ class WorkflowRepository:
 
     @staticmethod
     def list_schedules(workflow_id: str):
-        return WorkflowSchedule.objects.filter(workflow_id=workflow_id).order_by(
-            "-updated_at"
-        )
+        return WorkflowSchedule.objects.filter(workflow_id=workflow_id).order_by("-updated_at")
 
     @staticmethod
-    def get_schedule(schedule_id: str) -> Optional[WorkflowSchedule]:
+    def get_schedule(schedule_id: str) -> WorkflowSchedule | None:
         return WorkflowSchedule.objects.filter(id=schedule_id).first()
 
     @staticmethod
@@ -1124,8 +1098,8 @@ class WorkflowRepository:
     @staticmethod
     def get_events(
         workspace_id: str,
-        status: Optional[str] = None,
-    ) -> "QuerySet":
+        status: str | None = None,
+    ) -> QuerySet:
         """Retrieve workflow events.
 
         Args:
@@ -1147,8 +1121,8 @@ class WorkflowRepository:
         workspace_id: str,
         source_type: str,
         trigger_type: str,
-        payload: Dict[str, Any] = None,
-        source_id: Optional[str] = None,
+        payload: dict[str, Any] = None,
+        source_id: str | None = None,
         idempotency_key: str = "",
     ) -> WorkflowEvent:
         """Create a new workflow event.
