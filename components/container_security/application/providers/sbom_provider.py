@@ -37,7 +37,8 @@ def build_post_ingest_hook():
     """The registry-facing hook: (run_id, workspace_id, target_ref, result) → store SBOM."""
     use_case = build_store_image_sbom_use_case()
 
-    def _hook(*, run_id, workspace_id, target_ref, result) -> None:
+    def _hook(*, run_id, workspace_id, target_ref, result, **_) -> None:
+        # **_ swallows run facts this hook doesn't need (connection_id/account_id).
         use_case.execute(run_id=run_id, workspace_id=workspace_id, target_ref=target_ref, result=result)
 
     return _hook

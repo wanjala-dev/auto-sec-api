@@ -109,6 +109,22 @@ def _connect_slack(api_client, ws) -> dict:
     return connection
 
 
+def _expire_scan_cooldown(ws, account_id=None):
+    """Simulate the nightly gap between scans: age every completed run past the
+    dispatch gate's cooldown and drop the dispatch lock, so a re-scan is allowed
+    (back-to-back scan-now is now correctly 429'd by the anti-spam gate)."""
+    from datetime import timedelta
+
+    from django.core.cache import cache
+    from django.utils import timezone
+
+    from components.scanning.infrastructure.services.scan_gate import dispatch_lock_key
+    from infrastructure.persistence.scanning.models import ScanRun
+
+    ScanRun.objects.filter(workspace=ws).update(completed_at=timezone.now() - timedelta(hours=2))
+    cache.delete(dispatch_lock_key(str(ws.id), "cloud_posture.prowler", account_id or _MGMT_ACCOUNT))
+
+
 def _run_scan(api_client, ws, conn_id, stub_scan_execution, django_capture_on_commit_callbacks, records):
     with (
         stub_scan_execution(records=records),
@@ -217,6 +233,7 @@ class TestBackboneSlackFanoutChain:
             django_capture_on_commit_callbacks,
             CRITICAL_OCSF_RECORDS,
         )
+        _expire_scan_cooldown(ws)
         _run_scan(
             api_client,
             ws,

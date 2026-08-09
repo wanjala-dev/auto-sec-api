@@ -206,9 +206,38 @@ class AwsConnectionScanView(APIView):
             enqueue_connection_scan,
         )
 
-        enqueued = enqueue_connection_scan(workspace_id=str(workspace_id), connection_id=str(connection_id))
+        # Provenance: the operator pressing "Scan now" is stamped onto every
+        # ScanRun the fan-out creates (this used to be dropped on the floor).
+        result = enqueue_connection_scan(
+            workspace_id=str(workspace_id),
+            connection_id=str(connection_id),
+            triggered_by=request.user.id,
+        )
+        if result is None:
+            return Response({"success": False, "error": "Connection not found."}, status=404)
+        if result["enqueued"] == 0 and result["blocked"] > 0:
+            # Every account is gated (in-flight or cooling down) — honest 429,
+            # mirroring the code_security scan endpoint's budget rejection.
+            body = {
+                "success": False,
+                "error": "scan_gated",
+                "blocked": result["blocked"],
+            }
+            if result["retry_after"] is not None:
+                body["retry_after"] = result["retry_after"]
+            response = Response(body, status=429)
+            if result["retry_after"] is not None:
+                response["Retry-After"] = str(result["retry_after"])
+            return response
         return Response(
-            {"success": True, "data": {"status": "scanning", "enqueued": enqueued or 0}},
+            {
+                "success": True,
+                "data": {
+                    "status": "scanning",
+                    "enqueued": result["enqueued"],
+                    "blocked": result["blocked"],
+                },
+            },
             status=status.HTTP_202_ACCEPTED,
         )
 

@@ -28,9 +28,10 @@ from components.cloud_posture.tests._prowler_backend_stub import RecordsBackend
 
 # The OrgVerificationPort implementation the AWS connection provider wires in.
 _STS_ADAPTER = "components.integrations.infrastructure.adapters.sts_org_adapter.StsOrgAdapter"
-# The two seams the eager run_prowler_scan_for_account task reaches out through.
+# The two seams the eager spine scan task (scanning.run_scan) reaches out through:
+# the execution backend, and the generic task's default AWS assume-role vend.
 _BACKEND_PROVIDER = "components.scanning.application.providers.execution_backend_provider.build_execution_backend"
-_TASK_CREDS = "components.cloud_posture.infrastructure.tasks.cloud_posture_tasks.get_aws_credentials_port"
+_TASK_CREDS = "components.integrations.application.providers.aws_credentials_provider.get_aws_credentials_port"
 
 # One canned OCSF FAIL record — Prowler's shape (metadata.event_code + a resource +
 # cloud.account.uid). Parsed by the real records_to_scan_result into one actionable
