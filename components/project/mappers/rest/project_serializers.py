@@ -399,10 +399,22 @@ class TaskSerializer(WritableNestedModelSerializer, serializers.ModelSerializer)
         ]
 
     def to_representation(self, instance):
-        # Override to include full project object in the response
+        # Override to include full project object in the response.
+        #
+        # Serialized once per DISTINCT project and cached in the serializer
+        # context: ``ProjectSerializer`` runs ~5 ORM queries per call
+        # (updates/milestones/contribution_means M2Ms + the registered_time /
+        # num_tasks_todo model methods), so serializing it per TASK made a
+        # project-board page cost 5 queries × row count. A board page has a
+        # handful of distinct projects at most, and identical input yields
+        # identical output within one request.
         representation = super().to_representation(instance)
         if instance.project:
-            representation["project"] = ProjectSerializer(instance.project).data
+            cache = self.context.setdefault("_project_repr_cache", {})
+            key = instance.project_id
+            if key not in cache:
+                cache[key] = ProjectSerializer(instance.project).data
+            representation["project"] = cache[key]
         return representation
 
     def _get_request_user(self):
@@ -655,18 +667,28 @@ class TaskSerializer(WritableNestedModelSerializer, serializers.ModelSerializer)
         }
 
     def get_total_tracked_minutes(self, obj):
-        from django.db.models import Sum
+        # Computed in Python over ``obj.entries.all()`` so a repository
+        # ``prefetch_related("entries")`` (the board reads do this) makes the
+        # roll-up query-free per row. The previous filter/aggregate/first
+        # chain fired 2 fresh queries per task — and 4 with the display field
+        # below re-invoking this method — which scaled a board page's query
+        # count with its card count. Result is memoized per instance so the
+        # display field reuses it.
+        cached = getattr(obj, "_tracked_minutes_cache", None)
+        if cached is not None:
+            return cached
 
         user = self._get_request_user()
         if not user:
             return 0
 
-        entries = obj.entries.filter(created_by=user)
-        completed_total = entries.filter(is_tracked=False).aggregate(total=Sum("minutes"))["total"] or 0
+        entries = [e for e in obj.entries.all() if e.created_by_id == user.id]
+        completed_total = sum(e.minutes or 0 for e in entries if not e.is_tracked)
 
         # Include active timer time if one exists
-        active_entry = entries.filter(is_tracked=True).order_by("-created_at").first()
-        if active_entry:
+        active_entries = [e for e in entries if e.is_tracked]
+        if active_entries:
+            active_entry = max(active_entries, key=lambda e: e.created_at)
             try:
                 elapsed_seconds = (timezone.now() - active_entry.created_at).total_seconds()
                 if elapsed_seconds > 0:
@@ -675,7 +697,9 @@ class TaskSerializer(WritableNestedModelSerializer, serializers.ModelSerializer)
                 # Fallback: ignore active entry if timestamp arithmetic fails
                 pass
 
-        return int(completed_total)
+        total = int(completed_total)
+        obj._tracked_minutes_cache = total
+        return total
 
     def get_total_tracked_display(self, obj):
         minutes = self.get_total_tracked_minutes(obj)
@@ -712,7 +736,12 @@ class ColumnSerializer(WritableNestedModelSerializer, serializers.ModelSerialize
         queryset=Project.objects.all(), slug_field="id", required=False, allow_null=True, default=None
     )
     workspace = serializers.SlugRelatedField(queryset=Workspace.objects.all(), slug_field="id")  # Workspace by id
-    tasks = serializers.SerializerMethodField()  # Related tasks in board order
+    tasks = serializers.SerializerMethodField()  # Windowed tasks in board order
+    # Live-task count for the whole lane (may exceed len(tasks) — the board
+    # read windows each lane; clients page the rest via
+    # GET /project/columns/<id>/tasks/).
+    tasks_total = serializers.SerializerMethodField()
+    tasks_has_more = serializers.SerializerMethodField()
 
     def validate(self, attrs):
         """Explicit duplicate-title guard for TEAM-BOARD columns (project=None).
@@ -746,22 +775,45 @@ class ColumnSerializer(WritableNestedModelSerializer, serializers.ModelSerialize
         return attrs
 
     def get_tasks(self, obj):
-        # Task.Meta.ordering is ['-created_at'], so the bare `tasks.all` used
-        # here previously ignored the drag-persisted `order` field — every
-        # in-column reorder reverted on the next board fetch. Board order is
-        # ('order', 'created_at'), matching ProjectSerializer's task listing.
+        # Board reads (``OrmColumnQueryRepository``) attach ``windowed_tasks``
+        # — the first N live tasks in board order, eager-loaded for every FK/
+        # M2M this serializer's ``TaskSerializer`` reads. A lane is NEVER
+        # serialized whole on the board endpoint (a 9k-card intake lane
+        # produced a 10.8MB / 30s+ response); the remainder pages through
+        # GET /project/columns/<id>/tasks/.
+        windowed = getattr(obj, "windowed_tasks", None)
+        if windowed is not None:
+            return TaskSerializer(windowed, many=True, context=self.context).data
+
+        # Fallback for single-column callers (column create/update responses)
+        # that don't route through the repository. Task.Meta.ordering is
+        # ['-created_at'], so a bare `tasks.all` would ignore the
+        # drag-persisted `order` field — board order is ('order',
+        # 'created_at'), matching ProjectSerializer's task listing.
         #
         # ``status=ARCHIVED`` is the Task soft-delete state (recycle-bin
         # trash keeps the column FK). Without the exclusion a trashed card
         # reappeared on the board on the very next columns fetch, while also
         # sitting in the recycle bin — mirrors project_repository's task reads.
         tasks = (
-            obj.tasks.select_related("column")
-            .prefetch_related("assigned_to__profile", "assigned_to")
+            obj.tasks.select_related("team", "column", "grant", "project", "created_by")
+            .prefetch_related("assigned_to", "entries")
             .exclude(status=Task.ARCHIVED)
             .order_by("order", "created_at")
         )
         return TaskSerializer(tasks, many=True, context=self.context).data
+
+    def get_tasks_total(self, obj):
+        total = getattr(obj, "tasks_total", None)
+        if total is not None:
+            return total
+        return obj.tasks.exclude(status=Task.ARCHIVED).count()
+
+    def get_tasks_has_more(self, obj):
+        windowed = getattr(obj, "windowed_tasks", None)
+        if windowed is None:
+            return False
+        return len(windowed) < self.get_tasks_total(obj)
 
     class Meta:
         model = Column
@@ -781,11 +833,18 @@ class ColumnSerializer(WritableNestedModelSerializer, serializers.ModelSerialize
             "created_at",
             "updated_at",
             "tasks",
+            "tasks_total",
+            "tasks_has_more",
         ]
         read_only_fields = ["team", "workspace", "created_by", "created_at", "updated_at"]
 
     def to_representation(self, instance):
-        """Exclude soft-deleted columns."""
+        """Exclude soft-deleted columns.
+
+        Belt-and-braces only — the board read's repository already excludes
+        soft-deleted columns at the query so a deleted lane costs nothing to
+        serialize; this guard covers single-column callers.
+        """
         data = super().to_representation(instance)
         if instance.is_deleted:
             return {}
