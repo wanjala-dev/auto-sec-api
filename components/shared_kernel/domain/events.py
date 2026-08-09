@@ -186,9 +186,9 @@ class AttackPathDetected(DomainEvent):
 class ScanCompleted(DomainEvent):
     """A scan run finished and its findings were handed to the SSOT.
 
-    Emitted once per completed scan by the pillar's ingest choreography —
-    cloud_posture's ``ingest_scan_result`` and the generic
-    ``run_scan_and_ingest`` (container_security and future pillars). The
+    Emitted once per completed scan by the ONE ingest choreography — the
+    generic ``run_scan_and_ingest`` (every spine pillar; cloud_posture's
+    legacy ingest path is deleted, audit R2). The
     notifications context subscribes and dispatches the ONE-per-scan external
     digest (``soc.scan_completed`` → ``scan_digest``, ADR 0016 D5) — never one
     message per finding. Fields are JSON-safe primitives (wire format, like the
@@ -203,7 +203,7 @@ class ScanCompleted(DomainEvent):
     workspace_id: UUID
     source: str  # the pillar/scanner, e.g. "cloud_posture.prowler"
     engine: str  # "prowler", "trivy", …
-    scan_id: str  # CloudPostureScan / ScanRun id — the dedup identity
+    scan_id: str  # ScanRun id (historical rows may carry legacy snapshot ids) — the dedup identity
     target_ref: str = ""  # what was scanned (account id, image ref)
     account_id: str = ""
     total_checks: int = 0

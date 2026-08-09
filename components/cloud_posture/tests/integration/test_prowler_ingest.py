@@ -13,10 +13,8 @@ import pytest
 
 from components.cloud_posture.domain.value_objects.enums import CheckStatus, Severity
 from components.cloud_posture.infrastructure.services.prowler_ingest_service import (
-    ingest_prowler_scan,
     parse_prowler_ocsf,
 )
-from infrastructure.persistence.cloud_posture.models import CloudPostureFinding
 
 _FIXTURE = Path(__file__).resolve().parent.parent / "fixtures" / "prowler_ocsf_sample.json"
 
@@ -53,37 +51,66 @@ def test_parser_skips_records_without_check_id():
     assert parsed == []
 
 
+class _StubScanner:
+    def __init__(self, result):
+        self._result = result
+
+    def scan(self, target, on_progress=None):
+        return self._result
+
+
+def _spine_ingest(ws, records):
+    from components.cloud_posture.infrastructure.services.prowler_ingest_service import (
+        records_to_scan_result,
+    )
+    from components.scanning.infrastructure.services.run_scan_service import run_scan_and_ingest
+    from components.shared_kernel.application.ports.scanner_port import ScanTarget
+
+    return run_scan_and_ingest(
+        workspace_id=ws.id,
+        source="cloud_posture.prowler",
+        target=ScanTarget(identifier="123456789012"),
+        scanner=_StubScanner(records_to_scan_result(records, engine_version="prowler")),
+        account_id="123456789012",
+    )
+
+
 @pytest.mark.integration
 @pytest.mark.django_db
-def test_ingest_persists_scan_and_actionable_findings(workspace_factory):
+def test_spine_ingest_persists_run_and_actionable_findings(workspace_factory, django_capture_on_commit_callbacks):
+    from infrastructure.persistence.findings.models import Finding
+
     ws = workspace_factory()
+    with django_capture_on_commit_callbacks(execute=True):
+        run = _spine_ingest(ws, _records())
 
-    scan = ingest_prowler_scan(workspace_id=ws.id, account_id="123456789012", records=_records())
+    assert run.total_checks == 3
+    assert run.passed_count == 1
+    assert run.failed_count == 2
 
-    assert scan.total_checks == 3
-    assert scan.passed_count == 1
-    assert scan.failed_count == 2
-
-    findings = CloudPostureFinding.objects.filter(scan=scan)
-    # Only the two non-PASS checks are persisted as findings.
+    findings = Finding.objects.filter(workspace=ws, source="cloud_posture.prowler")
+    # Only the two non-PASS checks reach the SSOT.
     assert findings.count() == 2
-    assert set(findings.values_list("check_id", flat=True)) == {
+    assert {f.attributes["check_id"] for f in findings} == {
         "s3_bucket_public_access",
         "iam_root_mfa_enabled",
     }
-    crit = findings.get(check_id="iam_root_mfa_enabled")
+    crit = findings.get(attributes__check_id="iam_root_mfa_enabled")
     assert crit.severity == "critical"
-    assert crit.workspace_id == ws.id
 
 
 @pytest.mark.integration
 @pytest.mark.django_db
-def test_ingest_dedups_within_scan(workspace_factory):
+def test_spine_ingest_dedups_duplicate_records_within_a_scan(workspace_factory, django_capture_on_commit_callbacks):
+    """Two identical records in one OCSF output share a fingerprint → ONE SSOT row
+    (the legacy per-scan get_or_create dedup, now provided by SSOT identity)."""
+    from infrastructure.persistence.findings.models import Finding
+
     ws = workspace_factory()
     records = _records()
-    # Duplicate the S3 FAIL record — same (check_id, resource_uid).
     dup = [*records, records[0]]
+    with django_capture_on_commit_callbacks(execute=True):
+        _spine_ingest(ws, dup)
 
-    scan = ingest_prowler_scan(workspace_id=ws.id, account_id="123456789012", records=dup)
-
-    assert CloudPostureFinding.objects.filter(scan=scan, check_id="s3_bucket_public_access").count() == 1
+    s3 = Finding.objects.filter(workspace=ws, attributes__check_id="s3_bucket_public_access")
+    assert s3.count() == 1

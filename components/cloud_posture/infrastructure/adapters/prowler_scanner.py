@@ -118,12 +118,12 @@ class ProwlerScanner(ScannerPort):
         )
         # Fail LOUD, never silent. A Prowler Job that FATAL-errors / OOMKills / times out leaves no
         # (or no complete) OCSF file, so `cat` exits non-zero (or the backend flags timed_out) →
-        # result.ok is False. Parsing whatever is on stdout would yield [] → 0 findings, and
-        # run_prowler_scan_for_account would then record a COMPLETED CloudPostureScan AND promote
-        # the account link to VERIFIED — a crashed scan masquerading as a clean account, the worst
-        # failure mode for a security scanner. Raise so the task's `except` marks the link FAILED and
-        # reports the run failed (no-shortcuts: a bad scan is a failed scan). The memory_limit note
-        # above only *mitigates* the OOM (4Gi headroom); THIS is what actually *surfaces* it.
+        # result.ok is False. Parsing whatever is on stdout would yield [] → 0 findings, and the
+        # spine would then record a COMPLETED ScanRun AND the post-ingest hook would promote the
+        # account link to VERIFIED — a crashed scan masquerading as a clean account, the worst
+        # failure mode for a security scanner. Raise so run_scan_and_ingest records a FAILED run
+        # and the failure hook marks the link FAILED (no-shortcuts: a bad scan is a failed scan).
+        # The memory_limit note above only *mitigates* the OOM; THIS is what actually *surfaces* it.
         if not result.ok:
             snippet = (result.stdout or "").strip().replace("\n", " ")[:300]
             logger.error(

@@ -209,7 +209,7 @@ class BackgroundJob(models.Model):
     which persists lifecycle + progress HERE and pushes a realtime event over
     the shared resource stream under a single ``resource_type`` (``RESOURCE_TYPE``
     below), so ONE generic frontend renders every job type with no per-feature
-    UI work. Domain result models (e.g. ``CloudPostureScan``) stay separate —
+    UI work. Domain result models (e.g. scanning’s ``ScanRun``) stay separate —
     this only tracks the run's lifecycle + progress.
     """
 
