@@ -70,22 +70,25 @@ def _create_workspace(owner: CustomUser) -> Workspace:
 
 
 @pytest.mark.django_db
-def test_invite_to_existing_user_uses_accept_branch_in_email():
+def test_invite_to_existing_user_uses_accept_branch_in_email(django_capture_on_commit_callbacks):
     owner = _create_user("owner-exist@example.com", password="ownerpass1")
     invited = _create_user("invited-exist@example.com", password="invitedpass1")
     workspace = _create_workspace(owner)
 
     client = APIClient()
     client.force_authenticate(user=owner)
-    response = client.post(
-        reverse("membership:membership-persona-invite"),
-        {
-            "workspace_id": str(workspace.id),
-            "email": invited.email,
-            "persona": "auditor",
-        },
-        format="json",
-    )
+    # Invite email is queued post-commit to Celery (eager in tests) — flush
+    # on_commit callbacks so the send actually runs.
+    with django_capture_on_commit_callbacks(execute=True):
+        response = client.post(
+            reverse("membership:membership-persona-invite"),
+            {
+                "workspace_id": str(workspace.id),
+                "email": invited.email,
+                "persona": "auditor",
+            },
+            format="json",
+        )
 
     assert response.status_code == 201, response.data
     assert response.data["is_existing_user"] is True
@@ -101,21 +104,22 @@ def test_invite_to_existing_user_uses_accept_branch_in_email():
 
 
 @pytest.mark.django_db
-def test_invite_to_new_user_keeps_password_setup_branch():
+def test_invite_to_new_user_keeps_password_setup_branch(django_capture_on_commit_callbacks):
     owner = _create_user("owner-new@example.com", password="ownerpass1")
     workspace = _create_workspace(owner)
 
     client = APIClient()
     client.force_authenticate(user=owner)
-    response = client.post(
-        reverse("membership:membership-persona-invite"),
-        {
-            "workspace_id": str(workspace.id),
-            "email": "fresh@example.com",
-            "persona": "auditor",
-        },
-        format="json",
-    )
+    with django_capture_on_commit_callbacks(execute=True):
+        response = client.post(
+            reverse("membership:membership-persona-invite"),
+            {
+                "workspace_id": str(workspace.id),
+                "email": "fresh@example.com",
+                "persona": "auditor",
+            },
+            format="json",
+        )
 
     assert response.status_code == 201, response.data
     assert response.data["is_existing_user"] is False

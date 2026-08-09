@@ -9,10 +9,10 @@ from __future__ import annotations
 
 from rest_framework.throttling import SimpleRateThrottle
 
-
 # ---------------------------------------------------------------------------
 # Base
 # ---------------------------------------------------------------------------
+
 
 class _ScopedIdentityThrottle(SimpleRateThrottle):
     """Base throttle that prefers user/email identity, then falls back to client IP."""
@@ -54,6 +54,7 @@ class _ScopedPrincipalThrottle(SimpleRateThrottle):
 # Authentication throttles
 # ---------------------------------------------------------------------------
 
+
 class LoginThrottle(_ScopedIdentityThrottle):
     scope = "auth_login"
     rate = "10/min"
@@ -72,6 +73,33 @@ class PasswordResetConfirmThrottle(_ScopedIdentityThrottle):
 class EmailVerifyThrottle(_ScopedIdentityThrottle):
     scope = "auth_email_verify"
     rate = "15/hour"
+
+
+class ResendVerificationEmailThrottle(_ScopedIdentityThrottle):
+    """Per-email (falling back to per-IP) resend-verification throttle.
+
+    Tight (3/hour) because every accepted request can enqueue a real email
+    send for the named address — flooding it would both spam the inbox and
+    burn the SMTP/SES sender reputation.
+    """
+
+    scope = "auth_resend_verification"
+    rate = "3/hour"
+
+
+class ResendVerificationIPThrottle(SimpleRateThrottle):
+    """Strict per-client-IP ceiling on resend-verification requests.
+
+    Sits ALONGSIDE the per-email throttle: rotating the email in the body
+    must not buy an attacker unlimited sends from one host, and the always
+    -202 response means there's no feedback loop to tune enumeration with.
+    """
+
+    scope = "auth_resend_verification_ip"
+    rate = "10/hour"
+
+    def get_cache_key(self, request, view):
+        return self.cache_format % {"scope": self.scope, "ident": self.get_ident(request)}
 
 
 class MagicLinkRequestThrottle(_ScopedIdentityThrottle):
@@ -102,6 +130,7 @@ class MagicLinkVerifyThrottle(_ScopedIdentityThrottle):
 # ---------------------------------------------------------------------------
 # OTP / 2FA throttles
 # ---------------------------------------------------------------------------
+
 
 class OTPVerifyThrottle(_ScopedPrincipalThrottle):
     """Throttle OTP verification attempts per principal."""

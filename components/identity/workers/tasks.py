@@ -137,3 +137,69 @@ def sweep_user_sessions(self) -> dict[str, int]:
         audit_pruned,
     )
     return result
+
+
+@shared_task(
+    name="identity.send_verification_email",
+    bind=True,
+    max_retries=3,
+    retry_backoff=True,
+    retry_backoff_max=600,
+    retry_jitter=True,
+    soft_time_limit=60,
+    time_limit=90,
+)
+def send_verification_email(self, user_id: str) -> str:
+    """Send the account-verification email to one (still-unverified) user.
+
+    Queued by ``CeleryVerificationEmailDispatchAdapter`` from the register
+    and resend-verification flows. This primary adapter resolves the
+    environment facts (frontend base URL, confirmation path, site identity)
+    and delegates the business flow — re-check verified state, mint a fresh
+    token, send — to ``SendVerificationEmailUseCase``. A backend send
+    failure raises out of the use case, so Celery's retry/backoff machinery
+    (not a silent ``fail_silently``) owns transient SMTP trouble.
+
+    Idempotent: re-running mints a new token and re-sends; already-verified
+    users are skipped.
+    """
+    from django.conf import settings
+    from django.contrib.sites.models import Site
+    from django.core.exceptions import ImproperlyConfigured
+
+    from components.identity.application.providers.identity_provider import IdentityProvider
+
+    logger.info(
+        "identity.send_verification_email started user_id=%s task_id=%s",
+        user_id,
+        self.request.id,
+    )
+
+    frontend_base = getattr(settings, "FRONTEND_URL", None) or getattr(settings, "LOCALHOST_FRONTEND_URL", "")
+    confirm_path = getattr(settings, "EMAIL_CONFIRMATION_REDIRECT_PATH", "/identity/email-confirmed")
+    confirmation_base_url = f"{frontend_base.rstrip('/')}{confirm_path}"
+
+    site_name = getattr(settings, "SITE_NAME", "Auto-Sec")
+    site_domain = ""
+    try:
+        site = Site.objects.get_current()
+    except (ImproperlyConfigured, Site.DoesNotExist):
+        site = None
+    if site is not None:
+        site_name = site.name or site_name
+        site_domain = site.domain or site_domain
+
+    use_case = IdentityProvider.build_send_verification_email_use_case()
+    outcome = use_case.execute(
+        user_id=UUID(user_id),
+        confirmation_base_url=confirmation_base_url,
+        site_name=site_name,
+        site_domain=site_domain,
+    )
+    logger.info(
+        "identity.send_verification_email completed user_id=%s task_id=%s outcome=%s",
+        user_id,
+        self.request.id,
+        outcome,
+    )
+    return outcome

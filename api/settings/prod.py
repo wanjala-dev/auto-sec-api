@@ -27,8 +27,8 @@ SECRET_KEY = env("SECRET_KEY")
 # ── Email (AWS SES) ────────────────────────────────────────────────────────
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
 EMAIL_HOST = env("EMAIL_HOST", default="email-smtp.us-east-1.amazonaws.com")
-EMAIL_PORT = 587
-EMAIL_USE_TLS = True
+EMAIL_PORT = env.int("EMAIL_PORT", default=587)
+EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
 # celery-tasks skill §3c (backoff ≠ timeout): bound every SMTP/SES send with a
 # per-attempt socket timeout. Without it a hung SES connection pins a Celery
 # worker slot until the task's hard time-limit SIGKILLs it — and under

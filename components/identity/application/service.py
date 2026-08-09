@@ -2,14 +2,15 @@
 
 Orchestration only – delegates to use cases via IdentityProvider.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
 
+from components.identity.application.ports.user_query_port import UserQueryPort
 from components.identity.application.providers.identity_provider import IdentityProvider
 from components.identity.application.providers.user_context_provider import UserContextProvider
-from components.identity.application.ports.user_query_port import UserQueryPort
 
 
 @dataclass
@@ -18,6 +19,7 @@ class IdentityService:
 
     Orchestration only – delegates to use cases for business logic.
     """
+
     identity_provider: IdentityProvider = field(default_factory=IdentityProvider)
     user_context_provider: UserContextProvider = field(default_factory=UserContextProvider)
     user_query_port: UserQueryPort = field(default_factory=lambda: IdentityProvider.build_user_query_repository())
@@ -88,9 +90,19 @@ class IdentityService:
         return use_case.execute(command)
 
     def send_verification_email(self, **kwargs) -> bool:
-        """Send verification email to user."""
+        """Send verification email to user (synchronous — worker path only)."""
         adapter = self.identity_provider.build_email_verification_adapter()
         return adapter.send_verification_email(**kwargs)
+
+    def queue_verification_email(self, user_id) -> None:
+        """Queue verification-email delivery (async, post-commit)."""
+        adapter = self.identity_provider.build_verification_email_dispatch_adapter()
+        adapter.queue_verification_email(user_id)
+
+    def resend_verification_email(self, command) -> None:
+        """Public resend-verification flow (always-silent, no oracle)."""
+        use_case = self.identity_provider.build_resend_verification_email_use_case()
+        return use_case.execute(command)
 
     def notify_security_event(self, **kwargs) -> Any:
         """Dispatch a security-event notification."""

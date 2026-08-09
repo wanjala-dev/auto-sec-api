@@ -80,21 +80,30 @@ STATICFILES_STORAGE = "infrastructure.storage.backends.LocalStaticStorage"
 LOGIN_REDIRECT_URL = "/"
 LOGIN_URL = "/"
 
-EMAIL_USE_TLS = True
-EMAIL_HOST = env("EMAIL_HOST", default="smtp.gmail.com")
+# Fully env-driven SMTP seam — the k8s stack runs THIS settings module, so
+# real delivery (SES or any SMTP relay) is configured entirely from the
+# deployment env: EMAIL_HOST/PORT/USE_TLS/USER/PASSWORD (standard Django
+# keys, wired in auto-sec-infra's local overlay secrets).
+EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
+EMAIL_HOST = env("EMAIL_HOST", default="")
 EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="")
 EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
-EMAIL_PORT = 587
+EMAIL_PORT = env.int("EMAIL_PORT", default=587)
 # Per-attempt SMTP socket timeout (celery-tasks skill §3c) — keeps a hung
 # email send from pinning a worker slot. Mirrors prod.py.
 EMAIL_TIMEOUT = env.int("EMAIL_TIMEOUT", default=10)
-# Console backend by default locally — emails (including invite magic-links)
-# print to `make logs-web` so you can click them without SMTP. Override with
-# EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend in .env to use
-# Gmail/SES once credentials are valid.
+# Backend follows the host wiring: when the deployment env supplies an
+# EMAIL_HOST (e.g. the SES SMTP endpoint from the infra overlay secrets),
+# real SMTP delivery is on; with no host, emails print to the pod logs
+# (console backend) so links stay clickable without credentials. An explicit
+# EMAIL_BACKEND env always wins.
 EMAIL_BACKEND = env(
     "EMAIL_BACKEND",
-    default="django.core.mail.backends.console.EmailBackend",
+    default=(
+        "django.core.mail.backends.smtp.EmailBackend"
+        if EMAIL_HOST
+        else "django.core.mail.backends.console.EmailBackend"
+    ),
 )
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="Auto-Sec <info@octopusintl.org>")
 DEFAULT_EMAIL_FROM = DEFAULT_FROM_EMAIL

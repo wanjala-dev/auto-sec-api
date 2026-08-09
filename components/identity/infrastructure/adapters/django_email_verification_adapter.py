@@ -1,7 +1,11 @@
 """Infrastructure adapter implementing EmailVerificationPort.
 
 Delegates to Django's EmailMultiAlternatives for sending HTML/text
-verification emails.
+verification emails. FAIL-LOUD: a backend send failure raises (after a
+``logger.exception`` with ids only — never the token or the address) so
+the Celery caller retries instead of the API claiming success while
+delivering nothing. This adapter is invoked from the background worker
+(``identity.send_verification_email``), never inline in a request.
 """
 
 from __future__ import annotations
@@ -42,6 +46,7 @@ class DjangoEmailVerificationAdapter(EmailVerificationPort):
         contact_plaintext_message = render_to_string("email/email-confirm.txt", context)
 
         from django.conf import settings as django_settings
+
         default_from = getattr(django_settings, "DEFAULT_FROM_EMAIL", f"noreply@{site_domain}")
 
         msg = EmailMultiAlternatives(
@@ -51,11 +56,15 @@ class DjangoEmailVerificationAdapter(EmailVerificationPort):
             to=[email],
         )
         msg.attach_alternative(contact_html_message, "text/html")
-        sent_count = msg.send(fail_silently=True)
+        try:
+            sent_count = msg.send(fail_silently=False)
+        except Exception:
+            # No token / no address in the log line — user_id is enough to
+            # trace, and the traceback carries the SMTP root cause.
+            logger.exception("verification_email_send_failed user_id=%s", user_id)
+            raise
         if not sent_count:
-            logger.warning(
-                "Register email send failed for user_id=%s; continuing without blocking signup",
-                user_id,
-            )
-            return False
+            logger.error("verification_email_send_reported_zero user_id=%s", user_id)
+            raise RuntimeError("email backend accepted no messages for verification email")
+        logger.info("verification_email_sent user_id=%s", user_id)
         return True
