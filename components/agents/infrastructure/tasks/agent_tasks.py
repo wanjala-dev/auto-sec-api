@@ -296,6 +296,7 @@ def dispatch_finding_specialist(
     from components.agents.infrastructure.adapters.langchain.tools._finding_processing import (
         stamp_run_telemetry_on_findings,
     )
+    from components.agents.infrastructure.services import finding_dispatch_service as fds
     from infrastructure.persistence.workspaces.models import Workspace
 
     workspace = Workspace.objects.all_objects().filter(id=workspace_id).first()
@@ -310,6 +311,16 @@ def dispatch_finding_specialist(
         specialist,
     )
     dispatch_started_at = timezone.now()
+    # Tell the operator's HUD this batch is being worked on RIGHT NOW. Without it a
+    # finding shows QUEUED for the whole 10–30s deep run and the product looks idle
+    # at the exact moment it is doing the work. Fail-safe — a progress stamp never
+    # fails the dispatch it describes.
+    fds.stamp_dispatch_in_flight(
+        workspace_id,
+        specialist,
+        trigger=str((agent_context or {}).get("source") or "dispatch"),
+        task_ids=(agent_context or {}).get("finding_task_ids"),
+    )
     result = _delegate_to_agent(
         agent_type=specialist,
         query=goal,
@@ -579,3 +590,217 @@ def run_deep_run_plan(
         return {"success": False, "plan_id": run_thread, "error": result.error}
     logger.info("run_deep_run_plan completed plan_id=%s success=True", run_thread)
     return {"success": True, "plan_id": run_thread}
+
+
+# ── On-demand: "draft a fix PR for THIS finding" ─────────────────────────
+
+
+@shared_task(
+    name="infrastructure.ai.agents.tasks.draft_fix_for_finding",
+    soft_time_limit=AGENT_SOFT_TIME_LIMIT * 3,
+    time_limit=AGENT_TIME_LIMIT * 3,
+)
+def draft_fix_for_finding(
+    workspace_id: str,
+    task_id: str,
+    performed_by: str,
+) -> dict[str, Any]:
+    """Operator-triggered: triage ONE finding through the deep pipeline, then — only
+    if every guardrail passes — open its draft PR.
+
+    The third trigger onto the same engine (auto-on-detection, cadence, and this).
+    It is a Celery task, never in-request: the deep pipeline is 10–30s of LLM calls
+    and blocking daphne on it is the standing problem (#88) this must not extend.
+    The endpoint returns 202 with the run handle and the finding flips to DRAFTING.
+
+    Deterministic dispatch, not planner routing. The specialist is READ OFF THE CARD
+    (``metadata.agent_type``, stamped by the board handler's per-source builder), so
+    a new pillar is correct for free, and it is PINNED via ``worker_agent_type`` →
+    ``execute_plan_once(force_worker_agent_type=…)``. Handing a known target to the
+    LLM planner is a codified failure mode: it re-routes by keyword to an agent
+    without the right tools, which then fabricates success silently (2026-07-19).
+
+    Safety invariant — an unverified patch never reaches a repository. The PR step
+    is ``OpenDraftPrUseCase``, the ONE draft-PR engine, and every precondition lives
+    inside it: triaged, not ``needs_human`` (the grounded-verifier gate, which the
+    untrusted-repo-content path also trips), confidence not low, patch-scope
+    enforcement, the per-repo SAST open-PR throttle, the connection + repo allowlist,
+    and the agent's ``open_draft_pr`` capability. A failure of ANY of them records
+    the reason on the card and opens nothing.
+    """
+    from components.agents.application.services.detector_cycle import _delegate_to_agent
+    from components.agents.infrastructure.services import finding_dispatch_service as fds
+    from infrastructure.persistence.project.models import Task
+    from infrastructure.persistence.workspaces.models import Workspace
+
+    workspace = Workspace.objects.all_objects().filter(id=workspace_id).first()
+    if workspace is None:
+        logger.error("draft_fix_for_finding workspace not found workspace_id=%s", workspace_id)
+        return {"success": False, "error": "workspace_not_found"}
+
+    card = Task.objects.filter(id=task_id, workspace_id=workspace_id).first()
+    if card is None:
+        logger.error("draft_fix_for_finding card not found workspace_id=%s task_id=%s", workspace_id, task_id)
+        return {"success": False, "error": "finding_not_found"}
+
+    meta = card.metadata or {}
+    specialist = str(meta.get("agent_type") or "").strip()
+    source_type = card.source_type or ""
+    if not fds.is_routable(source_type, specialist):
+        logger.info(
+            "draft_fix_for_finding not_routable workspace_id=%s task_id=%s source_type=%s agent_type=%s",
+            workspace_id,
+            task_id,
+            source_type,
+            specialist,
+        )
+        return {"success": False, "error": "not_routable", "source_type": source_type}
+
+    logger.info(
+        "draft_fix_for_finding started workspace_id=%s task_id=%s specialist=%s performed_by=%s",
+        workspace_id,
+        task_id,
+        specialist,
+        performed_by,
+    )
+    fds.stamp_dispatch_in_flight(workspace_id, specialist, trigger="on_demand", task_ids=[task_id])
+    # Every AI action is posted to the board as provenance — including the human ask
+    # that started it, so the card records WHO requested the fix and when.
+    _append_finding_provenance(
+        task_id, actor=f"user:{performed_by}", action=f"requested a fix draft from {specialist}"
+    )
+
+    triaged = (meta.get("triage") or {}).get("status") == "triaged"
+    run_id = ""
+    if not triaged:
+        # Full deep run so the operator gets the DeepRun record, the per-step
+        # DeepRunLog trace, the LIVE RUN progress surface, telemetry/cost capture,
+        # and the rubric/critic verification pass — the machinery already built.
+        result = _delegate_to_agent(
+            agent_type=specialist,
+            query=fds.build_finding_goal(task_id, meta),
+            context=fds.build_finding_agent_context(specialist, task_id, meta),
+            performer_id=str(performed_by),
+            workspace=workspace,
+        )
+        run_id = str((result or {}).get("thread_id") or (result or {}).get("plan_id") or "")
+        if run_id:
+            # An id only. Run DETAIL (prompts / tool IO) stays owner-only behind its
+            # existing authz; nothing here widens that read.
+            _append_finding_provenance(
+                task_id, actor=f"agent:{specialist}", action="drafted a fix", extra={"run_id": run_id}
+            )
+        card.refresh_from_db()
+        meta = card.metadata or {}
+
+    outcome = _open_draft_pr_for_finding(
+        workspace_id=workspace_id, task_id=task_id, performed_by=performed_by, metadata=meta
+    )
+    logger.info(
+        "draft_fix_for_finding completed workspace_id=%s task_id=%s specialist=%s outcome=%s",
+        workspace_id,
+        task_id,
+        specialist,
+        outcome.get("reason") or ("opened" if outcome.get("pr_url") else "no_pr"),
+    )
+    return {"success": True, "specialist": specialist, "run_id": run_id, **outcome}
+
+
+def _open_draft_pr_for_finding(*, workspace_id: str, task_id: str, performed_by: str, metadata: dict) -> dict:
+    """Run the ONE draft-PR engine for a freshly triaged finding, or record WHY not.
+
+    Never raises: a blocked PR is a product state the operator must SEE (the whole
+    point of this change), not an exception that disappears into a task log.
+    """
+    from components.integrations.application.ports.vcs_port import VcsApiError
+    from components.integrations.application.providers.vcs_provider import get_open_draft_pr_use_case
+    from components.integrations.application.use_cases.open_draft_pr_use_case import (
+        DraftPrPreconditionError,
+    )
+
+    triage = metadata.get("triage") or {}
+    payload = metadata.get("payload") or {}
+    if triage.get("status") != "triaged":
+        return _record_draft_pr_blocked(
+            workspace_id, task_id, "finding_not_triaged", "The specialist did not produce a triaged fix."
+        )
+    if triage.get("needs_human") or payload.get("needs_human"):
+        # The grounded verifier (or the untrusted-repo-content control) held it.
+        return _record_draft_pr_blocked(
+            workspace_id,
+            task_id,
+            "finding_needs_human",
+            str(payload.get("needs_human_reason") or "")
+            or "The suggested fix could not be grounded in the finding's evidence — a human decides.",
+        )
+
+    try:
+        result = get_open_draft_pr_use_case().execute(
+            workspace_id=str(workspace_id), task_id=str(task_id), performed_by=str(performed_by)
+        )
+    except DraftPrPreconditionError as exc:
+        return _record_draft_pr_blocked(workspace_id, task_id, exc.reason, str(exc))
+    except VcsApiError as exc:
+        logger.exception("draft_fix_for_finding vcs error workspace_id=%s task_id=%s", workspace_id, task_id)
+        return _record_draft_pr_blocked(workspace_id, task_id, "vcs_api_error", str(exc))
+
+    # Success path already stamps payload.draft_pr + a provenance event + a card
+    # comment + the HITL notification (record_draft_pr) — nothing to add here.
+    return {"pr_url": result.url, "pr_repo": result.repo, "pr_created": result.created}
+
+
+def _record_draft_pr_blocked(workspace_id: str, task_id: str, reason: str, message: str) -> dict:
+    """Persist WHY no PR was opened onto the finding card + its provenance trail.
+
+    Fail-safe: recording the reason can never fail the task — but losing it would
+    leave the operator with a click that did nothing visible, which is the exact
+    failure this whole change exists to remove.
+    """
+    _append_finding_provenance(
+        task_id,
+        actor="agent:code_fix",
+        action=f"draft PR not opened ({reason})",
+        patch={"draft_pr_blocked": {"reason": reason, "message": message, "at": timezone.now().isoformat()}},
+        clear_dispatch=True,  # the run is over — stop showing DRAFTING
+    )
+    logger.info("draft_fix_for_finding blocked workspace_id=%s task_id=%s reason=%s", workspace_id, task_id, reason)
+    return {"pr_url": "", "reason": reason, "message": message}
+
+
+def _append_finding_provenance(task_id, *, actor: str, action: str, extra=None, patch=None, clear_dispatch=False):
+    """Append one provenance event to a finding card (and optionally patch its metadata).
+
+    ONE row-locked writer for every on-demand outcome — the operator's request, the
+    run that produced a fix, and a refusal — instead of three copies of the same
+    dance. Uses the same ``select_for_update(of=("self",))`` discipline as the triage
+    write, so it never races an overlapping specialist run.
+
+    Fail-safe: provenance can never fail the action it describes, but losing it would
+    leave the operator with a click that did nothing visible — the exact failure this
+    work removes — so it is logged loudly.
+    """
+    from django.db import transaction
+
+    from infrastructure.persistence.project.models import Task
+
+    at = timezone.now().isoformat()
+    try:
+        with transaction.atomic():
+            locked = Task.objects.select_for_update(of=("self",)).filter(id=task_id).first()
+            if locked is None:
+                return
+            meta = locked.metadata or {}
+            if patch:
+                meta.update(patch)
+            if clear_dispatch:
+                meta.pop("triage_dispatch", None)
+            provenance = meta.get("provenance") or {"events": []}
+            provenance.setdefault("events", [])
+            provenance["events"].append({"actor": actor, "action": action, "at": at, **(extra or {})})
+            provenance["last_handled_by"] = actor
+            provenance["last_handled_at"] = at
+            meta["provenance"] = provenance
+            locked.metadata = meta
+            locked.save(update_fields=["metadata", "updated_at"])
+    except Exception:
+        logger.exception("finding_provenance_append_failed task_id=%s actor=%s action=%s", task_id, actor, action)

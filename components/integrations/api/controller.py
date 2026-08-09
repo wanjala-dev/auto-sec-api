@@ -86,6 +86,9 @@ from components.membership.api.permissions import IsWorkspaceOwner, has_workspac
 logger = logging.getLogger(__name__)
 
 CanManageIntegrations = has_workspace_permission("manage_integrations")
+# The on-demand draft-fix action mutates the finding's triage state as well as
+# reaching the repo, so it demands the finding capability too (see the view).
+CanManageFindings = has_workspace_permission("manage_findings")
 
 
 class AwsConnectionListCreateView(APIView):
@@ -321,6 +324,56 @@ class FindingPreviewDraftPrView(APIView):
             )
 
         return Response({"success": True, "data": DraftPrPreviewResource.from_result(result).to_dict()})
+
+
+class FindingDraftFixView(APIView):
+    """POST /integrations/workspaces/<ws>/findings/<task_id>/draft-fix/
+
+    The operator's on-demand "draft a fix PR" action — the THIRD trigger onto the
+    one triage engine (the other two are automatic-on-detection and the cadence).
+
+    Non-blocking by contract: this enqueues a Celery task and returns **202** with
+    the finding's new state (``drafting``). The deep pipeline behind it is 10–30s of
+    LLM calls; running it in-request would block daphne, which is a standing problem
+    (#88) this must not extend. The HUD reconciles the real state by re-reading the
+    finding, so the click is never a dead click.
+
+    Authorisation is deliberately the SAME as the sibling ``open-draft-pr`` endpoint
+    this action culminates in (``manage_integrations``) plus ``manage_findings`` for
+    the finding mutation it performs. Gating on ``manage_findings`` alone would open
+    a second, more permissive door onto a write into the customer's repository —
+    a privilege escalation, not a convenience. Read-only viewers get 403.
+
+    Safety invariant: a fix that fails ANY guardrail — ungrounded (``needs_human``),
+    low confidence, out-of-patch-scope, untrusted repo content, over the per-repo
+    SAST throttle — opens NO pull request. The reason is recorded on the card and
+    surfaced in the finding's triage state instead.
+    """
+
+    permission_classes = (permissions.IsAuthenticated, CanManageFindings, CanManageIntegrations)
+    name = "integrations-finding-draft-fix"
+
+    _REASON_STATUS = {
+        "finding_not_found": status.HTTP_404_NOT_FOUND,
+        "not_routable": status.HTTP_409_CONFLICT,
+        "draft_pr_exists": status.HTTP_409_CONFLICT,
+        "ai_unavailable": status.HTTP_409_CONFLICT,
+    }
+
+    def post(self, request, workspace_id, task_id):
+        from components.agents.application.ports.finding_dispatch_port import DraftFixRefused
+        from components.agents.application.providers.ai_provider import AIProvider
+
+        try:
+            data = AIProvider.build_finding_dispatch_port().request_draft_fix(
+                workspace_id=str(workspace_id), task_id=str(task_id), performed_by=str(request.user.id)
+            )
+        except DraftFixRefused as exc:
+            return Response(
+                {"success": False, "reason": exc.reason, "error": str(exc)},
+                status=self._REASON_STATUS.get(exc.reason, status.HTTP_400_BAD_REQUEST),
+            )
+        return Response({"success": True, "data": data}, status=status.HTTP_202_ACCEPTED)
 
 
 class AwsConnectionLogStreamView(APIView):

@@ -5,7 +5,9 @@ from __future__ import annotations
 from uuid import UUID
 
 from components.findings.application.ports.finding_store_port import FindingStorePort
+from components.findings.application.ports.finding_triage_state_port import FindingTriageStatePort
 from components.findings.application.queries.list_findings_query import RankedFinding
+from components.findings.application.services.triage_state_attachment import attach_triage_states
 
 
 class GetFindingUseCase:
@@ -17,8 +19,12 @@ class GetFindingUseCase:
     (``RankedFinding``) so the detail render matches the list rows.
     """
 
-    def __init__(self, store: FindingStorePort):
+    def __init__(self, store: FindingStorePort, triage_states: FindingTriageStatePort | None = None):
         self._store = store
+        self._triage_states = triage_states
 
     def execute(self, workspace_id: UUID, finding_id: UUID) -> RankedFinding | None:
-        return self._store.get_ranked_finding(workspace_id, finding_id)
+        row = self._store.get_ranked_finding(workspace_id, finding_id)
+        if row is None:
+            return None
+        return attach_triage_states([row], self._triage_states, workspace_id=workspace_id)[0]

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from components.findings.application.ports.finding_store_port import FindingStorePort
+from components.findings.application.ports.finding_triage_state_port import FindingTriageStatePort
 from components.findings.application.queries.list_findings_query import (
     FindingPage,
     ListFindingsQuery,
 )
+from components.findings.application.services.triage_state_attachment import attach_triage_states
 
 
 class ListFindingsUseCase:
@@ -17,8 +19,9 @@ class ListFindingsUseCase:
     same filter so the caller can render pagination.
     """
 
-    def __init__(self, store: FindingStorePort):
+    def __init__(self, store: FindingStorePort, triage_states: FindingTriageStatePort | None = None):
         self._store = store
+        self._triage_states = triage_states
 
     def execute(self, query: ListFindingsQuery) -> FindingPage:
         items = self._store.list_ranked_findings(
@@ -42,4 +45,5 @@ class ListFindingsUseCase:
             tag_groups=query.tag_groups,
             exclude_tag_ids=query.exclude_tag_ids,
         )
+        items = attach_triage_states(items, self._triage_states, workspace_id=query.workspace_id)
         return FindingPage(items=items, total=total, limit=query.limit, offset=query.offset)
