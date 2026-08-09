@@ -435,15 +435,18 @@ class PersonaInviteManageView(APIView):
         )
 
         # Re-fire the email so the recipient gets a fresh link in their inbox.
-        # Queued to Celery post-commit (>100ms rule) — the task re-reads the
-        # invitation row so it must see the freshly-committed token; a send
-        # failure retries + logs loudly in the worker instead of being
-        # swallowed while this endpoint reports success.
-        from django.db import transaction as _transaction
+        # Queued to Celery post-commit (>100ms rule) via the team provider —
+        # the transaction/Celery choreography lives in the infrastructure
+        # dispatch helper, keeping this controller a thin primary adapter
+        # (no django.db imports; the architecture suite enforces it).
+        from components.team.application.providers.invitation_email_provider import (
+            get_invitation_email_provider,
+        )
 
-        from components.team.workers.tasks import send_persona_invitation_email
-
-        _transaction.on_commit(lambda: send_persona_invitation_email.delay(str(invitation.id), str(user.id), False))
+        get_invitation_email_provider().queue_persona_invitation(
+            invitation.id,
+            inviter_user_id=user.id,
+        )
 
         return Response(
             {
