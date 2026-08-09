@@ -247,6 +247,7 @@ def triage_container_vuln(agent, input_str: str) -> str:
             pkg_name=str(payload.get("pkg_name") or ""),
             installed_version=str(payload.get("installed_version") or ""),
             fixed_version=str(payload.get("fixed_version") or ""),
+            target=str(payload.get("target") or ""),
             feedback=feedback,
         )
 
@@ -261,17 +262,25 @@ def triage_container_vuln(agent, input_str: str) -> str:
                 "📦 Triage agent reviewed this vulnerability but could not derive a confident "
                 "remediation from the finding alone — needs a human eye."
             )
-        return (
+        comment = (
             f"📦 Triage agent analysed this container vulnerability.\n\n"
             f"Why it is a risk: {suggestion.likely_cause}\n\n"
             f"How to fix it: {suggestion.suggested_fix}\n\n"
-            f"Confidence: {suggestion.confidence}."
         )
+        if (suggestion.fix_snippet or "").strip():
+            # The image-target artifact: no repo to PR against, so the fix ships
+            # as copy-pasteable Dockerfile/package guidance on the card.
+            comment += f"Fix snippet:\n```dockerfile\n{suggestion.fix_snippet}\n```\n\n"
+        return comment + f"Confidence: {suggestion.confidence}."
 
     def apply_payload(payload, suggestion):
         payload["probable_cause"] = suggestion.likely_cause
         payload["suggested_fix"] = suggestion.suggested_fix
         payload["confidence"] = suggestion.confidence
+        # The FIX SNIPPET is the artifact for an image-target finding (no linked
+        # repo → no PR); the HUD renders it through the sanitized code block.
+        payload["fix_snippet"] = suggestion.fix_snippet
+        payload["fix_snippet_language"] = suggestion.fix_snippet_language
 
     def describe_action(suggestion):
         if suggestion is None:

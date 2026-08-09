@@ -3,6 +3,7 @@ from drf_writable_nested.serializers import WritableNestedModelSerializer
 from rest_framework import serializers
 
 from components.identity.mappers.rest.identity_serializers import LeanUserSerializer
+from components.shared_kernel.domain import triage as _shared_triage
 from components.workspace.mappers.rest.workspace_serializers import WorkspaceContributionsMeansSerializer
 from infrastructure.persistence.project.models import (
     Column,
@@ -504,19 +505,23 @@ class TaskSerializer(WritableNestedModelSerializer, serializers.ModelSerializer)
         # The finding kinds share the evidence-contract payload shape, so ONE
         # card renders all of them — an error finding (triage agent fills the
         # fix), an optimization finding (optimization agent fills the
-        # recommendation), and a SAST finding (code_security agent fills the
+        # recommendation), a SAST finding (code_security agent fills the
         # before/after fix; ADR 0019 P2 rides the same field so the frontend's
-        # existing finding-card seam lights up without a parallel serializer).
+        # existing finding-card seam lights up without a parallel serializer),
+        # and a container CVE finding (the triage agent fills the recommendation
+        # + the image-target FIX SNIPPET — its artifact, since a public/unlinked
+        # image has no repo to PR against).
         source_type = getattr(obj, "source_type", "") or ""
-        if source_type not in ("ai.log_watch", "ai.log_optimization", "ai.code_security"):
+        if source_type not in ("ai.log_watch", "ai.log_optimization", "ai.code_security", "ai.container_security"):
             return None
         meta = getattr(obj, "metadata", None) or {}
         payload = meta.get("log_watch") or meta.get("payload")
         if not payload:
             return None
         triage = meta.get("triage") or payload.get("triage") or {}
+        _KIND_BY_SOURCE = {"ai.code_security": "code_security", "ai.container_security": "container_security"}
         data = {
-            "kind": "code_security" if source_type == "ai.code_security" else (payload.get("kind") or "error"),
+            "kind": _KIND_BY_SOURCE.get(source_type) or payload.get("kind") or "error",
             "signal": payload.get("signal") or "",
             "service": payload.get("service") or "",
             "level": payload.get("level") or "",
@@ -554,6 +559,13 @@ class TaskSerializer(WritableNestedModelSerializer, serializers.ModelSerializer)
             # to the payload but never surfaced here — the FE read a field that
             # never arrived.
             "source_flagged": bool(payload.get("source_flagged")),
+            # WHERE this finding's fix lands (repo | image | cloud | service |
+            # none). The board card offers PREVIEW & OPEN DRAFT PR only for
+            # ``repo``; an image-target finding renders its FIX SNIPPET instead
+            # (no doomed PR affordance for a public/unlinked image).
+            "remediation_target": _shared_triage.remediation_target(source_type, payload),
+            "fix_snippet": str(payload.get("fix_snippet") or ""),
+            "fix_snippet_language": str(payload.get("fix_snippet_language") or ""),
             # Draft-PR outcome (rung 1): set by OpenDraftPrUseCase after the
             # human approves. ``None`` until a PR exists — the UI shows the
             # approve affordance for triaged findings without one. Carries the
@@ -578,6 +590,19 @@ class TaskSerializer(WritableNestedModelSerializer, serializers.ModelSerializer)
                     "fix_before": payload.get("fix_before") or "",
                     "fix_after": payload.get("fix_after") or "",
                     "suggested_fix_language": payload.get("language") or "",
+                }
+            )
+        if source_type == "ai.container_security":
+            # Container-CVE extras: the CVE header facts the HUD renders next to
+            # the fix snippet (the image-target artifact).
+            data.update(
+                {
+                    "vulnerability_id": payload.get("vulnerability_id") or "",
+                    "pkg_name": payload.get("pkg_name") or "",
+                    "installed_version": payload.get("installed_version") or "",
+                    "fixed_version": payload.get("fixed_version") or "",
+                    "target": payload.get("target") or "",
+                    "primary_url": payload.get("primary_url") or "",
                 }
             )
         return data

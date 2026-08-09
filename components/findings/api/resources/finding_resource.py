@@ -84,6 +84,11 @@ class FindingResource:
             "confidence": triage.confidence,
             "verification": triage.verification,
             "verification_gap": triage.verification_gap,
+            # WHERE the fix lands (repo → draft PR; image → fix snippet; cloud/
+            # service → guidance). The HUD keys the affordance + chip copy off it.
+            "remediation_target": triage.remediation_target,
+            "fix_snippet": triage.fix_snippet,
+            "fix_snippet_language": triage.fix_snippet_language,
             "draft_pr": triage.draft_pr,
             "blocked_reason": triage.blocked_reason,
             "can_draft_fix": triage.can_draft_fix,

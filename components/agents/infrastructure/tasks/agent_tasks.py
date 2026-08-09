@@ -702,7 +702,11 @@ def draft_fix_for_finding(
         meta = card.metadata or {}
 
     outcome = _open_draft_pr_for_finding(
-        workspace_id=workspace_id, task_id=task_id, performed_by=performed_by, metadata=meta
+        workspace_id=workspace_id,
+        task_id=task_id,
+        performed_by=performed_by,
+        metadata=meta,
+        source_type=source_type,
     )
     logger.info(
         "draft_fix_for_finding completed workspace_id=%s task_id=%s specialist=%s outcome=%s",
@@ -714,7 +718,9 @@ def draft_fix_for_finding(
     return {"success": True, "specialist": specialist, "run_id": run_id, **outcome}
 
 
-def _open_draft_pr_for_finding(*, workspace_id: str, task_id: str, performed_by: str, metadata: dict) -> dict:
+def _open_draft_pr_for_finding(
+    *, workspace_id: str, task_id: str, performed_by: str, metadata: dict, source_type: str = ""
+) -> dict:
     """Run the ONE draft-PR engine for a freshly triaged finding, or record WHY not.
 
     Never raises: a blocked PR is a product state the operator must SEE (the whole
@@ -725,7 +731,30 @@ def _open_draft_pr_for_finding(*, workspace_id: str, task_id: str, performed_by:
     from components.integrations.application.use_cases.open_draft_pr_use_case import (
         DraftPrPreconditionError,
     )
+    from components.shared_kernel.domain.triage import TARGET_REPO, remediation_target
 
+    # The artifact must MATCH the remediation target: a finding with no linked
+    # repository (public/unlinked container image, cloud resource) has nothing
+    # to open a PR against — its artifact is the fix snippet/guidance already on
+    # the card. A clean no-op, NOT a ``draft_pr_blocked`` stamp: "PR blocked" on
+    # a finding that never had a PR path is exactly the misleading noise this
+    # distinction removes. (The request path already refuses with
+    # ``no_repo_target``; this guards the direct/cadence callers.)
+    if source_type and remediation_target(source_type, metadata.get("payload") or {}) != TARGET_REPO:
+        logger.info(
+            "draft_fix_for_finding no_repo_target workspace_id=%s task_id=%s source_type=%s",
+            workspace_id,
+            task_id,
+            source_type,
+        )
+        return {
+            "pr_url": "",
+            "reason": "no_repo_target",
+            "message": (
+                "This finding's remediation target is not a connected repository — the fix "
+                "ships as guidance/a snippet on the finding, not a pull request."
+            ),
+        }
     triage = metadata.get("triage") or {}
     if triage.get("status") != "triaged":
         return _record_draft_pr_blocked(

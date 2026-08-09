@@ -22,7 +22,12 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from components.project.application.ports.record_finding_draft_pr_port import get_draft_pr
-from components.shared_kernel.domain.triage import TriageState, is_routable_to_specialist
+from components.shared_kernel.domain.triage import (
+    TARGET_REPO,
+    TriageState,
+    is_routable_to_specialist,
+    remediation_target,
+)
 
 
 @dataclass(frozen=True)
@@ -50,10 +55,23 @@ class FindingTriageStateView:
     #: The named evidence gap when ``verification == "unverified"``.
     verification_gap: str = ""
     draft_pr: dict | None = None
+    #: WHERE this finding's fix lands: ``repo`` (draft-PR path) | ``image`` (fix
+    #: snippet — no linked repo to PR against) | ``cloud`` | ``service`` |
+    #: ``none``. The artifact must MATCH the target: only ``repo`` findings ever
+    #: carry the draft-PR affordance.
+    remediation_target: str = ""
+    #: The image-target artifact: copy-pasteable Dockerfile/package guidance,
+    #: rendered by the HUD through the sanitized code block. Empty for repo
+    #: findings (their artifact is the draft PR).
+    fix_snippet: str = ""
+    fix_snippet_language: str = ""
     #: A fix exists but a guardrail refused the pull request (scope, throttle,
     #: confidence). Surfaced so a blocked PR is visible, never silent.
     blocked_reason: str = ""
     #: True when the operator's on-demand "draft a fix PR" action is available.
+    #: Always False off the ``repo`` target — offering the button for an
+    #: unlinked image was a doomed click (the engine refused it as
+    #: ``finding_not_found`` after burning a specialist run).
     can_draft_fix: bool = False
     factors: tuple[str, ...] = field(default_factory=tuple)
 
@@ -99,11 +117,18 @@ def derive_triage_state(
     # Read through the recording contract's ONE accessor (#264) so this reader can
     # never drift from the writer's shape — the exact failure that fix addressed.
     draft_pr = get_draft_pr(metadata) or None
+    # The artifact must MATCH the target: repo findings get the PR affordance,
+    # image findings get the fix snippet, cloud/service findings get guidance.
+    target = remediation_target(source_type, payload)
+    pr_target = target == TARGET_REPO
     base = {
         "specialist": specialist,
         "task_id": task_id,
         "triaged_at": str(triage.get("triaged_at") or ""),
         "draft_pr": draft_pr if draft_pr and draft_pr.get("url") else None,
+        "remediation_target": target,
+        "fix_snippet": str(payload.get("fix_snippet") or ""),
+        "fix_snippet_language": str(payload.get("fix_snippet_language") or ""),
     }
 
     if triage.get("status") == "triaged":
@@ -120,21 +145,26 @@ def derive_triage_state(
         if suggested_fix or triage.get("suggested"):
             if unverified:
                 # A fix EXISTS — it just failed verification. The label downgrades
-                # (the draft PR opens/opened marked [UNVERIFIED]); the artifact is
-                # never withheld, so this state always carries its affordance.
+                # (a repo finding's draft PR opens/opened marked [UNVERIFIED]; an
+                # image finding's snippet carries the same warning); the artifact
+                # is never withheld.
                 return FindingTriageStateView(
                     state=TriageState.FIX_UNVERIFIED.value,
                     reason=(
                         "Review carefully — this fix could not be grounded against the "
-                        f"finding's own evidence ({gap or 'no named anchor'}). Its draft PR "
-                        "is clearly labeled UNVERIFIED; the PR review is the human gate."
+                        f"finding's own evidence ({gap or 'no named anchor'}). "
+                        + (
+                            "Its draft PR is clearly labeled UNVERIFIED; the PR review is the human gate."
+                            if pr_target
+                            else "Treat the suggested fix/snippet as a starting point, not a vetted fix."
+                        )
                     ),
                     suggested_fix=suggested_fix,
                     confidence=confidence,
                     verification="unverified",
                     verification_gap=gap,
                     blocked_reason=str(blocked.get("reason") or ""),
-                    can_draft_fix=base["draft_pr"] is None,
+                    can_draft_fix=pr_target and base["draft_pr"] is None,
                     **base,
                 )
             return FindingTriageStateView(
@@ -144,7 +174,7 @@ def derive_triage_state(
                 verification=str(payload.get("verification") or ""),
                 blocked_reason=str(blocked.get("reason") or ""),
                 reason=str(blocked.get("message") or ""),
-                can_draft_fix=base["draft_pr"] is None,
+                can_draft_fix=pr_target and base["draft_pr"] is None,
                 **base,
             )
         no_fix_why = str(triage.get("no_fix_reason") or "").strip()
@@ -159,11 +189,16 @@ def derive_triage_state(
                         "fix from the rule and file alone."
                     )
                 )
-                + " Retry available — DRAFT FIX PR re-runs the specialist with fresh context."
+                + (
+                    " Retry available — DRAFT FIX PR re-runs the specialist with fresh context."
+                    if pr_target
+                    else " The next scheduled pass will retry with fresh context."
+                )
             ),
             # The retry affordance: a no-fix outcome is re-attemptable, never a
-            # dead end.
-            can_draft_fix=True,
+            # dead end. (Repo targets only — the on-demand action is the PR
+            # pipeline's trigger; non-repo findings retry on the cadence.)
+            can_draft_fix=pr_target,
             **base,
         )
 
@@ -182,6 +217,6 @@ def derive_triage_state(
             if specialist
             else "Queued for triage."
         ),
-        can_draft_fix=True,
+        can_draft_fix=pr_target,
         **base,
     )

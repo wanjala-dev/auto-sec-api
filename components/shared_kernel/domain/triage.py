@@ -63,6 +63,54 @@ ROUTABLE_SOURCE_TYPES: tuple[str, ...] = (
     "ai.code_security",
 )
 
+# ── Remediation target — WHERE a finding's fix lands ─────────────────────────
+#
+# The artifact must MATCH the target. A finding whose subject lives in a
+# connected repository (a traceback into the customer's code, a SAST hit at a
+# file:line) is remediated by a DRAFT PR. A finding whose subject is an
+# artifact we cannot open a PR against — a container image with no linked repo
+# (public nginx/node images, or any image URL a user points a scan at), a cloud
+# resource, a runtime service config — is remediated by a FIX SNIPPET /
+# guidance: offering a draft-PR affordance there is a doomed click, and
+# attempting one produces "finding not found" noise on the board.
+
+#: Sources whose findings the draft-PR engine can act on. ONE definition —
+#: the engine's finding-facts gate and the read paths that decide whether to
+#: offer the PR affordance both derive from this, so they can never disagree
+#: (the pre-fix bug: the triage state offered ``can_draft_fix`` for container
+#: findings the engine then refused as ``finding_not_found``).
+PR_REMEDIABLE_SOURCE_TYPES: tuple[str, ...] = ("ai.log_watch", "ai.code_security")
+
+#: Remediation-target values.
+TARGET_REPO = "repo"  # connected+allowlisted repository → draft-PR path
+TARGET_IMAGE = "image"  # container image with no linked repo → fix snippet
+TARGET_CLOUD = "cloud"  # cloud resource/config → operator guidance
+TARGET_SERVICE = "service"  # runtime service/log config → operator guidance
+TARGET_NONE = "none"  # operator-reading material — no automated artifact
+
+
+def remediation_target(source_type: str, payload: dict | None = None) -> str:
+    """WHERE this finding's fix lands — ``repo`` | ``image`` | ``cloud`` |
+    ``service`` | ``none``.
+
+    Only ``repo`` carries the draft-PR affordance. A container finding whose
+    payload names a connected repo (an image traceable to a repo build — the
+    future seam) flips to ``repo``; today's Trivy payloads never carry one, so
+    public/unlinked images honestly resolve to ``image``.
+    """
+    st = (source_type or "").strip()
+    if st in PR_REMEDIABLE_SOURCE_TYPES:
+        return TARGET_REPO
+    if st == "ai.container_security":
+        linked_repo = str((payload or {}).get("repo") or "").strip()
+        return TARGET_REPO if linked_repo else TARGET_IMAGE
+    if st == "ai.cloud_exposure":
+        return TARGET_CLOUD
+    if st == "ai.log_optimization":
+        return TARGET_SERVICE
+    return TARGET_NONE
+
+
 # ``agent_type`` values that are NOT a dispatchable specialist. A card stamped with
 # one of these is deliberately operator-reading material (the orchestrator is not a
 # board-acting specialist and has no triage tool), so it is never dispatched — and

@@ -49,8 +49,10 @@ from components.shared_kernel.domain.triage import (
     DISPATCH_STAMP_TTL_SECONDS,
     NON_SPECIALIST_AGENT_TYPES,
     ROUTABLE_SOURCE_TYPES,
+    TARGET_REPO,
     TriageState,
     is_routable_to_specialist,
+    remediation_target,
 )
 
 logger = logging.getLogger(__name__)
@@ -392,6 +394,19 @@ def request_draft_fix(workspace_id, task_id, *, performed_by: str) -> dict:
         raise DraftFixRefused(
             "not_routable",
             "This finding has no automated fix path — it is operator-reading material, not a code fix.",
+        )
+    # The artifact must MATCH the remediation target: a finding with no linked
+    # repository (a public/unlinked container image, a cloud resource) has
+    # nothing to open a PR against — its fix ships as a snippet/guidance on the
+    # finding itself. Refusing HERE (typed, before any dispatch) replaces the
+    # old doomed path: a full specialist run burned, then the engine refusing
+    # the PR as a misleading ``finding_not_found``.
+    if remediation_target(card.source_type or "", meta.get("payload") or {}) != TARGET_REPO:
+        raise DraftFixRefused(
+            "no_repo_target",
+            "This finding's remediation target is not a connected repository — there is "
+            "nothing to open a pull request against. The fix ships as guidance/a snippet "
+            "on the finding, refreshed on each triage pass.",
         )
     if get_draft_pr(meta).get("url"):
         raise DraftFixRefused("draft_pr_exists", "A draft PR is already open for this finding.")

@@ -21,11 +21,15 @@ from components.integrations.application.ports.finding_facts_port import (
     ActionableFinding,
     FindingFactsPort,
 )
+from components.shared_kernel.domain.triage import PR_REMEDIABLE_SOURCE_TYPES
 
 # The finding sources the ONE draft-PR engine acts on (ADR 0017 D0). A new source
-# joins this tuple together with its patch strategy in the use case — never a
-# second engine.
-ACTIONABLE_SOURCES = ("ai.log_watch", "ai.code_security")
+# joins the shared-kernel tuple together with its patch strategy in the use case —
+# never a second engine. ONE definition (shared kernel) so the engine's gate and
+# the read paths that decide whether to OFFER the PR affordance can never
+# disagree (the pre-fix bug: container findings got the affordance, then the
+# engine refused them as ``finding_not_found``).
+ACTIONABLE_SOURCES = PR_REMEDIABLE_SOURCE_TYPES
 
 
 class BoardFindingFactsReader(FindingFactsPort):
