@@ -215,6 +215,15 @@ def test_draft_fix_lease_is_per_finding_not_per_specialist():
             ),
             "draft_pr_exists",
         ),
+        # The artifact must match the remediation target: a container CVE from a
+        # public/unlinked image has no repo to PR against — typed refusal BEFORE
+        # a specialist run is burned (the old path ran the pipeline, then the
+        # engine refused the PR as a misleading finding_not_found).
+        (
+            _card(source_type="ai.container_security", metadata={"agent_type": "triage_agent"}),
+            "no_repo_target",
+        ),
+        (_card(source_type="ai.cloud_exposure", metadata={"agent_type": "triage_agent"}), "no_repo_target"),
     ],
 )
 def test_draft_fix_refuses_with_a_reason(card, expected_reason):

@@ -399,6 +399,11 @@ class FindingDraftFixView(APIView):
     _REASON_STATUS = {
         "finding_not_found": status.HTTP_404_NOT_FOUND,
         "not_routable": status.HTTP_409_CONFLICT,
+        # The artifact must match the remediation target: a finding with no
+        # linked repository (public/unlinked container image, cloud resource)
+        # has nothing to open a PR against — its fix ships as a snippet on the
+        # finding. Typed refusal, before any specialist run is burned.
+        "no_repo_target": status.HTTP_409_CONFLICT,
         "draft_pr_exists": status.HTTP_409_CONFLICT,
         "ai_unavailable": status.HTTP_409_CONFLICT,
     }
