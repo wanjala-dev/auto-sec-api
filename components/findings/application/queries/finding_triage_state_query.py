@@ -43,6 +43,12 @@ class FindingTriageStateView:
     triaged_at: str = ""
     suggested_fix: str = ""
     confidence: str = ""
+    #: "verified" | "unverified" | "" — the fix's confidence LABEL. ``unverified``
+    #: means the suggestion could not be grounded in the finding's own evidence
+    #: (or the source content is untrusted); the artifact still exists/ships.
+    verification: str = ""
+    #: The named evidence gap when ``verification == "unverified"``.
+    verification_gap: str = ""
     draft_pr: dict | None = None
     #: A fix exists but a guardrail refused the pull request (scope, throttle,
     #: confidence). Surfaced so a blocked PR is visible, never silent.
@@ -101,37 +107,63 @@ def derive_triage_state(
     }
 
     if triage.get("status") == "triaged":
-        needs_human = bool(triage.get("needs_human") or payload.get("needs_human"))
         suggested_fix = str(payload.get("suggested_fix") or "")
         confidence = str(payload.get("confidence") or "")
-        if needs_human:
-            return FindingTriageStateView(
-                state=TriageState.NEEDS_HUMAN.value,
-                reason=str(payload.get("needs_human_reason") or "")
-                or (
-                    "The suggested fix could not be grounded in this finding's own evidence, "
-                    "so it is held for a person. It never becomes an automatic pull request."
-                ),
-                suggested_fix=suggested_fix,
-                confidence=confidence,
-                **base,
-            )
+        unverified = (
+            str(payload.get("verification") or "").strip().lower() == "unverified"
+            # Legacy rows stamped before verification labels existed.
+            or bool(triage.get("needs_human") or payload.get("needs_human"))
+        )
+        gap = str(
+            payload.get("verification_gap") or triage.get("verification_gap") or payload.get("needs_human_reason") or ""
+        )
         if suggested_fix or triage.get("suggested"):
+            if unverified:
+                # A fix EXISTS — it just failed verification. The label downgrades
+                # (the draft PR opens/opened marked [UNVERIFIED]); the artifact is
+                # never withheld, so this state always carries its affordance.
+                return FindingTriageStateView(
+                    state=TriageState.FIX_UNVERIFIED.value,
+                    reason=(
+                        "Review carefully — this fix could not be grounded against the "
+                        f"finding's own evidence ({gap or 'no named anchor'}). Its draft PR "
+                        "is clearly labeled UNVERIFIED; the PR review is the human gate."
+                    ),
+                    suggested_fix=suggested_fix,
+                    confidence=confidence,
+                    verification="unverified",
+                    verification_gap=gap,
+                    blocked_reason=str(blocked.get("reason") or ""),
+                    can_draft_fix=base["draft_pr"] is None,
+                    **base,
+                )
             return FindingTriageStateView(
                 state=TriageState.FIX_READY.value,
                 suggested_fix=suggested_fix,
                 confidence=confidence,
+                verification=str(payload.get("verification") or ""),
                 blocked_reason=str(blocked.get("reason") or ""),
                 reason=str(blocked.get("message") or ""),
                 can_draft_fix=base["draft_pr"] is None,
                 **base,
             )
+        no_fix_why = str(triage.get("no_fix_reason") or "").strip()
         return FindingTriageStateView(
             state=TriageState.NO_FIX.value,
             reason=(
-                "The specialist reviewed this finding and could not derive a confident fix "
-                "from the rule and file alone — it needs a human eye."
+                (
+                    f"The specialist ran and could not derive a fix: {no_fix_why}."
+                    if no_fix_why
+                    else (
+                        "The specialist reviewed this finding and could not derive a confident "
+                        "fix from the rule and file alone."
+                    )
+                )
+                + " Retry available — DRAFT FIX PR re-runs the specialist with fresh context."
             ),
+            # The retry affordance: a no-fix outcome is re-attemptable, never a
+            # dead end.
+            can_draft_fix=True,
             **base,
         )
 

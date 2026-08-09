@@ -24,6 +24,8 @@ class ProjectFindingPrRecorder(FindingPrRecorderPort):
         pr_url: str,
         pr_repo: str,
         branch: str,
+        verification: str = "",
+        verification_gap: str = "",
     ) -> None:
         from components.project.application.ports.record_finding_draft_pr_port import (
             RecordFindingDraftPrCommand,
@@ -40,5 +42,7 @@ class ProjectFindingPrRecorder(FindingPrRecorderPort):
                 pr_url=pr_url,
                 pr_repo=pr_repo,
                 branch=branch,
+                verification=verification,
+                verification_gap=verification_gap,
             )
         )

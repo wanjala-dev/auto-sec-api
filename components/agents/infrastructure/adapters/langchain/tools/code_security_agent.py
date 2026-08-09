@@ -158,8 +158,9 @@ def triage_code_finding(agent, input_str: str) -> str:
     every specialist (via ``process_pending_finding``); this supplies only the
     SAST advisor (``SastFixAdvisor``), the comment, and the payload fields. The
     ``finding_verifier``'s code_security branch grades the suggestion against the
-    rule/file/snippet anchors; an ungrounded one is re-advised once, then flagged
-    ``needs_human`` — it never feeds a draft PR.
+    rule/file/snippet anchors; an ungrounded one is re-advised once, then LABELED
+    ``unverified`` with the named gap — its draft PR still opens, marked
+    [UNVERIFIED] (the label downgrades, it never withholds the artifact).
     """
     from components.code_security.application.planted_instruction_reporter_service import (
         report_planted_instructions,
@@ -220,9 +221,10 @@ def triage_code_finding(agent, input_str: str) -> str:
             comment += (
                 "⚠️ The source file around this finding contains text shaped like "
                 "INSTRUCTIONS TO AN AI ASSISTANT (prompt-injection heuristic hit). The "
-                "suggestion was produced treating that content strictly as data, and this "
-                "finding is held for human review — it will not auto-propose a pull "
-                "request. Inspect the file for planted instructions.\n\n"
+                "suggestion was produced treating that content strictly as data. Any "
+                "draft PR opened from it is clearly labeled UNVERIFIED — inspect the "
+                "file for planted instructions and review the patch carefully before "
+                "merging.\n\n"
             )
         return comment + f"Confidence: {suggestion.confidence}."
 
@@ -233,16 +235,21 @@ def triage_code_finding(agent, input_str: str) -> str:
         payload["fix_before"] = suggestion.fix_before
         payload["fix_after"] = suggestion.fix_after
         if suggestion.source_flagged:
-            # Untrusted-content control: repository content that trips the
-            # injection heuristic NEVER auto-proposes a PR. The engine's
-            # needs_human precondition (and the confidence gate) both read these.
+            # Untrusted-content control, as a LABEL: repository content that trips
+            # the injection heuristic downgrades the fix to UNVERIFIED with the
+            # named gap — the draft PR still opens (it cannot merge itself; the
+            # mechanical ``validate_patch_scope`` guard still fail-closes any
+            # patch that reaches outside the flagged lines), it is just never
+            # presented as trustworthy.
             payload["source_flagged"] = True
             payload["needs_human"] = True
-            payload["needs_human_reason"] = (
+            payload["verification"] = "unverified"
+            payload["verification_gap"] = (
                 "The source file contains text shaped like instructions to an AI assistant "
-                "(possible prompt injection planted in the repository) — a human must review "
-                "this fix before it becomes a pull request."
+                "(possible prompt injection planted in the repository) — review this patch "
+                "carefully before merging; treat the file's content as untrusted."
             )
+            payload["needs_human_reason"] = payload["verification_gap"]
 
     def describe_action(suggestion):
         if suggestion is None:

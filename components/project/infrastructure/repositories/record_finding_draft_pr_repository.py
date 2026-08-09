@@ -53,16 +53,23 @@ class OrmRecordFindingDraftPrRepository(RecordFindingDraftPrPort):
                 "branch": command.branch,
                 "opened_by": str(command.performed_by),
                 "opened_at": opened_at,
+                "verification": command.verification,
+                "verification_gap": command.verification_gap,
             },
         )
 
         # Same growable provenance shape the detector/triage pipeline appends to.
         provenance = meta.get("provenance") or {"events": []}
         provenance.setdefault("events", [])
+        unverified = command.verification == "unverified"
         provenance["events"].append(
             {
                 "actor": f"agent:{command.acting_agent} via user:{command.performed_by}",
-                "action": f"opened draft PR {command.pr_url}",
+                "action": (
+                    f"opened draft PR {command.pr_url} (UNVERIFIED — review carefully)"
+                    if unverified
+                    else f"opened draft PR {command.pr_url}"
+                ),
                 "at": opened_at,
             }
         )
@@ -74,13 +81,16 @@ class OrmRecordFindingDraftPrRepository(RecordFindingDraftPrPort):
 
         author = CustomUser.objects.filter(id=command.performed_by).first()
         if author is not None:
-            TaskComment.objects.create(
-                task=task,
-                author=author,
-                comment=(
-                    f"🔧 Draft PR opened for this finding: {command.pr_url} "
-                    f"(branch `{command.branch}`, repo `{command.pr_repo}`)."
-                ),
+            comment = (
+                f"🔧 Draft PR opened for this finding: {command.pr_url} "
+                f"(branch `{command.branch}`, repo `{command.pr_repo}`)."
             )
+            if unverified:
+                comment += (
+                    "\n\n⚠️ This PR is labeled UNVERIFIED — the fix could not be grounded "
+                    f"against the finding's evidence ({command.verification_gap or 'no named anchor'}). "
+                    "Review it carefully before merging."
+                )
+            TaskComment.objects.create(task=task, author=author, comment=comment)
 
         return RecordFindingDraftPrResult(recorded=True)

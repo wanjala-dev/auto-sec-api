@@ -533,14 +533,31 @@ class TaskSerializer(WritableNestedModelSerializer, serializers.ModelSerializer)
             "suggested_fix": payload.get("suggested_fix") or "",
             "recommendation": payload.get("recommendation") or "",
             "triage_status": (triage.get("status") if isinstance(triage, dict) else "") or "pending",
-            # Grounded-verifier flag: the suggestion couldn't be grounded in the
-            # finding's evidence → committed but downgraded, awaiting a human.
+            # Grounded-verifier LABEL (gate → labeler): "unverified" means the
+            # suggestion couldn't be grounded in the finding's evidence (or the
+            # source content is untrusted) — the fix still ships, its draft PR
+            # opens marked [UNVERIFIED], and the HUD renders the gap verbatim.
+            "verification": str(payload.get("verification") or ""),
+            "verification_gap": str(
+                payload.get("verification_gap")
+                or (triage.get("verification_gap") if isinstance(triage, dict) else "")
+                or payload.get("needs_human_reason")
+                or ""
+            ),
+            # Boolean kept for legacy consumers (posture backlog, older FE).
             "needs_human": bool(
                 payload.get("needs_human") or (triage.get("needs_human") if isinstance(triage, dict) else False)
             ),
+            "needs_human_reason": str(payload.get("needs_human_reason") or ""),
+            # Untrusted-content heuristic hit (SAST): the HUD's prominent
+            # planted-instruction warning keys off this. Was previously written
+            # to the payload but never surfaced here — the FE read a field that
+            # never arrived.
+            "source_flagged": bool(payload.get("source_flagged")),
             # Draft-PR outcome (rung 1): set by OpenDraftPrUseCase after the
             # human approves. ``None`` until a PR exists — the UI shows the
-            # approve affordance for triaged, grounded findings without one.
+            # approve affordance for triaged findings without one. Carries the
+            # verification label the engine stamped.
             "draft_pr": payload.get("draft_pr") or None,
         }
         if source_type == "ai.code_security":

@@ -5,9 +5,11 @@ consent gates, same validate_patch chain, same preview contract, same provenance
 — differing only in the patch STRATEGY (``SastPatchAdvisor``) and the location
 resolution (pass-through: the scanner IS the resolver, no traceback heuristics).
 
-Pins the P2-specific gates: the location pass-through, the confidence gate, the
-per-repo open-PR throttle, and the untrusted-content scope guard reaching the
-API as a typed refusal.
+Pins the P2-specific behaviour: the location pass-through, the per-repo open-PR
+throttle, the untrusted-content scope guard reaching the API as a typed refusal
+— and the gate→labeler contract: an unverified / low-confidence / source-flagged
+fix still opens its draft PR, title-prefixed [UNVERIFIED] with the named gap
+(the #866 regression), never a withheld artifact.
 """
 
 from __future__ import annotations
@@ -200,24 +202,86 @@ class TestSastDraftPrHappyPath:
         assert "DRAFT" in bodies[0]
 
 
+class _PrCapture(_FakeGitHub):
+    """Records the POST /pulls request body so a test can assert the label."""
+
+    def __init__(self):
+        super().__init__()
+        self.pr_bodies: list[dict] = []
+
+    def __call__(self, method, url, headers=None, json=None, params=None, timeout=None):
+        if method == "POST" and url.endswith("/pulls"):
+            self.pr_bodies.append(json or {})
+        return super().__call__(method, url, headers=headers, json=json, params=params, timeout=timeout)
+
+
 @pytest.mark.django_db
 class TestSastGates:
-    def test_low_confidence_never_becomes_a_pr(self, workspace_factory, team_factory):
+    def test_low_confidence_opens_a_labeled_pr_not_a_refusal(self, workspace_factory, team_factory):
+        """Gate → labeler: the honest-but-unsure tier gets its artifact too, with
+        the doubt carried ON the PR ([UNVERIFIED] + the named gap), not a 409."""
         workspace, owner, team, column = _board(workspace_factory, team_factory)
         task = _sast_finding(workspace, owner, team, column, confidence="low")
         _connection(workspace, owner)
         _capability(workspace, owner)
-        fake = _FakeGitHub()
+        fake = _PrCapture()
 
-        with mock.patch(_REQUESTS_PATH, new=fake), pytest.raises(DraftPrPreconditionError) as exc:
-            _use_case().execute(workspace_id=str(workspace.id), task_id=str(task.id), performed_by=str(owner.id))
+        with mock.patch(_REQUESTS_PATH, new=fake), mock.patch(_SAST_PROPOSE, return_value=_PATCH):
+            result = _use_case().execute(
+                workspace_id=str(workspace.id), task_id=str(task.id), performed_by=str(owner.id)
+            )
 
-        assert exc.value.reason == "low_confidence"
-        assert fake.calls == []  # refused before any API call
+        assert result.created is True
+        assert result.verification == "unverified"
+        assert "confidence" in result.verification_gap.lower()
+        assert fake.pr_bodies[0]["title"].startswith("[Auto-Sec][UNVERIFIED]")
+        assert "Review carefully — UNVERIFIED" in fake.pr_bodies[0]["body"]
 
-    def test_needs_human_finding_never_becomes_a_pr(self, workspace_factory, team_factory):
-        """The untrusted-content control's end state: a flagged source file sets
-        payload.needs_human, and the engine refuses — no PR from planted text."""
+    def test_866_plausible_but_unverifiable_fix_opens_an_unverified_pr(self, workspace_factory, team_factory):
+        """Named regression — dogfood finding #866: a plausible but semantically
+        wrong parameterization fix for raw-SQL %-formatting. The grounded
+        verifier could not anchor it (``verification: unverified`` + the gap on
+        the card). The honest outcome is NOT a held fix and a dead-end NEEDS
+        HUMAN chip — it is a draft PR that says loudly it is unverified and why.
+        """
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        gap = (
+            "The fix references none of the finding's specifics (e.g. sql-execute-format, "
+            "migrate_schema.py) and reads as generic."
+        )
+        task = _sast_finding(
+            workspace,
+            owner,
+            team,
+            column,
+            extra={"verification": "unverified", "verification_gap": gap, "needs_human": True},
+        )
+        _connection(workspace, owner)
+        _capability(workspace, owner)
+        fake = _PrCapture()
+
+        with mock.patch(_REQUESTS_PATH, new=fake), mock.patch(_SAST_PROPOSE, return_value=_PATCH):
+            result = _use_case().execute(
+                workspace_id=str(workspace.id), task_id=str(task.id), performed_by=str(owner.id)
+            )
+
+        # The PR opened — the artifact is never withheld…
+        assert result.created is True
+        assert result.url.endswith("/pull/11")
+        # …and it is loudly labeled, with the verifier's own gap verbatim.
+        assert result.verification == "unverified"
+        assert result.verification_gap == gap
+        assert fake.pr_bodies[0]["title"].startswith("[Auto-Sec][UNVERIFIED]")
+        assert gap in fake.pr_bodies[0]["body"]
+        # The card's draft_pr record carries the label (the chip's data source).
+        task.refresh_from_db()
+        assert task.metadata["payload"]["draft_pr"]["verification"] == "unverified"
+
+    def test_planted_instruction_finding_opens_a_labeled_pr(self, workspace_factory, team_factory):
+        """The untrusted-content control, relabeled: a flagged source file yields
+        an [UNVERIFIED] draft PR naming the injection suspicion — the mechanical
+        ``validate_patch_scope`` guard (below) is what still fail-closes a patch
+        that actually reaches outside the flagged lines."""
         workspace, owner, team, column = _board(workspace_factory, team_factory)
         task = _sast_finding(
             workspace,
@@ -228,13 +292,16 @@ class TestSastGates:
         )
         _connection(workspace, owner)
         _capability(workspace, owner)
-        fake = _FakeGitHub()
+        fake = _PrCapture()
 
-        with mock.patch(_REQUESTS_PATH, new=fake), pytest.raises(DraftPrPreconditionError) as exc:
-            _use_case().execute(workspace_id=str(workspace.id), task_id=str(task.id), performed_by=str(owner.id))
+        with mock.patch(_REQUESTS_PATH, new=fake), mock.patch(_SAST_PROPOSE, return_value=_PATCH):
+            result = _use_case().execute(
+                workspace_id=str(workspace.id), task_id=str(task.id), performed_by=str(owner.id)
+            )
 
-        assert exc.value.reason == "finding_needs_human"
-        assert fake.calls == []
+        assert result.created is True
+        assert result.verification == "unverified"
+        assert fake.pr_bodies[0]["title"].startswith("[Auto-Sec][UNVERIFIED]")
 
     def test_per_repo_open_pr_throttle(self, workspace_factory, team_factory):
         workspace, owner, team, column = _board(workspace_factory, team_factory)

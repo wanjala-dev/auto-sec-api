@@ -27,6 +27,8 @@ class FindingPrRecorderPort(abc.ABC):
         pr_url: str,
         pr_repo: str,
         branch: str,
+        verification: str = "",
+        verification_gap: str = "",
     ) -> None:
         """Stamp the opened draft PR onto the finding's board card.
 

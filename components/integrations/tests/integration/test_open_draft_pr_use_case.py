@@ -7,8 +7,10 @@ sibling advisor tests stub ``LogFixAdvisor.suggest``). Covers:
 
 * happy path — branch/commit/PR calls issued, ``payload.draft_pr`` +
   provenance event + TaskComment written;
-* every precondition failure (no connection, repo not allowlisted, finding
-  needs_human, finding not triaged, capability off) with typed reasons;
+* every precondition failure (no connection, repo not allowlisted, finding not
+  triaged, capability off) with typed reasons — plus the gate→labeler contract:
+  an ungrounded (needs_human) fix opens a PR labeled [UNVERIFIED], never a
+  refusal;
 * idempotency — a finding that already has ``payload.draft_pr`` returns the
   existing URL with ZERO GitHub API calls;
 * the endpoint (workspace owner) — 201 with the PR URL.
@@ -46,9 +48,13 @@ class _FakeGitHub:
 
     def __init__(self):
         self.calls: list[tuple[str, str]] = []
+        # (method, url, json_body) — lets a test assert on what was SENT (e.g.
+        # the PR title/body carrying the [UNVERIFIED] label).
+        self.bodies: list[tuple[str, str, dict | None]] = []
 
     def __call__(self, method, url, headers=None, json=None, params=None, timeout=None):
         self.calls.append((method, url))
+        self.bodies.append((method, url, json))
         path = url.split("api.github.com")[-1]
 
         def _resp(payload, status=200):
@@ -369,14 +375,46 @@ class TestOpenDraftPrPreconditions:
         assert exc.value.reason == "repo_not_allowlisted"
         assert fake.calls == []
 
-    def test_finding_needs_human_is_refused(self, workspace_factory, team_factory):
+    def test_needs_human_finding_opens_a_labeled_pr_not_a_refusal(self, workspace_factory, team_factory):
+        """Gate → labeler: an ungrounded (needs_human) fix still gets its draft PR
+        — title-prefixed [UNVERIFIED], the gap named in the body, the label on
+        the card's draft_pr record. A finding in a connected repo always carries
+        its artifact; the draft PR is the human review surface."""
         workspace, owner, team, column = _board(workspace_factory, team_factory)
-        task = _triaged_finding(workspace, owner, team, column, needs_human=True)
+        task = _triaged_finding(
+            workspace,
+            owner,
+            team,
+            column,
+            needs_human=True,
+            extra_payload={"needs_human_reason": "The fix references none of the error's specifics"},
+        )
         _connection(workspace, owner)
         _capability_agent(workspace, owner)
-        with pytest.raises(DraftPrPreconditionError) as exc:
-            self._execute(workspace, task, owner)
-        assert exc.value.reason == "finding_needs_human"
+        fake = _FakeGitHub()
+
+        with mock.patch(_REQUESTS_PATH, new=fake), mock.patch(_PROPOSE_PATH, return_value=_PATCH):
+            result = _use_case().execute(
+                workspace_id=str(workspace.id), task_id=str(task.id), performed_by=str(owner.id)
+            )
+
+        assert result.created is True  # the artifact ships
+        assert result.verification == "unverified"
+        assert "references none of the error's specifics" in result.verification_gap
+
+        # The PR itself is loudly labeled: title prefix + body warning section.
+        pr_call = next(body for m, u, body in fake.bodies if m == "POST" and u.endswith("/pulls"))
+        assert pr_call["title"].startswith("[Auto-Sec][UNVERIFIED]")
+        assert "Review carefully — UNVERIFIED" in pr_call["body"]
+        assert "references none of the error's specifics" in pr_call["body"]
+
+        # The card records the label so the HUD renders FIX DRAFTED — UNVERIFIED.
+        task.refresh_from_db()
+        draft = task.metadata["payload"]["draft_pr"]
+        assert draft["verification"] == "unverified"
+        assert "UNVERIFIED" in task.metadata["provenance"]["events"][-1]["action"]
+        comment = TaskComment.objects.filter(task=task).first()
+        assert comment is not None and "UNVERIFIED" in comment.comment
 
     def test_untriaged_finding_is_refused(self, workspace_factory, team_factory):
         workspace, owner, team, column = _board(workspace_factory, team_factory)
@@ -644,13 +682,31 @@ class TestAgentToolDelegation:
         from components.agents.infrastructure.adapters.langchain.tools import triage_agent as tools
 
         workspace, owner, team, column = _board(workspace_factory, team_factory)
-        task = _triaged_finding(workspace, owner, team, column, needs_human=True)
+        task = _triaged_finding(workspace, owner, team, column, triaged=False)
         _connection(workspace, owner)
         _capability_agent(workspace, owner)
         agent = SimpleNamespace(workspace_id=str(workspace.id), user_id=str(owner.id))
 
         result = tools.open_draft_pr(agent, str(task.id))
-        assert "finding_needs_human" in result
+        assert "finding_not_triaged" in result
+
+    def test_tool_labels_an_unverified_pr_in_its_reply(self, workspace_factory, team_factory):
+        """The agent's own report of an ungrounded fix's PR must carry the label —
+        the loop closes with an artifact, never a refusal."""
+        from components.agents.infrastructure.adapters.langchain.tools import triage_agent as tools
+
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _triaged_finding(workspace, owner, team, column, needs_human=True)
+        _connection(workspace, owner)
+        _capability_agent(workspace, owner)
+        agent = SimpleNamespace(workspace_id=str(workspace.id), user_id=str(owner.id))
+        fake = _FakeGitHub()
+
+        with mock.patch(_REQUESTS_PATH, new=fake), mock.patch(_PROPOSE_PATH, return_value=_PATCH):
+            result = tools.open_draft_pr(agent, json.dumps({"task_id": str(task.id)}))
+
+        assert f"https://github.com/{_REPO}/pull/7" in result
+        assert "UNVERIFIED" in result
 
 
 @pytest.mark.django_db
