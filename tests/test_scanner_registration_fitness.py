@@ -87,6 +87,7 @@ def test_dispatch_pinned_queue_guard_matches_the_registry():
 _EXPECTED_BEAT_TASKS: dict[str, dict[str, bool]] = {
     # task name → {settings module: expected present}
     "cloud_posture.schedule_prowler_runs": {"local": True, "dev": True, "prod": True},
+    "cloud_posture.schedule_vercel_prowler_runs": {"local": True, "dev": True, "prod": True},
     "container_security.schedule_container_scans": {"local": True, "dev": False, "prod": False},
     "code_security.schedule_repo_scans": {"local": True, "dev": False, "prod": False},
 }

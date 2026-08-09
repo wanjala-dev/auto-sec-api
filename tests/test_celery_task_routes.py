@@ -41,6 +41,8 @@ CONSUMED_QUEUES = {"default", "ai_teammate", "cloud_posture", "container_securit
 # by dispatch_scan's apply_async(queue=queue_for(source)) in
 # components/scanning/application/providers/scanner_registry.py. Kept in
 # lockstep with the registry by tests/test_scanner_registration_fitness.py.
+# (cloud_posture entered via the Vercel posture entry, #286 — the guard had
+# silently missed it, the third live drift these fitness tests caught.)
 DISPATCH_PINNED_QUEUES = {"container_security", "code_security", "cloud_posture"}
 
 
