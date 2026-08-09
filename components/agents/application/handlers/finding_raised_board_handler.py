@@ -96,7 +96,12 @@ def _build_logwatch_card(finding, event, mapping) -> dict:
         "title": finding.title,
         "summary": finding.description,
         "source_type": mapping["source_type"],
-        "agent_type": attrs.get("agent_type") or "ai_teammate",  # the routing target
+        # The routing target. The bridge normally carries it from the detector; the
+        # FALLBACK is the source's own specialist, never the orchestrator — a
+        # routable card stamped ``ai_teammate`` is skipped by the router and the
+        # finding is silently never triaged (the ``ai.code_security`` strand, found
+        # by ``test_every_routable_board_source_names_a_real_specialist``).
+        "agent_type": attrs.get("agent_type") or mapping.get("default_agent_type") or "ai_teammate",
         "detector_key": mapping["detector_key"],
         "payload": payload,
         "context": dict(attrs.get("board_context") or {}),
@@ -366,12 +371,14 @@ _SOURCE_BOARD = {
         "source_type": "ai.log_watch",
         "detector_key": "logwatch.error",
         "flag": _LOGWATCH_CUTOVER_FLAG,
+        "default_agent_type": "triage_agent",  # routable → must fall back to a REAL specialist
         "build": _build_logwatch_card,
     },
     "logwatch.optimization": {
         "source_type": "ai.log_optimization",
         "detector_key": "logwatch.optimization",
         "flag": _LOGWATCH_CUTOVER_FLAG,
+        "default_agent_type": "optimization_agent",
         "build": _build_logwatch_card,
     },
 }
@@ -406,6 +413,9 @@ def handle_finding_raised_board(event: FindingRaised) -> None:
     )
     from components.agents.application.providers.ai_provider import AIProvider
     from components.agents.infrastructure.services.agents_board_service import SUGGESTED
+    from components.agents.infrastructure.services.finding_dispatch_service import (
+        request_specialist_dispatch,
+    )
     from components.findings.application.providers.finding_provider import FindingProvider
 
     workspace = AIProvider.build_workspace_query().get_by_id(event.workspace_id)
@@ -482,4 +492,23 @@ def handle_finding_raised_board(event: FindingRaised) -> None:
         task_id,
         event.source,
         finding.severity.value,
+    )
+
+    # Fire the owning specialist NOW rather than leaving the finding to wait for the
+    # next 5-minutely cadence tick. THIS is the honest choke point for "the moment
+    # the scan happens": ``ScanCompleted`` reads like the natural hook but is
+    # published as its own Celery task alongside the ``FindingObserved`` batch, two
+    # async hops BEFORE any card exists — a dispatch hung off it would run against an
+    # empty backlog and burn the lease. Here, the precondition genuinely holds: a
+    # routable card exists. It is also source-agnostic (log-watch findings never come
+    # from a scan at all).
+    #
+    # Bounded by construction: this is O(1) per finding (one cache op, no query), and
+    # the shared per-(workspace, specialist) lease collapses a 500-finding scan into
+    # ONE dispatch carrying all of them. The cadence remains the backstop.
+    request_specialist_dispatch(
+        event.workspace_id,
+        card["agent_type"],
+        source_type=card["source_type"],
+        trigger="finding_raised",
     )

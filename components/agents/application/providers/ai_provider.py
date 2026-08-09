@@ -788,6 +788,21 @@ class AIProvider:
         return OrmAgentCapabilityRepository()
 
     @staticmethod
+    def build_finding_dispatch_port():
+        """The agents context's public way to START triage work for a finding.
+
+        Callers outside this context (the operator's "draft a fix PR" action) reach
+        the routing engine through here, so no other context imports agents
+        infrastructure — and all three triggers (on-detection, cadence, on-demand)
+        keep sharing the one engine behind it.
+        """
+        from components.agents.infrastructure.services.finding_dispatch_service import (
+            FindingDispatchAdapter,
+        )
+
+        return FindingDispatchAdapter()
+
+    @staticmethod
     def build_ai_permission_grant_port():
         from components.agents.infrastructure.repositories.orm_ai_permission_grant_repository import (
             OrmAiPermissionGrantRepository,

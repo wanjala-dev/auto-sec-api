@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from uuid import UUID
 
+from components.findings.application.queries.finding_triage_state_query import FindingTriageStateView
 from components.findings.domain.entities.finding_entity import FindingEntity
 
 # Pagination bounds — a list endpoint must paginate (performance rule §11). The
@@ -64,6 +65,10 @@ class RankedFinding:
 
     finding: FindingEntity
     risk: FindingRiskView | None = None
+    #: Where this finding sits between "detected" and "fix proposed". Attached by
+    #: the read use cases through ``FindingTriageStatePort`` so the HUD never has to
+    #: render an unexplained blank while a specialist run is pending.
+    triage: FindingTriageStateView | None = None
 
 
 @dataclass(frozen=True)

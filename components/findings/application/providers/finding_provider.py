@@ -48,7 +48,10 @@ class FindingProvider:
             DjangoFindingRepository,
         )
 
-        return ListFindingsUseCase(store=DjangoFindingRepository())
+        return ListFindingsUseCase(
+            store=DjangoFindingRepository(),
+            triage_states=FindingProvider.build_finding_triage_state_reader(),
+        )
 
     @staticmethod
     def build_get_finding_use_case():
@@ -57,7 +60,22 @@ class FindingProvider:
             GetFindingUseCase,
         )
 
-        return GetFindingUseCase(store=FindingProvider.build_finding_store())
+        return GetFindingUseCase(
+            store=FindingProvider.build_finding_store(),
+            triage_states=FindingProvider.build_finding_triage_state_reader(),
+        )
+
+    @staticmethod
+    def build_finding_triage_state_reader():
+        """Read-only access to each finding's triage state (where it sits between
+        "detected" and "fix proposed"). The state is written on the board card by the
+        agents pipeline; this composition root picks the adapter that reads it, so the
+        read use cases stay ORM-free."""
+        from components.findings.infrastructure.repositories.board_triage_state_repository import (
+            BoardTriageStateRepository,
+        )
+
+        return BoardTriageStateRepository()
 
     @staticmethod
     def build_recompute_finding_risk_use_case():

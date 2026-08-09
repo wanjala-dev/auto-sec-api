@@ -11,6 +11,7 @@ from components.integrations.api.controller import (
     DeliveryConnectionDetailView,
     DeliveryConnectionListCreateView,
     DeliveryConnectionVerifyView,
+    FindingDraftFixView,
     FindingOpenDraftPrView,
     FindingPreviewDraftPrView,
     TriageCapabilityView,
@@ -62,6 +63,14 @@ urlpatterns = [
         "workspaces/<uuid:workspace_id>/findings/<str:task_id>/preview-draft-pr/",
         FindingPreviewDraftPrView.as_view(),
         name=FindingPreviewDraftPrView.name,
+    ),
+    path(
+        # On-demand "draft a fix PR": triage this finding through the deep pipeline
+        # (pinned worker) and, only if every guardrail passes, open its draft PR.
+        # Enqueues + returns 202 — never runs the pipeline in-request.
+        "workspaces/<uuid:workspace_id>/findings/<str:task_id>/draft-fix/",
+        FindingDraftFixView.as_view(),
+        name=FindingDraftFixView.name,
     ),
     # ── Log sources (ADR 0008 Phase 3) ──
     path(

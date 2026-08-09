@@ -21,6 +21,7 @@ from collections.abc import Iterable
 
 from components.agents.domain.detectors.base import BaseDetector, DetectorContext, DetectorResult
 from components.agents.infrastructure.adapters.actions.detectors import registry
+from components.agents.infrastructure.services import finding_dispatch_service as fds
 
 logger = logging.getLogger(__name__)
 
@@ -156,24 +157,27 @@ class AiFindingRouterDetector(BaseDetector):
     This is the consumer/routing half — the seam that expands as we add
     specialists. It emits no findings of its own. Every finding persisted via
     the AIAction path carries ``metadata.agent_type`` (the ``DetectorResult``'s
-    target specialist — ``triage_agent`` for log-watch errors today; a future
-    ``optimization_agent`` / ``rca_agent`` for other finding kinds). This router
-    groups pending findings by that declared target and ENQUEUES each group's
-    dispatch (``dispatch_finding_specialist`` on the agent worker → the cycle's
+    target specialist — ``triage_agent`` for log-watch errors today, a
+    ``code_security_agent`` for SAST findings). The router groups pending
+    findings by that declared target and ENQUEUES each group's dispatch
+    (``dispatch_finding_specialist`` on the agent worker → the cycle's
     entitlement-gated delegator → ``AgentService.execute_agent`` — the detector
     cycle is still the autonomous orchestrator, skill §3; the router just no
-    longer BLOCKS the cycle on the specialist's LLM latency). The specialist
-    then processes its own findings with its own tools.
+    longer BLOCKS the cycle on the specialist's LLM latency).
 
     Why route by the finding's declared target rather than hard-code one agent:
     it SCALES. Adding a new finding→specialist path is "file findings with
     ``agent_type=<new_specialist>``" — the router picks them up with no change
-    here. Routing is deterministic today (each finding names its target — the
-    documented ``Command(goto=…)`` pattern for known routing); when a finding's
-    correct specialist becomes ambiguous, the target can be left unset and this
-    hand-off routed through the deep planner instead (the forced-worker knob in
-    ``execute_plan_once`` keeps that reliable). Detect now, route next tick (the
-    cycle persists results only after every detector's ``execute`` returns).
+    here. Routing is deterministic (each finding names its target — the
+    documented ``Command(goto=…)`` pattern for known routing).
+
+    **This detector is now the BACKSTOP, not the only trigger.** The grouping /
+    lease / enqueue choreography moved to ``finding_dispatch_service`` so the
+    board handler can fire the SAME dispatch the moment a routable card exists
+    (a finding must never sit in an unexplained gap between "detected" and "fix
+    proposed"). The cadence still sweeps every tick and stays correct on its own:
+    anything the immediate path missed — a burst that outran the debounce window,
+    a workspace whose gate was off at file time, a lost task — is picked up here.
     """
 
     slug = "ai_findings.route"
@@ -181,114 +185,16 @@ class AiFindingRouterDetector(BaseDetector):
     cadence = "frequent"
     description = "Routes pending AI findings to the specialist each finding declares (metadata.agent_type)."
 
-    # Finding source_types this router owns. Grows as detectors add kinds; each
-    # entry's findings route by their declared metadata.agent_type. Adding
-    # ``ai.log_optimization`` here is the ENTIRE routing change needed to support
-    # the new optimization specialist — the dispatch logic below is untouched.
-    ROUTABLE_SOURCE_TYPES = (
-        "ai.log_watch",
-        "ai.log_optimization",
-        "ai.cloud_exposure",
-        "ai.container_security",
-        "ai.code_security",
-    )
-    # Findings targeting the orchestrator itself are not re-dispatched here.
-    _NON_SPECIALIST = {"", "ai_teammate", "ai_teammate_agent", "orchestrator"}
-
-    # A dispatch to a specialist is leased in the cache for this long so
-    # overlapping 5-min cycles (beat cadence == the run's time limit) don't fire
-    # a second redundant deep run for the same specialist. > one cycle, < a long
-    # backlog stall. Correctness is still guaranteed by triage_finding's row
-    # lock; this only saves wasted deep runs + LLM spend.
-    _DISPATCH_LEASE_SECONDS = 240
+    # Re-exported from the shared dispatch engine so there is exactly ONE
+    # definition of what is routable / what is not a specialist. Callers and
+    # tests may keep reading them off the detector.
+    ROUTABLE_SOURCE_TYPES = fds.ROUTABLE_SOURCE_TYPES
+    _NON_SPECIALIST = fds.NON_SPECIALIST
+    _DISPATCH_LEASE_SECONDS = fds.DISPATCH_LEASE_SECONDS
 
     def execute(self, context: DetectorContext) -> Iterable[DetectorResult]:
-        from collections import defaultdict
-
-        from django.core.cache import cache
-        from django.db import transaction
-
-        from components.agents.infrastructure.adapters.langchain.tools._finding_processing import (
-            not_triaged_filter,
-        )
-        from components.agents.infrastructure.tasks.agent_tasks import dispatch_finding_specialist
-        from infrastructure.persistence.project.models import Task
-
-        # Group pending findings by the specialist they declare. The handled
-        # exclusion is pushed into the query (NULL-safe — see not_triaged_filter;
-        # ``.exclude`` alone drops findings whose triage key isn't stamped yet)
-        # so the scan stays bounded as finding history grows.
-        by_specialist: dict[str, list] = defaultdict(list)
-        pending = (
-            Task.objects.filter(workspace_id=context.workspace_id, source_type__in=self.ROUTABLE_SOURCE_TYPES)
-            .filter(not_triaged_filter())
-            .only("id", "metadata")
-        )
-        for t in pending:
-            target = ((t.metadata or {}).get("agent_type") or "").strip()
-            if target in self._NON_SPECIALIST:
-                continue
-            by_specialist[target].append(t)
-
-        for specialist, findings in by_specialist.items():
-            # Skip if a dispatch to this specialist is already in flight (lease).
-            lease_key = f"ai_finding_router:dispatch:{context.workspace_id}:{specialist}"
-            if not cache.add(lease_key, "1", self._DISPATCH_LEASE_SECONDS):
-                logger.info(
-                    "ai_finding_router dispatch in-flight, skipping workspace=%s specialist=%s",
-                    context.workspace_id,
-                    specialist,
-                )
-                continue
-
-            goal = (
-                f"There are {len(findings)} pending findings on the SOC board assigned to you. "
-                "Use your tools to list them and process each one (propose a fix, comment it, "
-                "and advance the card)."
-            )
-            # Orchestrator-routed, deterministic named dispatch — ENQUEUED, not
-            # inline. The specialist's deep run (advisor + grader LLM calls per
-            # finding) used to execute synchronously here and blew the 30s
-            # per-detector timeout on every real batch; the router's only job is
-            # ROUTING, so it hands the run to the agent worker
-            # (``dispatch_finding_specialist``) and returns instantly. The task
-            # reuses the cycle's entitlement-gated delegator, so orchestrator
-            # routing + workspace entitlements still hold. The target is KNOWN
-            # (the finding declares it) — worker_agent_type pins it for the
-            # runner's forced-worker override so even a deep run can't drift
-            # (§5.13). Dispatched after commit (celery-tasks skill §0) so the
-            # worker never races a finding row the cycle hasn't committed yet.
-            agent_context = {
-                # The dispatch MUST run the LangGraph deep pipeline —
-                # worker_agent_type (forced-worker pin) and max_reflections
-                # are only read by _execute_deep, and the telemetry stamp
-                # reads run_metadata off the deep run's final_output. Without
-                # this key the specialist Agent row's config decides the mode,
-                # and a row with mode=None silently drops to the plain
-                # executor where both keys are dead and no telemetry exists.
-                "mode": "deep",
-                "worker_agent_type": specialist,
-                "source": "ai_findings.route",
-                # Verification loop (L2): the specialist self-verifies its
-                # finding output and re-runs once on a failing grade. This is
-                # the autonomous path where finding quality IS the product.
-                "max_reflections": 1,
-            }
-            performed_by = str((context.extras or {}).get("performed_by") or "") or None
-            transaction.on_commit(
-                # All loop variables bound as defaults — a bare closure would
-                # capture them by reference and every enqueue would fire with
-                # the LAST iteration's specialist/goal.
-                lambda s=specialist, g=goal, ctx=agent_context, p=performed_by: dispatch_finding_specialist.delay(
-                    str(context.workspace_id), s, g, ctx, p
-                )
-            )
-            logger.info(
-                "ai_finding_router enqueued workspace=%s specialist=%s pending=%s",
-                context.workspace_id,
-                specialist,
-                len(findings),
-            )
+        performed_by = str((getattr(context, "extras", None) or {}).get("performed_by") or "") or None
+        fds.dispatch_pending_findings(context.workspace_id, performed_by=performed_by, trigger=self.slug)
         return []
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from components.findings.application.queries.finding_triage_state_query import FindingTriageStateView
 from components.findings.application.queries.list_findings_query import (
     FindingPage,
     FindingRiskView,
@@ -59,9 +60,36 @@ class FindingResource:
         }
 
     @staticmethod
+    def _triage_dict(triage: FindingTriageStateView | None) -> dict | None:
+        """Where this finding sits between "detected" and "fix proposed".
+
+        The HUD renders this on every finding so there is never an unexplained gap:
+        QUEUED names the next cadence pass, DRAFTING says a specialist is working
+        now, FIX READY carries the suggestion + the draft-PR affordance, NEEDS HUMAN
+        and NO FIX carry the reason the pipeline already recorded, and NOT ROUTED
+        says plainly that this kind of finding has no automated fix path.
+        """
+        if triage is None:
+            return None
+        return {
+            "state": triage.state,
+            "specialist": triage.specialist,
+            "next_triage_at": triage.next_triage_at.isoformat() if triage.next_triage_at else None,
+            "reason": triage.reason,
+            "task_id": triage.task_id,
+            "triaged_at": triage.triaged_at,
+            "suggested_fix": triage.suggested_fix,
+            "confidence": triage.confidence,
+            "draft_pr": triage.draft_pr,
+            "blocked_reason": triage.blocked_reason,
+            "can_draft_fix": triage.can_draft_fix,
+        }
+
+    @staticmethod
     def from_ranked(row: RankedFinding) -> dict:
         data = FindingResource._finding_dict(row.finding)
         data["risk"] = FindingResource._risk_dict(row.risk)
+        data["triage"] = FindingResource._triage_dict(row.triage)
         return data
 
     @staticmethod
