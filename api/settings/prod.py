@@ -353,6 +353,13 @@ CELERY_BEAT_SCHEDULE = {
         "task": "cloud_posture.schedule_prowler_runs",
         "schedule": crontab(hour=2, minute=0),
     },
+    # Nightly Vercel posture scan (ADR 0021 D3) — fans out per CONNECTED VercelConnection
+    # of opted-in workspaces (feature.vercel_posture). Dark until opt-in; the task
+    # self-gates on the flag AND the scanning dispatch gate (cooldown/in-flight).
+    "schedule_vercel_posture_scans": {
+        "task": "cloud_posture.schedule_vercel_prowler_runs",
+        "schedule": crontab(hour=2, minute=30),
+    },
     # Daily threat-intel feed refresh (ADR 0013 D2) — EPSS + CISA KEV → immutable dated
     # snapshots; publishes VulnIntelRefreshed so findings rescores contextual risk.
     "vuln_intel_refresh_feeds": {
