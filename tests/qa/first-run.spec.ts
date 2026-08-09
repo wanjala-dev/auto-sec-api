@@ -399,20 +399,38 @@ test.describe.serial('first-run customer journey', () => {
     // FINDINGS action (IntegrationsSection omits onViewRepoFindings — the
     // FINDINGS panel isn't reachable from inside the settings modal), so walk
     // to the FINDINGS panel by its deep link instead. In a from-zero workspace
-    // every finding there IS this scan's output — no scoping needed.
+    // every finding there IS this scan's output — no scoping needed. The
+    // triage-state chip rides each row's header (HudFindingsPanel), so its
+    // presence proves finding + honest per-finding triage state together.
     await page.goto('/?panel=findings');
-
-    // Findings panel: a finding row exists; open it and assert the triage
-    // state chip + the sanitized code snippet.
     await expect(
       modal.getByText('No findings match these filters.')
     ).toBeHidden();
-    await modal
-      .locator('button[title="Open finding detail"]')
-      .first()
-      .click();
-    await expect(page.getByTestId('triage-state-chip')).toBeVisible();
-    const sast = page.getByTestId('sast-finding-detail');
+    await expect(modal.getByTestId('triage-state-chip').first()).toBeVisible({
+      timeout: 30_000
+    });
+
+    // The sanitized code snippet + the draft-PR affordance live on the SOC
+    // board's card callout (findings at the high+critical floor land as board
+    // cards — AI-action board provenance; the DRAFT FIX PR action is
+    // capability-gated there, which is why the read-only FINDINGS panel
+    // deliberately doesn't carry it). The scan above yields HIGH findings, so
+    // cards must exist.
+    // The finding→card chain is ASYNC (FindingObserved → SSOT row →
+    // FindingRaised → board handler, each a queued event), so cards can land
+    // minutes after the scan completes; the panel fetches on mount, so poll
+    // by reloading the deep link until the first card exists.
+    await expect
+      .poll(
+        async () => {
+          await page.goto('/?panel=kanban');
+          return modal.locator('[data-kanban-card]').count();
+        },
+        { timeout: 300_000, intervals: [10_000] }
+      )
+      .toBeGreaterThan(0);
+    await modal.locator('[data-kanban-card]').first().click();
+    const sast = page.getByTestId('sast-finding-detail').first();
     await expect(sast).toBeVisible();
     await expect(sast.getByText('Matched code')).toBeVisible();
 
@@ -422,8 +440,9 @@ test.describe.serial('first-run customer journey', () => {
     // must exist — its absence is the bug this walk exists to catch.
     const affordance = page
       .getByTestId('draft-fix-pr')
-      .or(page.getByText(/VIEW DRAFT PR|PREVIEW & OPEN DRAFT PR|QUEUED FOR TRIAGE|DRAFTING FIX/i).first());
-    await expect(affordance).toBeVisible({ timeout: 180_000 });
+      .or(page.getByTestId('draft-pr-preview-trigger'))
+      .or(page.getByText(/VIEW DRAFT PR|PREVIEW & OPEN DRAFT PR|QUEUED FOR TRIAGE|DRAFTING FIX/i));
+    await expect(affordance.first()).toBeVisible({ timeout: 180_000 });
   });
 
   test('step 5 — Slack: a malformed webhook is refused loudly; a real webhook connects + verifies', async ({
