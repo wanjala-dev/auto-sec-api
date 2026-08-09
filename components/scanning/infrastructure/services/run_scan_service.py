@@ -17,11 +17,17 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
+from dataclasses import replace
 from uuid import UUID
 
 from django.db import transaction
 from django.utils import timezone
 
+from components.scanning.infrastructure.adapters.scan_run_audit_adapter import (
+    audit_scan_completed,
+    audit_scan_failed,
+    audit_scan_started,
+)
 from components.shared_kernel.application.ports.scanner_port import (
     ProgressCallback,
     ScannerPort,
@@ -46,6 +52,7 @@ def run_scan_and_ingest(
     event_publisher=None,
     on_progress: ProgressCallback | None = None,
     on_completed=None,
+    credentials_provider=None,
 ):
     """Run *scanner* against *target*, record a ``ScanRun``, emit findings to the SSOT.
 
@@ -54,6 +61,12 @@ def run_scan_and_ingest(
     transactional, so a rolled-back finalize never emits orphan findings. A scan
     failure marks the run FAILED and re-raises so the caller (task) can react.
     Returns the ``ScanRun``.
+
+    ``credentials_provider`` (optional, zero-arg) vends the target's credentials
+    INSIDE the run-recorded window: a vend failure (bad account, revoked role —
+    the most common real-world failure) is a scan attempt the operator made, so
+    it must leave the same honest FAILED row an engine crash does, not vanish
+    without a record.
 
     ``on_completed(run, result)`` (optional) fires after the run row is finalized —
     the pillar's post-ingest seam (persisting ``ScanResult.artifacts``, e.g. an image
@@ -75,8 +88,12 @@ def run_scan_and_ingest(
         status=ScanRun.Status.RUNNING,
         started_at=now,
     )
+    # Operator action on customer infrastructure → immutable trail (audit R4).
+    audit_scan_started(run)
 
     try:
+        if credentials_provider is not None:
+            target = replace(target, credentials=credentials_provider())
         result = scanner.scan(target, on_progress=on_progress)
     except Exception as exc:
         logger.exception("scan_failed source=%s target=%s run_id=%s", source, target.identifier, run.id)
@@ -85,6 +102,7 @@ def run_scan_and_ingest(
             error=str(exc)[:255],
             completed_at=timezone.now(),
         )
+        audit_scan_failed(run, error=str(exc))
         raise
 
     observed = [_finding_observed(workspace_id, f, run_id=str(run.id)) for f in result.findings]
@@ -129,6 +147,7 @@ def run_scan_and_ingest(
         len(observed),
     )
     run.refresh_from_db()
+    audit_scan_completed(run)
 
     if on_completed is not None:
         try:
@@ -144,15 +163,12 @@ def run_scan_and_ingest(
 def _finding_observed(workspace_id: UUID, finding: NormalizedFinding, *, run_id: str = "") -> FindingObserved:
     """Map a ``NormalizedFinding`` (any engine) to a ``FindingObserved`` for the SSOT.
 
-    ``run_id`` stamps the originating ``ScanRun`` into the finding's attributes
-    (``scan_run_id``) so finding → run → trigger/user/engine-version provenance is
-    carried for EVERY spine pillar. A first-class ``FindingObserved.scan_run_id``
-    field + indexed ``Finding`` column is the named follow-up (scanner-architecture
-    audit R2) — the attributes carry is the additive, non-breaking half.
+    ``run_id`` stamps the originating ``ScanRun`` first-class onto the event
+    (audit R2): finding → run → trigger/user/engine-version becomes a plain
+    lookup for every spine pillar. This is the follow-up #286's interim
+    attributes-carry named — superseded here by the first-class field
+    (ONE mechanism; the attributes copy is gone).
     """
-    attributes = dict(finding.attributes)
-    if run_id:
-        attributes.setdefault("scan_run_id", run_id)
     return FindingObserved(
         workspace_id=workspace_id,
         source=finding.source,
@@ -163,7 +179,8 @@ def _finding_observed(workspace_id: UUID, finding: NormalizedFinding, *, run_id:
         description=finding.description,
         remediation=finding.remediation,
         compliance=dict(finding.compliance),
-        attributes=attributes,
+        attributes=dict(finding.attributes),
+        scan_run_id=run_id,
     )
 
 

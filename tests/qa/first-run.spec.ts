@@ -16,8 +16,13 @@ import { E2E, HUD_ROOT_RE } from './helpers/env';
  *
  * Every spec is honest about its preconditions:
  *   - The email-verification step uses a REAL minted token (kubectl → api pod)
- *     because this deployment's email backend is console — a real user would
- *     receive nothing (reported separately; the spec documents the gate).
+ *     because no inbox is readable from the harness. Delivery itself is now
+ *     proven separately: the resend leg asserts the Celery send task COMPLETES
+ *     (SES-accepted when SMTP creds are wired; console print otherwise), and
+ *     all throwaway identities use SES mailbox-simulator addresses so real
+ *     sends never bounce.
+ *   - The invite leg drives the REAL public /invite/accept page — the same
+ *     URL the invite email carries — not the raw accept endpoint.
  *   - GitHub steps need E2E_GITHUB_PAT + E2E_GITHUB_REPO and skip LOUDLY
  *     without them. feature.code_security (like every scanner capability) is
  *     ON by default — the spec asserts the fresh workspace resolves it with
@@ -33,13 +38,17 @@ import { E2E, HUD_ROOT_RE } from './helpers/env';
  * beforeAll (crash-safe re-runs) and afterAll. Never touches the demo
  * workspace or the demo logins.
  */
-const OWNER = 'first-run-owner@qa.autosec.local';
+// SES mailbox-simulator addresses (success+label@simulator.amazonses.com):
+// with real SMTP creds wired into the cluster these registrations/invites now
+// SEND — the simulator accepts every message with zero bounce/reputation
+// impact, while a console-backend environment just prints them. Never point
+// these at a fake domain again (each run would bounce off SES).
+const OWNER = 'success+first-run-owner@simulator.amazonses.com';
 const OWNER_PASSWORD = 'FirstRunOwner123!';
-const MEMBER = 'first-run-viewer@qa.autosec.local';
+const MEMBER = 'success+first-run-viewer@simulator.amazonses.com';
 const MEMBER_PASSWORD = 'FirstRunViewer123!';
 const WS_NAME = 'First Run Org';
 
-const API_BASE = process.env.E2E_API_URL || 'http://autosec.local';
 const GITHUB_PAT = process.env.E2E_GITHUB_PAT || '';
 const GITHUB_REPO = process.env.E2E_GITHUB_REPO || '';
 const SLACK_WEBHOOK = process.env.E2E_SLACK_WEBHOOK || '';
@@ -49,17 +58,24 @@ const SLACK_WEBHOOK = process.env.E2E_SLACK_WEBHOOK || '';
 const wipeJourneyRows = () =>
   sh(
     [
-      'from infrastructure.persistence.users.models import CustomUser',
+      'from infrastructure.persistence.users.models import AuthAuditEvent, CustomUser',
       'from infrastructure.persistence.workspaces.models import Workspace',
       'from infrastructure.persistence.team.models import Invitation',
       'from infrastructure.persistence.notifications.models import Notification',
       `Invitation.objects.filter(email__in=['${OWNER}','${MEMBER}']).delete()`,
+      // Audit rows keep the email after user delete (user is SET_NULL) — wipe
+      // them so the resend-audit assertion is exact on every (re)run.
+      `AuthAuditEvent.objects.filter(email__in=['${OWNER}','${MEMBER}']).delete()`,
+      // Reset the resend throttle counters (3/hour per email, 10/hour per IP
+      // in redis) so repeated suite runs inside an hour never 429 the banner.
+      'from django.core.cache import cache',
+      "getattr(cache, 'delete_pattern', lambda *_: None)('*auth_resend_verification*')",
       // Includes the synthetic AI-teammate user the workspace bootstrap
       // provisions for 'First Run Org' — workspace delete orphans it.
       `users=CustomUser.objects.filter(email__in=['${OWNER}','${MEMBER}','first-run-org@ai-teammate.local'])`,
       'Workspace.objects.all_objects().filter(workspace_owner__in=users).delete()',
-      // A crashed prior run can leak an AITeammateProfile whose workspace is
-      // already gone; its PROTECT FK on user would wedge every later cleanup.
+      // The teammate's AITeammateProfile PROTECTs its user row and can
+      // outlive the workspace delete — drop it before the user delete.
       'from infrastructure.persistence.ai.models import AITeammateProfile',
       'AITeammateProfile.objects.filter(user__in=users).delete()',
       'Notification.objects.filter(recipient__in=users).delete()',
@@ -131,6 +147,40 @@ test.describe.serial('first-run customer journey', () => {
     await login(page, OWNER, OWNER_PASSWORD);
     await expect(page).toHaveURL(/\/identity\/login$/);
     await expect(page.getByText(/not verified/i).first()).toBeVisible();
+
+    // RECOVERY (Blocker A): the refusal is no longer a dead end — a banner
+    // offers a resend, the endpoint answers with the neutral 202 UX, the
+    // resend is audit-logged, and the Celery send task actually completes.
+    const banner = page.getByTestId('not-verified-banner');
+    await expect(banner).toBeVisible();
+    await banner
+      .getByRole('button', { name: /RESEND VERIFICATION EMAIL/i })
+      .click();
+    await expect(
+      page.getByText(/a fresh verification email is on its way/i)
+    ).toBeVisible();
+
+    const auditOut = sh(
+      [
+        'from infrastructure.persistence.users.models import AuthAuditEvent',
+        `n=AuthAuditEvent.objects.filter(event_code='auth.email_verification_resent', email='${OWNER}').count()`,
+        "print('RESEND_AUDIT=%d' % n)"
+      ].join('; ')
+    );
+    // >=1: a Playwright retry of this spec legitimately resends again.
+    expect(auditOut).toMatch(/RESEND_AUDIT=[1-9]/);
+
+    // The queued task ran to completion in the worker (grep the marker the
+    // task logs — honest delivery, not an API that claims success silently).
+    let taskDone = false;
+    for (let i = 0; i < 15 && !taskDone; i++) {
+      const logs = execSync(
+        'kubectl -n autosec logs deploy/celery-worker --since=10m'
+      ).toString();
+      taskDone = logs.includes('identity.send_verification_email completed');
+      if (!taskDone) execSync('sleep 2');
+    }
+    expect(taskDone, 'identity.send_verification_email completed in the worker').toBeTruthy();
 
     // Mint the exact token the verification email would carry (this
     // deployment's email backend is console — see the report), then drive the
@@ -206,9 +256,9 @@ test.describe.serial('first-run customer journey', () => {
     await page.getByRole('button', { name: /Invite/ }).dispatchEvent('click');
     await expect(page.getByText(/Invite sent/)).toBeVisible();
 
-    // Read the invitation's magic-link token from the live DB — the emailed
-    // accept link is not deliverable in this deployment (see the report), so
-    // the spec accepts through the real public accept endpoint.
+    // Read the invitation's magic-link token from the live DB — the exact
+    // token the emailed accept link carries (an inbox can't be read from
+    // here; the URL below is byte-identical to the email's link).
     const out = sh(
       [
         'from infrastructure.persistence.team.models import Invitation',
@@ -220,21 +270,31 @@ test.describe.serial('first-run customer journey', () => {
     expect(token, 'invitation token present in DB').toBeTruthy();
     expect(token).not.toBe('MISSING');
 
-    const accept = await page.request.post(
-      `${API_BASE}/membership/invitations/persona/accept/`,
-      {
-        data: {
-          token,
-          password: MEMBER_PASSWORD,
-          first_name: 'Vera',
-          last_name: 'Viewer'
-        }
-      }
-    );
-    expect(
-      accept.ok(),
-      `invite accept responded ${accept.status()}: ${await accept.text()}`
-    ).toBeTruthy();
+    // Drop the owner's session — the teammate opens this link logged out.
+    await page.evaluate(() => {
+      window.localStorage.clear();
+      window.sessionStorage.clear();
+    });
+
+    // A mangled token must be an HONEST dead end, leaking nothing usable.
+    await page.goto('/invite/accept?token=bogus-token');
+    await expect(page.getByText('INVITE UNAVAILABLE')).toBeVisible();
+
+    // Blocker B: the REAL public accept page — invite facts render, the
+    // new user sets a password, and the returned JWTs land them on the HUD.
+    await page.goto(`/invite/accept?token=${token}`);
+    await expect(page.getByText('JOIN WORKSPACE')).toBeVisible();
+    // exact — the AuthShell subtitle also carries the workspace name.
+    await expect(page.getByText(WS_NAME, { exact: true })).toBeVisible();
+    await expect(page.getByText(MEMBER)).toBeVisible();
+    await page.getByPlaceholder('Full name (optional)').fill('Vera Viewer');
+    await page.getByPlaceholder('Password', { exact: true }).fill(MEMBER_PASSWORD);
+    await page.getByPlaceholder('Confirm password').fill(MEMBER_PASSWORD);
+    await page
+      .getByRole('button', { name: 'SET PASSWORD & JOIN' })
+      .click();
+    await expect(page).toHaveURL(HUD_ROOT_RE, { timeout: 20_000 });
+    await expect(page.getByText('AUTO-SEC').first()).toBeVisible();
 
     // The membership row landed with the invited role.
     const roleOut = sh(

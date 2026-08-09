@@ -24,6 +24,8 @@ from components.integrations.application.use_cases.generate_onboarding_template_
 # The ProwlerScanner now runs the engine on a ScanExecutionBackend (ADR 0006); patch the
 # backend provider so the real scanner + records_to_scan_result execute against canned records.
 _BACKEND_PROVIDER = "components.scanning.application.providers.execution_backend_provider.build_execution_backend"
+# The generic spine task's default AWS assume-role vend (the single token-vending seam).
+_CREDS_PROVIDER = "components.integrations.application.providers.aws_credentials_provider.get_aws_credentials_port"
 from infrastructure.persistence.cloud_posture.models import CloudPostureScan
 from infrastructure.persistence.integrations.models import AwsOrganizationConnection
 
@@ -95,7 +97,12 @@ def test_terraform_attaches_prowler_managed_policies():
 
 @pytest.mark.integration
 @pytest.mark.django_db
-def test_run_prowler_scan_for_account_assumes_runs_and_ingests(workspace_factory):
+def test_spine_scan_assumes_runs_and_ingests(workspace_factory):
+    """The generic spine task drives the real ProwlerScanner: creds vended through
+    the single AWS seam, the engine backend invoked once, the legacy snapshot
+    dual-written by the post-ingest hook (until the R2 read cutover)."""
+    from components.scanning.infrastructure.tasks.scan_tasks import run_scan
+
     ws = workspace_factory()
     conn = AwsOrganizationConnection.objects.create(
         workspace=ws,
@@ -104,24 +111,51 @@ def test_run_prowler_scan_for_account_assumes_runs_and_ingests(workspace_factory
         role_name="AutoSecAuditRole",
     )
 
-    target = "components.cloud_posture.infrastructure.tasks.cloud_posture_tasks"
     creds_port = MagicMock()
     creds_port.assume_role.return_value = _CREDS
     backend = RecordsBackend(_RECORDS)
     with (
-        patch(f"{target}.get_aws_credentials_port", return_value=creds_port),
+        patch(_CREDS_PROVIDER, return_value=creds_port),
         patch(_BACKEND_PROVIDER, return_value=backend),
     ):
+        result = run_scan(
+            source="cloud_posture.prowler",
+            workspace_id=str(ws.id),
+            target_ref="123456789012",
+            connection_id=str(conn.id),
+            account_id="123456789012",
+            trigger="manual",
+        )
+
+    assert result["success"] is True
+    assert result["findings"] == 1
+    creds_port.assume_role.assert_called_once()
+    assert len(backend.calls) == 1
+    scan = CloudPostureScan.objects.get(workspace=ws, account_id="123456789012")
+    assert scan.connection_id == conn.id
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_legacy_task_shim_forwards_onto_the_spine(workspace_factory):
+    """Lossless-deploy shim: a pre-spine broker message re-routes through the
+    gated spine dispatch instead of poisoning (or running the dead pipeline)."""
+    ws = workspace_factory()
+    conn = AwsOrganizationConnection.objects.create(
+        workspace=ws,
+        management_account_id="123456789012",
+        external_id=f"ext-{uuid.uuid4().hex[:12]}",
+        role_name="AutoSecAuditRole",
+    )
+
+    with patch("components.scanning.application.providers.scan_dispatch_provider.dispatch_scan") as m_dispatch:
         result = run_prowler_scan_for_account(str(conn.id), "123456789012")
 
     assert result["success"] is True
-    assert result["failed"] == 1
-    creds_port.assume_role.assert_called_once()
-    assert len(backend.calls) == 1
-    scan = CloudPostureScan.objects.get(id=result["scan_id"])
-    assert scan.workspace_id == ws.id
-    assert scan.account_id == "123456789012"
-    assert scan.connection_id == conn.id
+    assert result["enqueued"] is True
+    kwargs = m_dispatch.call_args.kwargs
+    assert kwargs["source"] == "cloud_posture.prowler"
+    assert kwargs["trigger"] == "schedule"
 
 
 @pytest.mark.integration
@@ -149,14 +183,22 @@ def test_failed_scan_publishes_scan_failed_event(workspace_factory, monkeypatch)
         role_name="AutoSecAuditRole",
     )
 
+    from components.scanning.infrastructure.tasks.scan_tasks import run_scan
+
     published = []
     monkeypatch.setattr(pub_mod.CeleryEventPublisher, "publish", lambda self, event: published.append(event))
 
     creds_port = MagicMock()
     creds_port.assume_role.side_effect = RuntimeError("AccessDenied: arn:aws:iam::123:role/secret")
-    target = "components.cloud_posture.infrastructure.tasks.cloud_posture_tasks"
-    with patch(f"{target}.get_aws_credentials_port", return_value=creds_port):
-        result = run_prowler_scan_for_account(str(conn.id), "123456789012")
+    with patch(_CREDS_PROVIDER, return_value=creds_port):
+        result = run_scan(
+            source="cloud_posture.prowler",
+            workspace_id=str(ws.id),
+            target_ref="123456789012",
+            connection_id=str(conn.id),
+            account_id="123456789012",
+            trigger="manual",
+        )
 
     assert result == {"success": False, "error": "scan_failed"}
     failed = [e for e in published if isinstance(e, ScanFailed)]
@@ -169,3 +211,11 @@ def test_failed_scan_publishes_scan_failed_event(workspace_factory, monkeypatch)
     assert event.run_id, "a per-attempt identity is required so recurring failures re-alert"
     assert event.reason == "scan engine failure"
     assert "AccessDenied" not in event.reason
+
+    # Even a credential-vend failure (bad account / revoked role) leaves an honest
+    # FAILED run row — previously a failed CSPM scan left no record at all.
+    from infrastructure.persistence.scanning.models import ScanRun
+
+    run = ScanRun.objects.get(workspace=ws, source="cloud_posture.prowler", target_ref="123456789012")
+    assert run.status == ScanRun.Status.FAILED
+    assert run.error

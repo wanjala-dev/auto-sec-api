@@ -40,6 +40,12 @@ class Finding(models.Model):
     compliance = models.JSONField(default=dict, help_text="Framework tags, e.g. {'CIS-2.0': ['2.1.5']}.")
     attributes = models.JSONField(default=dict, help_text="Pillar-specific extras.")
 
+    # Run provenance (audit R2): the ScanRun of the LAST observation — soft
+    # reference (no cross-context FK, matching connection/account refs elsewhere),
+    # "" for run-less sources (detector cycles, log ingest). Finding → run →
+    # trigger/triggered_by/engine_version becomes a plain lookup.
+    scan_run_id = models.CharField(max_length=64, blank=True, default="")
+
     # Risk-acceptance context on the suppress lifecycle action (ADR 0015 D9):
     # the operator's "why" + optional time-box. ``resolve``/``reopen`` clear both.
     # Enforcement of the expiry (auto-reopen beat task) is P2 — the columns ship
@@ -64,6 +70,8 @@ class Finding(models.Model):
             models.Index(fields=["workspace", "severity", "-last_seen_at"], name="finding_ws_sev_seen_idx"),
             models.Index(fields=["workspace", "status", "-last_seen_at"], name="finding_ws_status_seen_idx"),
             models.Index(fields=["workspace", "asset_urn"], name="finding_ws_urn_idx"),
+            # "Findings of run X" — the run-detail / provenance drill-down read.
+            models.Index(fields=["workspace", "scan_run_id"], name="finding_ws_run_idx"),
         ]
 
     def __str__(self) -> str:

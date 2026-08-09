@@ -123,9 +123,19 @@ test('inviting an operator surfaces a pending invite', async ({ page }) => {
   await openMembers(page);
 
   await page.getByRole('tab', { name: /INVITES/ }).click();
-  const email = `invitee+${Date.now().toString().slice(-6)}@qa.autosec.local`;
+  // SES mailbox simulator — with real SMTP creds wired, this invite email
+  // actually SENDS; the simulator absorbs it with no bounce/reputation hit.
+  const email = `success+invitee${Date.now()
+    .toString()
+    .slice(-6)}@simulator.amazonses.com`;
   await page.getByPlaceholder('operator@org.com').fill(email);
   await page.getByRole('button', { name: /Invite/ }).dispatchEvent('click');
 
   await expect(page.getByText(/Invite sent/)).toBeVisible();
+
+  // The pending row now carries the copy-invite-link fallback (Blocker B):
+  // the canonical accept URL is available even when email delivery breaks.
+  await expect(
+    page.getByRole('button', { name: `Copy invite link for ${email}` })
+  ).toBeVisible();
 });

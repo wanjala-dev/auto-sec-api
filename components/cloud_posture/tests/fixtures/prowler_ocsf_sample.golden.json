@@ -1,0 +1,59 @@
+{
+  "engine": "prowler",
+  "engine_version": "prowler",
+  "failed_count": 2,
+  "findings": [
+    {
+      "asset_urn": "arn:aws:s3:::mybucket",
+      "attributes": {
+        "account_id": "123456789012",
+        "check_id": "s3_bucket_public_access",
+        "check_status": "fail",
+        "finding_uid": "prowler-aws-s3_bucket_public_access-123456789012-us-east-1-mybucket",
+        "region": "us-east-1",
+        "resource_name": "mybucket",
+        "resource_type": "AwsS3Bucket",
+        "resource_uid": "arn:aws:s3:::mybucket",
+        "service": "s3"
+      },
+      "compliance": {
+        "CIS-2.0": [
+          "2.1.5"
+        ]
+      },
+      "description": "Public S3 buckets can expose sensitive data to the internet.",
+      "fingerprint": "s3_bucket_public_access|123456789012|arn:aws:s3:::mybucket",
+      "remediation": "Block public access on the bucket and review its policy.",
+      "severity": "high",
+      "source": "cloud_posture.prowler",
+      "title": "Ensure S3 Buckets are not publicly accessible"
+    },
+    {
+      "asset_urn": "arn:aws:iam::123456789012:root",
+      "attributes": {
+        "account_id": "123456789012",
+        "check_id": "iam_root_mfa_enabled",
+        "check_status": "fail",
+        "finding_uid": "prowler-aws-iam_root_mfa_enabled-123456789012",
+        "region": "us-east-1",
+        "resource_name": "root",
+        "resource_type": "AwsIamUser",
+        "resource_uid": "arn:aws:iam::123456789012:root",
+        "service": "iam"
+      },
+      "compliance": {
+        "CIS-2.0": [
+          "1.5"
+        ]
+      },
+      "description": "The root account without MFA is a critical exposure.",
+      "fingerprint": "iam_root_mfa_enabled|123456789012|arn:aws:iam::123456789012:root",
+      "remediation": "Enable a hardware or virtual MFA device on the root account.",
+      "severity": "critical",
+      "source": "cloud_posture.prowler",
+      "title": "Ensure MFA is enabled for the root account"
+    }
+  ],
+  "passed_count": 1,
+  "total_checks": 3
+}

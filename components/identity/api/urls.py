@@ -17,6 +17,7 @@ from components.identity.api.controller import (
     ProfileEditView,
     RegisterView,
     RequestPasswordResetEmail,
+    ResendVerificationEmailView,
     SessionAwareTokenRefreshView,
     SetNewPasswordAPIView,
     SignupAPI,
@@ -85,6 +86,11 @@ urlpatterns = [
     path("logout/", LogoutAPIView.as_view(), name="logout"),
     path("invitations/", UserInvitationDetails.as_view(), name=UserInvitationDetails.name),
     path("email-verify/", VerifyEmail.as_view(), name="email-verify"),
+    path(
+        "resend-verification/",
+        ResendVerificationEmailView.as_view(),
+        name=ResendVerificationEmailView.name,
+    ),
     # Session-aware: stock simplejwt refresh + best-effort UserSession touch.
     path("token/refresh/", SessionAwareTokenRefreshView.as_view(), name="token_refresh"),
     path("request-reset-email/", RequestPasswordResetEmail.as_view(), name="request-reset-email"),
