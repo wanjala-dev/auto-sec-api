@@ -52,6 +52,10 @@ from components.integrations.api.requests.vcs_connection_request import (
     CreateVcsConnectionRequest,
     UpdateVcsConnectionRequest,
 )
+from components.integrations.api.requests.vercel_connection_request import (
+    CreateVercelConnectionRequest,
+    UpdateVercelConnectionRequest,
+)
 from components.integrations.api.resources.aws_connection_resource import (
     AwsConnectionResource,
 )
@@ -65,6 +69,9 @@ from components.integrations.api.resources.triage_capability_resource import (
     TriageCapabilityResource,
 )
 from components.integrations.api.resources.vcs_connection_resource import VcsConnectionResource
+from components.integrations.api.resources.vercel_connection_resource import (
+    VercelConnectionResource,
+)
 from components.integrations.application.aws_connection_service import (
     OrgVerificationError,
 )
@@ -80,6 +87,9 @@ from components.integrations.application.providers.log_source_provider import (
 )
 from components.integrations.application.providers.vcs_provider import (
     get_vcs_connection_service,
+)
+from components.integrations.application.providers.vercel_provider import (
+    get_vercel_connection_service,
 )
 from components.membership.api.permissions import IsWorkspaceOwner, has_workspace_permission
 
@@ -615,6 +625,176 @@ class VcsConnectionVerifyView(APIView):
             return Response({"success": False, "error": "VCS connection not found."}, status=404)
         connection = service.verify_connection(connection)
         return Response({"success": True, "data": VcsConnectionResource.from_model(connection).to_dict()})
+
+
+# ── VercelConnection CRUD + verify + scan (ADR 0021 D2/D3) — link the ONE Vercel
+#    team a workspace consents to posture-scan. Token-shaped (the GitHub-PAT
+#    precedent); the pillar is dark behind feature.vercel_posture (D6): create and
+#    scan are flag-gated 403 (no connect surface, no scan Jobs while dark); reads
+#    and lifecycle on EXISTING rows stay available so an operator can still
+#    disable/remove a connection after the flag is turned off.
+
+
+def _vercel_posture_enabled(workspace_id) -> bool:
+    """Fail-closed check of the pillar's dark-launch flag (ADR 0021 D6)."""
+    from components.shared_platform.application.providers.feature_flags_provider import (
+        get_feature_flags_provider,
+    )
+
+    try:
+        return bool(
+            get_feature_flags_provider().is_feature_enabled("feature.vercel_posture", workspace_id=str(workspace_id))
+        )
+    except Exception:
+        logger.exception("vercel_posture flag check failed workspace=%s", workspace_id)
+        return False
+
+
+_VERCEL_POSTURE_DISABLED_RESPONSE = {
+    "success": False,
+    "error": "vercel_posture_not_enabled",
+}
+
+
+@method_decorator(sensitive_post_parameters("token"), name="dispatch")
+class VercelConnectionListCreateView(APIView):
+    permission_classes = (permissions.IsAuthenticated, CanManageIntegrations)
+    name = "integrations-vercel-connections"
+
+    def get(self, request, workspace_id):
+        connections = get_vercel_connection_service().list_connections(workspace_id)
+        return Response(
+            {"success": True, "data": [VercelConnectionResource.from_model(c).to_dict() for c in connections]}
+        )
+
+    def post(self, request, workspace_id):
+        if not _vercel_posture_enabled(workspace_id):
+            return Response(_VERCEL_POSTURE_DISABLED_RESPONSE, status=status.HTTP_403_FORBIDDEN)
+        req = CreateVercelConnectionRequest.from_payload(request.data)
+        error = req.validation_error()
+        if error:
+            return Response({"success": False, "error": error}, status=status.HTTP_400_BAD_REQUEST)
+        team_id, team_slug = req.team_parts
+        connection = get_vercel_connection_service().create_connection(
+            workspace_id=workspace_id,
+            name=req.name,
+            team_id=team_id,
+            team_slug=team_slug,
+            token=req.token,
+            created_by=request.user,
+        )
+        return Response(
+            {"success": True, "data": VercelConnectionResource.from_model(connection).to_dict()},
+            status=status.HTTP_201_CREATED,
+        )
+
+
+@method_decorator(sensitive_post_parameters("token"), name="dispatch")
+class VercelConnectionDetailView(APIView):
+    permission_classes = (permissions.IsAuthenticated, CanManageIntegrations)
+    name = "integrations-vercel-connection-detail"
+
+    def patch(self, request, workspace_id, connection_id):
+        service = get_vercel_connection_service()
+        connection = service.get_connection(workspace_id, connection_id)
+        if connection is None:
+            return Response({"success": False, "error": "Vercel connection not found."}, status=404)
+        req = UpdateVercelConnectionRequest.from_payload(request.data)
+        error = req.validation_error()
+        if error:
+            return Response({"success": False, "error": error}, status=status.HTTP_400_BAD_REQUEST)
+        team_parts = req.team_parts
+        connection = service.update_connection(
+            connection,
+            name=req.name,
+            team_id=team_parts[0] if team_parts is not None else None,
+            team_slug=team_parts[1] if team_parts is not None else None,
+            status=req.status,
+            token=req.token,
+        )
+        return Response({"success": True, "data": VercelConnectionResource.from_model(connection).to_dict()})
+
+    def delete(self, request, workspace_id, connection_id):
+        service = get_vercel_connection_service()
+        connection = service.get_connection(workspace_id, connection_id)
+        if connection is None:
+            return Response({"success": False, "error": "Vercel connection not found."}, status=404)
+        service.delete_connection(connection)
+        return Response({"success": True, "deleted": True})
+
+
+class VercelConnectionVerifyView(APIView):
+    permission_classes = (permissions.IsAuthenticated, CanManageIntegrations)
+    name = "integrations-vercel-connection-verify"
+
+    def post(self, request, workspace_id, connection_id):
+        service = get_vercel_connection_service()
+        connection = service.get_connection(workspace_id, connection_id)
+        if connection is None:
+            return Response({"success": False, "error": "Vercel connection not found."}, status=404)
+        connection = service.verify_connection(connection)
+        return Response({"success": True, "data": VercelConnectionResource.from_model(connection).to_dict()})
+
+
+class VercelConnectionScanView(APIView):
+    """POST → gate + enqueue one async Prowler ``vercel`` posture scan (ADR 0021 D3).
+
+    Rides the scanning spine: the trigger use case takes the anti-spam dispatch
+    lock (one in-flight scan per team, one completed scan per cooldown window) and
+    dispatches the generic ``scanning.run_scan`` task — Prowler never runs in the
+    request path. 403 while the pillar is dark (D6); budget rejections are 429
+    with Retry-After (the code_security mapping).
+    """
+
+    permission_classes = (permissions.IsAuthenticated, CanManageIntegrations)
+    name = "integrations-vercel-connection-scan"
+
+    def post(self, request, workspace_id, connection_id):
+        if not _vercel_posture_enabled(workspace_id):
+            return Response(_VERCEL_POSTURE_DISABLED_RESPONSE, status=status.HTTP_403_FORBIDDEN)
+        connection = get_vercel_connection_service().get_connection(workspace_id, connection_id)
+        if connection is None:
+            return Response({"success": False, "error": "Vercel connection not found."}, status=404)
+        if connection.status == connection.Status.DISABLED:
+            return Response(
+                {"success": False, "error": "This Vercel connection is disabled."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        if not connection.team_ref:
+            return Response(
+                {"success": False, "error": "No team configured — verify the connection first."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        from components.cloud_posture.application.providers.scan_provider import trigger_vercel_scan
+        from components.cloud_posture.application.use_cases.trigger_vercel_scan_use_case import (
+            VercelScanRejected,
+        )
+
+        try:
+            result = trigger_vercel_scan(
+                workspace_id=workspace_id,
+                connection_id=connection.id,
+                team=connection.team_ref,
+                trigger="manual",
+                triggered_by=request.user.id,
+            )
+        except VercelScanRejected as exc:
+            # Budget rejections are 429 (retriable, with Retry-After); shape
+            # rejections are 400 — the code_security controller's mapping.
+            body = {"success": False, "error": exc.code, "detail": str(exc)}
+            if exc.code in ("scan_cooldown", "scan_already_running"):
+                if exc.retry_after:
+                    body["retry_after"] = exc.retry_after
+                response = Response(body, status=429)
+                if exc.retry_after:
+                    response["Retry-After"] = str(exc.retry_after)
+                return response
+            return Response(body, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {"success": True, "data": {"status": "scanning", **result}},
+            status=status.HTTP_202_ACCEPTED,
+        )
 
 
 # ── Triage-agent capability toggle (ADR 0010) — the last mile of the draft-PR

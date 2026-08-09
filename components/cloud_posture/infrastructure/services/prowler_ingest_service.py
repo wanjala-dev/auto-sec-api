@@ -21,6 +21,10 @@ from django.db import transaction
 from django.utils import timezone
 
 from components.cloud_posture.domain.entities.posture_finding_entity import NormalizedPostureFinding
+from components.cloud_posture.domain.posture_provider import (
+    PostureProvider,
+    resolve_posture_provider,
+)
 from components.cloud_posture.domain.value_objects.enums import (
     CheckStatus,
     severity_from_prowler,
@@ -91,20 +95,24 @@ def ingest_prowler_scan(
     connection_id: UUID | None = None,
     engine_version: str = "",
     event_publisher=None,
+    provider: PostureProvider | None = None,
 ):
     """Convenience: ingest raw Prowler OCSF records (parse → normalize → ingest).
 
     A thin wrapper over ``records_to_scan_result`` + ``ingest_scan_result`` for callers
     that hold raw records (tests). The Celery scan task goes through the ``ProwlerScanner``
-    ScannerPort adapter (ADR 0004 Phase 4) instead.
+    ScannerPort adapter (ADR 0004 Phase 4) instead. ``provider`` defaults to AWS —
+    every pre-ADR-0021 caller is an AWS caller.
     """
-    result = records_to_scan_result(records, engine_version=engine_version or "prowler")
+    provider = provider or resolve_posture_provider(None)
+    result = records_to_scan_result(records, engine_version=engine_version or "prowler", provider=provider)
     return ingest_scan_result(
         workspace_id=workspace_id,
         account_id=account_id,
         result=result,
         connection_id=connection_id,
         event_publisher=event_publisher,
+        provider=provider,
     )
 
 
@@ -173,6 +181,7 @@ def ingest_scan_result(
     result: ScanResult,
     connection_id: UUID | None = None,
     event_publisher=None,
+    provider: PostureProvider | None = None,
 ):
     """Persist a scan result: the CSPM snapshot + a dual-write into the findings SSOT.
 
@@ -181,8 +190,9 @@ def ingest_scan_result(
     emits the SSOT events itself and persists the snapshot via the registry's
     post-ingest hook. cloud_posture stays decoupled: it publishes a shared-kernel
     event and never imports the findings context. ``event_publisher`` is
-    injectable for tests.
+    injectable for tests; ``provider`` defaults to AWS (ADR 0021 D1).
     """
+    provider = provider or resolve_posture_provider(None)
     scan = persist_snapshot_rows(
         workspace_id=workspace_id,
         account_id=account_id,
@@ -197,7 +207,7 @@ def ingest_scan_result(
     severity_counts = Counter(f.severity.value for f in result.findings)
     completed_event = ScanCompleted(
         workspace_id=workspace_id,
-        source="cloud_posture.prowler",
+        source=provider.source,
         engine=result.engine or "prowler",
         scan_id=str(scan.id),
         target_ref=str(account_id or ""),
@@ -223,47 +233,58 @@ def ingest_scan_result(
     return scan
 
 
-def _to_normalized(finding: NormalizedPostureFinding) -> NormalizedFinding:
+def _to_normalized(finding: NormalizedPostureFinding, provider: PostureProvider | None = None) -> NormalizedFinding:
     """Map a rich CSPM finding to the shared normalized shape (CSPM specifics → attributes).
 
     ``fingerprint`` is stable across scans for the same misconfiguration on the same
-    resource; ``asset_urn`` is the resource ARN (canonicalised), or a per-account URN
-    for account-level checks so the required identity is never empty.
+    resource; ``asset_urn`` is the resource ref canonicalised under the PROVIDER's
+    namespace (an AWS ARN passes through verbatim; an opaque Vercel id becomes
+    ``urn:vercel:<ref>``), or a per-account URN for account-level checks so the
+    required identity is never empty. The source, URN namespace, and fingerprint
+    identity key all come from the ``PostureProvider`` — never a string literal
+    (ADR 0021 D1; a fitness test enforces this structurally).
     """
+    provider = provider or resolve_posture_provider(None)
     resource_ref = finding.resource_uid or f"account/{finding.account_id or 'unknown'}"
+    attributes = {
+        "check_id": finding.check_id,
+        "account_id": finding.account_id,
+        "region": finding.region,
+        "service": finding.service,
+        "resource_type": finding.resource_type,
+        "resource_name": finding.resource_name,
+        "resource_uid": finding.resource_uid,
+        "finding_uid": finding.finding_uid,
+        "check_status": str(finding.status),
+    }
+    attributes.update(provider.extra_attributes(finding))
     return NormalizedFinding(
-        source="cloud_posture.prowler",
-        fingerprint=f"{finding.check_id}|{finding.account_id}|{finding.resource_uid}",
-        asset_urn=AssetUrn.canonical("aws", resource_ref).value,
+        source=provider.source,
+        fingerprint=f"{finding.check_id}|{provider.identity_key(finding)}|{finding.resource_uid}",
+        asset_urn=AssetUrn.canonical(provider.token, resource_ref).value,
         severity=Severity.from_name(str(finding.severity)),
         title=finding.title or finding.check_id,
         description=finding.description,
         remediation=finding.remediation,
         compliance=dict(finding.compliance),
-        attributes={
-            "check_id": finding.check_id,
-            "account_id": finding.account_id,
-            "region": finding.region,
-            "service": finding.service,
-            "resource_type": finding.resource_type,
-            "resource_name": finding.resource_name,
-            "resource_uid": finding.resource_uid,
-            "finding_uid": finding.finding_uid,
-            "check_status": str(finding.status),
-        },
+        attributes=attributes,
     )
 
 
-def records_to_scan_result(records: list[dict], *, engine_version: str = "") -> ScanResult:
+def records_to_scan_result(
+    records: list[dict], *, engine_version: str = "", provider: PostureProvider | None = None
+) -> ScanResult:
     """Parse Prowler OCSF records → a ``ScanResult`` (pure: no engine, no DB).
 
     Counts come from ALL parsed checks (including passes); ``findings`` are the
-    actionable ones mapped to the shared ``NormalizedFinding`` shape.
+    actionable ones mapped to the shared ``NormalizedFinding`` shape under the
+    given provider's source/URN identity (default AWS — ADR 0021 D1).
     """
+    provider = provider or resolve_posture_provider(None)
     parsed = parse_prowler_ocsf(records)
     passed = sum(1 for f in parsed if f.status is CheckStatus.PASS)
     failed = sum(1 for f in parsed if f.status is CheckStatus.FAIL)
-    findings = tuple(_to_normalized(f) for f in parsed if f.is_actionable)
+    findings = tuple(_to_normalized(f, provider) for f in parsed if f.is_actionable)
     return ScanResult(
         findings=findings,
         engine="prowler",

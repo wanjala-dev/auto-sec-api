@@ -34,6 +34,7 @@ import components.agents.infrastructure.tasks.ai_action_rollup_tasks
 import components.agents.infrastructure.tasks.ai_quality_rollup_tasks
 import components.agents.infrastructure.tasks.eval_tasks
 import components.cloud_posture.infrastructure.tasks.cloud_posture_tasks
+import components.cloud_posture.infrastructure.tasks.vercel_posture_tasks
 import components.code_security.infrastructure.tasks.code_security_tasks
 import components.container_security.infrastructure.tasks.container_security_tasks
 import components.findings.infrastructure.tasks.attck_coverage_tasks

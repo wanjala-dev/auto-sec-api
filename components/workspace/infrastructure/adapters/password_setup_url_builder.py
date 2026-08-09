@@ -16,5 +16,8 @@ def build_password_setup_url(*, user, request=None, site_domain: str | None = No
     if resolved_site_domain is None:
         resolved_site_domain = getattr(current_site, "domain", str(current_site)) if current_site else ""
     base = resolve_frontend_base_url(site_domain=resolved_site_domain, request=request)
-    relative_path = f"/PasswordResetConfirm/{uidb64}/{token}/"
+    # Canonical SPA route (root App.jsx). The legacy /PasswordResetConfirm/...
+    # path has no route in the auto-sec frontend — the wildcard redirect drops
+    # the uid/token, so an invited user could never set their password.
+    relative_path = f"/identity/password-reset-confirm/{uidb64}/{token}/"
     return f"{base}{relative_path}"

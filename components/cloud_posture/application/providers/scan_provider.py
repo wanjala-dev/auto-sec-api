@@ -29,3 +29,20 @@ def enqueue_connection_scan(*, workspace_id: str, connection_id: str, triggered_
         trigger="manual",
         triggered_by=triggered_by,
     )
+
+
+def trigger_vercel_scan(*, workspace_id, connection_id, team: str, trigger: str = "manual", triggered_by=None) -> dict:
+    """Gate + dispatch one Vercel posture scan (ADR 0021 D3) — the seam the
+    integrations "Scan now" endpoint and the beat fan-out both call. Raises
+    ``VercelScanRejected`` (import it from the use case) on a gate rejection."""
+    from components.cloud_posture.application.use_cases.trigger_vercel_scan_use_case import (
+        TriggerVercelScanUseCase,
+    )
+
+    return TriggerVercelScanUseCase().execute(
+        workspace_id=workspace_id,
+        connection_id=connection_id,
+        team=team,
+        trigger=trigger,
+        triggered_by=triggered_by,
+    )

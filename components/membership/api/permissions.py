@@ -110,6 +110,22 @@ class IsWorkspaceOwner(permissions.BasePermission):
         return is_workspace_owner(getattr(request, "user", None), workspace_id)
 
 
+class IsActiveWorkspaceMember(permissions.BasePermission):
+    """Allows the workspace owner or any ACTIVE member. Resolves the workspace
+    from the URL kwargs. The membership floor for workspace-scoped reads that
+    carry no capability of their own (e.g. the setup-status funnel)."""
+
+    message = "You must be a member of this workspace."
+
+    def has_permission(self, request, view) -> bool:
+        kwargs = getattr(view, "kwargs", None) or {}
+        workspace_id = next(
+            (kwargs[key] for key in _WORKSPACE_LOOKUP_KEYS if kwargs.get(key)),
+            None,
+        )
+        return user_is_active_workspace_member(getattr(request, "user", None), workspace_id)
+
+
 def _resolve_workspace(request, view):
     """Find the active workspace from URL kwargs, request body, or profile.
 

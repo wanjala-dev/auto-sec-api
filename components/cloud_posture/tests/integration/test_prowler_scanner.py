@@ -78,7 +78,7 @@ def test_prowler_scanner_is_a_scanner_port_and_runs_the_engine():
 
 @pytest.mark.unit
 def test_prowler_scanner_rejects_a_malicious_region():
-    from components.cloud_posture.domain.aws_scan_target import InvalidAwsScanTargetError
+    from components.cloud_posture.domain.scan_targets import InvalidAwsScanTargetError
 
     scanner = ProwlerScanner(backend=RecordsBackend([]))
     target = ScanTarget(

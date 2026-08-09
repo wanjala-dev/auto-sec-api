@@ -87,6 +87,10 @@ def _code_security_credentials() -> CredentialsVendor:
 
 
 def _cloud_posture_prowler() -> ScannerPort:
+    # The SAME ProwlerScanner adapter for BOTH posture providers — the provider
+    # dimension (argv word / source / URN namespace / credential env) resolves
+    # off ScanTarget.params["provider"] via the PostureProvider registry
+    # (ADR 0021 D1; AWS is the default when the param is absent).
     from components.cloud_posture.application.providers.scanner_provider import build_scanner
 
     return build_scanner()
@@ -108,6 +112,18 @@ def _cloud_posture_failure() -> FailureHook:
     return build_failure_hook()
 
 
+def _cloud_posture_vercel_credentials() -> CredentialsVendor:
+    # Third use of the credentials seam (after the AWS assume-role default and the
+    # code_security VCS token): the integrations context decrypts the connection's
+    # Vercel token into the opaque envelope. The ONE vending path — no
+    # pillar-internal vend exists for Vercel.
+    from components.integrations.application.providers.vercel_provider import (
+        vend_vercel_scan_credentials,
+    )
+
+    return vend_vercel_scan_credentials
+
+
 # source → (adapter factory, isolated worker queue). One line per pillar.
 _REGISTRY: dict[str, RegisteredScanner] = {
     "container_security.trivy": RegisteredScanner(
@@ -121,15 +137,21 @@ _REGISTRY: dict[str, RegisteredScanner] = {
         post_ingest_factory=_code_security_post_ingest,
         credentials_factory=_code_security_credentials,
     ),
-    # The CSPM pillar (audit R1): Prowler rides the same spine as every engine.
-    # No credentials_factory — the task's default AWS assume-role vend IS this
-    # pillar's credential path (duplicating it in a vendor would be the DRY
-    # violation the seam exists to avoid).
+    # The AWS CSPM pillar (audit R1): Prowler rides the same spine as every
+    # engine — the ADR 0021 convergence seam closed (a sibling entry resolving
+    # PostureProvider("aws"), the default provider). No credentials_factory —
+    # the task's default AWS assume-role vend IS this pillar's credential path
+    # (duplicating it in a vendor would be the DRY violation the seam avoids).
     "cloud_posture.prowler": RegisteredScanner(
         factory=_cloud_posture_prowler,
         queue="cloud_posture",
         post_ingest_factory=_cloud_posture_post_ingest,
         failure_factory=_cloud_posture_failure,
+    ),
+    "cloud_posture.prowler.vercel": RegisteredScanner(
+        factory=_cloud_posture_prowler,
+        queue="cloud_posture",
+        credentials_factory=_cloud_posture_vercel_credentials,
     ),
 }
 

@@ -275,6 +275,74 @@ def _build_code_security_card(finding, event, mapping) -> dict:
     }
 
 
+def _build_vercel_posture_card(finding, event, mapping) -> dict:
+    """Build the SOC-board card for a Vercel posture finding (ADR 0021 D4).
+
+    Born SSOT-native. Card copy leads with the check + the project (the Vercel
+    analogue of the CSPM check + ARN; the team id is the account-id analog).
+    Operator-reading material like AWS cloud_posture (``agent_type`` =
+    ``ai_teammate``): routing to a triage specialist ships together with its tool
+    in a later slice — "routable without a tool is a silent no-op".
+
+    A MANUAL check (Prowler could not verify it under this token — e.g. the 5
+    firewall checks with no accessible firewall endpoint, ADR 0021 R4) surfaces
+    HONESTLY: it keeps its card, is labelled MANUAL, and drops to medium
+    confidence — it never renders as a PASS and never vanishes.
+    """
+    attrs = finding.attributes or {}
+    team_id = attrs.get("team_id") or attrs.get("account_id", "")
+    check_id = attrs.get("check_id", "")
+    resource_uid = attrs.get("resource_uid", "")
+    check_status = attrs.get("check_status", "")
+    is_manual = check_status == "manual"
+    severity = finding.severity.value
+
+    lookup_key = finding.fingerprint
+    resource_label = attrs.get("resource_name") or resource_uid or "resource"
+    title = f"{severity.title()}: {finding.title or check_id}"[:255]
+    manual_note = "MANUAL — could not be verified with the connected token. " if is_manual else ""
+    summary = (
+        f"{manual_note}{finding.title or check_id} — {resource_label} (team {team_id or '?'}). {finding.remediation}"
+    ).strip()
+    payload = {
+        "lookup_key": lookup_key,
+        "signal": title,
+        "confidence": "medium" if is_manual else "high",
+        "check_id": check_id,
+        "check_status": check_status,
+        "severity": severity,
+        "team_id": team_id,
+        "service": attrs.get("service", ""),
+        "resource_uid": resource_uid,
+        "resource_type": attrs.get("resource_type", ""),
+        "resource_name": attrs.get("resource_name", ""),
+        "compliance": finding.compliance,
+        "remediation": finding.remediation,
+        "evidence": [
+            f"check: {check_id}",
+            f"resource: {resource_uid}",
+            f"severity: {severity}",
+            f"status: {check_status or 'fail'}",
+        ],
+        "finding_id": str(finding.id),
+    }
+    return {
+        "title": title,
+        "summary": summary[:2000],
+        "source_type": mapping["source_type"],
+        "agent_type": "ai_teammate",  # operator reading material — no triage tool yet (deliberate)
+        "detector_key": mapping["detector_key"],
+        "payload": payload,
+        "context": {
+            "kind": "vercel_posture",
+            "workspace_id": str(event.workspace_id),
+            "finding_id": str(finding.id),
+        },
+        "impact_score": _IMPACT.get(severity, 40),
+        "lookup_key": lookup_key,
+    }
+
+
 def _build_planted_instructions_card(finding, event, mapping) -> dict:
     """Board card for AI-targeted instructions planted in repository content.
 
@@ -360,6 +428,13 @@ _SOURCE_BOARD = {
         "flag": None,  # born SSOT-native; the pillar itself is dark behind feature.code_security
         "min_severity": "high",  # board floor (ADR 0019 D4/OQ4 default: high+critical)
         "build": _build_code_security_card,
+    },
+    "cloud_posture.prowler.vercel": {
+        "source_type": "ai.vercel_posture",
+        "detector_key": "ai_findings.vercel_posture",
+        "flag": None,  # born SSOT-native; the pillar itself is dark behind feature.vercel_posture
+        "min_severity": "high",  # board floor (ADR 0021 D4 — domain/DNS hygiene stays SSOT-only)
+        "build": _build_vercel_posture_card,
     },
     "code_security.planted_instructions": {
         "source_type": "ai.planted_instructions",
