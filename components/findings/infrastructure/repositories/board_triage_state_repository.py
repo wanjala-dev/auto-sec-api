@@ -72,6 +72,12 @@ def _stamp_is_fresh(stamp, stale_before) -> bool:
     A run that died leaves its stamp behind; past the TTL the finding honestly falls
     back to QUEUED (with the next cadence pass named) instead of spinning on
     DRAFTING forever.
+
+    The stamp is a STRING on the card, written by whichever environment wrote it, so
+    its awareness follows that deployment's ``USE_TZ`` — while ``stale_before`` follows
+    THIS process's. Coercing only one side (the obvious version of this function)
+    raises ``can't compare offset-naive and offset-aware datetimes`` the moment a
+    stamp exists, which is exactly the DRAFTING path. Both sides are normalized here.
     """
     if not isinstance(stamp, dict):
         return False
@@ -82,9 +88,18 @@ def _stamp_is_fresh(stamp, stale_before) -> bool:
         at = datetime.fromisoformat(raw)
     except ValueError:
         return False
-    if at.tzinfo is None:
-        at = timezone.make_aware(at, timezone.get_default_timezone())
-    return at >= stale_before
+    return _match_awareness(at, stale_before) >= stale_before
+
+
+def _match_awareness(value: datetime, reference: datetime) -> datetime:
+    """Return *value* with the same naive/aware-ness as *reference*."""
+    ref_aware = reference.tzinfo is not None
+    val_aware = value.tzinfo is not None
+    if ref_aware and not val_aware:
+        return timezone.make_aware(value, timezone.get_default_timezone())
+    if val_aware and not ref_aware:
+        return timezone.make_naive(value, timezone.get_default_timezone())
+    return value
 
 
 def next_cadence_run_at(now: datetime | None = None) -> datetime | None:

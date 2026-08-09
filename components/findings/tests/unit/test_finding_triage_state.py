@@ -195,6 +195,40 @@ class TestStampFreshness:
         old = (now - timedelta(seconds=1200)).isoformat()
         assert _stamp_is_fresh({"at": old}, now - timedelta(seconds=600)) is False
 
+    def test_naive_stamp_against_aware_window_does_not_explode(self):
+        """Regression (found live): the stamp is a STRING whose awareness follows the
+        writing deployment's USE_TZ, while the comparison window follows this
+        process's. Coercing only one side raised "can't compare offset-naive and
+        offset-aware datetimes" on the DRAFTING path, and the fail-safe swallowed it
+        so every finding silently lost its triage block."""
+        from components.findings.infrastructure.repositories.board_triage_state_repository import (
+            _stamp_is_fresh,
+        )
+
+        aware_window = datetime.now(UTC) - timedelta(seconds=600)
+        naive_now = datetime.now(UTC).replace(tzinfo=None)
+        assert _stamp_is_fresh({"at": naive_now.isoformat()}, aware_window) is True
+
+    def test_aware_stamp_against_naive_window_does_not_explode(self):
+        """The mirror case: USE_TZ=False in this process (the local k8s overlay),
+        a tz-aware stamp on the card."""
+        from components.findings.infrastructure.repositories.board_triage_state_repository import (
+            _stamp_is_fresh,
+        )
+
+        naive_window = datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=600)
+        aware_now = datetime.now(UTC)
+        assert _stamp_is_fresh({"at": aware_now.isoformat()}, naive_window) is True
+
+    def test_naive_expired_stamp_against_aware_window_is_stale(self):
+        from components.findings.infrastructure.repositories.board_triage_state_repository import (
+            _stamp_is_fresh,
+        )
+
+        aware_window = datetime.now(UTC) - timedelta(seconds=600)
+        naive_old = (datetime.now(UTC) - timedelta(seconds=1200)).replace(tzinfo=None)
+        assert _stamp_is_fresh({"at": naive_old.isoformat()}, aware_window) is False
+
     @pytest.mark.parametrize("stamp", [None, {}, {"at": ""}, {"at": "not-a-date"}, "nonsense"])
     def test_malformed_stamp_is_not_believed(self, stamp):
         from components.findings.infrastructure.repositories.board_triage_state_repository import (
