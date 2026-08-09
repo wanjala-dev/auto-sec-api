@@ -29,11 +29,25 @@ So this ADR is the deeper grounding pass: it re-verifies the feasibility doc's l
 (one of them turns out **wrong in our favor** — R2), decides the architecture as D-numbered
 decisions, and stops. Nothing is built.
 
+### This is customer-driven work, anchored to a named buyer
+
+**Isaac — the first real buyer signal in the outreach tracker (~60 AI agents in production, Stripe
+card data in play, no security team) — is confirmed on Vercel** (outreach tracker; Henry's
+confirmation 2026-08-09). Henry's bar, verbatim: *"at minimum, making sure that the Vercel Prowler
+scanner is working should just be good enough."*
+
+That answers the queue question this ADR would otherwise have left open: Vercel posture is not a
+speculative pillar-dimension bet — it is the shortest path to scanning a named prospect's real
+production estate. The phasing (below) is shaped so the **earliest shippable phase IS Henry's
+minimum bar**: a working Prowler `vercel` posture scan producing findings in the SSOT. Everything
+richer (estate graph, joins, OAuth) queues behind it.
+
 ### Why this matters more than "a 17th integration"
 
-1. **Our ICP ships on Vercel.** The AI-era-builder ICP (Tom's framing: "the security team you
-   don't hire") deploys Next.js on Vercel far more often than it runs EKS. A Vercel team is, for
-   many prospects, *the* production estate — and today we can say nothing about it.
+1. **Our ICP ships on Vercel — and the first buyer-signal prospect does, confirmed.** The
+   AI-era-builder ICP (Tom's framing: "the security team you don't hire") deploys Next.js on
+   Vercel far more often than it runs EKS. For Isaac, a Vercel team **is** the production estate —
+   and today we can say nothing about it.
 2. **The April 2026 Vercel incident made this a live wound.** Vercel's own bulletin told customers
    to rotate env vars after an attacker could "enumerate and decrypt non-sensitive environment
    variables" (R6). Prowler shipped a `vercel` provider and wrote the playbook against that exact
@@ -69,8 +83,9 @@ the scan/ingest contract**, and the shortcut becomes structurally unwritable.
 
 ### Build sequencing (standing constraint)
 
-Design only. Each phase awaits Henry's explicit go, and the queue position itself is an open
-question (OQ1) — this may or may not jump ahead of other work given Isaac's and Tom's stacks.
+Design only. Each phase awaits Henry's explicit go. The queue-position question is **answered**
+(Isaac confirmed on Vercel, 2026-08-09 — this is customer-driven work with a named buyer); what
+remains open is only the per-phase go and the small set of Isaac-facing questions in OQ1.
 
 ## Research grounding (claim → source, fetched 2026-08-08 unless noted)
 
@@ -304,6 +319,26 @@ key/type/target metadata — plaintext values are never needed for posture.
 | **WAF posture beyond Prowler's `MANUAL`** | No `security`/firewall integration scope exists (R5); under a reduced-privilege token the 5 firewall checks return `MANUAL` (R4) — honest partial coverage, surfaced as such | Vercel ships a firewall read scope |
 | **Hobby-tier posture promises** | 11 of 26 checks have explicit billing-plan handling (R4) — password protection, SAML SSO etc. don't exist on Hobby; findings there would be "upgrade your Vercel plan" nags | Never "fixed" — handled by honest per-plan reporting from day one |
 
+### D6 — The pillar ships **dark** behind `feature.vercel_posture`, un-darkened per workspace — the `code_security` pattern, applied from day one. **[proposed]**
+
+Standing rule from Henry (2026-08-09): in-progress capability ships behind a flag and is enabled
+per workspace, never globally-on at birth.
+
+- **Flag key:** `feature.vercel_posture` — a sibling of `feature.cloud_posture`, not a re-use of
+  it: the AWS pillar's flag must not implicitly grant a second provider (a workspace opted into
+  AWS CSPM has not consented to a Vercel scan surface), and gating them separately keeps the
+  pricing mapping (§OQ2) free to place them independently.
+- **Seeded dark:** registered in `seed_feature_flags` and included in `PROD_DISABLED_FLAGS`, same
+  as the scanner flags before it — globally disabled in prod, enabled by an operator per workspace
+  (Isaac's, ours for dogfood). Fail closed: every gate checks the flag and treats "missing" as
+  off, mirroring `_is_cloudwatch_enabled`'s posture.
+- **Where the gate sits:** (a) the Settings ▸ Integrations panel entry renders only when the flag
+  is on (no connect surface, no dark-launch confusion); (b) `enqueue`/beat fan-out skips
+  non-flagged workspaces (no scan Jobs run dark); (c) the on-demand scan endpoint 403s without the
+  flag. Findings ingest needs no separate gate — no scan, no findings.
+- **Tier mapping later:** the flag joins `tier_features.py` only when OQ2 is decided; until then it
+  is an operator switch, not an entitlement (the ADR 0020 distinction).
+
 ## Consequences
 
 **Positive:** a second posture provider at provider-dimension cost — engine, substrate, SSOT,
@@ -335,43 +370,57 @@ wart, chosen deliberately over an SSOT identity migration.
 
 ## Phased build plan (each phase awaits Henry's go — standing rule)
 
-**G0 — half a day, zero code, before anything is scheduled:**
+**The earliest shippable phase IS Henry's minimum bar** — *"making sure that the Vercel Prowler
+scanner is working should just be good enough"* — i.e. **P0 = connection + token + scan Job +
+findings in the SSOT**, flag-gated (D6). Nothing richer sits ahead of it: P0a (the
+`PostureProvider` refactor) is not front-loading — it is the load-bearing prerequisite *inside*
+P0, because without it the scan physically cannot produce correctly-URN'd findings (the `aws:`
+corruption trap, D1). Estate graph, down-rank, joins, and OAuth all queue behind the working scan.
+
+**G0 — half a day, zero code, before P0 is scheduled:**
 (a) ~~verify the pin contains the provider~~ — **done in this ADR (R2), no bump needed**;
-(b) the **empirical check matrix**: run `prowler vercel` (the pinned image, `VERCEL_TOKEN` from a
+(b) ~~is Isaac on Vercel?~~ — **confirmed (2026-08-09)**;
+(c) the **empirical check matrix**: run `prowler vercel` (the pinned image, `VERCEL_TOKEN` from a
 Viewer-role token) against our own Vercel team; capture the OCSF file; record which of the 26
 checks PASS/FAIL/MANUAL/ERROR under (i) a Viewer token and — if cheap to mint — (ii) an
 integration-scoped token; confirm OCSF field placement for the D4 identity keys;
-(c) **ask Tom and Isaac**: are you on Vercel, which plan tier (Hobby/Pro/Enterprise), and would a
-"connect your Vercel team" onboarding land this month? (The answers gate OQ1's queue-jump.)
+(d) the three remaining **Isaac questions** (OQ1).
 
 | Phase | Scope | Effort |
 |---|---|---|
-| **P0a — `PostureProvider` refactor** | D1 in full: value object + registry, validator registry (AWS regexes move verbatim), threaded scanner/ingest, golden-master + fitness tests. AWS byte-identical. **Ships on its own merits.** | ~4–5 days |
-| **P0b — Vercel posture** | D2 token-shaped `VercelConnection` + verify() + Settings panel entry; D3 validator/env/egress/gate wiring; D4 normalization + board/triage seam entry. First real findings (flagship #1 included). | ~3 days |
+| **P0 — the minimum bar: a working Vercel Prowler scan → findings in the SSOT** (two internal steps, one deliverable) | **P0a** — D1 in full: `PostureProvider` value object + registry, validator registry (AWS regexes move verbatim), threaded scanner/ingest, golden-master + fitness tests; AWS byte-identical. **P0b** — D2 token-shaped `VercelConnection` + verify() + Settings panel entry (flag-gated, D6); D3 validator/env/egress/gate wiring; D4 normalization + board/triage seam entry; `feature.vercel_posture` seeded dark. Exit criterion: a real scan of a real team produces correctly-URN'd findings on the board (flagship finding #1 class included). **Validation moment: Isaac's team, with his consent (OQ1c).** | ~4–5 days + ~3 days |
 | **P1 — estate enumeration** | Teams/projects/domains/deployments as graph nodes with the D4 exposure semantics; env-var keys+types; HUD estate surfacing. | ~3 days |
 | **P1.5 — CVE-2025-29927 down-rank** | Vercel-hosted ⇒ down-rank the auto-mitigated class in contextual risk. | ~1 day |
 | **P2 — the join findings** | Commit-SHA correlation of Vercel deployments ↔ `VcsConnection` repos; `deployment.succeeded` webhook (signature-verified) firing the SAST pillar; flagship findings #2/#3. | ~3 days |
 | **P4 — OAuth connectable integration** *(deliberately after P2)* | The `oauth_integration` credential kind: install redirect + code exchange + partner assets (logo/EULA/privacy/gallery — GTM work, parallel-trackable); gated on G0's integration-token matrix. | ~3 days eng + GTM assets |
 
-**Recommended cut: G0 → P0a → P0b → P1 → P1.5 → P2 ≈ 2.5–3 weeks of eng.** This *confirms* the
-feasibility doc's ~3-week estimate but re-derives it differently: G0 shrank (the pin is fine, R2)
-and P0b shrank (token-first, no OAuth flow), which absorbs the slack the feasibility pass had
-under-budgeted for the join work and the per-plan reporting nuance. P4 is additive and optional
-until a design partner objects to pasting a token.
+**Recommended cut: G0 → P0 → P1 → P1.5 → P2 ≈ 2.5–3 weeks of eng — but P0 alone (~1.5 weeks)
+satisfies the named buyer's bar** and is a clean stopping point if Isaac's engagement dictates
+pace. The total *confirms* the feasibility doc's ~3-week estimate but re-derives it: G0 shrank
+(the pin is fine R2; the "is he on Vercel" question is answered) and P0b shrank (token-first, no
+OAuth flow), which absorbs the slack the feasibility pass had under-budgeted for the join work and
+the per-plan reporting nuance. P4 is additive and optional until a design partner objects to
+pasting a token.
 
 ## Open questions (for Henry)
 
-1. **Does Vercel posture jump the queue?** This is customer-driven surface area: if Tom and/or
-   Isaac run production on Vercel (G0c), this pillar-dimension touches their real estate faster
-   than Azure/GCP would. Against it: the standing "harden the core loops" priority. Proposal:
-   G0 costs half a day and answers itself — run G0 now, schedule P0a only on a yes from the
-   plan-tier answers.
+1. **The three remaining Isaac questions** (the "is he on Vercel" question is answered —
+   confirmed 2026-08-09):
+   (a) **Plan tier** (Hobby/Pro/Enterprise) — matters *only* for the out-of-scope drains
+   discussion (D5's re-entry conditions) and for how many of the 11 plan-gated checks will read
+   as "not on your plan"; it does not gate P0.
+   (b) **Team vs personal account** — a personal (Hobby) install has `team_id: null` semantics;
+   the connection model and the `VERCEL_TEAM` pinning (D3) assume a team, so a personal account
+   needs the personal-scope branch exercised in G0's matrix.
+   (c) **Consent to run a read-only posture scan against his real team as the validation
+   moment** — P0's exit criterion is his estate, with his explicit yes (Viewer-role token, the
+   D2 recipe).
 2. **Pricing placement.** The merged pricing doc meters on **connected estate** — cloud accounts,
    repos, images. Is a Vercel team a "cloud account" unit (Free: 1 account total across
    providers, weekly; Pro: 3 accounts, +$79/extra) — or a separate cheaper unit (a Vercel team
    costs us a 2Gi/~minutes Job, far less than an AWS sweep)? Proposal: count it as a cloud
-   account for simplicity at launch (`feature.cloud_posture` already gates the pillar), revisit
-   if it suppresses connects.
+   account for simplicity at launch, with `feature.vercel_posture` (D6) joining `tier_features.py`
+   when this is decided; revisit if it suppresses connects.
 3. **Token-first vs OAuth-first (D2).** This ADR reverses the feasibility doc's OAuth-first on
    the Viewer-role-inheritance fact + Prowler's documented auth path + partner-asset drag. Are
    you comfortable asking a design partner for a Viewer-scoped, expiring token in the interim, or
