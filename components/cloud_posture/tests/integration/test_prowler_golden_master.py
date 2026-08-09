@@ -84,21 +84,27 @@ class _StubScanner:
 
 def _ssot_projection(workspace) -> list[dict]:
     rows = Finding.objects.filter(workspace=workspace, source="cloud_posture.prowler").order_by("fingerprint")
-    return [
-        {
-            "source": f.source,
-            "fingerprint": f.fingerprint,
-            "asset_urn": f.asset_urn,
-            "severity": f.severity,
-            "status": f.status,
-            "title": f.title,
-            "description": f.description,
-            "remediation": f.remediation,
-            "compliance": f.compliance,
-            "attributes": f.attributes,
-        }
-        for f in rows
-    ]
+    projected = []
+    for f in rows:
+        attributes = dict(f.attributes)
+        # Run PROVENANCE is expected to differ between paths (the spine stamps
+        # the ScanRun id; the legacy path has no run) — it is not identity.
+        attributes.pop("scan_run_id", None)
+        projected.append(
+            {
+                "source": f.source,
+                "fingerprint": f.fingerprint,
+                "asset_urn": f.asset_urn,
+                "severity": f.severity,
+                "status": f.status,
+                "title": f.title,
+                "description": f.description,
+                "remediation": f.remediation,
+                "compliance": f.compliance,
+                "attributes": attributes,
+            }
+        )
+    return projected
 
 
 def test_spine_path_persists_identical_ssot_rows_as_the_legacy_pipeline(
