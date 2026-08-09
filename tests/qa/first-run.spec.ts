@@ -19,9 +19,9 @@ import { E2E, HUD_ROOT_RE } from './helpers/env';
  *     because this deployment's email backend is console — a real user would
  *     receive nothing (reported separately; the spec documents the gate).
  *   - GitHub steps need E2E_GITHUB_PAT + E2E_GITHUB_REPO and skip LOUDLY
- *     without them. The repo scan also needs feature.code_security, which is
- *     default-OFF for every workspace — the spec seeds the per-workspace flag
- *     rule the way an operator would today (that gap is reported).
+ *     without them. feature.code_security (like every scanner capability) is
+ *     ON by default — the spec asserts the fresh workspace resolves it with
+ *     NO seeded rule, so the scan endpoint is reachable from zero.
  *   - Slack verify needs E2E_SLACK_WEBHOOK (it posts a REAL message) and
  *     skips loudly without it; the malformed-URL fail-loud check runs always.
  *   - A real AWS cross-account connect cannot be automated from here (it
@@ -58,6 +58,10 @@ const wipeJourneyRows = () =>
       // provisions for 'First Run Org' — workspace delete orphans it.
       `users=CustomUser.objects.filter(email__in=['${OWNER}','${MEMBER}','first-run-org@ai-teammate.local'])`,
       'Workspace.objects.all_objects().filter(workspace_owner__in=users).delete()',
+      // A crashed prior run can leak an AITeammateProfile whose workspace is
+      // already gone; its PROTECT FK on user would wedge every later cleanup.
+      'from infrastructure.persistence.ai.models import AITeammateProfile',
+      'AITeammateProfile.objects.filter(user__in=users).delete()',
       'Notification.objects.filter(recipient__in=users).delete()',
       'Notification.objects.filter(actor__in=users).delete()',
       'users.delete()',
@@ -336,33 +340,41 @@ test.describe.serial('first-run customer journey', () => {
     );
     test.setTimeout(600_000); // a real SAST scan job takes minutes
 
-    // feature.code_security is default-OFF for every workspace (per-workspace
-    // opt-in) — seed the flag rule exactly the way an operator must today.
-    sh(
+    // Scanner capabilities are ON by default (kill-switch, not entitlement) —
+    // assert the fresh workspace resolves feature.code_security with NO rule
+    // row at all. SOURCE=default is the contract: a 403 here would be the
+    // "operator must hand-seed a flag" regression this journey exists to catch.
+    const flagOut = sh(
       [
-        'from infrastructure.persistence.core.models import FeatureFlag, FeatureFlagRule',
         'from infrastructure.persistence.workspaces.models import Workspace',
-        'from components.shared_platform.infrastructure.services.feature_flags import bump_feature_flags_version',
+        'from components.shared_platform.infrastructure.services.feature_flags import evaluate_feature_flag',
         `ws=Workspace.objects.all_objects().get(workspace_name='${WS_NAME}')`,
-        "f,_=FeatureFlag.objects.get_or_create(key='feature.code_security', defaults={'default_enabled': False})",
-        "FeatureFlagRule.objects.get_or_create(flag=f, scope='workspace', workspace=ws, defaults={'enabled': True})",
-        'bump_feature_flags_version()',
-        "print('flag-ok')"
+        "e=evaluate_feature_flag('feature.code_security', workspace_id=str(ws.id))",
+        "print('FLAG=%s SOURCE=%s' % (e.enabled, e.source))"
       ].join('; ')
     );
+    expect(flagOut).toContain('FLAG=True');
+    expect(flagOut).toContain('SOURCE=default');
 
     await loginToHud(page, OWNER, OWNER_PASSWORD);
     await openIntegrations(page);
 
+    // With the scanner capabilities on by default, the dashboard's CODE REPOS
+    // card BEHIND the settings drawer also renders per-repo SCAN/stamp
+    // affordances (HudCodeReposCard) — so every locator here must be scoped to
+    // the z-[55] settings modal, or Playwright resolves the background card's
+    // copy and the overlay swallows the click.
+    const modal = page.locator('div.fixed.inset-0.z-\\[55\\]');
+
     // Owner-only: allow the triage agent to open draft PRs, so the FIX READY
     // path can surface its affordance.
-    const capability = page.getByRole('button', { name: 'Turn on' });
+    const capability = modal.getByRole('button', { name: 'Turn on' });
     if (await capability.isVisible().catch(() => false)) {
       await capability.click();
     }
 
     // Fire the scan from the per-repo row.
-    await page
+    await modal
       .getByRole('button', { name: 'SCAN', exact: true })
       .first()
       .click();
@@ -370,35 +382,28 @@ test.describe.serial('first-run customer journey', () => {
       page.getByText(/Code scan started for/i)
     ).toBeVisible({ timeout: 20_000 });
 
-    // Wait for the scan to complete: the repo row's recency stamp flips from
-    // RUNNING back to a fresh "just now" state (the status poller runs every
-    // 30s). Then the scan-history callout must show the latest run.
-    const stamp = page.locator(`[data-scan-ago="${GITHUB_REPO}"]`);
-    await expect
-      .poll(
-        async () => {
-          const scanBtn = page
-            .getByRole('button', { name: /RUNNING…|STARTING…|SCAN|~\d+m/ })
-            .first();
-          return (await scanBtn.textContent())?.trim() || '';
-        },
-        { timeout: 540_000, intervals: [15_000] }
-      )
-      .not.toMatch(/RUNNING|STARTING/);
+    // Wait for the scan to complete. The recency stamp renders ONLY when the
+    // repo has a completed scan and nothing is in flight (VcsConnectionsPanel:
+    // `status.last_scanned_at && !status.in_flight`), so its appearance IS the
+    // completion signal — no fragile "wait for RUNNING then for it to clear"
+    // dance (which passes vacuously if sampled before the row flips). A fresh
+    // workspace has no scan history, so the stamp cannot pre-exist here.
+    const stamp = modal.locator(`[data-scan-ago="${GITHUB_REPO}"]`);
+    await expect(stamp).toBeVisible({ timeout: 540_000 });
 
     await stamp.click();
-    await expect(page.getByText(/SCAN HISTORY/)).toBeVisible();
-    await expect(page.locator('[data-scan-result]').first()).toBeVisible();
-    await page
+    await expect(modal.getByText(/SCAN HISTORY/)).toBeVisible();
+    await expect(modal.locator('[data-scan-result]').first()).toBeVisible();
+    await modal
       .getByRole('button', { name: /VIEW CURRENT FINDINGS FOR THIS REPO/i })
       .click();
 
     // Findings panel: a finding row exists; open it and assert the triage
     // state chip + the sanitized code snippet.
     await expect(
-      page.getByText('No findings match these filters.')
+      modal.getByText('No findings match these filters.')
     ).toBeHidden();
-    await page
+    await modal
       .locator('button[title="Open finding detail"]')
       .first()
       .click();

@@ -20,6 +20,7 @@ from __future__ import annotations
 from django.conf import settings
 from django.core.management import BaseCommand
 
+from components.shared_platform.infrastructure.services.feature_flags import bump_feature_flags_version
 from infrastructure.persistence.core.models import FeatureFlag, FeatureFlagRule
 from infrastructure.persistence.users.models import CustomUser
 
@@ -56,11 +57,14 @@ DEFAULT_FLAGS = [
     ),
     (
         "feature.cloud_posture",
-        False,
+        True,
         "Cloud posture (CSPM) — Prowler-as-engine per-account scans → posture "
-        "snapshots + findings. Off in prod until GA; per-workspace opt-in. The live "
-        "assume-role scan is gated on the read-only IAM audit-role rollout. See "
-        "docs/plans/SECURITY_POSTURE_VISION_2026-07-20.md §3.3.",
+        "snapshots + findings. ON by default: a scanner capability ships in Free "
+        "(docs/product/PRICING_PACKAGING_RECOMMENDATION_2026-08-08.md), so this "
+        "flag is a kill-switch, not an entitlement gate. Harmless while ON — no "
+        "scan runs without a CONNECTED AwsOrganizationConnection (the customer's "
+        "deployed audit role IS the consent), and an explicit workspace/global "
+        "disable rule still wins. See docs/plans/SECURITY_POSTURE_VISION_2026-07-20.md §3.3.",
     ),
     (
         "feature.logwatch_board_from_findings",
@@ -73,31 +77,42 @@ DEFAULT_FLAGS = [
     ),
     (
         "feature.container_security",
-        False,
+        True,
         "Container security (SCA) — Trivy-as-engine image vulnerability scans "
         "(ADR 0006) run as ephemeral, gVisor-isolated Kubernetes Jobs on the "
-        "ScanExecutionBackend → NormalizedFindings in the SSOT. Off in prod until "
-        "GA; per-workspace opt-in. See docs/adr/0006-scanner-execution-substrate.md.",
+        "ScanExecutionBackend → NormalizedFindings in the SSOT. ON by default: "
+        "ships in Free (pricing rec 2026-08-08), so the flag is a kill-switch, not "
+        "an entitlement gate. Harmless while ON — a scan only runs when a "
+        "workspace member supplies an image target (the beat cycle has no image "
+        "source yet), and an explicit disable rule still wins. See "
+        "docs/adr/0006-scanner-execution-substrate.md.",
     ),
     (
         "feature.code_security",
-        False,
+        True,
         "Code security (SAST) — Opengrep-as-engine scans of allowlisted VCS repos "
         "(ADR 0019) run as ephemeral, hardened Kubernetes Jobs on the "
         "ScanExecutionBackend → NormalizedFindings (file/line/rule/snippet) in the "
-        "SSOT + board cards at the high+critical floor. Off in prod until GA; "
-        "per-workspace opt-in. See docs/adr/0019-sast-code-scanning-pillar.md.",
+        "SSOT + board cards at the high+critical floor. ON by default: ships in "
+        "Free (pricing rec 2026-08-08), so the flag is a kill-switch, not an "
+        "entitlement gate. Harmless while ON — nothing scans without a CONNECTED "
+        "VcsConnection + repo allowlist (the customer's PAT IS the consent), and "
+        "an explicit disable rule still wins. See "
+        "docs/adr/0019-sast-code-scanning-pillar.md.",
     ),
     (
         "feature.vercel_posture",
-        False,
+        True,
         "Vercel posture (ADR 0021) — Prowler `vercel`-provider scans of a "
         "workspace's ONE consented Vercel team (VercelConnection, token-shaped) "
         "run as ephemeral hardened Kubernetes Jobs on the scanning spine → "
         "NormalizedFindings with urn:vercel: URNs in the SSOT + board cards at "
         "the high+critical floor. A deliberate SIBLING of feature.cloud_posture, "
-        "never a reuse — AWS CSPM opt-in is not Vercel consent. Off in prod until "
-        "GA; per-workspace opt-in. See docs/adr/0021-vercel-posture-provider.md.",
+        "never a reuse — AWS CSPM opt-in is not Vercel consent. ON by default: "
+        "ships in Free (pricing rec 2026-08-08), so the flag is a kill-switch, "
+        "not an entitlement gate. Harmless while ON — no scan runs without a "
+        "CONNECTED VercelConnection (the customer's token IS the consent), and an "
+        "explicit disable rule still wins. See docs/adr/0021-vercel-posture-provider.md.",
     ),
     (
         "feature.cloud_asset_graph",
@@ -131,14 +146,23 @@ DEFAULT_FLAGS = [
 # Flags that should be globally disabled in production (DEBUG=False).
 # Dev/local (DEBUG=True) leaves them at their default_enabled value.
 # Add product feature-gate keys here as they are introduced.
+#
+# The four scanner capabilities (feature.cloud_posture, feature.container_security,
+# feature.code_security, feature.vercel_posture) deliberately LEFT this list on
+# 2026-08-08: they ship in Free (see the pricing recommendation), so their flags
+# are kill-switches, not entitlement gates — default-ON everywhere, with the
+# break-glass being an explicit GLOBAL/WORKSPACE disable rule (which the resolver
+# ladder honours over the default). Stale seed-created disable rules for keys
+# that leave this list are cleaned up by ``_apply_environment_rules``.
 PROD_DISABLED_FLAGS = (
     "feature.provenance_graph",
-    "feature.cloud_posture",
-    "feature.container_security",
-    "feature.code_security",
     "feature.sample_data_mode",
-    "feature.vercel_posture",
 )
+
+# The exact note the seed stamps on its own global disable rules. Cleanup is
+# matched on this note so operator-created rules (a real kill-switch) are
+# never touched by the seed.
+PROD_DISABLE_NOTE = "Disabled in production by seed_feature_flags."
 
 
 # Flags that, while globally disabled in production, are kept enabled for a
@@ -181,10 +205,14 @@ class Command(BaseCommand):
         for pair in options.get("enable_flag_for_user", []) or []:
             flag_key, email = pair
             self._enable_flag_for_user(flag_key, email)
+        # Flag/rule writes above bypass the API layer's cache invalidation —
+        # bump the version so evaluations pick the new state up immediately
+        # instead of after the 300s TTL.
+        bump_feature_flags_version()
 
     def _seed_flags(self):
         for key, default_enabled, description in DEFAULT_FLAGS:
-            flag, created = FeatureFlag.objects.get_or_create(
+            _flag, created = FeatureFlag.objects.get_or_create(
                 key=key,
                 defaults={
                     "default_enabled": default_enabled,
@@ -197,31 +225,43 @@ class Command(BaseCommand):
                 self.stdout.write(f"  Flag already exists: {key}")
 
     def _apply_environment_rules(self):
-        """Ensure prod has global disable rules; dev/local clears them."""
+        """Ensure prod has global disable rules; remove ones no longer warranted.
+
+        Cleanup is note-matched (``PROD_DISABLE_NOTE``) so an operator's own
+        global rules — a deliberate kill-switch — are never touched. It runs in
+        every environment: dev/local clears every seed-created disable, and prod
+        clears only those whose key has LEFT ``PROD_DISABLED_FLAGS`` (e.g. the
+        scanner capabilities that flipped default-on 2026-08-08 — without this,
+        a previously-seeded prod DB would keep them dark forever).
+        """
         is_prod = not settings.DEBUG
-        for key in PROD_DISABLED_FLAGS:
-            flag = FeatureFlag.objects.filter(key=key).first()
-            if not flag:
-                continue
-            if is_prod:
-                rule, created = FeatureFlagRule.objects.update_or_create(
+        if is_prod:
+            for key in PROD_DISABLED_FLAGS:
+                flag = FeatureFlag.objects.filter(key=key).first()
+                if not flag:
+                    continue
+                _rule, created = FeatureFlagRule.objects.update_or_create(
                     flag=flag,
                     scope=FeatureFlagRule.Scope.GLOBAL,
                     defaults={
                         "enabled": False,
-                        "note": "Disabled in production by seed_feature_flags.",
+                        "note": PROD_DISABLE_NOTE,
                     },
                 )
                 action = "Created" if created else "Updated"
                 self.stdout.write(self.style.SUCCESS(f"  {action} global disable rule: {key}"))
-            else:
-                deleted, _ = FeatureFlagRule.objects.filter(
-                    flag=flag,
-                    scope=FeatureFlagRule.Scope.GLOBAL,
-                    note="Disabled in production by seed_feature_flags.",
-                ).delete()
-                if deleted:
-                    self.stdout.write(f"  Removed prod disable rule: {key}")
+
+        stale = FeatureFlagRule.objects.filter(
+            scope=FeatureFlagRule.Scope.GLOBAL,
+            note=PROD_DISABLE_NOTE,
+        )
+        if is_prod:
+            stale = stale.exclude(flag__key__in=PROD_DISABLED_FLAGS)
+        stale_keys = list(stale.values_list("flag__key", flat=True))
+        if stale_keys:
+            stale.delete()
+            for key in stale_keys:
+                self.stdout.write(f"  Removed stale seed-created disable rule: {key}")
 
     def _apply_prod_allowlist_rules(self):
         """In prod, re-enable globally-disabled flags for allow-listed operators.
