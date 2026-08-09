@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from django.db.models import Q
 from django.utils import timezone
@@ -141,6 +141,119 @@ def resolve_workspace_id_from_request(request, view=None) -> str | None:
     return str(workspace_id) if workspace_id else None
 
 
+class _ScopeRuleSource(Protocol):
+    """Anything the resolver can ask for "the rule at this scope, or None"."""
+
+    def get(self, scope: str, default: Any = None) -> Any: ...
+
+
+class _TierUnlockSource(Protocol):
+    """Anything the resolver can ask "does this tier unlock this flag key?"."""
+
+    def __contains__(self, flag_key: str) -> bool: ...
+
+
+def _resolve(
+    *,
+    flag_key: str,
+    default_enabled: bool,
+    rules_by_scope: _ScopeRuleSource,
+    tier_unlocked: _TierUnlockSource,
+    now,
+) -> FeatureFlagEvaluation:
+    """THE precedence ladder — the single implementation, used by every caller.
+
+    Resolution order:
+      user -> workspace -> plan tier -> global -> ``FeatureFlag.default_enabled``
+
+    The plan-tier layer unlocks a paid tier's feature set above the global
+    default but below explicit user/workspace rules, and only ever unlocks
+    (it never disables). The user-beats-workspace ordering is deliberate and
+    load-bearing: ``feature.support_impersonation`` expects a per-user rule and
+    is never globally enabled, and ``PROD_ALLOWLISTED_USER_FLAGS`` lets a named
+    user past a global disable. Do not reorder (ADR 0020 D0).
+
+    **Pure**: no ORM query, no cache read/write, no request. It only reads what
+    it is handed. ``rules_by_scope`` is consulted in precedence order, so a
+    caller may hand in a *lazy* source that fetches a scope's rule only when the
+    ladder actually reaches it — which is how ``evaluate_feature_flag`` keeps its
+    short-circuit while still deriving the ANSWER from this one function.
+    Windowing (``starts_at``/``ends_at``) is applied here, once, for every path.
+    """
+    for scope, source in (
+        (FeatureFlagRule.Scope.USER, "user_rule"),
+        (FeatureFlagRule.Scope.WORKSPACE, "workspace_rule"),
+    ):
+        rule = rules_by_scope.get(scope)
+        if rule is not None and rule.is_active_now(now):
+            return FeatureFlagEvaluation(enabled=bool(rule.enabled), source=source)
+
+    if flag_key in tier_unlocked:
+        return FeatureFlagEvaluation(enabled=True, source="plan_tier")
+
+    rule = rules_by_scope.get(FeatureFlagRule.Scope.GLOBAL)
+    if rule is not None and rule.is_active_now(now):
+        return FeatureFlagEvaluation(enabled=bool(rule.enabled), source="global_rule")
+
+    return FeatureFlagEvaluation(enabled=bool(default_enabled), source="default")
+
+
+class _LazyScopeRules:
+    """Single-flag fetching strategy: one query per scope, only when reached.
+
+    Reproduces ``evaluate_feature_flag``'s original short-circuit exactly — a
+    hit at USER never queries WORKSPACE or GLOBAL — while the ANSWER comes from
+    the shared ``_resolve``. The bulk path (``flags_for_context``) hands
+    ``_resolve`` a plain dict instead, because it already has every rule from
+    its single query.
+    """
+
+    def __init__(self, flag_id, *, user_id: str | None, workspace_id: str | None) -> None:
+        self._flag_id = flag_id
+        self._user_id = user_id
+        self._workspace_id = workspace_id
+        self._fetched: dict[str, Any] = {}
+
+    def get(self, scope: str, default: Any = None) -> Any:
+        if scope not in self._fetched:
+            self._fetched[scope] = self._fetch(scope)
+        rule = self._fetched[scope]
+        return default if rule is None else rule
+
+    def _fetch(self, scope: str) -> Any:
+        filters: dict[str, Any] = {"flag_id": self._flag_id, "scope": scope}
+        if scope == FeatureFlagRule.Scope.USER:
+            if not self._user_id:
+                return None
+            filters["user_id"] = self._user_id
+        elif scope == FeatureFlagRule.Scope.WORKSPACE:
+            if not self._workspace_id:
+                return None
+            filters["workspace_id"] = self._workspace_id
+        return FeatureFlagRule.objects.filter(**filters).only("enabled", "starts_at", "ends_at").first()
+
+
+class _LazyTierUnlock:
+    """Single-flag tier lookup, deferred until the ladder reaches the tier step.
+
+    Resolving the workspace's plan costs a ``Workspace`` query; the original
+    ladder only paid it when no user/workspace rule matched, so neither does
+    this. ``_workspace_plan_tier`` returns ``None`` (no query) for a missing
+    workspace, which ``features_for_tier`` maps to "unlocks nothing" — the same
+    outcome as the original's ``if normalized_workspace_id`` guard.
+    """
+
+    def __init__(self, workspace_id: str | None, request=None) -> None:
+        self._workspace_id = workspace_id
+        self._request = request
+        self._unlocked: frozenset[str] | None = None
+
+    def __contains__(self, flag_key: str) -> bool:
+        if self._unlocked is None:
+            self._unlocked = features_for_tier(_workspace_plan_tier(self._workspace_id, self._request))
+        return flag_key in self._unlocked
+
+
 def evaluate_feature_flag(
     flag_key: str,
     *,
@@ -151,10 +264,9 @@ def evaluate_feature_flag(
     """
     Evaluate a single flag for a given user/workspace context.
 
-    Resolution order:
-      user -> workspace -> plan tier -> global -> FeatureFlag.default_enabled
-    (the plan-tier layer unlocks a paid tier's feature set above the global
-    default but below explicit user/workspace rules — see step 2.5 below.)
+    Owns the fetching (lazy, one query per scope reached) and the caching
+    (per-request dict + version-keyed shared cache); the precedence decision
+    itself belongs to ``_resolve``, shared with ``flags_for_context``.
     """
     normalized_flag_key = FeatureFlag.normalize_key(flag_key)
     if not normalized_flag_key:
@@ -186,79 +298,29 @@ def evaluate_feature_flag(
             per_request[cache_key] = result
         return result
 
+    def _store(result: FeatureFlagEvaluation) -> FeatureFlagEvaluation:
+        _cache_adapter.set_evaluation(shared_key, {"enabled": result.enabled, "source": result.source}, timeout=300)
+        if per_request is not None:
+            per_request[cache_key] = result
+        return result
+
     flag = FeatureFlag.objects.filter(key=normalized_flag_key).only("id", "default_enabled").first()
     if not flag:
-        result = FeatureFlagEvaluation(enabled=False, source="missing_flag")
-        _cache_adapter.set_evaluation(shared_key, {"enabled": result.enabled, "source": result.source}, timeout=300)
-        if per_request is not None:
-            per_request[cache_key] = result
-        return result
+        return _store(FeatureFlagEvaluation(enabled=False, source="missing_flag"))
 
-    now = timezone.now()
-
-    # 1) User-level override
-    if user and user_id:
-        rule = (
-            FeatureFlagRule.objects.filter(flag_id=flag.id, scope=FeatureFlagRule.Scope.USER, user_id=user_id)
-            .only("enabled", "starts_at", "ends_at")
-            .first()
-        )
-        if rule and rule.is_active_now(now):
-            result = FeatureFlagEvaluation(enabled=bool(rule.enabled), source="user_rule")
-            _cache_adapter.set_evaluation(shared_key, {"enabled": result.enabled, "source": result.source}, timeout=300)
-            if per_request is not None:
-                per_request[cache_key] = result
-            return result
-
-    # 2) Workspace-level override
-    if normalized_workspace_id:
-        rule = (
-            FeatureFlagRule.objects.filter(
-                flag_id=flag.id,
-                scope=FeatureFlagRule.Scope.WORKSPACE,
+    return _store(
+        _resolve(
+            flag_key=normalized_flag_key,
+            default_enabled=flag.default_enabled,
+            rules_by_scope=_LazyScopeRules(
+                flag.id,
+                user_id=user_id if user else None,
                 workspace_id=normalized_workspace_id,
-            )
-            .only("enabled", "starts_at", "ends_at")
-            .first()
+            ),
+            tier_unlocked=_LazyTierUnlock(normalized_workspace_id, request),
+            now=timezone.now(),
         )
-        if rule and rule.is_active_now(now):
-            result = FeatureFlagEvaluation(enabled=bool(rule.enabled), source="workspace_rule")
-            _cache_adapter.set_evaluation(shared_key, {"enabled": result.enabled, "source": result.source}, timeout=300)
-            if per_request is not None:
-                per_request[cache_key] = result
-            return result
-
-    # 2.5) Plan-tier unlock — a paid tier turns its feature set ON, above the
-    # global default but below explicit user/workspace rules (already checked).
-    # Only unlocks (never disables); non-tier flags fall through unchanged.
-    if normalized_workspace_id:
-        tier = _workspace_plan_tier(normalized_workspace_id, request)
-        if normalized_flag_key in features_for_tier(tier):
-            result = FeatureFlagEvaluation(enabled=True, source="plan_tier")
-            _cache_adapter.set_evaluation(shared_key, {"enabled": result.enabled, "source": result.source}, timeout=300)
-            if per_request is not None:
-                per_request[cache_key] = result
-            return result
-
-    # 3) Global override
-    rule = (
-        FeatureFlagRule.objects.filter(flag_id=flag.id, scope=FeatureFlagRule.Scope.GLOBAL)
-        .only("enabled", "starts_at", "ends_at")
-        .first()
     )
-    if rule and rule.is_active_now(now):
-        result = FeatureFlagEvaluation(enabled=bool(rule.enabled), source="global_rule")
-        _cache_adapter.set_evaluation(shared_key, {"enabled": result.enabled, "source": result.source}, timeout=300)
-        if per_request is not None:
-            per_request[cache_key] = result
-        return result
-
-    # 4) Default
-    result = FeatureFlagEvaluation(enabled=bool(flag.default_enabled), source="default")
-    _cache_adapter.set_evaluation(shared_key, {"enabled": result.enabled, "source": result.source}, timeout=300)
-    if per_request is not None:
-        per_request[cache_key] = result
-    return result
 
 
 def is_feature_enabled(
@@ -281,7 +343,11 @@ def flags_for_context(
     """
     Return a map of all known flags evaluated for the given context.
 
-    Intended for frontend bootstrapping; avoid calling in hot loops.
+    Intended for frontend bootstrapping; avoid calling in hot loops. Owns its own
+    fetching (one query for every rule in scope) and caching; the precedence
+    decision per flag belongs to ``_resolve``, shared with
+    ``evaluate_feature_flag`` — the frontend bootstrap and the backend gate
+    therefore cannot answer differently.
     """
     version = _get_or_init_version()
     normalized_workspace_id = None
@@ -319,12 +385,15 @@ def flags_for_context(
         .only("flag_id", "scope", "enabled", "starts_at", "ends_at", "workspace_id", "user_id")
     )
 
+    # Bucket by scope. Windowing is NOT applied here — ``_resolve`` owns
+    # ``starts_at``/``ends_at`` for every path, so the two paths cannot drift on
+    # scheduling. (One rule per flag per scope-target is guaranteed by the
+    # model's unique constraints, so a bucket never loses an active rule to an
+    # inactive one.)
     global_rules = {}
     workspace_rules = {}
     user_rules = {}
     for rule in rules:
-        if not rule.is_active_now(now):
-            continue
         if rule.scope == FeatureFlagRule.Scope.GLOBAL:
             global_rules[rule.flag_id] = rule
         elif (
@@ -341,26 +410,22 @@ def flags_for_context(
 
     results: dict[str, Any] = {}
     for flag in flags:
-        if flag.id in user_rules:
-            enabled = bool(user_rules[flag.id].enabled)
-            source = "user_rule"
-        elif flag.id in workspace_rules:
-            enabled = bool(workspace_rules[flag.id].enabled)
-            source = "workspace_rule"
-        elif flag.key in tier_unlocked:
-            enabled = True
-            source = "plan_tier"
-        elif flag.id in global_rules:
-            enabled = bool(global_rules[flag.id].enabled)
-            source = "global_rule"
-        else:
-            enabled = bool(flag.default_enabled)
-            source = "default"
+        evaluation = _resolve(
+            flag_key=flag.key,
+            default_enabled=flag.default_enabled,
+            rules_by_scope={
+                FeatureFlagRule.Scope.USER: user_rules.get(flag.id),
+                FeatureFlagRule.Scope.WORKSPACE: workspace_rules.get(flag.id),
+                FeatureFlagRule.Scope.GLOBAL: global_rules.get(flag.id),
+            },
+            tier_unlocked=tier_unlocked,
+            now=now,
+        )
 
         if include_sources:
-            results[flag.key] = {"enabled": enabled, "source": source}
+            results[flag.key] = {"enabled": evaluation.enabled, "source": evaluation.source}
         else:
-            results[flag.key] = enabled
+            results[flag.key] = evaluation.enabled
 
     _cache_adapter.set_evaluation(shared_key, results, timeout=300)
     return results
