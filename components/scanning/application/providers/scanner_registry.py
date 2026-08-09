@@ -97,7 +97,7 @@ def _cloud_posture_prowler() -> ScannerPort:
 
 
 def _cloud_posture_post_ingest() -> PostIngestHook:
-    from components.cloud_posture.application.providers.posture_snapshot_provider import (
+    from components.cloud_posture.application.providers.account_link_hooks_provider import (
         build_post_ingest_hook,
     )
 
@@ -105,7 +105,7 @@ def _cloud_posture_post_ingest() -> PostIngestHook:
 
 
 def _cloud_posture_failure() -> FailureHook:
-    from components.cloud_posture.application.providers.posture_snapshot_provider import (
+    from components.cloud_posture.application.providers.account_link_hooks_provider import (
         build_failure_hook,
     )
 

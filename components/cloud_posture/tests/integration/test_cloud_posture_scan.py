@@ -26,7 +26,6 @@ from components.integrations.application.use_cases.generate_onboarding_template_
 _BACKEND_PROVIDER = "components.scanning.application.providers.execution_backend_provider.build_execution_backend"
 # The generic spine task's default AWS assume-role vend (the single token-vending seam).
 _CREDS_PROVIDER = "components.integrations.application.providers.aws_credentials_provider.get_aws_credentials_port"
-from infrastructure.persistence.cloud_posture.models import CloudPostureScan
 from infrastructure.persistence.integrations.models import AwsOrganizationConnection
 
 _SECURITY_AUDIT = "arn:aws:iam::aws:policy/SecurityAudit"
@@ -99,8 +98,8 @@ def test_terraform_attaches_prowler_managed_policies():
 @pytest.mark.django_db
 def test_spine_scan_assumes_runs_and_ingests(workspace_factory):
     """The generic spine task drives the real ProwlerScanner: creds vended through
-    the single AWS seam, the engine backend invoked once, the legacy snapshot
-    dual-written by the post-ingest hook (until the R2 read cutover)."""
+    the single AWS seam, the engine backend invoked once, the run recorded as a
+    ScanRun row."""
     from components.scanning.infrastructure.tasks.scan_tasks import run_scan
 
     ws = workspace_factory()
@@ -131,8 +130,11 @@ def test_spine_scan_assumes_runs_and_ingests(workspace_factory):
     assert result["findings"] == 1
     creds_port.assume_role.assert_called_once()
     assert len(backend.calls) == 1
-    scan = CloudPostureScan.objects.get(workspace=ws, account_id="123456789012")
-    assert scan.connection_id == conn.id
+    from infrastructure.persistence.scanning.models import ScanRun
+
+    run = ScanRun.objects.get(workspace=ws, source="cloud_posture.prowler", account_id="123456789012")
+    assert run.connection_id == conn.id
+    assert run.status == ScanRun.Status.COMPLETED
 
 
 @pytest.mark.integration

@@ -197,7 +197,7 @@ class ScanCompleted(DomainEvent):
     workspace_id: UUID
     source: str  # the pillar/scanner, e.g. "cloud_posture.prowler"
     engine: str  # "prowler", "trivy", …
-    scan_id: str  # CloudPostureScan / ScanRun id — the dedup identity
+    scan_id: str  # ScanRun id (historical rows may carry legacy snapshot ids) — the dedup identity
     target_ref: str = ""  # what was scanned (account id, image ref)
     account_id: str = ""
     total_checks: int = 0

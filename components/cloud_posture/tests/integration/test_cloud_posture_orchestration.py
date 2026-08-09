@@ -203,10 +203,6 @@ class TestSpineScanEndToEnd:
         # The scan proved the role — the link is VERIFIED (post-ingest hook).
         link.refresh_from_db()
         assert link.status == AwsAccountLink.Status.VERIFIED
-        # The legacy snapshot is still dual-written until the R2 read cutover.
-        from infrastructure.persistence.cloud_posture.models import CloudPostureScan
-
-        assert CloudPostureScan.objects.filter(workspace=ws, account_id="863183417583").exists()
         # Audit trail (R4): triggered + completed transitions on the run entity.
         transitions = set(
             EntityAuditLog.objects.filter(workspace=ws, object_id=str(run.id)).values_list("new_value", flat=True)

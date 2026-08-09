@@ -1,17 +1,21 @@
-"""Registry-facing hooks for the CSPM pillar's post-scan side effects (audit R1).
+"""Registry-facing hooks for the AWS CSPM pillar's post-scan side effects.
 
 Composition root (providers are the allowed slot for own-context infrastructure
-imports). Two hooks the scanner registry wires into the generic scan task:
+imports). Two hooks the scanner registry wires into the generic scan task —
+both about the ACCOUNT LINK, because the scan attempt IS the per-account role
+verification, in both directions:
 
-- **post-ingest** (run COMPLETED): persist the LEGACY ``CloudPostureScan`` /
-  ``CloudPostureFinding`` snapshot (transitional — dies with the R2 read
-  cutover; ``ScanRun`` + the Finding SSOT are the truth) and promote the
-  scanned account link to VERIFIED — the scan proved the role works.
+- **post-ingest** (run COMPLETED): promote the scanned account link to
+  VERIFIED — the scan proved the role works.
 - **failure** (run FAILED): mark the account link FAILED, degrading that one
-  account without blocking the rest of the org. The scan attempt IS the
-  per-account role verification, in both directions.
+  account without blocking the rest of the org.
 
-Both are best-effort by the registry's contract — the caller logs and continues.
+The legacy ``CloudPostureScan``/``CloudPostureFinding`` snapshot write that
+used to live here is DELETED (audit R2): ``ScanRun`` + the Finding SSOT are the
+only stores — the HUD posture card reads them via ``posture_summary``.
+
+Both hooks are best-effort by the registry's contract — the caller logs and
+continues.
 """
 
 from __future__ import annotations
@@ -29,21 +33,12 @@ def _set_link_status(connection_id, account_id: str, status: str) -> None:
 
 
 def build_post_ingest_hook():
-    """(run_id, workspace_id, target_ref, result, connection_id, account_id) → snapshot + link VERIFIED."""
+    """(run facts) → account link VERIFIED."""
 
     def _hook(*, run_id, workspace_id, target_ref, result, connection_id=None, account_id="", **_) -> None:
-        from components.cloud_posture.infrastructure.services.prowler_ingest_service import (
-            persist_snapshot_rows,
-        )
         from infrastructure.persistence.integrations.models import AwsAccountLink
 
         account = account_id or target_ref
-        persist_snapshot_rows(
-            workspace_id=workspace_id,
-            account_id=account,
-            result=result,
-            connection_id=connection_id,
-        )
         if connection_id:
             # The scan proved the role in this account — promote the link to VERIFIED.
             _set_link_status(connection_id, account, AwsAccountLink.Status.VERIFIED)
@@ -59,7 +54,7 @@ def build_post_ingest_hook():
 
 
 def build_failure_hook():
-    """(workspace_id, target_ref, connection_id, account_id) → link FAILED."""
+    """(run facts) → account link FAILED."""
 
     def _hook(*, workspace_id, target_ref, connection_id=None, account_id="", **_) -> None:
         from infrastructure.persistence.integrations.models import AwsAccountLink

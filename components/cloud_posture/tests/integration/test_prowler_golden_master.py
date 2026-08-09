@@ -24,7 +24,6 @@ from pathlib import Path
 import pytest
 
 from components.cloud_posture.infrastructure.services.prowler_ingest_service import (
-    ingest_prowler_scan,
     records_to_scan_result,
 )
 from components.scanning.infrastructure.services.run_scan_service import run_scan_and_ingest
@@ -107,20 +106,16 @@ def _ssot_projection(workspace) -> list[dict]:
     return projected
 
 
-def test_spine_path_persists_identical_ssot_rows_as_the_legacy_pipeline(
-    workspace_factory, django_capture_on_commit_callbacks
-):
-    """LEGACY ingest (workspace A) vs SPINE choreography (workspace B): the SSOT
-    rows must be identical — the before/after proof for the R1 migration."""
-    ws_legacy = workspace_factory()
-    ws_spine = workspace_factory()
-
-    with django_capture_on_commit_callbacks(execute=True):
-        ingest_prowler_scan(workspace_id=ws_legacy.id, account_id="123456789012", records=_records())
+def test_spine_path_persists_exactly_the_golden_findings(workspace_factory, django_capture_on_commit_callbacks):
+    """The SPINE choreography persists SSOT rows whose identity/content equal the
+    golden fixture's findings — the frozen before/after proof for the R1
+    migration (the legacy ingest pipeline this was originally compared against
+    is deleted; the golden file IS its recorded output)."""
+    ws = workspace_factory()
 
     with django_capture_on_commit_callbacks(execute=True):
         run_scan_and_ingest(
-            workspace_id=ws_spine.id,
+            workspace_id=ws.id,
             source="cloud_posture.prowler",
             target=ScanTarget(identifier="123456789012", params={"regions": ["us-east-1"]}),
             scanner=_StubScanner(records_to_scan_result(_records(), engine_version="prowler")),
@@ -128,5 +123,17 @@ def test_spine_path_persists_identical_ssot_rows_as_the_legacy_pipeline(
             trigger="manual",
         )
 
-    assert _ssot_projection(ws_legacy) == _ssot_projection(ws_spine)
-    assert len(_ssot_projection(ws_spine)) == 2
+    persisted = _ssot_projection(ws)
+    expected = sorted(_golden()["findings"], key=lambda f: f["fingerprint"])
+    assert len(persisted) == 2
+    for row, gold in zip(persisted, expected, strict=True):
+        assert row["source"] == gold["source"]
+        assert row["fingerprint"] == gold["fingerprint"]
+        assert row["asset_urn"] == gold["asset_urn"]
+        assert row["severity"] == gold["severity"]
+        assert row["title"] == gold["title"]
+        assert row["description"] == gold["description"]
+        assert row["remediation"] == gold["remediation"]
+        assert row["compliance"] == gold["compliance"]
+        assert row["attributes"] == gold["attributes"]
+        assert row["status"] == "open"
