@@ -22,6 +22,8 @@ class RecordObservedFindingCommand:
     remediation: str = ""
     compliance: dict = field(default_factory=dict)
     attributes: dict = field(default_factory=dict)
+    # The ScanRun that made this observation ("" for run-less sources) — audit R2.
+    scan_run_id: str = ""
 
 
 @dataclass(frozen=True)

@@ -163,15 +163,12 @@ def run_scan_and_ingest(
 def _finding_observed(workspace_id: UUID, finding: NormalizedFinding, *, run_id: str = "") -> FindingObserved:
     """Map a ``NormalizedFinding`` (any engine) to a ``FindingObserved`` for the SSOT.
 
-    ``run_id`` stamps the originating ``ScanRun`` into the finding's attributes
-    (``scan_run_id``) so finding → run → trigger/user/engine-version provenance is
-    carried for EVERY spine pillar. A first-class ``FindingObserved.scan_run_id``
-    field + indexed ``Finding`` column is the named follow-up (scanner-architecture
-    audit R2) — the attributes carry is the additive, non-breaking half.
+    ``run_id`` stamps the originating ``ScanRun`` first-class onto the event
+    (audit R2): finding → run → trigger/user/engine-version becomes a plain
+    lookup for every spine pillar. This is the follow-up #286's interim
+    attributes-carry named — superseded here by the first-class field
+    (ONE mechanism; the attributes copy is gone).
     """
-    attributes = dict(finding.attributes)
-    if run_id:
-        attributes.setdefault("scan_run_id", run_id)
     return FindingObserved(
         workspace_id=workspace_id,
         source=finding.source,
@@ -182,7 +179,8 @@ def _finding_observed(workspace_id: UUID, finding: NormalizedFinding, *, run_id:
         description=finding.description,
         remediation=finding.remediation,
         compliance=dict(finding.compliance),
-        attributes=attributes,
+        attributes=dict(finding.attributes),
+        scan_run_id=run_id,
     )
 
 

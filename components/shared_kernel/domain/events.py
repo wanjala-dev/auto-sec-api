@@ -113,6 +113,12 @@ class FindingObserved(DomainEvent):
     remediation: str = ""
     compliance: dict = field(default_factory=dict)  # framework tags (JSON-safe)
     attributes: dict = field(default_factory=dict)  # pillar-specific extras (JSON-safe)
+    # The ScanRun that observed this finding (str(ScanRun.id)), or "" for sources
+    # with no run record (detector cycles, log ingest). Carrying it across the
+    # event boundary is what lets a Finding answer "which run found this — who
+    # triggered it, when, with which engine version" (scanner-architecture audit
+    # R2; the SARIF result→invocation link).
+    scan_run_id: str = ""
 
 
 @dataclass(frozen=True, kw_only=True)
