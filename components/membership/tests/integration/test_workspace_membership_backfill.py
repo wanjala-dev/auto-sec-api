@@ -1,21 +1,33 @@
-"""Tests for the Phase 3a team-only WorkspaceMembership backfill.
+"""Tests for the team-only WorkspaceMembership backfill.
 
-The ``0019_backfill_team_only_workspace_memberships`` data migration
-walks every active Team, finds its members, and ensures each one has
-a ``WorkspaceMembership`` (``role="member"``) in the team's workspace.
+The backfill walks every ACTIVE Team, finds its members, and ensures each one
+has a ``WorkspaceMembership`` (``role="member"``) in the team's workspace.
 Users who already have a membership are skipped — we never overwrite.
 
-These tests hit the backfill function directly (migration modules are
-importable) so they exercise the real code without relying on pytest's
-migration runner.
+FORK-DRIFT REPAIR (2026-08-08)
+------------------------------
+These tests had been failing on every run with ``ModuleNotFoundError:
+...migrations.0019_backfill_team_only_workspace_memberships`` — they imported a
+data migration that no longer exists (migration history was reset to fresh
+``0001``s in the fork). The backfill itself survives as the
+``backfill_memberships`` management command, which is now the canonical entry
+point, so these invariants are re-pointed at it and exercised through
+``call_command`` — the real operator path.
+
+Re-running them against the live command surfaced TWO real gaps in it, both
+fixed alongside this repair (see the command):
+  * it walked ``Team.objects.all()``, so a soft-DELETED team's members were
+    still granted workspace access — the exact invariant
+    ``test_deleted_team_does_not_trigger_backfill`` exists to protect, silently
+    unverified for as long as the import was broken;
+  * it never set ``workspace_role``, manufacturing rows with a role NAME but no
+    capabilities behind it — what the model calls "a hard bug from Phase 2".
 """
 
 from __future__ import annotations
 
-import importlib
-
 import pytest
-from django.apps import apps as django_apps
+from django.core.management import call_command
 
 from infrastructure.persistence.team.models import Team
 from infrastructure.persistence.workspaces.models import (
@@ -27,10 +39,10 @@ pytestmark = pytest.mark.django_db
 
 
 def _run_backfill():
-    module = importlib.import_module(
-        "infrastructure.persistence.workspaces.migrations.0019_backfill_team_only_workspace_memberships"
-    )
-    module.backfill_team_only_memberships(django_apps, schema_editor=None)
+    """Drive the real operator entry point, output suppressed."""
+    import io
+
+    call_command("backfill_memberships", stdout=io.StringIO())
 
 
 def _member_role() -> WorkspaceRole:
@@ -39,32 +51,26 @@ def _member_role() -> WorkspaceRole:
 
 
 class TestBackfillCreatesMembershipForTeamOnlyUser:
-    def test_team_only_user_gets_workspace_membership(
-        self, workspace_factory, user_factory, team_factory
-    ) -> None:
+    def test_team_only_user_gets_workspace_membership(self, workspace_factory, user_factory, team_factory) -> None:
         owner = user_factory()
         team_only_user = user_factory()
         workspace = workspace_factory(owner=owner)
         team_factory(workspace=workspace, members=[team_only_user])
 
-        assert not WorkspaceMembership.objects.filter(
-            workspace=workspace, user=team_only_user
-        ).exists(), "sanity: no membership before backfill"
+        assert not WorkspaceMembership.objects.filter(workspace=workspace, user=team_only_user).exists(), (
+            "sanity: no membership before backfill"
+        )
 
         _run_backfill()
 
-        membership = WorkspaceMembership.objects.get(
-            workspace=workspace, user=team_only_user
-        )
+        membership = WorkspaceMembership.objects.get(workspace=workspace, user=team_only_user)
         assert membership.role == "member"
         assert membership.status == WorkspaceMembership.Status.ACTIVE
         assert membership.workspace_role_id == _member_role().id
 
 
 class TestBackfillDoesNotOverwrite:
-    def test_existing_admin_membership_preserved(
-        self, workspace_factory, user_factory, team_factory
-    ) -> None:
+    def test_existing_admin_membership_preserved(self, workspace_factory, user_factory, team_factory) -> None:
         """Pre-existing non-member roles must survive the backfill."""
         owner = user_factory()
         admin = user_factory()
@@ -86,9 +92,7 @@ class TestBackfillDoesNotOverwrite:
         assert membership.role == "admin"
         assert membership.workspace_role_id == admin_role.id
 
-    def test_suspended_membership_preserved(
-        self, workspace_factory, user_factory, team_factory
-    ) -> None:
+    def test_suspended_membership_preserved(self, workspace_factory, user_factory, team_factory) -> None:
         """Even an inactive/suspended prior membership is not replaced."""
         owner = user_factory()
         user = user_factory()
@@ -112,32 +116,24 @@ class TestBackfillDoesNotOverwrite:
 
 
 class TestBackfillIsIdempotent:
-    def test_rerun_creates_nothing_new(
-        self, workspace_factory, user_factory, team_factory
-    ) -> None:
+    def test_rerun_creates_nothing_new(self, workspace_factory, user_factory, team_factory) -> None:
         owner = user_factory()
         user = user_factory()
         workspace = workspace_factory(owner=owner)
         team_factory(workspace=workspace, members=[user])
 
         _run_backfill()
-        count_after_first = WorkspaceMembership.objects.filter(
-            workspace=workspace, user=user
-        ).count()
+        count_after_first = WorkspaceMembership.objects.filter(workspace=workspace, user=user).count()
 
         _run_backfill()
-        count_after_second = WorkspaceMembership.objects.filter(
-            workspace=workspace, user=user
-        ).count()
+        count_after_second = WorkspaceMembership.objects.filter(workspace=workspace, user=user).count()
 
         assert count_after_first == 1
         assert count_after_second == 1
 
 
 class TestBackfillIgnoresInactiveTeams:
-    def test_deleted_team_does_not_trigger_backfill(
-        self, workspace_factory, user_factory, team_factory
-    ) -> None:
+    def test_deleted_team_does_not_trigger_backfill(self, workspace_factory, user_factory, team_factory) -> None:
         owner = user_factory()
         user = user_factory()
         workspace = workspace_factory(owner=owner)
@@ -147,9 +143,7 @@ class TestBackfillIgnoresInactiveTeams:
 
         _run_backfill()
 
-        assert not WorkspaceMembership.objects.filter(
-            workspace=workspace, user=user
-        ).exists()
+        assert not WorkspaceMembership.objects.filter(workspace=workspace, user=user).exists()
 
 
 class TestBackfillMultipleWorkspaces:
@@ -165,9 +159,5 @@ class TestBackfillMultipleWorkspaces:
 
         _run_backfill()
 
-        assert WorkspaceMembership.objects.filter(
-            workspace=ws_a, user=shared_user
-        ).exists()
-        assert WorkspaceMembership.objects.filter(
-            workspace=ws_b, user=shared_user
-        ).exists()
+        assert WorkspaceMembership.objects.filter(workspace=ws_a, user=shared_user).exists()
+        assert WorkspaceMembership.objects.filter(workspace=ws_b, user=shared_user).exists()
