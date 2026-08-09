@@ -42,6 +42,29 @@ class InvitationEmailProvider:
             is_existing_user=is_existing_user,
         )
 
+    def queue_persona_invitation(
+        self,
+        invitation_id: Any,
+        *,
+        inviter_user_id: Any = None,
+        is_existing_user: bool = False,
+    ) -> None:
+        """Queue the persona invitation email (async, post-commit).
+
+        The transaction/Celery choreography lives in the infrastructure
+        dispatch helper — controllers call THIS so they stay free of
+        ``django.db`` imports (thin primary adapters).
+        """
+        from components.team.infrastructure.adapters.persona_invitation_email_dispatch import (
+            queue_persona_invitation_email as _queue_persona_invitation_email,
+        )
+
+        _queue_persona_invitation_email(
+            invitation_id,
+            inviter_user_id=inviter_user_id,
+            is_existing_user=is_existing_user,
+        )
+
     def send_invitation(
         self,
         to_email: str,

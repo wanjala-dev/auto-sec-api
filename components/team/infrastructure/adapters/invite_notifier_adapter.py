@@ -24,22 +24,20 @@ class InviteNotifierAdapter(InviteNotifierPort):
         inviter_user_id: str | None,
         is_existing_user: bool,
     ) -> None:
-        from django.db import transaction
-
-        from components.team.workers.tasks import send_persona_invitation_email
-
         # Queue the SMTP send to Celery, post-commit (>100ms rule): the task
         # re-reads the invitation row, so it must see the committed token. A
         # send failure retries + logs loudly in the worker instead of being
-        # swallowed here while the API claims "Invite sent".
-        transaction.on_commit(
-            lambda: send_persona_invitation_email.delay(
-                str(invitation_id),
-                str(inviter_user_id) if inviter_user_id else None,
-                bool(is_existing_user),
-            )
+        # swallowed here while the API claims "Invite sent". The enqueue
+        # choreography lives ONCE in the shared dispatch helper.
+        from components.team.infrastructure.adapters.persona_invitation_email_dispatch import (
+            queue_persona_invitation_email,
         )
-        logger.info("persona_invite_email_queued invitation_id=%s", invitation_id)
+
+        queue_persona_invitation_email(
+            invitation_id,
+            inviter_user_id=inviter_user_id,
+            is_existing_user=is_existing_user,
+        )
 
     def notify_existing_user(
         self,
