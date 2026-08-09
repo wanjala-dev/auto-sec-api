@@ -435,20 +435,15 @@ class PersonaInviteManageView(APIView):
         )
 
         # Re-fire the email so the recipient gets a fresh link in their inbox.
-        try:
-            from components.team.application.providers.invitation_email_provider import (
-                get_invitation_email_provider,
-            )
+        # Queued to Celery post-commit (>100ms rule) — the task re-reads the
+        # invitation row so it must see the freshly-committed token; a send
+        # failure retries + logs loudly in the worker instead of being
+        # swallowed while this endpoint reports success.
+        from django.db import transaction as _transaction
 
-            send_persona_invitation = get_invitation_email_provider().send_persona_invitation
-            send_persona_invitation(invitation, inviter_user=user)
-        except Exception:
-            import logging
+        from components.team.workers.tasks import send_persona_invitation_email
 
-            logging.getLogger("invitations").exception(
-                "persona invite resend email failed for %s",
-                invitation.email,
-            )
+        _transaction.on_commit(lambda: send_persona_invitation_email.delay(str(invitation.id), str(user.id), False))
 
         return Response(
             {

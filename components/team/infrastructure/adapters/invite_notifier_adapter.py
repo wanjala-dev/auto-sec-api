@@ -24,29 +24,22 @@ class InviteNotifierAdapter(InviteNotifierPort):
         inviter_user_id: str | None,
         is_existing_user: bool,
     ) -> None:
-        from infrastructure.persistence.team.models import Invitation
-        from infrastructure.persistence.users.models import CustomUser
+        from django.db import transaction
 
-        invitation = Invitation.objects.select_related("workspace", "team").filter(id=invitation_id).first()
-        if invitation is None:
-            return
+        from components.team.workers.tasks import send_persona_invitation_email
 
-        inviter_user = None
-        if inviter_user_id:
-            inviter_user = CustomUser.objects.filter(id=inviter_user_id).first()
-
-        try:
-            from components.team.infrastructure.adapters.utilities import (
-                send_persona_invitation,
+        # Queue the SMTP send to Celery, post-commit (>100ms rule): the task
+        # re-reads the invitation row, so it must see the committed token. A
+        # send failure retries + logs loudly in the worker instead of being
+        # swallowed here while the API claims "Invite sent".
+        transaction.on_commit(
+            lambda: send_persona_invitation_email.delay(
+                str(invitation_id),
+                str(inviter_user_id) if inviter_user_id else None,
+                bool(is_existing_user),
             )
-
-            send_persona_invitation(
-                invitation,
-                inviter_user=inviter_user,
-                is_existing_user=is_existing_user,
-            )
-        except Exception:
-            logger.exception("persona invite email failed for %s", invitation.email)
+        )
+        logger.info("persona_invite_email_queued invitation_id=%s", invitation_id)
 
     def notify_existing_user(
         self,

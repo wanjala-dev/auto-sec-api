@@ -47,13 +47,16 @@ class TestOnboardingFlow:
             format="json",
         )
 
-    def test_full_onboarding_sequence(self, api_client):
+    def test_full_onboarding_sequence(self, api_client, django_capture_on_commit_callbacks):
         email = "founder@acme-soc.example"
         username = "acmefounder"
 
-        # 1. Register — user is created, unverified, and a welcome email is queued.
+        # 1. Register — user is created, unverified, and a welcome email is
+        #    queued POST-COMMIT to Celery (eager in tests), so the request is
+        #    wrapped in the on-commit capture to mirror the real flow.
         mail.outbox.clear()
-        resp = self._register(api_client, email=email, username=username)
+        with django_capture_on_commit_callbacks(execute=True):
+            resp = self._register(api_client, email=email, username=username)
         assert resp.status_code == 200, resp.data
         assert resp.data["data"]["email"] == email
 

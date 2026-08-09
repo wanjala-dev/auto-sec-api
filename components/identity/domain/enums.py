@@ -21,6 +21,7 @@ class AuthEventCode(str, Enum):
     PASSWORD_RESET_REQUESTED = "auth.password_reset_requested"
     PASSWORD_RESET_COMPLETED = "auth.password_reset_completed"
     EMAIL_VERIFY = "auth.email_verify"
+    EMAIL_VERIFICATION_RESENT = "auth.email_verification_resent"
     LOGOUT = "auth.logout"
     PASSWORD_CHANGED = "auth.password_changed"
     SESSION_REVOKED = "auth.session_revoked"

@@ -64,6 +64,8 @@ from components.identity.api.throttles import (
     OTPVerifyThrottle,
     PasswordResetConfirmThrottle,
     PasswordResetRequestThrottle,
+    ResendVerificationEmailThrottle,
+    ResendVerificationIPThrottle,
     StaticVerifyThrottle,
 )
 from components.identity.domain.enums import LOGIN_ACTIVITY_EVENT_CODES
@@ -631,38 +633,14 @@ class RegisterView(generics.GenericAPIView):
             }
         }
 
-        # 2. Resolve site context for email verification URL
-        #    Use FRONTEND_URL / LOCALHOST_FRONTEND_URL for email links — NOT the
-        #    API's Site domain, which would point users to the backend.
-        current_site = get_current_site(request)
-        site_domain = getattr(current_site, "domain", current_site)
-        site_domain = site_domain.strip() if isinstance(site_domain, str) else ""
-        frontend_base = getattr(settings, "FRONTEND_URL", None) or getattr(settings, "LOCALHOST_FRONTEND_URL", "")
-        confirm_path = getattr(settings, "EMAIL_CONFIRMATION_REDIRECT_PATH", "/EmailConfirmed/")
-        confirmation_base_url = (
-            f"{frontend_base.rstrip('/')}{confirm_path}"
-            if frontend_base
-            else _build_frontend_url(request, confirm_path, site_domain=site_domain)
-        )
-
-        # 3. Delegate verification email to the email port via service
-        #    (user creation already done by serializer, so we use the adapter
-        #    for the email dispatch only)
+        # 2. Queue the verification email (async, post-commit). The Celery
+        #    task resolves FRONTEND_URL + EMAIL_CONFIRMATION_REDIRECT_PATH and
+        #    mints the token itself; a send failure retries in the worker and
+        #    logs loudly instead of this endpoint claiming a delivery that
+        #    never happened (>100ms rule — no SMTP in the request path).
         user = service.get_user_by_email(user_data["email"])
-        token = RefreshToken.for_user(user).access_token
-        verification_url = f"{confirmation_base_url}?token={token!s}"
-
-        service = IdentityService()
-        email_sent = service.send_verification_email(
-            user_id=user.id,
-            email=user.email,
-            username=user.username,
-            verification_url=verification_url,
-            site_name=getattr(settings, "SITE_NAME", "Octopus"),
-            site_domain=site_domain,
-        )
-        if not email_sent:
-            response["warning"] = "Account created, but verification email could not be sent right now."
+        service.queue_verification_email(user.id)
+        response["detail"] = "Account created. Check your email to verify your address."
 
         return Response(response, status=status.HTTP_200_OK)
 
@@ -707,6 +685,44 @@ class VerifyEmail(views.APIView):
             "tokens": result.tokens,
         }
         return Response({**auth_payload, "detail": "Successfully activated"}, status=status.HTTP_200_OK)
+
+
+class ResendVerificationEmailView(views.APIView):
+    """POST /identity/resend-verification/  {email}
+
+    Public recovery path for the verification gate: an unverified user who
+    lost (or never received) the confirmation email asks for a fresh one.
+
+    ALWAYS answers 202 with the same neutral body — success, unknown email,
+    and already-verified all look identical, so the endpoint is not an
+    account-existence oracle. Hard-throttled per-email AND per-IP because
+    each accepted request can enqueue a real email send. The actual resend
+    (unverified accounts only) is queued to Celery and audit-logged by the
+    use case.
+    """
+
+    permission_classes = (IsUnauthenticatedOrAdminOrStaff,)
+    throttle_classes = [ResendVerificationEmailThrottle, ResendVerificationIPThrottle]
+    name = "resend-verification"
+
+    def post(self, request):
+        from components.identity.application.use_cases.resend_verification_email_use_case import (
+            ResendVerificationEmailCommand,
+        )
+
+        email = (request.data.get("email") or "").strip().lower()
+        if not email:
+            return Response(
+                {"detail": "Email is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        context = build_request_context(request)
+        IdentityService().resend_verification_email(ResendVerificationEmailCommand(email=email, context=context))
+        return Response(
+            {"detail": "If an account exists for this address, a verification email has been sent."},
+            status=status.HTTP_202_ACCEPTED,
+        )
 
 
 class UserViewSet(viewsets.ModelViewSet):

@@ -143,6 +143,44 @@ class IdentityProvider:
         )
 
     @staticmethod
+    def build_send_verification_email_use_case():
+        """Worker-side send: mint token + build URL + SMTP via the email port."""
+        from components.identity.application.use_cases.send_verification_email_use_case import (
+            SendVerificationEmailUseCase,
+        )
+
+        return SendVerificationEmailUseCase(
+            user_repo=OrmUserRepository(),
+            token_port=JWTTokenAdapter(),
+            email_port=DjangoEmailVerificationAdapter(),
+        )
+
+    @staticmethod
+    def build_resend_verification_email_use_case():
+        """Public resend flow: no-oracle lookup + audit + async queue."""
+        from components.identity.application.use_cases.resend_verification_email_use_case import (
+            ResendVerificationEmailUseCase,
+        )
+        from components.identity.infrastructure.adapters.celery_verification_email_dispatch_adapter import (
+            CeleryVerificationEmailDispatchAdapter,
+        )
+
+        return ResendVerificationEmailUseCase(
+            user_repo=OrmUserRepository(),
+            audit_port=OrmAuthAuditRepository(),
+            dispatch_port=CeleryVerificationEmailDispatchAdapter(),
+        )
+
+    @staticmethod
+    def build_verification_email_dispatch_adapter():
+        """Async queue adapter — used by the register controller path."""
+        from components.identity.infrastructure.adapters.celery_verification_email_dispatch_adapter import (
+            CeleryVerificationEmailDispatchAdapter,
+        )
+
+        return CeleryVerificationEmailDispatchAdapter()
+
+    @staticmethod
     def build_verify_email_use_case() -> VerifyEmailUseCase:
         return VerifyEmailUseCase(
             user_repo=OrmUserRepository(),
