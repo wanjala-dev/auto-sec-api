@@ -1,13 +1,30 @@
 """Backfill workspace/team membership records for existing org data."""
-from __future__ import annotations
 
-from typing import Iterable
+from __future__ import annotations
 
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
-from infrastructure.persistence.workspaces.models import Workspace, WorkspaceMembership
 from infrastructure.persistence.team.models import Team, TeamMembership
+from infrastructure.persistence.workspaces.models import Workspace, WorkspaceMembership
+
+
+def _system_role(slug: str):
+    """The seeded system ``WorkspaceRole`` for *slug*, or None if unseeded.
+
+    ``WorkspaceMembership.workspace_role`` is the CAPABILITY-backed role — the
+    model documents null as "a hard bug from Phase 2 onward". A backfill that
+    sets only the legacy ``role`` string therefore manufactures exactly the rows
+    the RBAC model considers broken: the member has a role name but no
+    capabilities behind it. Resolving it here keeps repaired rows first-class.
+
+    Best-effort by design: on a database where the system roles have not been
+    seeded yet (``seed_workspace_roles``) this returns None and the row is
+    created exactly as before — never a crash during a data repair.
+    """
+    from infrastructure.persistence.workspaces.models import WorkspaceRole
+
+    return WorkspaceRole.objects.filter(workspace__isnull=True, is_system=True, slug=slug).first()
 
 
 class Command(BaseCommand):
@@ -40,7 +57,15 @@ class Command(BaseCommand):
         if workspace_id:
             workspaces = workspaces.filter(id=workspace_id)
 
-        teams = Team.objects.all()
+        # ACTIVE teams only. ``Team`` has no soft-delete manager, so a bare
+        # ``.all()`` walks DELETED teams too — and this command GRANTS workspace
+        # access to every team member it finds. Backfilling from a deleted team
+        # silently resurrects access that an admin had explicitly removed, which
+        # on a security product is an access-control regression, not a cosmetic
+        # one. (Caught 2026-08-08 while repairing the backfill's fork-drifted
+        # tests, whose "deleted team does not trigger backfill" invariant had
+        # been unverified since the migration it pointed at was removed.)
+        teams = Team.objects.filter(status=Team.ACTIVE)
         if team_id:
             teams = teams.filter(id=team_id)
         if workspace_id:
@@ -68,13 +93,9 @@ class Command(BaseCommand):
                 transaction.set_rollback(True)
 
         self.stdout.write(
-            "Workspace memberships: "
-            f"{created_workspace_memberships} created, {updated_workspace_memberships} updated"
+            f"Workspace memberships: {created_workspace_memberships} created, {updated_workspace_memberships} updated"
         )
-        self.stdout.write(
-            "Team memberships: "
-            f"{created_team_memberships} created, {updated_team_memberships} updated"
-        )
+        self.stdout.write(f"Team memberships: {created_team_memberships} created, {updated_team_memberships} updated")
 
     def _ensure_workspace_owner(self, workspace, owner_id, *, dry_run: bool) -> tuple[int, int]:
         # Persona for the workspace owner is derived from workspace_type
@@ -97,6 +118,7 @@ class Command(BaseCommand):
             user_id=owner_id,
             defaults={
                 "role": WorkspaceMembership.Role.OWNER,
+                "workspace_role": _system_role(WorkspaceMembership.Role.OWNER),
                 "persona": owner_persona,
                 "status": WorkspaceMembership.Status.ACTIVE,
                 "accepted_at": workspace.created_at,
@@ -160,6 +182,7 @@ class Command(BaseCommand):
                     user_id=team.created_by_id,
                     defaults={
                         "role": WorkspaceMembership.Role.MEMBER,
+                        "workspace_role": _system_role(WorkspaceMembership.Role.MEMBER),
                         "status": WorkspaceMembership.Status.ACTIVE,
                     },
                 )
@@ -185,6 +208,7 @@ class Command(BaseCommand):
                     user_id=member_id,
                     defaults={
                         "role": WorkspaceMembership.Role.MEMBER,
+                        "workspace_role": _system_role(WorkspaceMembership.Role.MEMBER),
                         "status": WorkspaceMembership.Status.ACTIVE,
                     },
                 )
