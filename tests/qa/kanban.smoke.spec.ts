@@ -150,3 +150,190 @@ test('add-task persists a finding into a lane', async ({ page }) => {
   );
   expect(out).toContain('TASK=True');
 });
+
+/**
+ * Simulated pointer drag that satisfies dnd-kit's PointerSensor activation
+ * constraint (5px of travel before a drag starts): press, jiggle past the
+ * threshold, glide to the target in small steps so onDragOver fires along the
+ * way, settle, release.
+ */
+async function pointerDrag(
+  page: Page,
+  from: { x: number; y: number },
+  to: { x: number; y: number }
+) {
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(from.x + 8, from.y + 2, { steps: 3 });
+  await page.waitForTimeout(150);
+  for (let i = 1; i <= 25; i += 1) {
+    await page.mouse.move(
+      from.x + ((to.x - from.x) * i) / 25,
+      from.y + ((to.y - from.y) * i) / 25
+    );
+    await page.waitForTimeout(40);
+  }
+  await page.waitForTimeout(500);
+  await page.mouse.up();
+}
+
+/**
+ * The drag-mechanics regressions get their OWN two-lane team board ("DND E2E")
+ * so lane geometry stays clean and deterministic — the shared "SOC E2E" board
+ * accumulates a column + a task per run of the earlier write-path specs, which
+ * makes pixel-level drags flaky. Wiped + re-seeded on every run.
+ */
+const DND_TEAM = 'DND E2E';
+
+function seedDndBoard(taskTitle: string) {
+  sh(
+    [
+      'from infrastructure.persistence.users.models import CustomUser',
+      'from infrastructure.persistence.workspaces.models import Workspace',
+      'from infrastructure.persistence.team.models import Team',
+      'from infrastructure.persistence.project.models import Column, Task',
+      `u=CustomUser.objects.get(email='${EMAIL}')`,
+      'ws=Workspace.objects.all_objects().filter(workspace_owner=u).first()',
+      `t=Team.objects.filter(workspace=ws, title='${DND_TEAM}').first() or Team.objects.create(workspace=ws, title='${DND_TEAM}', status='active', created_by=u)`,
+      't.members.add(u)',
+      'Task.objects.filter(team=t).delete()',
+      "c1=Column.objects.get_or_create(team=t, workspace=ws, project=None, title='To Do', defaults={'order':0,'created_by':u})[0]",
+      "c2=Column.objects.get_or_create(team=t, workspace=ws, project=None, title='Doing', defaults={'order':1,'created_by':u})[0]",
+      "c1.order=0; c1.save(update_fields=['order']); c2.order=1; c2.save(update_fields=['order'])",
+      `Task.objects.create(team=t, workspace=ws, title='${taskTitle}', column=c1, created_by=u, source_type='ai.detection')`,
+      "print('ready')"
+    ].join('; ')
+  );
+}
+
+async function openDndBoard(page: Page) {
+  await login(page);
+  await openKanban(page);
+  await page.locator('select[aria-label="Team"]').selectOption({ label: DND_TEAM });
+  await expect(
+    page.locator('[data-kanban-lane][data-kanban-lane-title="To Do"]')
+  ).toBeVisible();
+  await expect(
+    page.locator('[data-kanban-lane][data-kanban-lane-title="Doing"]')
+  ).toBeVisible();
+}
+
+test('dragging a card into an EMPTY lane persists the move', async ({ page }) => {
+  // Regression (found 2026-08-09): with bare closestCorners collision
+  // detection, a tall empty lane's corners average farther from the drag rect
+  // than the dragged card's own vacated slot, so `over` never left the card
+  // and dropping into an empty column was a silent no-op — the card snapped
+  // back. Fixed in the HUD board with pointer-first collision detection
+  // (pointerWithin, closestCorners fallback).
+  const title = `E2E empty-lane drag ${Date.now().toString().slice(-5)}`;
+  seedDndBoard(title);
+  await openDndBoard(page);
+
+  const card = page.locator(`[data-kanban-card]:has-text("${title}")`).first();
+  await expect(card).toBeVisible();
+  const cardBox = await card.boundingBox();
+  const destLane = page.locator('[data-kanban-lane][data-kanban-lane-title="Doing"]');
+  const destBox = await destLane.boundingBox();
+  if (!cardBox || !destBox) throw new Error('card/lane not measurable');
+
+  await pointerDrag(
+    page,
+    { x: cardBox.x + cardBox.width / 2, y: cardBox.y + 12 },
+    { x: destBox.x + destBox.width / 2, y: destBox.y + 80 }
+  );
+
+  // The card lands in the empty lane and the move survives the debounced
+  // patch-queue flush + a full reload (server truth, not optimistic state).
+  await expect(destLane.locator(`[data-kanban-card]:has-text("${title}")`)).toBeVisible();
+  await expect
+    .poll(
+      () =>
+        sh(
+          [
+            'from infrastructure.persistence.project.models import Task',
+            `t=Task.objects.get(title='${title}')`,
+            "print('COL=' + t.column.title)"
+          ].join('; ')
+        ),
+      // The patch queue debounces the flush and each request to the local
+      // cluster runs ~5s — 15s raced the write and flaked; 45s is safe.
+      { timeout: 45_000 }
+    )
+    .toContain('COL=Doing');
+
+  await page.reload();
+  await openKanban(page);
+  await page.locator('select[aria-label="Team"]').selectOption({ label: DND_TEAM });
+  await expect(
+    page
+      .locator('[data-kanban-lane][data-kanban-lane-title="Doing"]')
+      .locator(`[data-kanban-card]:has-text("${title}")`)
+  ).toBeVisible();
+});
+
+test('dragging a lane header reorders the board columns and persists', async ({ page }) => {
+  // Regression (found 2026-08-09): the backend reorder endpoint
+  // (POST /project/columns/reorder/) and the shared drag hook's Column branch
+  // both existed, but the HUD board never rendered lanes as sortable — columns
+  // simply could not be dragged. Fixed by making each lane header a drag
+  // handle inside a horizontal SortableContext.
+  seedDndBoard(`E2E reorder anchor ${Date.now().toString().slice(-5)}`);
+  await openDndBoard(page);
+
+  const header = (title: string) =>
+    page.locator(`[data-kanban-lane-header]:has(:text-is("${title}"))`).first();
+
+  await expect(header('To Do')).toBeVisible();
+  const fromBox = await header('To Do').boundingBox();
+  const destLane = page.locator('[data-kanban-lane][data-kanban-lane-title="Doing"]');
+  const destBox = await destLane.boundingBox();
+  if (!fromBox || !destBox) throw new Error('lane headers not measurable');
+
+  const order = () =>
+    sh(
+      [
+        'from infrastructure.persistence.users.models import CustomUser',
+        'from infrastructure.persistence.workspaces.models import Workspace',
+        'from infrastructure.persistence.team.models import Team',
+        'from infrastructure.persistence.project.models import Column',
+        `u=CustomUser.objects.get(email='${EMAIL}')`,
+        'ws=Workspace.objects.all_objects().filter(workspace_owner=u).first()',
+        `t=Team.objects.get(workspace=ws, title='${DND_TEAM}')`,
+        "print('ORDER=' + ','.join(Column.objects.filter(team=t, workspace=ws, project__isnull=True).order_by('order').values_list('title', flat=True)))"
+      ].join('; ')
+    );
+
+  const [reorderResp] = await Promise.all([
+    page.waitForResponse(
+      (r) => r.url().includes('/project/columns/reorder/') && r.request().method() === 'POST'
+    ),
+    pointerDrag(
+      page,
+      { x: fromBox.x + fromBox.width / 2, y: fromBox.y + fromBox.height / 2 },
+      { x: destBox.x + destBox.width / 2, y: fromBox.y + fromBox.height / 2 }
+    )
+  ]);
+  expect(reorderResp.ok()).toBeTruthy();
+
+  // Server truth: 'Doing' now precedes 'To Do' on this board.
+  expect(order()).toContain('ORDER=Doing,To Do');
+
+  // Drag it back so the fixture board stays canonical for the next run.
+  await Promise.all([
+    page.waitForResponse(
+      (r) => r.url().includes('/project/columns/reorder/') && r.request().method() === 'POST'
+    ),
+    (async () => {
+      const backBox = await header('To Do').boundingBox();
+      const frontLane = page.locator('[data-kanban-lane][data-kanban-lane-title="Doing"]');
+      const frontBox = await frontLane.boundingBox();
+      if (!backBox || !frontBox) throw new Error('lanes not measurable for restore');
+      await pointerDrag(
+        page,
+        { x: backBox.x + backBox.width / 2, y: backBox.y + backBox.height / 2 },
+        { x: frontBox.x + frontBox.width / 2, y: backBox.y + backBox.height / 2 }
+      );
+    })()
+  ]);
+  expect(order()).toContain('ORDER=To Do,Doing');
+});
