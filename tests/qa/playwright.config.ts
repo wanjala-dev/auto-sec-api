@@ -42,7 +42,7 @@ export default defineConfig({
   projects: [
     {
       name: 'autosec',
-      testMatch: /(auth|onboarding|auth-recovery|twofactor|sessions|profile|kanban|members|collab|surfaces)\.smoke\.spec\.ts/,
+      testMatch: /((auth|onboarding|auth-recovery|twofactor|sessions|profile|kanban|members|collab|surfaces)\.smoke|first-run)\.spec\.ts/,
       use: {
         ...devices['Desktop Chrome'],
         baseURL: E2E.baseURL,
