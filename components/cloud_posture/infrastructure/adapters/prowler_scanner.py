@@ -1,4 +1,4 @@
-"""ProwlerScanner — the CSPM ScannerPort adapter (ADR 0006 D4).
+"""ProwlerScanner — the CSPM ScannerPort adapter (ADR 0006 D4, provider-keyed per ADR 0021).
 
 Runs the **official Prowler image** with its **native `-M json-ocsf` CLI** and parses the OCSF it
 emits — the same shape as ``TrivyScanner`` (build argv → ``ScanExecutionBackend`` → parse
@@ -7,12 +7,17 @@ emits — the same shape as ``TrivyScanner`` (build argv → ``ScanExecutionBack
 broke on every Prowler version bump and forced us to build+own an image. Pinning the maintained
 official image and using the stable CLI removes that coupling (see ``improve-dont-replicate.md``).
 
+The engine is multi-provider (``prowler aws`` / ``prowler vercel``); WHICH provider comes from the
+``PostureProvider`` value object resolved off ``target.params["provider"]`` (ADR 0021 D1) —
+it supplies the argv word, the ``ScanJobSpec.source``, the target validator (the injection gate),
+the credential env mapping, and the memory profile. Nothing provider-shaped is hardcoded here.
+
 Getting the OCSF out of an ephemeral Job: Prowler writes OCSF to a *file* (no stdout mode), and the
 K8sJobBackend collects *stdout* — so the Job runs Prowler then ``cat``s the file to stdout. The only
-interpolated inputs are the **regions**, strictly validated by ``validate_aws_scan_target`` (real
-AWS region tokens only), which closes the shell-injection surface — the same "validate the untrusted
-input, then it's safe in the command" gate Trivy uses for its image ref. Credentials are the
-already-assumed short-lived creds, mounted as ``secret_env`` (never in argv or logs).
+interpolated inputs are the provider's validated tokens (AWS regions; the Vercel team never enters
+argv at all — it rides the ``VERCEL_TEAM`` env var), which closes the shell-injection surface — the
+same "validate the untrusted input, then it's safe in the command" gate Trivy uses for its image
+ref. Credentials are the already-vended envelope, mounted as ``secret_env`` (never in argv or logs).
 
 Scale note (ADR 0006 D4 follow-up): a full-account OCSF result can exceed pod-log limits and be
 truncated (``records_to_scan_result`` then defensively yields fewer/zero findings). The fix — shared
@@ -25,7 +30,10 @@ import json
 import logging
 import os
 
-from components.cloud_posture.domain.aws_scan_target import validate_aws_scan_target
+from components.cloud_posture.domain.posture_provider import (
+    PostureProvider,
+    resolve_posture_provider,
+)
 from components.scanning.application.ports.scan_execution_backend import (
     ScanExecutionBackend,
     ScanJobSpec,
@@ -42,7 +50,9 @@ logger = logging.getLogger(__name__)
 
 _ENGINE = "prowler"
 # The maintained official Prowler image (pinned for reproducible + supply-chain-controlled scans),
-# like Trivy's aquasec/trivy pin. Override with PROWLER_IMAGE.
+# like Trivy's aquasec/trivy pin. Override with PROWLER_IMAGE. The pinned 5.36.0 digest already
+# contains the `vercel` provider tree (verified against the 5.36.0 tag — ADR 0021 R2), so both
+# posture providers run the SAME image: no bump, no second pin.
 _PROWLER_IMAGE = os.environ.get(
     "PROWLER_IMAGE",
     # Pinned by version AND digest (we execute this image — pin-versions.md rule #2). Prowler 5.36.0.
@@ -54,10 +64,21 @@ _PROWLER_BIN_DIR = "/home/prowler/.venv/bin"
 # The official image's non-root user (uid 1000); its venv binary is only reachable by that uid, so
 # the scan Job must run as it — not the backend's default hardened uid. Stable for the pinned digest.
 _PROWLER_UID = 1000
-# Prowler loads every provider SDK and accumulates an account's findings in-memory across all
-# regions; the backend's 2Gi default OOMKills a real scan (→ zero findings, silent). 4Gi carries
-# a full single-account scan with headroom. Override via PROWLER_MEMORY_LIMIT for larger estates.
-_PROWLER_MEM = os.environ.get("PROWLER_MEMORY_LIMIT", "4Gi")
+
+
+def _memory_limit_for(provider: PostureProvider) -> str | None:
+    """The engine container's memory limit for this provider.
+
+    Prowler loads every provider SDK and accumulates an account's findings in-memory across
+    all regions; the backend's 2Gi default OOMKills a real AWS scan (→ zero findings,
+    silent), so the AWS provider carries a 4Gi override (env-tunable via
+    PROWLER_MEMORY_LIMIT for larger estates). A provider WITHOUT an override (Vercel — one
+    team, 26 checks) deliberately keeps the backend default; the env knob does not widen it
+    (ADR 0021 D3: don't inherit the AWS bump).
+    """
+    if provider.memory_limit is None:
+        return None
+    return os.environ.get("PROWLER_MEMORY_LIMIT", provider.memory_limit)
 
 
 class ProwlerScanner(ScannerPort):
@@ -69,28 +90,29 @@ class ProwlerScanner(ScannerPort):
             records_to_scan_result,
         )
 
-        # Strict gate: only well-formed AWS tokens reach the command (regions are interpolated).
-        _account, regions = validate_aws_scan_target(target.identifier, target.params.get("regions"))
-        region_flag = f"--region {' '.join(regions)}" if regions else ""
+        provider = resolve_posture_provider(target.params.get("provider"))
+        # Strict gate: only well-formed provider tokens reach the command (AWS regions are
+        # interpolated; the Vercel team rides env-only but is validated to the same bar).
+        identifier, extra_flags = provider.validate_target(target.identifier, target.params)
 
         # Official Prowler writes OCSF to a file (no stdout mode) → run it, suppress its
         # progress/table output, then cat the OCSF file to stdout for the backend to collect.
         script = (
             f'export PATH="{_PROWLER_BIN_DIR}:$PATH"; '
-            "prowler aws --output-formats json-ocsf --output-directory /tmp "
-            f"--output-filename scan {region_flag} >/dev/null 2>&1; "
+            f"prowler {provider.token} --output-formats json-ocsf --output-directory /tmp "
+            f"--output-filename scan {extra_flags} >/dev/null 2>&1; "
             "cat /tmp/*.ocsf.json 2>/dev/null"
         )
 
         result = self._backend.run(
             ScanJobSpec(
-                source="cloud_posture.prowler",
+                source=provider.source,
                 image=_PROWLER_IMAGE,
-                args=("sh", "-c", script),  # regions validated above → no injection surface
+                args=("sh", "-c", script),  # inputs validated above → no injection surface
                 env={"HOME": "/tmp"},  # prowler config/cache under the writable /tmp (readOnlyRootFS)
-                secret_env=_aws_secret_env(target.credentials),
+                secret_env=provider.credential_env(target.credentials, identifier),
                 run_as_user=_PROWLER_UID,  # the official image's uid; the venv binary needs it
-                memory_limit=_PROWLER_MEM,  # 2Gi default OOMKills a full account scan → 0 findings
+                memory_limit=_memory_limit_for(provider),
             ),
             on_progress=on_progress,  # K8s elapsed-time heartbeat (Prowler has no stdout progress)
         )
@@ -105,17 +127,18 @@ class ProwlerScanner(ScannerPort):
         if not result.ok:
             snippet = (result.stdout or "").strip().replace("\n", " ")[:300]
             logger.error(
-                "prowler_scan_failed account=%s exit_code=%s timed_out=%s detail=%s",
-                _account,
+                "prowler_scan_failed provider=%s target=%s exit_code=%s timed_out=%s detail=%s",
+                provider.token,
+                identifier,
                 result.exit_code,
                 result.timed_out,
                 snippet,
             )
             raise ScanExecutionError(
-                f"Prowler scan of account {_account} failed "
+                f"Prowler {provider.token} scan of {identifier} failed "
                 f"(exit_code={result.exit_code}, timed_out={result.timed_out})"
             )
-        return records_to_scan_result(_parse_ocsf_stdout(result.stdout), engine_version=_ENGINE)
+        return records_to_scan_result(_parse_ocsf_stdout(result.stdout), engine_version=_ENGINE, provider=provider)
 
 
 def _parse_ocsf_stdout(stdout: str | None) -> list:
@@ -133,16 +156,3 @@ def _parse_ocsf_stdout(stdout: str | None) -> list:
         logger.warning("prowler OCSF output was not valid JSON (bytes=%d)", len(text))
         return []
     return data if isinstance(data, list) else []
-
-
-def _aws_secret_env(credentials: dict | None) -> dict[str, str]:
-    if not credentials:
-        return {}
-    out: dict[str, str] = {}
-    if credentials.get("AccessKeyId"):
-        out["AWS_ACCESS_KEY_ID"] = credentials["AccessKeyId"]
-    if credentials.get("SecretAccessKey"):
-        out["AWS_SECRET_ACCESS_KEY"] = credentials["SecretAccessKey"]
-    if credentials.get("SessionToken"):
-        out["AWS_SESSION_TOKEN"] = credentials["SessionToken"]
-    return out
