@@ -94,6 +94,13 @@ class RecordFindingDraftPrCommand:
     verification: str = ""
     #: The named evidence gap when ``verification == "unverified"``.
     verification_gap: str = ""
+    #: The patch that went into the PR — the flagged file's path + the bounded
+    #: unified diff + the advisor's change summary. Persisted so the HUD renders
+    #: the code change INLINE on the finding/board callouts (the PR link is the
+    #: secondary action, not the only review surface).
+    path: str = ""
+    diff: str = ""
+    change_summary: str = ""
 
 
 @dataclass(frozen=True)

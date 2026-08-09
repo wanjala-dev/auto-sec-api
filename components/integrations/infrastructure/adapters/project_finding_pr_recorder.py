@@ -26,6 +26,9 @@ class ProjectFindingPrRecorder(FindingPrRecorderPort):
         branch: str,
         verification: str = "",
         verification_gap: str = "",
+        path: str = "",
+        diff: str = "",
+        change_summary: str = "",
     ) -> None:
         from components.project.application.ports.record_finding_draft_pr_port import (
             RecordFindingDraftPrCommand,
@@ -44,5 +47,8 @@ class ProjectFindingPrRecorder(FindingPrRecorderPort):
                 branch=branch,
                 verification=verification,
                 verification_gap=verification_gap,
+                path=path,
+                diff=diff,
+                change_summary=change_summary,
             )
         )
