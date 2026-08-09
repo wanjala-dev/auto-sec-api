@@ -10,7 +10,7 @@ application layer stays free of infrastructure imports.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +26,7 @@ class WorkflowService:
         from components.workflow.infrastructure.repositories.workflow_repository import (
             WorkflowRepository,
         )
+
         self.repo = WorkflowRepository()
 
     # ========================
@@ -34,14 +35,14 @@ class WorkflowService:
 
     def get_templates(
         self,
-        scope: Optional[str] = None,
-        workspace_id: Optional[str] = None,
-        user: Optional[Any] = None,
-    ) -> "QuerySet":
+        scope: str | None = None,
+        workspace_id: str | None = None,
+        user: Any | None = None,
+    ) -> QuerySet:
         """Retrieve templates by scope, workspace, and user visibility."""
         return self.repo.get_templates(scope=scope, workspace_id=workspace_id, user=user)
 
-    def get_template_by_id(self, template_id: str) -> Optional[Any]:
+    def get_template_by_id(self, template_id: str) -> Any | None:
         """Retrieve a single template."""
         return self.repo.get_template_by_id(template_id)
 
@@ -53,9 +54,9 @@ class WorkflowService:
         category: str = "",
         version: str = "1",
         is_system: bool = False,
-        default_graph: Dict[str, Any] = None,
-        workspace_id: Optional[str] = None,
-        created_by: Optional[Any] = None,
+        default_graph: dict[str, Any] = None,
+        workspace_id: str | None = None,
+        created_by: Any | None = None,
     ) -> Any:
         """Create a new workflow template."""
         return self.repo.create_template(
@@ -76,13 +77,13 @@ class WorkflowService:
 
     def get_workflows(
         self,
-        workspace_id: Optional[str] = None,
-        status: Optional[str] = None,
-        goal: Optional[str] = None,
-        template_id: Optional[str] = None,
-        scheduled: Optional[bool] = None,
+        workspace_id: str | None = None,
+        status: str | None = None,
+        goal: str | None = None,
+        template_id: str | None = None,
+        scheduled: bool | None = None,
         exclude_deleted: bool = True,
-    ) -> "QuerySet":
+    ) -> QuerySet:
         """Retrieve workflows with optional filters."""
         return self.repo.get_workflows(
             workspace_id=workspace_id,
@@ -93,7 +94,7 @@ class WorkflowService:
             exclude_deleted=exclude_deleted,
         )
 
-    def get_workflow_by_id(self, workflow_id: str) -> Optional[Any]:
+    def get_workflow_by_id(self, workflow_id: str) -> Any | None:
         """Retrieve a single workflow."""
         return self.repo.get_workflow_by_id(workflow_id)
 
@@ -103,12 +104,12 @@ class WorkflowService:
         name: str,
         description: str = "",
         goal: str = "",
-        template_id: Optional[str] = None,
+        template_id: str | None = None,
         is_custom: bool = False,
         status: str = "draft",
         version: int = 1,
-        graph: Dict[str, Any] = None,
-        created_by: Optional[Any] = None,
+        graph: dict[str, Any] = None,
+        created_by: Any | None = None,
     ) -> Any:
         """Create a new workflow."""
         return self.repo.create_workflow(
@@ -124,11 +125,7 @@ class WorkflowService:
             created_by=created_by,
         )
 
-    def update_workflow(
-        self,
-        workflow: Any,
-        **kwargs
-    ) -> Any:
+    def update_workflow(self, workflow: Any, **kwargs) -> Any:
         """Update a workflow with the given fields."""
         return self.repo.update_workflow(workflow, **kwargs)
 
@@ -136,7 +133,7 @@ class WorkflowService:
         self,
         workflow: Any,
         notes: str = "",
-        created_by: Optional[Any] = None,
+        created_by: Any | None = None,
     ) -> Any:
         """Publish a workflow version.
 
@@ -145,17 +142,13 @@ class WorkflowService:
         passes full structural + per-node validation. This is what keeps the
         engine from ever executing a half-configured graph.
         """
-        from components.workflow.domain.validators import validate_graph
         from components.workflow.domain.errors import WorkflowGraphValidationError
+        from components.workflow.domain.validators import validate_graph
 
         errors = validate_graph(getattr(workflow, "graph", None) or {})
         if errors:
-            summary = "; ".join(
-                f"{e.get('path', 'graph')}: {e.get('message', 'invalid')}" for e in errors[:5]
-            )
-            raise WorkflowGraphValidationError(
-                f"Workflow graph is not valid for publishing — {summary}"
-            )
+            summary = "; ".join(f"{e.get('path', 'graph')}: {e.get('message', 'invalid')}" for e in errors[:5])
+            raise WorkflowGraphValidationError(f"Workflow graph is not valid for publishing — {summary}")
         published = self.repo.publish_workflow(workflow, notes=notes, created_by=created_by)
         # Wire up the start node's trigger(s). A single start node may carry
         # multiple triggers ("group multiple triggers into one workflow") via
@@ -165,7 +158,7 @@ class WorkflowService:
         return published
 
     @staticmethod
-    def _start_node_triggers(graph: Dict[str, Any]) -> List[tuple]:
+    def _start_node_triggers(graph: dict[str, Any]) -> list[tuple]:
         """Extract (source_type, trigger_type) pairs from the start node.
 
         Accepts ``config.triggerTypes`` (list) and/or ``config.triggerType``
@@ -183,7 +176,7 @@ class WorkflowService:
         if not start:
             return []
         config = start.get("config") or {}
-        ids: List[str] = []
+        ids: list[str] = []
         for value in config.get("triggerTypes") or []:
             if value and value not in ids:
                 ids.append(str(value))
@@ -210,7 +203,7 @@ class WorkflowService:
     def clone_workflow(
         self,
         workflow: Any,
-        created_by: Optional[Any] = None,
+        created_by: Any | None = None,
     ) -> Any:
         """Clone a workflow."""
         return self.repo.clone_workflow(workflow, created_by=created_by)
@@ -221,11 +214,11 @@ class WorkflowService:
 
     def get_bindings(
         self,
-        workflow_id: Optional[str] = None,
-        source_type: Optional[str] = None,
-        source_id: Optional[str] = None,
-        workspace_id: Optional[str] = None,
-    ) -> "QuerySet":
+        workflow_id: str | None = None,
+        source_type: str | None = None,
+        source_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> QuerySet:
         """Retrieve workflow bindings with optional filters."""
         return self.repo.get_bindings(
             workflow_id=workflow_id,
@@ -234,7 +227,7 @@ class WorkflowService:
             workspace_id=workspace_id,
         )
 
-    def get_binding_by_id(self, binding_id: str) -> Optional[Any]:
+    def get_binding_by_id(self, binding_id: str) -> Any | None:
         """Retrieve a single binding."""
         return self.repo.get_binding_by_id(binding_id)
 
@@ -243,8 +236,8 @@ class WorkflowService:
         workflow_id: str,
         source_type: str,
         trigger_type: str,
-        source_id: Optional[str] = None,
-        config: Dict[str, Any] = None,
+        source_id: str | None = None,
+        config: dict[str, Any] = None,
         is_active: bool = True,
     ) -> Any:
         """Create a new workflow binding."""
@@ -277,11 +270,11 @@ class WorkflowService:
     def create_runs_with_idempotency(
         self,
         workflow: Any,
-        targets: List[Dict[str, str]],
+        targets: list[dict[str, str]],
         trigger_type: str,
-        trigger_payload: Dict[str, Any] = None,
-        idempotency_key: Optional[str] = None,
-    ) -> List[str]:
+        trigger_payload: dict[str, Any] = None,
+        idempotency_key: str | None = None,
+    ) -> list[str]:
         """Create workflow runs with idempotency support."""
         return self.repo.create_run_with_idempotency(
             workflow=workflow,
@@ -291,17 +284,18 @@ class WorkflowService:
             idempotency_key=idempotency_key,
         )
 
-    def get_run_by_id(self, run_id: str) -> Optional[Any]:
+    def get_run_by_id(self, run_id: str) -> Any | None:
         """Retrieve a single run."""
         return self.repo.get_run_by_id(run_id)
 
     def get_runs(
         self,
-        workflow_id: Optional[str] = None,
-        status: Optional[str] = None,
-    ) -> "QuerySet":
+        workflow_id: str | None = None,
+        status: str | None = None,
+        workspace_id: str | None = None,
+    ) -> QuerySet:
         """Retrieve workflow runs with optional filters."""
-        return self.repo.get_runs(workflow_id=workflow_id, status=status)
+        return self.repo.get_runs(workflow_id=workflow_id, status=status, workspace_id=workspace_id)
 
     def cancel_run(self, run: Any) -> Any:
         """Cancel a workflow run."""
@@ -327,7 +321,7 @@ class WorkflowService:
         self,
         run: Any,
         node_id: str,
-        output: Dict[str, Any],
+        output: dict[str, Any],
         event_type: str = "completed",
     ) -> None:
         """Complete a workflow step."""
@@ -342,7 +336,7 @@ class WorkflowService:
         """Check if a node exists in the workflow graph."""
         return self.repo.node_exists_in_graph(run, node_id)
 
-    def get_step_events(self, run: WorkflowRun) -> "QuerySet":
+    def get_step_events(self, run: WorkflowRun) -> QuerySet:
         """Retrieve step events for a run."""
         return self.repo.get_step_events(run)
 
@@ -352,10 +346,10 @@ class WorkflowService:
 
     def get_enrollments(
         self,
-        workflow_id: Optional[str] = None,
-        status: Optional[str] = None,
-        target_type: Optional[str] = None,
-    ) -> "QuerySet":
+        workflow_id: str | None = None,
+        status: str | None = None,
+        target_type: str | None = None,
+    ) -> QuerySet:
         """Retrieve workflow enrollments."""
         return self.repo.get_enrollments(
             workflow_id=workflow_id,
@@ -381,18 +375,16 @@ class WorkflowService:
     def enroll_targets(
         self,
         workflow: Any,
-        targets: List[Dict[str, str]],
-        idempotency_key: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        targets: list[dict[str, str]],
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
         """Enroll targets AND start a run for each one (manual enrollment).
 
         This is the link that was missing: an enrollment without a run is dead
         state. Manual enrollment skips the trigger and starts the run at the
         ``start`` node. Returns the enrollment rows + the created run ids.
         """
-        enrollments = self.repo.enroll_targets(
-            workflow_id=str(workflow.id), targets=targets
-        )
+        enrollments = self.repo.enroll_targets(workflow_id=str(workflow.id), targets=targets)
         run_ids = self.repo.create_run_with_idempotency(
             workflow=workflow,
             targets=targets,
@@ -405,12 +397,12 @@ class WorkflowService:
     def delete_enrollments(
         self,
         workflow_id: str,
-        targets: List[Dict[str, str]],
+        targets: list[dict[str, str]],
     ) -> int:
         """Delete workflow enrollments."""
         return self.repo.delete_enrollments(workflow_id, targets)
 
-    def fire_due_schedules(self, now) -> Dict[str, int]:
+    def fire_due_schedules(self, now) -> dict[str, int]:
         """Fire every recurring schedule whose next_run_at has arrived.
 
         Called by the beat task. Each schedule fires independently — one
@@ -425,9 +417,7 @@ class WorkflowService:
                 if self.repo.fire_due_workflow_schedule(schedule_id, now):
                     fired += 1
             except Exception:
-                logger.exception(
-                    "workflow_schedule_fire_failed schedule_id=%s", schedule_id
-                )
+                logger.exception("workflow_schedule_fire_failed schedule_id=%s", schedule_id)
         if schedule_ids:
             logger.info(
                 "workflow_fire_due_schedules due=%s fired=%s",
@@ -445,10 +435,10 @@ class WorkflowService:
         cadence: str,
         run_time: Any = None,
         timezone: str = "UTC",
-        days_of_week: Optional[List[int]] = None,
-        day_of_month: Optional[int] = None,
-        interval_minutes: Optional[int] = None,
-        audience: Optional[List[Dict[str, str]]] = None,
+        days_of_week: list[int] | None = None,
+        day_of_month: int | None = None,
+        interval_minutes: int | None = None,
+        audience: list[dict[str, str]] | None = None,
         enabled: bool = True,
     ) -> Any:
         """Create a recurring schedule, precomputing its first next_run_at.

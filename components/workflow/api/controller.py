@@ -489,7 +489,30 @@ class WorkflowRunViewSet(viewsets.ReadOnlyModelViewSet):
         return [permissions.IsAuthenticated(), IsOrgOwnerOrMember()]
 
     def list(self, request, *args, **kwargs):
-        return Response(status=status.HTTP_405_METHOD_NOT_ALLOWED)
+        """Workspace-scoped recent runs across every workflow.
+
+        Powers the workflows-index activity strip. A resolvable workspace is
+        REQUIRED (query param, body, or the caller's active-workspace profile
+        fallback — the same resolve_workspace_id every workflow endpoint uses);
+        there is deliberately no unscoped run listing, and the membership check
+        in IsOrgOwnerOrMember gates on the same resolved workspace, so
+        cross-tenant listing is denied before the query runs.
+        """
+        workspace_id = resolve_workspace_id(request)
+        if not workspace_id:
+            return Response(
+                {"detail": "workspace is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        queryset = self.service.get_runs(
+            workspace_id=workspace_id,
+            status=request.query_params.get("status") or None,
+        )
+        page = self.paginate_queryset(queryset)
+        serializer = self.get_serializer(page if page is not None else queryset, many=True)
+        if page is not None:
+            return self.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
     def get_throttles(self):
         if self.action in {"complete_step", "input_step"}:
