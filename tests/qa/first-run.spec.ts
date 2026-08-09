@@ -394,9 +394,13 @@ test.describe.serial('first-run customer journey', () => {
     await stamp.click();
     await expect(modal.getByText(/SCAN HISTORY/)).toBeVisible();
     await expect(modal.locator('[data-scan-result]').first()).toBeVisible();
-    await modal
-      .getByRole('button', { name: /VIEW CURRENT FINDINGS FOR THIS REPO/i })
-      .click();
+
+    // Settings ▸ Integrations deliberately hides the callout's VIEW CURRENT
+    // FINDINGS action (IntegrationsSection omits onViewRepoFindings — the
+    // FINDINGS panel isn't reachable from inside the settings modal), so walk
+    // to the FINDINGS panel by its deep link instead. In a from-zero workspace
+    // every finding there IS this scan's output — no scoping needed.
+    await page.goto('/?panel=findings');
 
     // Findings panel: a finding row exists; open it and assert the triage
     // state chip + the sanitized code snippet.
