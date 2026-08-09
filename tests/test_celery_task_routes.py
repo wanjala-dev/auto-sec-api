@@ -39,10 +39,9 @@ CONSUMED_QUEUES = {"default", "ai_teammate", "cloud_posture", "container_securit
 # Queues pinned outside the route table AND outside task decorators, at dynamic
 # dispatch sites (grep `queue=`): the scanner registry's per-pillar queue, used
 # by dispatch_scan's apply_async(queue=queue_for(source)) in
-# components/scanning/application/providers/scanner_registry.py. (cloud_posture
-# is decorator-pinned and covered by the registered-task sweep below.) Kept in
+# components/scanning/application/providers/scanner_registry.py. Kept in
 # lockstep with the registry by tests/test_scanner_registration_fitness.py.
-DISPATCH_PINNED_QUEUES = {"container_security", "code_security"}
+DISPATCH_PINNED_QUEUES = {"container_security", "code_security", "cloud_posture"}
 
 
 def test_task_routes_setting_actually_applies():

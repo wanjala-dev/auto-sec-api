@@ -21,7 +21,8 @@ _SCAN_META_KIND = "code_security.scan_meta"
 def build_post_ingest_hook():
     """The registry-facing hook: (run_id, workspace_id, target_ref, result) → snapshot row."""
 
-    def _hook(*, run_id, workspace_id, target_ref, result) -> None:
+    def _hook(*, run_id, workspace_id, target_ref, result, **_) -> None:
+        # **_ swallows run facts this hook doesn't need (connection_id/account_id).
         persist_repo_scan_snapshot(run_id=run_id, workspace_id=workspace_id, target_ref=target_ref, result=result)
 
     return _hook

@@ -108,22 +108,22 @@ def ingest_prowler_scan(
     )
 
 
-def ingest_scan_result(
+def persist_snapshot_rows(
     *,
     workspace_id: UUID,
     account_id: str,
     result: ScanResult,
     connection_id: UUID | None = None,
-    event_publisher=None,
 ):
-    """Persist a scan result: the CSPM snapshot + a dual-write into the findings SSOT.
+    """LEGACY dual-write: the ``CloudPostureScan`` snapshot + per-scan finding rows.
 
-    The engine-agnostic ingest — given a ``ScanResult`` from any ScannerPort adapter
-    (Prowler today), record the ``CloudPostureScan`` snapshot + its ``CloudPostureFinding``
-    rows (CSPM specifics read from each finding's ``attributes``), and emit one
-    ``FindingObserved`` per finding for the SSOT (ADR 0004). cloud_posture stays
-    decoupled: it publishes a shared-kernel event and never imports the findings context.
-    ``event_publisher`` is injectable for tests.
+    Transitional (audit R1 → R2): the HUD posture card still reads these tables,
+    so the spine's post-ingest hook keeps writing them until the reads cut over
+    to ``ScanRun`` + the Finding SSOT — then this function AND the two models
+    die (the ADR 0004 C6 violation with them). Rows only, NO events: on the
+    spine, ``run_scan_and_ingest`` owns the ``FindingObserved``/``ScanCompleted``
+    emit. Timestamps here are ingest-time approximations; ``ScanRun`` carries
+    the honest ones.
     """
     from infrastructure.persistence.cloud_posture.models import CloudPostureFinding, CloudPostureScan
 
@@ -141,11 +141,9 @@ def ingest_scan_result(
         completed_at=now,
     )
 
-    created = 0
-    observed_events = []
     for finding in result.findings:
         attrs = finding.attributes or {}
-        _, was_created = CloudPostureFinding.objects.get_or_create(
+        CloudPostureFinding.objects.get_or_create(
             scan=scan,
             check_id=attrs.get("check_id", ""),
             resource_uid=attrs.get("resource_uid", ""),
@@ -165,8 +163,34 @@ def ingest_scan_result(
                 "compliance": dict(finding.compliance),
             },
         )
-        created += int(was_created)
-        observed_events.append(_finding_observed_from_normalized(workspace_id, finding))
+    return scan
+
+
+def ingest_scan_result(
+    *,
+    workspace_id: UUID,
+    account_id: str,
+    result: ScanResult,
+    connection_id: UUID | None = None,
+    event_publisher=None,
+):
+    """Persist a scan result: the CSPM snapshot + a dual-write into the findings SSOT.
+
+    The LEGACY (pre-spine) ingest path, kept for tests and the parity guard —
+    production scans now run through ``run_scan_and_ingest`` (audit R1), which
+    emits the SSOT events itself and persists the snapshot via the registry's
+    post-ingest hook. cloud_posture stays decoupled: it publishes a shared-kernel
+    event and never imports the findings context. ``event_publisher`` is
+    injectable for tests.
+    """
+    scan = persist_snapshot_rows(
+        workspace_id=workspace_id,
+        account_id=account_id,
+        result=result,
+        connection_id=connection_id,
+    )
+
+    observed_events = [_finding_observed_from_normalized(workspace_id, finding) for finding in result.findings]
 
     # One ScanCompleted per ingest — the anti-flood digest signal (ADR 0016 D5):
     # the notifications context turns it into ONE external message per scan.
@@ -189,12 +213,11 @@ def ingest_scan_result(
     _publish_events([*observed_events, completed_event], event_publisher)
 
     logger.info(
-        "cloud_posture_ingest workspace_id=%s account=%s checks=%s failed=%s findings_created=%s observed=%s",
+        "cloud_posture_ingest workspace_id=%s account=%s checks=%s failed=%s observed=%s",
         workspace_id,
         account_id,
         result.total_checks,
         result.failed_count,
-        created,
         len(observed_events),
     )
     return scan

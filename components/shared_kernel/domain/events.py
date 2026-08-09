@@ -212,8 +212,8 @@ class ScanCompleted(DomainEvent):
 class ScanFailed(DomainEvent):
     """A scan engine failed loud — coverage is silently degraded until fixed.
 
-    Emitted from the pillars' fail-loud task paths (cloud_posture's
-    ``run_prowler_scan_for_account`` except-branch, scanning's ``run_scan``);
+    Emitted from the ONE fail-loud task path (scanning's ``run_scan`` — every
+    engine pillar, cloud_posture included, rides it since the R1 migration);
     the notifications context subscribes and dispatches ``soc.scan_failed`` →
     the ``scan_failed`` external event (ADR 0016 D4). ``reason`` is a coarse,
     redaction-safe token — never a raw exception string, which could carry

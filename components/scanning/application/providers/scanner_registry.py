@@ -28,6 +28,13 @@ PostIngestHook = Callable[..., None]
 # task learning any pillar's credential shape.
 CredentialsVendor = Callable[..., dict | None]
 
+# A pillar's optional failure hook: called when a run FAILS, with (workspace_id,
+# target_ref, connection_id, account_id) keywords. The pillar's chance to degrade
+# its own state honestly (cloud_posture marks the account link FAILED — the scan
+# attempt IS the per-account role verification). POLICY: best-effort — a hook
+# failure is logged by the caller and never changes the task's failure handling.
+FailureHook = Callable[..., None]
+
 
 @dataclass(frozen=True)
 class RegisteredScanner:
@@ -38,6 +45,9 @@ class RegisteredScanner:
     post_ingest_factory: Callable[[], PostIngestHook] | None = None
     # Lazily resolves the pillar's CredentialsVendor, or None for the AWS default.
     credentials_factory: Callable[[], CredentialsVendor] | None = None
+    # Lazily resolves the pillar's FailureHook, or None when the pillar has no
+    # failure side-effects beyond the FAILED ScanRun row the spine records.
+    failure_factory: Callable[[], FailureHook] | None = None
 
 
 def _container_security_trivy() -> ScannerPort:
@@ -76,6 +86,28 @@ def _code_security_credentials() -> CredentialsVendor:
     return vend_scan_credentials
 
 
+def _cloud_posture_prowler() -> ScannerPort:
+    from components.cloud_posture.application.providers.scanner_provider import build_scanner
+
+    return build_scanner()
+
+
+def _cloud_posture_post_ingest() -> PostIngestHook:
+    from components.cloud_posture.application.providers.posture_snapshot_provider import (
+        build_post_ingest_hook,
+    )
+
+    return build_post_ingest_hook()
+
+
+def _cloud_posture_failure() -> FailureHook:
+    from components.cloud_posture.application.providers.posture_snapshot_provider import (
+        build_failure_hook,
+    )
+
+    return build_failure_hook()
+
+
 # source → (adapter factory, isolated worker queue). One line per pillar.
 _REGISTRY: dict[str, RegisteredScanner] = {
     "container_security.trivy": RegisteredScanner(
@@ -88,6 +120,16 @@ _REGISTRY: dict[str, RegisteredScanner] = {
         queue="code_security",
         post_ingest_factory=_code_security_post_ingest,
         credentials_factory=_code_security_credentials,
+    ),
+    # The CSPM pillar (audit R1): Prowler rides the same spine as every engine.
+    # No credentials_factory — the task's default AWS assume-role vend IS this
+    # pillar's credential path (duplicating it in a vendor would be the DRY
+    # violation the seam exists to avoid).
+    "cloud_posture.prowler": RegisteredScanner(
+        factory=_cloud_posture_prowler,
+        queue="cloud_posture",
+        post_ingest_factory=_cloud_posture_post_ingest,
+        failure_factory=_cloud_posture_failure,
     ),
 }
 
@@ -122,6 +164,12 @@ def post_ingest_for(source: str) -> PostIngestHook | None:
 def credentials_vendor_for(source: str) -> CredentialsVendor | None:
     """Build *source*'s credential vendor, or None → the task's default AWS vend."""
     factory = _entry(source).credentials_factory
+    return factory() if factory is not None else None
+
+
+def failure_hook_for(source: str) -> FailureHook | None:
+    """Build *source*'s failure hook, or None when the pillar registers none."""
+    factory = _entry(source).failure_factory
     return factory() if factory is not None else None
 
 

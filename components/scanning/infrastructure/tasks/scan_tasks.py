@@ -104,18 +104,23 @@ def run_scan(
     try:
         # Per-source credential vend (registry seam) — e.g. code_security vends a VCS
         # read token through the ADR 0010 connection; pillars without a vendor use
-        # the default AWS assume-role path below.
+        # the default AWS assume-role path. Passed as a PROVIDER so the vend runs
+        # inside the choreography's run-recorded window: a vend failure (bad
+        # account, revoked role) leaves the same honest FAILED ScanRun row an
+        # engine crash does, instead of vanishing without a record.
         vendor = credentials_vendor_for(source)
-        if vendor is not None:
-            credentials = vendor(
-                workspace_id=workspace_id,
-                target_ref=target_ref,
-                connection_id=connection_id,
-                account_id=account_id,
-                params=params or {},
-            )
-        else:
-            credentials = _vend_credentials(connection_id=connection_id, account_id=account_id)
+
+        def _credentials():
+            if vendor is not None:
+                return vendor(
+                    workspace_id=workspace_id,
+                    target_ref=target_ref,
+                    connection_id=connection_id,
+                    account_id=account_id,
+                    params=params or {},
+                )
+            return _vend_credentials(connection_id=connection_id, account_id=account_id)
+
         update_job(job_id=job_id, progress=15, phase="scanning", detail=f"Running {source}")
 
         last = {"pct": 15}
@@ -140,12 +145,16 @@ def run_scan(
                     workspace_id=run.workspace_id,
                     target_ref=run.target_ref,
                     result=result,
+                    # Soft references off the run row — cloud_posture's snapshot
+                    # hook needs them; hooks that don't simply swallow them.
+                    connection_id=run.connection_id,
+                    account_id=run.account_id,
                 )
 
         run = run_scan_and_ingest(
             workspace_id=workspace_id,
             source=source,
-            target=ScanTarget(identifier=target_ref, credentials=credentials, params=params or {}),
+            target=ScanTarget(identifier=target_ref, params=params or {}),
             scanner=scanner,
             connection_id=connection_id,
             account_id=account_id,
@@ -153,10 +162,18 @@ def run_scan(
             triggered_by=triggered_by,
             on_progress=_on_progress,
             on_completed=on_completed,
+            credentials_provider=_credentials,
         )
     except Exception:
         logger.exception("run_scan failed source=%s target=%s", source, target_ref)
         _release_dispatch_lock(workspace_id=workspace_id, source=source, target_ref=target_ref)
+        _run_failure_hook(
+            source=source,
+            workspace_id=workspace_id,
+            target_ref=target_ref,
+            connection_id=connection_id,
+            account_id=account_id,
+        )
         fail_job(job_id=job_id, error="scan_failed")
         _publish_scan_failed(
             workspace_id=workspace_id,
@@ -173,6 +190,25 @@ def run_scan(
         detail=f"{run.failed_count} findings",
     )
     return {"success": True, "run_id": str(run.id), "findings": run.failed_count}
+
+
+def _run_failure_hook(*, source: str, workspace_id, target_ref: str, connection_id, account_id: str) -> None:
+    """Invoke the pillar's registered failure hook (registry seam), best-effort —
+    the pillar's chance to degrade its own state honestly on a FAILED run (e.g.
+    cloud_posture marking the account link FAILED). Never alters failure handling."""
+    try:
+        from components.scanning.application.providers.scanner_registry import failure_hook_for
+
+        hook = failure_hook_for(source)
+        if hook is not None:
+            hook(
+                workspace_id=workspace_id,
+                target_ref=target_ref,
+                connection_id=connection_id,
+                account_id=account_id,
+            )
+    except Exception:
+        logger.exception("run_scan_failure_hook_failed source=%s target=%s", source, target_ref)
 
 
 def _release_dispatch_lock(*, workspace_id, source: str, target_ref: str) -> None:
