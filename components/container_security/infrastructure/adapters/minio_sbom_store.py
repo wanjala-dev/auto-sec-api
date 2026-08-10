@@ -1,13 +1,16 @@
 """MinIO/S3 SbomStorePort adapter — object body + ImageSbom reference row.
 
-MIRRORS (deliberately, not extracts) the report-PDF storage conventions
+Follows the report-PDF storage conventions
 (``components/report/infrastructure/services/report_pdf_storage_service.py``):
-lazy boto3 client, internal endpoint for writes / public endpoint for presigns,
-idempotent bucket auto-create, presigned GET with optional attachment disposition.
-A shared storage util was considered and rejected for now: the report service is
-report-scoped (REPORT_PDF_* settings baked into module functions) and extracting a
-parameterized store would churn the report context inside an unrelated PR — the
-two ~40-line adapters stay independently owned until a third consumer appears.
+internal endpoint for writes / public endpoint for presigns, idempotent bucket
+auto-create, presigned GET with optional attachment disposition.
+
+The client itself is NOT mirrored — it comes from
+``infrastructure.storage.object_storage.build_object_storage_client``. This module
+originally noted that a shared storage util was rejected "until a third consumer
+appears"; three more appeared (scan artifacts, writing PDFs, media uploads), and
+each hand-rolled client re-introduced the same SigV2 presign defect. The client
+construction is now shared; the settings ladder stays owned here.
 
 Settings are ``SBOM_S3_*`` with env fallbacks to the ``REPORT_PDF_S3_*`` env vars,
 so the existing MinIO deployment serves SBOMs with zero new cluster config.
@@ -26,6 +29,7 @@ from components.container_security.application.ports.sbom_store_port import (
     SbomStorePort,
     StoredSbom,
 )
+from infrastructure.storage.object_storage import build_object_storage_client
 
 logger = logging.getLogger(__name__)
 
@@ -39,17 +43,14 @@ def _presigned_ttl() -> int:
 
 
 def _client(*, public: bool = False):
-    """Lazy boto3 client — internal endpoint for writes, public for presigns."""
-    import boto3
-
+    """Lazy object-storage client — internal endpoint for writes, public for presigns."""
     endpoint = (
         getattr(settings, "SBOM_S3_PUBLIC_ENDPOINT", None) if public else getattr(settings, "SBOM_S3_ENDPOINT", None)
     )
-    return boto3.client(
-        "s3",
+    return build_object_storage_client(
         endpoint_url=endpoint,
-        aws_access_key_id=getattr(settings, "SBOM_S3_ACCESS_KEY", None),
-        aws_secret_access_key=getattr(settings, "SBOM_S3_SECRET_KEY", None),
+        access_key=getattr(settings, "SBOM_S3_ACCESS_KEY", None),
+        secret_key=getattr(settings, "SBOM_S3_SECRET_KEY", None),
         region_name=getattr(settings, "SBOM_S3_REGION", "us-east-1"),
     )
 

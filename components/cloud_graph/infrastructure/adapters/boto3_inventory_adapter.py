@@ -489,7 +489,14 @@ class Boto3InventoryAdapter(AssetInventoryPort):
 
     def _collect_s3(self, session, account_id, mk, add):
         try:
-            s3 = session.client("s3")
+            # SigV4 declared inline (the exemption tests/architecture/test_object_storage_sigv4.py
+            # allows): this is a customer-credential SESSION client for enumeration, so it cannot
+            # use the shared factory, which builds from raw keys. It only calls list_buckets and
+            # never presigns — but botocore's SigV2 default has already shipped three latent
+            # defects in this codebase, so it is pinned here rather than left to chance.
+            from botocore.config import Config
+
+            s3 = session.client("s3", config=Config(signature_version="s3v4"))
             for b in s3.list_buckets().get("Buckets", []):
                 name = b.get("Name")
                 if not name:
