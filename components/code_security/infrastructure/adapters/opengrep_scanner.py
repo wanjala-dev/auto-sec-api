@@ -46,8 +46,10 @@ from components.code_security.infrastructure.services.opengrep_normalizer import
 )
 from components.code_security.infrastructure.services.ruleset import load_ruleset_yaml
 from components.scanning.application.ports.scan_execution_backend import (
+    SCAN_ARTIFACT_PATH,
     ScanExecutionBackend,
     ScanJobSpec,
+    artifact_emit_tail,
 )
 from components.scanning.domain.engine_output import parse_engine_result_document
 from components.scanning.domain.errors import IncompleteScanOutputError, ScanExecutionError
@@ -114,9 +116,14 @@ if [ "$code" -ne 0 ]; then
   cat "$err"
   exit "$code"
 fi
-printf '{{"{envelope_key}":1,"sarif":'
-cat "$sarif_out"
-printf '}}\\n'
+envelope=/tmp/autosec-opengrep-envelope.json
+{{
+  printf '{{"{envelope_key}":1,"sarif":'
+  cat "$sarif_out"
+  printf '}}\\n'
+}} > "$envelope"
+code=0
+{artifact_tail}cat "$envelope"
 """
 
 
@@ -131,6 +138,8 @@ def _job_script() -> str:
         excludes=excludes,
         jobs=2,  # matches the Job's cpu limit; opengrep's default of 10 just thrashes
         envelope_key=_ENVELOPE_KEY,
+        # The shared artifact protocol (ADR 0022) — rendered, never hand-rolled.
+        artifact_tail=artifact_emit_tail("$envelope"),
     )
 
 
@@ -183,6 +192,12 @@ class OpengrepScanner(ScannerPort):
                 secret_env={"VCS_TOKEN": token},
                 args=args,
                 timeout_seconds=_SCAN_TIMEOUT_SECONDS,
+                # Raw output travels as an object-storage artifact, not pod-log stdout (ADR
+                # 0022). A monorepo's SARIF is the largest document we handle, so this pillar
+                # was the most exposed to the pod-log ceiling.
+                artifact_path=SCAN_ARTIFACT_PATH,
+                workspace_id=str(target.params.get("workspace_id") or ""),
+                scan_run_id=str(target.params.get("scan_run_id") or ""),
             ),
             on_progress=on_progress,
         )
@@ -225,6 +240,7 @@ class OpengrepScanner(ScannerPort):
             passed_count=scan_result.passed_count,
             failed_count=scan_result.failed_count,
             artifacts=(meta,),
+            raw_artifact_ref=result.artifact_ref,  # ADR 0022 D2
         )
 
 

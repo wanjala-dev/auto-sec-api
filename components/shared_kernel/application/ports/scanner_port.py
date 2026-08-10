@@ -64,6 +64,12 @@ class ScanResult:
     passed_count: int = 0
     failed_count: int = 0
     artifacts: tuple[ScanArtifact, ...] = ()
+    # Where this scan's RAW engine output was persisted, as "<bucket>/<key>" (ADR 0022).
+    # Distinct from ``artifacts`` above: those are by-products the pillar interprets and
+    # stores itself (an SBOM), carried by value; this is a REFERENCE to the untouched
+    # engine document the pipeline already consumed. It rides up to ``ScanRun`` so a run's
+    # raw output stays retrievable for debugging, support and (later) re-normalization.
+    raw_artifact_ref: str = ""
 
 
 # A progress reporter the runner may call with a float 0–100.

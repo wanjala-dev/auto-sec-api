@@ -23,6 +23,17 @@ class ScanExecutionError(ScanError):
     """
 
 
+class ScanArtifactStoreError(ScanExecutionError):
+    """The scan's raw-output artifact could not be stored or retrieved (ADR 0022 D4).
+
+    A ``ScanExecutionError`` on purpose: moving raw output off pod logs onto object
+    storage adds a dependency to the scan path, and the invariant must not weaken when
+    it does. If we cannot durably capture or read back the engine's output, we have not
+    got trustworthy output — so the run FAILS rather than silently reporting whatever
+    (possibly nothing) we managed to see. Upload failure is never a silent skip.
+    """
+
+
 class IncompleteScanOutputError(ScanExecutionError):
     """The engine ran, but the result document it produced is unusable.
 

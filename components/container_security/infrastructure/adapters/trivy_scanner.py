@@ -27,6 +27,8 @@ vuln pass is fail-loud.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import json
 import logging
 import os
@@ -37,8 +39,10 @@ from components.container_security.infrastructure.services.trivy_normalizer impo
     trivy_json_to_scan_result,
 )
 from components.scanning.application.ports.scan_execution_backend import (
+    SCAN_ARTIFACT_PATH,
     ScanExecutionBackend,
     ScanJobSpec,
+    artifact_emit_tail,
 )
 from components.scanning.domain.engine_output import parse_engine_result_document
 from components.scanning.domain.errors import IncompleteScanOutputError, ScanExecutionError
@@ -121,15 +125,20 @@ if ! trivy --cache-dir "$TRIVY_CACHE_DIR" --timeout {timeout} image --format cyc
     --quiet --output "$sbom_out" -- "$1" >>"$errlog" 2>&1; then
   sbom_ok=0
 fi
-printf '{{"{envelope_key}":1,"vuln":'
-cat "$vuln_out"
-if [ "$sbom_ok" -eq 1 ]; then
-  printf ',"sbom":'
-  cat "$sbom_out"
-else
-  printf ',"sbom":null'
-fi
-printf '}}\\n'
+envelope=/tmp/autosec-trivy-envelope.json
+{{
+  printf '{{"{envelope_key}":1,"vuln":'
+  cat "$vuln_out"
+  if [ "$sbom_ok" -eq 1 ]; then
+    printf ',"sbom":'
+    cat "$sbom_out"
+  else
+    printf ',"sbom":null'
+  fi
+  printf '}}\\n'
+}} > "$envelope"
+code=0
+{artifact_tail}cat "$envelope"
 """
 
 
@@ -164,7 +173,14 @@ def _job_script(*, timeout: str, server: str | None) -> str:
         if re.search(r"[\s'\"\\$`;|&<>()]", server):
             raise ScanExecutionError(f"Invalid TRIVY_SERVER_URL {server!r} (unsafe characters)")
         server_fragment = f" --server {server}"
-    return _JOB_SCRIPT_TEMPLATE.format(timeout=timeout, server=server_fragment, envelope_key=_ENVELOPE_KEY)
+    return _JOB_SCRIPT_TEMPLATE.format(
+        timeout=timeout,
+        server=server_fragment,
+        envelope_key=_ENVELOPE_KEY,
+        # The shared artifact protocol (ADR 0022) — rendered, never hand-rolled, so all
+        # three engines publish their result identically.
+        artifact_tail=artifact_emit_tail("$envelope"),
+    )
 
 
 class TrivyScanner(ScannerPort):
@@ -194,6 +210,10 @@ class TrivyScanner(ScannerPort):
                 # Backend deadline (k8s Job activeDeadlineSeconds / subprocess timeout) MUST
                 # outlive Trivy's own --timeout — see _BACKEND_TIMEOUT_HEADROOM_SECONDS.
                 timeout_seconds=_duration_seconds(trivy_timeout) + _BACKEND_TIMEOUT_HEADROOM_SECONDS,
+                # Raw output travels as an object-storage artifact, not pod-log stdout (ADR 0022).
+                artifact_path=SCAN_ARTIFACT_PATH,
+                workspace_id=str(target.params.get("workspace_id") or ""),
+                scan_run_id=str(target.params.get("scan_run_id") or ""),
             ),
             on_progress=on_progress,
         )
@@ -216,7 +236,10 @@ class TrivyScanner(ScannerPort):
             )
 
         vuln_payload, sbom_content = _split_envelope(result.stdout, image_ref=image_ref)
-        scan_result = trivy_json_to_scan_result(vuln_payload, image_ref=image_ref)
+        scan_result = replace(
+            trivy_json_to_scan_result(vuln_payload, image_ref=image_ref),
+            raw_artifact_ref=result.artifact_ref,  # ADR 0022 D2
+        )
         if sbom_content is None:
             return scan_result
         artifact = ScanArtifact(kind=SBOM_ARTIFACT_KIND, media_type=SBOM_MEDIA_TYPE, content=sbom_content)
