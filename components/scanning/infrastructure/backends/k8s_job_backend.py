@@ -82,8 +82,7 @@ if [ ! -s "$ARTIFACT_PATH" ]; then
   exit 71
 fi
 bytes=$(wc -c < "$ARTIFACT_PATH")
-if ! curl -sS --fail-with-body -X PUT -T "$ARTIFACT_PATH" \
-     -H "Content-Type: application/json" "$UPLOAD_URL" >&2; then
+if ! curl -sS --fail-with-body -X PUT -T "$ARTIFACT_PATH" "$UPLOAD_URL" >&2; then
   echo "artifact-uploader: PUT failed for $ARTIFACT_PATH ($bytes bytes)" >&2
   exit 72
 fi

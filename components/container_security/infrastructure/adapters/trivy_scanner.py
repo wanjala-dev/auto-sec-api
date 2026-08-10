@@ -243,15 +243,11 @@ class TrivyScanner(ScannerPort):
         if sbom_content is None:
             return scan_result
         artifact = ScanArtifact(kind=SBOM_ARTIFACT_KIND, media_type=SBOM_MEDIA_TYPE, content=sbom_content)
-        return ScanResult(
-            findings=scan_result.findings,
-            engine=scan_result.engine,
-            engine_version=scan_result.engine_version,
-            total_checks=scan_result.total_checks,
-            passed_count=scan_result.passed_count,
-            failed_count=scan_result.failed_count,
-            artifacts=(artifact,),
-        )
+        # ``replace``, NOT a rebuilt ScanResult: hand-listing the fields silently dropped
+        # ``raw_artifact_ref`` here (caught only by a live scan — the run completed with an
+        # empty artifact reference). Copying a frozen dataclass field-by-field means every
+        # future field has to be remembered in this one spot; replace() cannot forget.
+        return replace(scan_result, artifacts=(artifact,))
 
 
 def _split_envelope(stdout: str, *, image_ref: str) -> tuple[str | dict, str | None]:

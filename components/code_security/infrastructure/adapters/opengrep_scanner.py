@@ -31,6 +31,8 @@ never builds or executes it.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import json
 import logging
 import os
@@ -232,16 +234,10 @@ class OpengrepScanner(ScannerPort):
                 }
             ),
         )
-        return ScanResult(
-            findings=scan_result.findings,
-            engine=scan_result.engine,
-            engine_version=scan_result.engine_version,
-            total_checks=scan_result.total_checks,
-            passed_count=scan_result.passed_count,
-            failed_count=scan_result.failed_count,
-            artifacts=(meta,),
-            raw_artifact_ref=result.artifact_ref,  # ADR 0022 D2
-        )
+        # ``replace``, NOT a rebuilt ScanResult — see the same note in trivy_scanner: a
+        # hand-listed copy silently drops any field the author forgets (it dropped
+        # raw_artifact_ref there, caught only by a live scan).
+        return replace(scan_result, artifacts=(meta,), raw_artifact_ref=result.artifact_ref)
 
 
 def _unwrap_envelope(stdout: str, *, repo: str) -> dict:

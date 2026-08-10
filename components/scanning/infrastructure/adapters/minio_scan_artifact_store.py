@@ -106,6 +106,7 @@ def _credentials() -> tuple[str | None, str | None]:
 
 def _client():
     import boto3
+    from botocore.config import Config
 
     access_key, secret_key = _credentials()
     return boto3.client(
@@ -114,6 +115,13 @@ def _client():
         aws_access_key_id=access_key,
         aws_secret_access_key=secret_key,
         region_name=_setting("SCAN_ARTIFACT_S3_REGION", "SBOM_S3_REGION", "us-east-1"),
+        # SigV4 EXPLICITLY. Without this botocore mints a legacy SigV2 presigned URL
+        # (AWSAccessKeyId/Signature/Expires), which current MinIO rejects outright with
+        # SignatureDoesNotMatch — verified live: the uploader reached MinIO and got a 403
+        # on a perfectly-formed request. Every upload would fail, and (correctly, but
+        # uselessly) fail every scan with it. AWS S3 also requires SigV4 in newer regions,
+        # so this is not a MinIO quirk — it is the only correct setting for both targets.
+        config=Config(signature_version="s3v4"),
     )
 
 

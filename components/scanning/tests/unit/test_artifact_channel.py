@@ -217,3 +217,38 @@ class TestArtifactContentStillPassesThePhase1Guard:
 
         # So run_scan_and_ingest's existing FAILED-run path catches them unchanged.
         assert issubclass(ScanArtifactStoreError, ScanExecutionError)
+
+
+class TestArtifactRefSurvivesEveryReturnPath:
+    """Regression: a live scan COMPLETED with an empty raw_artifact_ref.
+
+    Trivy's SBOM branch rebuilt ScanResult field-by-field and forgot the new one, so the
+    artifact was uploaded and fetched correctly but the run pointed at nothing — the raw
+    output was unreachable, which is the entire debugging value of the channel. Unit tests
+    passed throughout; only a real scan surfaced it. Both adapters now use
+    dataclasses.replace, which cannot forget a field, and these lock that in.
+    """
+
+    def test_trivy_keeps_the_ref_on_the_sbom_branch(self):
+        import json
+
+        from components.container_security.infrastructure.adapters.trivy_scanner import TrivyScanner
+        from components.scanning.application.ports.scan_execution_backend import ScanJobResult
+
+        envelope = json.dumps(
+            {
+                "autosec_trivy_envelope": 1,
+                "vuln": {"Results": []},
+                "sbom": {"bomFormat": "CycloneDX", "specVersion": "1.5", "components": []},
+            }
+        )
+
+        class _Backend:
+            def run(self, spec, *, on_progress=None, on_output_line=None):
+                return ScanJobResult(stdout=envelope, exit_code=0, artifact_ref="bucket/some/key.json")
+
+        from components.shared_kernel.application.ports.scanner_port import ScanTarget
+
+        result = TrivyScanner(_Backend()).scan(ScanTarget(identifier="alpine:3.19"))
+        assert result.artifacts, "the SBOM branch must still be exercised by this test"
+        assert result.raw_artifact_ref == "bucket/some/key.json"
