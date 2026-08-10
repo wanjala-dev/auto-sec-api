@@ -9,9 +9,10 @@ the unified-documents feed can resolve presigned URLs with one client.
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from django.conf import settings
+
+from infrastructure.storage.object_storage import build_object_storage_client
 
 logger = logging.getLogger(__name__)
 
@@ -21,14 +22,11 @@ def _bucket_name() -> str:
 
 
 def _s3_client():
-    """Lazy boto3/minio client — keep django config import at call time."""
-    import boto3
-
-    return boto3.client(
-        "s3",
+    """Lazy object-storage client — keep django config import at call time."""
+    return build_object_storage_client(
         endpoint_url=getattr(settings, "AWS_S3_ENDPOINT_URL", None),
-        aws_access_key_id=getattr(settings, "AWS_ACCESS_KEY_ID", None),
-        aws_secret_access_key=getattr(settings, "AWS_SECRET_ACCESS_KEY", None),
+        access_key=getattr(settings, "AWS_ACCESS_KEY_ID", None),
+        secret_key=getattr(settings, "AWS_SECRET_ACCESS_KEY", None),
         region_name=getattr(settings, "AWS_S3_REGION_NAME", "us-east-1"),
     )
 
@@ -50,7 +48,7 @@ class WritingPdfStorageService:
             ContentType="application/pdf",
         )
 
-    def presigned_url(self, *, key: str, expires_in: int = 600) -> Optional[str]:
+    def presigned_url(self, *, key: str, expires_in: int = 600) -> str | None:
         client = _s3_client()
         try:
             return client.generate_presigned_url(
@@ -58,6 +56,6 @@ class WritingPdfStorageService:
                 Params={"Bucket": _bucket_name(), "Key": key},
                 ExpiresIn=expires_in,
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("writing pdf presign failed key=%s", key)
             return None

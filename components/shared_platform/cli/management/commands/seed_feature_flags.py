@@ -56,6 +56,20 @@ DEFAULT_FLAGS = [
         "vendor's permissions. See docs/plans/PROVENANCE_ACCESS_GRAPH_2026-07-17.md.",
     ),
     (
+        "feature.agent_runtime_accountability",
+        False,
+        "Agent runtime accountability (ADR 0023): ingest a customer's OWN AI-agent "
+        "telemetry into the existing provenance graph — which agent, which tool, "
+        "which resource, when. A deliberate SIBLING of feature.provenance_graph, "
+        "never a reuse: opting into the internal access graph is not consent to "
+        "observe your agents. DARK — off in prod, per-workspace opt-in, fails "
+        "closed. Read-only and metadata-only: no prompt bodies, no tool arguments. "
+        "Nothing ingests without an ACTIVE AgentTelemetrySource whose agent "
+        "allowlist names the agent (the allowlist IS the consent). Records are "
+        "attributable, NOT proven — tamper-evidence is a later phase. See "
+        "docs/adr/0023-agent-runtime-accountability.md.",
+    ),
+    (
         "feature.cloud_posture",
         True,
         "Cloud posture (CSPM) — Prowler-as-engine per-account scans → posture "
@@ -156,6 +170,7 @@ DEFAULT_FLAGS = [
 # that leave this list are cleaned up by ``_apply_environment_rules``.
 PROD_DISABLED_FLAGS = (
     "feature.provenance_graph",
+    "feature.agent_runtime_accountability",
     "feature.sample_data_mode",
 )
 

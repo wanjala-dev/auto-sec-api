@@ -30,6 +30,7 @@ from components.scanning.application.ports.scan_artifact_store_port import (
     ScanArtifactStorePort,
 )
 from components.scanning.domain.errors import ScanArtifactStoreError
+from infrastructure.storage.object_storage import build_object_storage_client
 
 logger = logging.getLogger(__name__)
 
@@ -105,23 +106,17 @@ def _credentials() -> tuple[str | None, str | None]:
 
 
 def _client():
-    import boto3
-    from botocore.config import Config
-
+    # SigV4 comes from the shared factory — see infrastructure/storage/object_storage.py
+    # for why it is non-negotiable. This adapter is where the defect was first caught
+    # live (a SigV2 presigned PUT + the uploader's Content-Type header = 403
+    # SignatureDoesNotMatch, with every test green); the factory exists so the other
+    # presign call sites cannot keep re-introducing it.
     access_key, secret_key = _credentials()
-    return boto3.client(
-        "s3",
+    return build_object_storage_client(
         endpoint_url=_endpoint(),
-        aws_access_key_id=access_key,
-        aws_secret_access_key=secret_key,
+        access_key=access_key,
+        secret_key=secret_key,
         region_name=_setting("SCAN_ARTIFACT_S3_REGION", "SBOM_S3_REGION", "us-east-1"),
-        # SigV4 EXPLICITLY. Without this botocore mints a legacy SigV2 presigned URL
-        # (AWSAccessKeyId/Signature/Expires), which current MinIO rejects outright with
-        # SignatureDoesNotMatch — verified live: the uploader reached MinIO and got a 403
-        # on a perfectly-formed request. Every upload would fail, and (correctly, but
-        # uselessly) fail every scan with it. AWS S3 also requires SigV4 in newer regions,
-        # so this is not a MinIO quirk — it is the only correct setting for both targets.
-        config=Config(signature_version="s3v4"),
     )
 
 

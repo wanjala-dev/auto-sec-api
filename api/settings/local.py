@@ -267,12 +267,11 @@ EMAIL_CONFIRMATION_REDIRECT_PATH = env("EMAIL_CONFIRMATION_REDIRECT_PATH", defau
 # 429s that look like flakes. Relax these on the LOCAL dev server only — prod
 # and the test-gate settings inherit the real base rates untouched.
 #
-# ⚠ Only the `*_ip` entries below are actually LIVE today. The four original
-# entries are inert: their throttle classes hardcode `rate`, and
-# SimpleRateThrottle only consults this table when `rate` is falsy — so the
-# class attribute wins and this block has never relieved anything. That is
-# FINDING C from #310, fixed in the follow-up PR; the new per-IP throttles
-# deliberately declare a `scope` and no `rate`, so they honour this table.
+# This block is now LIVE. It was inert for its whole existence: the identity
+# throttle classes hardcoded `rate`, and SimpleRateThrottle only consults the
+# rate table when `rate` is falsy — so the class attribute won and dev never
+# actually got the relief this block promised (FINDING C from #310). The
+# hardcoded rates are gone, so these overrides finally apply.
 REST_FRAMEWORK = {
     **REST_FRAMEWORK,  # noqa: F405 — from base import *
     "DEFAULT_THROTTLE_RATES": {
@@ -289,6 +288,14 @@ REST_FRAMEWORK = {
         "auth_email_send_ip": "1000/hour",
         "auth_token_verify_ip": "1000/hour",
         "auth_resend_verification_ip": "1000/hour",
+        # Newly relievable now that the class attributes are gone. The QA
+        # lifecycle suite drives magic-link and 2FA repeatedly from one dev
+        # machine, which the production 5/hour and 5/min caps do not survive.
+        "auth_resend_verification": "1000/hour",
+        "auth_magic_link_request": "1000/hour",
+        "auth_magic_link_verify": "1000/hour",
+        "otp_verify": "1000/min",
+        "otp_static_verify": "1000/min",
     },
 }
 

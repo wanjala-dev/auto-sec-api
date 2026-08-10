@@ -482,10 +482,27 @@ REST_FRAMEWORK = {
         "photos-categories": "1000/day",
         "videos-categories": "1000/day",
         "paintings-categories": "1000/day",
+        # ── Identity throttles ───────────────────────────────────────────
+        # These entries GOVERN. They did not used to: every class in
+        # components/identity/api/throttles.py also set a hardcoded `rate`,
+        # and SimpleRateThrottle.__init__ only consults this table when `rate`
+        # is falsy — so the class attribute always won and this block was
+        # authoritative-looking dead config. The hardcoded rates are gone; the
+        # values below are the exact rates that were previously in force, so
+        # nothing about production behaviour changed when they moved here.
+        # Do not reintroduce a `rate` class attribute — it silently re-kills
+        # this table AND local.py's dev-relief block.
         "auth_login": "10/min",
         "auth_password_reset_request": "5/hour",
         "auth_password_reset_confirm": "10/hour",
         "auth_email_verify": "15/hour",
+        # Previously hardcoded on the class with no settings entry at all, so
+        # an operator reading this file could not even see them. Same values.
+        "auth_resend_verification": "3/hour",
+        "auth_magic_link_request": "5/hour",
+        "auth_magic_link_verify": "10/hour",
+        "otp_verify": "10/min",
+        "otp_static_verify": "5/min",
         # ── Per-IP ceilings on the anonymous auth surface ────────────────
         # The `auth_*` scopes above key on an identity the CALLER supplies
         # (an email in the body OR the query string), so none of them bounds
@@ -539,6 +556,14 @@ REST_FRAMEWORK = {
         "sns_webhook": "200/min",
         # Public pre-auth login-brand lookup (anonymous, keyed on workspace id).
         "workspace_login_brand": "60/min",
+        # Agent-runtime telemetry ingest (ADR 0023). Authenticated + workspace
+        # scoped, but it is the one WRITE surface intended to face a customer's
+        # own exporter (and eventually a Vercel Trace Drain), so it carries its
+        # own bucket rather than riding the generic "user" rate: a runaway
+        # exporter must not be able to consume a tenant's whole request budget.
+        # Generous because a drain batches and retries; the 1 MiB body cap and
+        # the 1000-span batch cap are the real ceilings.
+        "agent_telemetry_ingest": "300/min",
     },
     "DEFAULT_SCHEMA_CLASS": "infrastructure.api.schema.ContextualAutoSchema",
     "EXCEPTION_HANDLER": "infrastructure.api.exception_handler.custom_exception_handler",

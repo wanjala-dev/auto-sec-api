@@ -33,3 +33,16 @@ class ColorSpacePort(ABC):
     @abstractmethod
     def rotate_hue(self, hex_color: str, degrees: float) -> str:
         """Rotate the HSL hue by ``degrees`` (used to derive a secondary)."""
+
+    @abstractmethod
+    def blend(self, foreground: str, background: str, alpha: float) -> str:
+        """Composite ``foreground`` over ``background`` at ``alpha`` (0.0–1.0).
+
+        Models what a browser paints for a translucent fill (``bg-accent/10``
+        over a panel). The UI-accent derivation needs it because the surface an
+        accent lands on is partly *made of* that accent.
+        """
+
+    @abstractmethod
+    def lightness(self, hex_color: str) -> float:
+        """HSL lightness (0.0–1.0) — used to pick which way to nudge a colour."""

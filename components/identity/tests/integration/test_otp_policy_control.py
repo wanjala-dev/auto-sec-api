@@ -25,8 +25,8 @@ from __future__ import annotations
 import pytest
 from django.core.cache import cache
 from django.urls import reverse
+from rest_framework.throttling import SimpleRateThrottle
 
-from components.identity.api.throttles import OTPVerifyThrottle
 from components.identity.domain.enums import LOCKOUT_THRESHOLD
 
 _WRONG_CODE = "000000"
@@ -131,9 +131,16 @@ class TestOtpLockoutEngages:
 
     @pytest.fixture(autouse=True)
     def _relax_otp_throttle(self, monkeypatch):
-        # Class-attribute patch, not override_settings — see FINDING C: these
-        # throttles hardcode `rate`, so DEFAULT_THROTTLE_RATES is dead config.
-        monkeypatch.setattr(OTPVerifyThrottle, "rate", "1000/min")
+        # Patches the rate TABLE, so the real `scope` → DEFAULT_THROTTLE_RATES
+        # resolution still runs. It used to patch the class attribute because
+        # these throttles hardcoded `rate`, which made the settings entries
+        # dead config (FINDING C from #310, now fixed). `override_settings`
+        # still cannot reach THROTTLE_RATES — it is bound at class definition.
+        monkeypatch.setattr(
+            SimpleRateThrottle,
+            "THROTTLE_RATES",
+            {**SimpleRateThrottle.THROTTLE_RATES, "otp_verify": "1000/min"},
+        )
 
     def test_repeated_totp_failures_lock_the_principal_out(self, api_client, totp_user):
         client = _authenticate(api_client, totp_user)

@@ -30,6 +30,10 @@ from components.workspace.application.commands.update_workspace_theme_command im
 from components.workspace.application.providers.workspace_theme_provider import (
     WorkspaceThemeProvider,
 )
+from components.workspace.domain.value_objects.ui_surface_palette import APP_SURFACE_PALETTES
+from components.workspace.infrastructure.adapters.pure_python_color_space_adapter import (
+    PurePythonColorSpaceAdapter,
+)
 
 pytestmark = [pytest.mark.django_db]
 
@@ -47,7 +51,18 @@ class TestWorkspacePublicBrand:
         data = response.data["data"]
         # Frozen legacy keys always present; brand-kit keys are additive-only.
         assert set(data.keys()) >= {"mode", "logo_url", "light", "dark"}
-        assert set(data.keys()) == {"mode", "logo_url", "light", "dark", "logos", "fonts"}
+        assert set(data.keys()) == {
+            "mode",
+            "logo_url",
+            "light",
+            "dark",
+            "logos",
+            "fonts",
+            "ui_accent",
+        }
+        # An unbranded workspace gets no derived accent — the app keeps its own
+        # built-in tokens, so nothing changes for a workspace that never branded.
+        assert data["ui_accent"] is None
         # Unthemed → the default brand, so the page always renders.
         assert data["light"]["primary"] == _DEFAULT_PRIMARY
         # Unthemed fonts → the default typography with a full fallback stack.
@@ -75,6 +90,33 @@ class TestWorkspacePublicBrand:
         assert data["logo_url"] == "https://cdn.example/logo.png"
         # CSS-channel shape ("R G B") the frontend injects as --primary.
         assert len(data["light"]["primary"].split()) == 3
+
+    def test_a_dark_brand_ships_an_accent_that_is_legible_on_our_canvas(self, api_client, workspace_factory):
+        """The API must never emit an unusable accent — whatever the customer picks.
+
+        ``#345700`` is the colour that shipped at ~2:1 on the dark HUD before
+        this guard. The endpoint now carries a derived, AA-guaranteed ``text``
+        variant per theme alongside the untouched brand fill.
+        """
+        workspace = workspace_factory()
+        WorkspaceThemeProvider.build_update_use_case().execute(
+            UpdateWorkspaceThemeCommand(workspace_id=workspace.id, brand_seed="#345700")
+        )
+        color_space = PurePythonColorSpaceAdapter()
+
+        response = api_client.get(f"/workspaces/{workspace.id}/public/brand/")
+
+        accent = response.data["data"]["ui_accent"]
+        assert accent is not None
+        assert accent["source"] == "#345700"
+        assert accent["dark"]["adjusted"] is True
+
+        for palette in APP_SURFACE_PALETTES:
+            channels = accent[palette.key]["text"]
+            assert len(channels.split()) == 3, "CSS channel shape, like every other token"
+            hex_color = "#%02X%02X%02X" % tuple(int(c) for c in channels.split())
+            for surface in palette.surfaces:
+                assert color_space.contrast_ratio(hex_color, surface) >= 4.5
 
     def test_unknown_workspace_returns_default_palette_not_404(self, api_client):
         # A brand is decoration; the entity's own data fetch enforces

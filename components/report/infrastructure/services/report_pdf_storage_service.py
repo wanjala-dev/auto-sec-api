@@ -13,6 +13,8 @@ import logging
 
 from django.conf import settings
 
+from infrastructure.storage.object_storage import build_object_storage_client
+
 logger = logging.getLogger(__name__)
 
 
@@ -45,42 +47,24 @@ def _presigned_ttl() -> int:
 
 
 def _client(*, public: bool = False):
-    """Lazy boto3 client — internal endpoint for writes, public for presigns."""
-    import boto3
-    from botocore.config import Config
+    """Lazy object-storage client — internal endpoint for writes, public for presigns.
 
+    SigV4 is not configured here on purpose: ``build_object_storage_client`` pins it
+    for every caller, which is what stops this exact defect recurring (#316). The
+    factory also treats a falsy endpoint as "real AWS S3" and a missing credential
+    pair as "use boto3's default chain" — precisely the prod shape this module now
+    relies on, so prod needs no special-casing at the call site.
+    """
     endpoint = (
         getattr(settings, "REPORT_PDF_S3_PUBLIC_ENDPOINT", None)
         if public
         else getattr(settings, "REPORT_PDF_S3_ENDPOINT", None)
     )
-    return boto3.client(
-        "s3",
+    return build_object_storage_client(
         endpoint_url=endpoint,
-        aws_access_key_id=getattr(settings, "REPORT_PDF_S3_ACCESS_KEY", None),
-        aws_secret_access_key=getattr(settings, "REPORT_PDF_S3_SECRET_KEY", None),
+        access_key=getattr(settings, "REPORT_PDF_S3_ACCESS_KEY", None),
+        secret_key=getattr(settings, "REPORT_PDF_S3_SECRET_KEY", None),
         region_name=getattr(settings, "REPORT_PDF_S3_REGION", "us-east-1"),
-        # SigV4 EXPLICITLY, matching the scan-artifact store. Without it botocore
-        # mints a LEGACY SigV2 presigned URL (AWSAccessKeyId=/Signature=) even
-        # though the client's own resolved signature_version reads "s3v4" —
-        # verified empirically against MinIO on this branch. That mattered little
-        # while these objects lived on MinIO, which still accepts SigV2 for GET; it
-        # becomes load-bearing the moment prod points at real AWS S3, where S3
-        # supports ONLY SigV4 in most regions and SigV2 is deprecated and being
-        # turned off. A presigned download signed SigV2 is a SignatureDoesNotMatch
-        # waiting to happen, so the S3 migration cannot ship without this.
-        #
-        # CONVERGENCE NOTE — deliberate, temporary duplication. The concurrent
-        # `fix/presign-sigv4` branch introduces
-        # `infrastructure/storage/object_storage.build_object_storage_client`, ONE
-        # factory every object-storage client is built from, precisely so this
-        # setting cannot be forgotten again. That is the better home for it. This
-        # inline Config exists only so THIS branch is correct on its own — shipping a
-        # prod S3 migration whose presigned URLs work only if another unmerged branch
-        # lands is exactly the kind of hidden coupling that breaks quietly.
-        # Whichever of the two merges SECOND: delete this `config=` line and the
-        # botocore import, and call the factory instead. Do not keep both.
-        config=Config(signature_version="s3v4"),
     )
 
 
