@@ -12,6 +12,7 @@ from components.project.api.controller import (
     ColumnDetailView,
     ColumnReorderView,
     ColumnsView,
+    ColumnTasksView,
     DiscardTimerView,
     MilestoneDetailView,
     MilestonesView,
@@ -51,6 +52,7 @@ urlpatterns = [
     path("columns/", ColumnsView.as_view(), name="columns"),
     path("columns/reorder/", ColumnReorderView.as_view(), name="column-reorder"),
     path("columns/<int:column_id>/", ColumnDetailView.as_view(), name="column-detail"),
+    path("columns/<int:column_id>/tasks/", ColumnTasksView.as_view(), name="column-tasks"),
     path(
         "columns/project/<int:project_id>/team/<int:team_id>/workspaces/<uuid:workspace_id>/",
         ColumnsView.as_view(),

@@ -2,6 +2,7 @@
 
 No Django imports — depends only on port.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -9,6 +10,8 @@ from typing import Any
 from components.workspace.application.ports.column_query_port import (
     ColumnFilterRequest,
     ColumnQueryPort,
+    ColumnTasksPage,
+    clamp_tasks_limit,
 )
 
 
@@ -30,6 +33,7 @@ class FetchColumnsQuery:
         workspace_id: Any | None = None,
         user_assigned: str | None = None,
         user: Any | None = None,
+        tasks_limit: Any | None = None,
     ) -> ColumnFilterRequest:
         """Build a typed request from URL kwargs and query params."""
         return ColumnFilterRequest(
@@ -39,4 +43,24 @@ class FetchColumnsQuery:
             workspace_id=workspace_id,
             user_assigned=bool(user_assigned),
             user=user,
+            tasks_limit=clamp_tasks_limit(tasks_limit),
+        )
+
+
+class FetchColumnTasksQuery:
+    """Application query for one lane's task window (board "load more")."""
+
+    def __init__(self, query_port: ColumnQueryPort) -> None:
+        self._port = query_port
+
+    def execute(self, *, column_id: Any, user: Any, offset: Any = 0, limit: Any = None) -> ColumnTasksPage:
+        try:
+            offset = int(offset)
+        except (TypeError, ValueError):
+            offset = 0
+        return self._port.fetch_column_tasks(
+            column_id=column_id,
+            user=user,
+            offset=max(0, offset),
+            limit=clamp_tasks_limit(limit),
         )

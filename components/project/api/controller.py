@@ -1326,6 +1326,10 @@ class ColumnsView(APIView):
                 workspace_id=workspace_id,
                 user_assigned=request.query_params.get("user_assigned", None),
                 user=request.user,
+                # Per-column task window (always applied; clamped server-side).
+                # Lanes report `tasks_total` / `tasks_has_more`; the remainder
+                # pages through GET /project/columns/<id>/tasks/.
+                tasks_limit=request.query_params.get("tasks_limit", None),
             )
             columns = query.execute(request=filter_req)
 
@@ -1511,6 +1515,57 @@ class ColumnDetailView(ColumnsView):
     """Column detail view for unique schema operation IDs."""
 
     name = "column-detail"
+
+
+class ColumnTasksView(APIView):
+    """One lane's task window, in board order — the board's "load more" read.
+
+    GET /project/columns/<column_id>/tasks/?offset=<n>&limit=<n>
+
+    The board endpoints window every lane (``tasks_limit`` per column); this
+    endpoint pages the remainder of a single lane with the same ordering and
+    eager-loading contract, so consecutive windows never skip or duplicate
+    cards. Offset/limit (not page numbers) because lanes are appended to
+    incrementally from a moving client-side length.
+    """
+
+    permission_classes = (permissions.IsAuthenticated,)
+    name = "column-tasks"
+
+    def get(self, request, column_id=None):
+        from components.project.domain.errors import (
+            AuthorizationError,
+            NotFoundError,
+        )
+
+        try:
+            query = ColumnQueryProvider.build_column_tasks_query()
+            page = query.execute(
+                column_id=column_id,
+                user=request.user,
+                offset=request.query_params.get("offset", 0),
+                limit=request.query_params.get("limit", None),
+            )
+            serializer = TaskSerializer(page.tasks, many=True, context={"request": request})
+            return Response(
+                {
+                    "success": True,
+                    "status_code": status.HTTP_200_OK,
+                    "message": "Column tasks fetched successfully",
+                    "data": serializer.data,
+                    "meta": {
+                        "total": page.total,
+                        "offset": page.offset,
+                        "limit": page.limit,
+                        "has_more": page.has_more,
+                    },
+                },
+                status=status.HTTP_200_OK,
+            )
+        except NotFoundError as exc:
+            return Response({"success": False, "message": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+        except AuthorizationError as exc:
+            return Response({"success": False, "message": str(exc)}, status=status.HTTP_403_FORBIDDEN)
 
 
 class ColumnReorderView(APIView):
