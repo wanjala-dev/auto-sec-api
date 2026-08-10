@@ -58,9 +58,11 @@ def service(color_space):
 
 
 def _all_backgrounds(color_space, accent, palette):
-    """Every surface the accent lands on, including the fill it tints itself."""
+    """Every surface the accent lands on, including the fills it tints itself."""
     tinted = tuple(color_space.blend(accent, s, palette.tint_alpha) for s in palette.surfaces)
-    return palette.surfaces + tinted
+    card_border = color_space.blend(accent, palette.canvas, palette.card_border_alpha)
+    cards = tuple(color_space.blend(s, card_border, palette.card_fill_alpha) for s in palette.surfaces)
+    return palette.surfaces + tinted + cards
 
 
 class TestGuaranteedRatios:
@@ -139,6 +141,59 @@ class TestBrandIdentityPreservation:
         assert abs(color_space.lightness(derived.decorative) - seed_l) < abs(
             color_space.lightness(derived.text) - seed_l
         )
+
+
+class TestTheBarIsCoherentWithOurOwnPalette:
+    """Why the surface model stops where it does — do not "fix" this by cranking
+    the alphas in ``ui_surface_palette``.
+
+    ``HudCard`` lays a translucent panel fill over an accent border layer, so
+    the accent tints the card interior. With a THIN fill the bleed-through is so
+    strong that accent-coloured text cannot clear AA for *any* colour — which is
+    why the modelled bar is "at least as legible as autosec's own accent", not
+    "legible on every surface in the app". The residual is a component defect in
+    the card's border/fill combination, identical for branded and unbranded
+    workspaces.
+    """
+
+    # Real fill alphas from the frontend (`bg-hud-surface/30`, `/20`). The
+    # thinner the fill, the more the accent border bleeds into the interior.
+    THIN_FILL = 0.30
+    THINNEST_FILL = 0.20
+
+    def _thin_card(self, color_space, accent, palette, fill=None):
+        border = color_space.blend(accent, palette.canvas, palette.card_border_alpha)
+        return color_space.blend(palette.surfaces[1], border, self.THIN_FILL if fill is None else fill)
+
+    @pytest.mark.parametrize(
+        "palette,builtin",
+        [(DARK_HUD, "#2EDBE8"), (LIGHT_HUD, "#0B636B")],
+        ids=["dark-cyan", "light-teal"],
+    )
+    def test_our_own_accent_passes_everything_we_hold_brands_to(self, service, color_space, palette, builtin):
+        """The bar must not be stricter for a customer's brand than for ours."""
+        for background in _all_backgrounds(color_space, builtin, palette):
+            assert color_space.contrast_ratio(builtin, background) >= UiAccentDerivationService.TEXT_TARGET
+
+    def test_the_thin_card_fill_is_unwinnable_by_colour_choice(self, color_space):
+        """Proof the excluded surface is a component defect, not a colour one.
+
+        At ``bg-hud-surface/30`` autosec's OWN accent already fails; at ``/20``
+        even pure white — the highest-contrast colour that exists on a dark
+        canvas — cannot reach AA. No derivation can rescue either.
+        """
+        cyan_at_30 = self._thin_card(color_space, "#2EDBE8", DARK_HUD)
+        assert color_space.contrast_ratio("#2EDBE8", cyan_at_30) < 4.5
+
+        white_at_20 = self._thin_card(color_space, "#FFFFFF", DARK_HUD, fill=self.THINNEST_FILL)
+        assert color_space.contrast_ratio("#FFFFFF", white_at_20) < 4.5
+
+    def test_the_guard_still_improves_that_surface_substantially(self, service, color_space):
+        """Even where AA is unreachable, the derived accent is far better."""
+        raw = color_space.contrast_ratio("#345700", self._thin_card(color_space, "#345700", DARK_HUD))
+        derived = service.derive("#345700", DARK_HUD).text
+        after = color_space.contrast_ratio(derived, self._thin_card(color_space, derived, DARK_HUD))
+        assert after > raw * 1.5
 
 
 class TestDirectionality:

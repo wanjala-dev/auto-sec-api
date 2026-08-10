@@ -74,13 +74,19 @@ class UiAccentDerivationService:
         )
 
     def _backgrounds(self, accent: str, palette: UiSurfacePalette) -> tuple[str, ...]:
-        """Every surface this accent lands on, including the fill it tints itself.
+        """Every surface this accent lands on, including the fills it tints itself.
 
-        The accent-tinted card fill moves with the accent, so it is recomputed
-        for each candidate rather than measured once against the seed.
+        Accent-derived surfaces move WITH the accent, so they are recomputed for
+        each candidate rather than measured once against the seed. Two kinds:
+
+        * lightly tinted fills — the accent laid over a panel at a low alpha;
+        * card interiors — ``HudCard`` paints an accent border layer and lays a
+          translucent panel fill over it, so the accent tints the whole interior.
         """
         tinted = tuple(self._cs.blend(accent, s, palette.tint_alpha) for s in palette.surfaces)
-        return palette.surfaces + tinted
+        card_border = self._cs.blend(accent, palette.canvas, palette.card_border_alpha)
+        cards = tuple(self._cs.blend(s, card_border, palette.card_fill_alpha) for s in palette.surfaces)
+        return palette.surfaces + tinted + cards
 
     def _nudge_until_legible(self, seed: str, palette: UiSurfacePalette, target: float) -> str:
         """Move ONLY lightness, in the one direction that gains contrast.
