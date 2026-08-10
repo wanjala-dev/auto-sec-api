@@ -135,7 +135,31 @@ opposite of a honeypot's job, on a surface about to go internet-facing. Attempts
 *were* still captured (the row is written before the raise); only the response
 broke. Fixed with the missing import.
 
-### FINDING B — login has NO per-IP ceiling (NOT yet fixed — decided, not built)
+### FINDING B — login has NO per-IP ceiling (**FIXED** on `fix/login-ip-throttle`)
+
+> **Status update.** Built on branch `fix/login-ip-throttle`. The finding turned
+> out to be **broader than described below**: `_ScopedIdentityThrottle` reads
+> `email` from the request body *or* the **query string**, so its `ip:` fallback
+> is never a real IP ceiling on ANY endpoint — a caller appends
+> `?email=<random>` and mints a fresh bucket even on endpoints whose payload has
+> no email (email-verify, password-reset confirm/complete, magic-link verify).
+> Seven anonymous identity views were affected, not one.
+>
+> Fix shipped: a `_ScopedIPThrottle` base (marker attr `ip_keyed`) + four new
+> scopes, stacked alongside the existing identity throttles; the pre-existing
+> `ResendVerificationIPThrottle` was re-based onto it (DRY, per the plan below).
+> Rates live in `DEFAULT_THROTTLE_RATES` — no hardcoded `rate`, so Finding C is
+> not deepened. Recurrence guard:
+> `tests/architecture/test_auth_throttle_ip_ceiling.py` walks the identity
+> URLconf and fails any anonymous-reachable view that resolves no IP-keyed
+> throttle (verified RED on the pre-fix code — it named all 7).
+>
+> The `30/min` single-tier proposal below was **superseded**: one tier cannot
+> both stop a burst and stop a paced sprayer. Login now carries a burst brake
+> (`auth_login_ip` 60/min) *and* a sustained ceiling
+> (`auth_login_ip_sustained` 600/hour). Rationale in the PR.
+
+Original write-up follows.
 
 `LoginThrottle` extends `_ScopedIdentityThrottle`, whose `_identity()` returns
 `email:<x>` whenever an email is in the body and only falls back to `ip:` when

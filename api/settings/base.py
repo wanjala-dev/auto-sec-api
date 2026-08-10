@@ -486,6 +486,41 @@ REST_FRAMEWORK = {
         "auth_password_reset_request": "5/hour",
         "auth_password_reset_confirm": "10/hour",
         "auth_email_verify": "15/hour",
+        # ── Per-IP ceilings on the anonymous auth surface ────────────────
+        # The `auth_*` scopes above key on an identity the CALLER supplies
+        # (an email in the body OR the query string), so none of them bounds
+        # what ONE HOST can do across many identities. Declaring
+        # `throttle_classes` on a view also REPLACES DEFAULT_THROTTLE_CLASSES,
+        # so the global `anon` ceiling silently stopped applying to every auth
+        # endpoint. These scopes are that ceiling, put back explicitly.
+        #
+        # Chosen generous-but-finite on purpose: shared egress is normal for
+        # our customers (one office NAT, a corporate VPN, a carrier CGNAT),
+        # and a false 429 on login is a support ticket, while account lockout
+        # (email-keyed, 10 failures) is the second layer for the per-account
+        # case. Tune HERE, per environment — never by hardcoding `rate` on the
+        # throttle class, which turns this table back into dead config.
+        #
+        # auth_login_ip            burst brake: a script does 60 login POSTs
+        #                          in a second, an office never does in a
+        #                          minute; recovers fully in 60s.
+        # auth_login_ip_sustained  the actual anti-spray control. ~2x the
+        #                          busiest plausible hour for a 200-seat
+        #                          customer logging in at once, and it caps a
+        #                          single host at 14.4k attempts/day instead
+        #                          of unlimited.
+        # auth_email_send_ip       one request == one real outbound email
+        #                          (password-reset + magic-link requests share
+        #                          the budget because they share the resource:
+        #                          our SES sender reputation).
+        # auth_token_verify_ip     anonymous token redemption. Generous: mail
+        #                          security products prefetch emailed links,
+        #                          so honest traffic arrives in bursts.
+        "auth_login_ip": "60/min",
+        "auth_login_ip_sustained": "600/hour",
+        "auth_email_send_ip": "40/hour",
+        "auth_token_verify_ip": "60/hour",
+        "auth_resend_verification_ip": "10/hour",
         # Payment endpoints
         "checkout_anon": "20/min",
         "checkout_user": "30/min",

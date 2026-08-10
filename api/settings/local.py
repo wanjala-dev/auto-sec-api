@@ -266,6 +266,13 @@ EMAIL_CONFIRMATION_REDIRECT_PATH = env("EMAIL_CONFIRMATION_REDIRECT_PATH", defau
 # trip the 15/hour email-verify cap and 10/min login cap, producing spurious
 # 429s that look like flakes. Relax these on the LOCAL dev server only — prod
 # and the test-gate settings inherit the real base rates untouched.
+#
+# ⚠ Only the `*_ip` entries below are actually LIVE today. The four original
+# entries are inert: their throttle classes hardcode `rate`, and
+# SimpleRateThrottle only consults this table when `rate` is falsy — so the
+# class attribute wins and this block has never relieved anything. That is
+# FINDING C from #310, fixed in the follow-up PR; the new per-IP throttles
+# deliberately declare a `scope` and no `rate`, so they honour this table.
 REST_FRAMEWORK = {
     **REST_FRAMEWORK,  # noqa: F405 — from base import *
     "DEFAULT_THROTTLE_RATES": {
@@ -274,6 +281,14 @@ REST_FRAMEWORK = {
         "auth_email_verify": "1000/hour",
         "auth_password_reset_request": "1000/hour",
         "auth_password_reset_confirm": "1000/hour",
+        # The per-IP auth ceilings bite HARDEST in dev, because every persona
+        # in the QA sweep shares one source IP — which is exactly the traffic
+        # shape they exist to stop in prod. Relax them here only.
+        "auth_login_ip": "1000/min",
+        "auth_login_ip_sustained": "10000/hour",
+        "auth_email_send_ip": "1000/hour",
+        "auth_token_verify_ip": "1000/hour",
+        "auth_resend_verification_ip": "1000/hour",
     },
 }
 

@@ -59,7 +59,11 @@ from components.identity.api.permissions import (
 from components.identity.api.renderers import UserRenderer
 from components.identity.api.request_context import build_request_context, extract_client_ip
 from components.identity.api.throttles import (
+    AuthEmailSendIPThrottle,
+    AuthTokenVerifyIPThrottle,
     EmailVerifyThrottle,
+    LoginIPBurstThrottle,
+    LoginIPSustainedThrottle,
     LoginThrottle,
     OTPVerifyThrottle,
     PasswordResetConfirmThrottle,
@@ -647,7 +651,10 @@ class RegisterView(generics.GenericAPIView):
 
 class VerifyEmail(views.APIView):
     permission_classes = (IsUnauthenticatedOrAdminOrStaff,)
-    throttle_classes = [EmailVerifyThrottle]
+    # `?token=` carries no email, so EmailVerifyThrottle *appears* to key on
+    # IP — until a caller adds `&email=<random>`, which it reads and keys on
+    # instead. AuthTokenVerifyIPThrottle is the ceiling that cannot be moved.
+    throttle_classes = [EmailVerifyThrottle, AuthTokenVerifyIPThrottle]
     serializer_class = EmailVerificationSerializer
 
     token_param_config = OpenApiParameter(
@@ -1219,7 +1226,15 @@ class LoginAPIView(generics.GenericAPIView):
     """
 
     permission_classes = (IsUnauthenticatedOrAdminOrStaff,)
-    throttle_classes = [LoginThrottle]
+    # LoginThrottle keys on the submitted email, which bounds an attack on ONE
+    # account and nothing else — rotate the address and every attempt gets its
+    # own bucket. The two IP throttles are the ceiling that makes password
+    # spraying from a single host expensive. Both are required: the burst
+    # throttle stops the hammer, the sustained one stops a paced sprayer that
+    # would sit happily under any per-minute limit. Declaring throttle_classes
+    # at all is what dropped the global anon ceiling in the first place, so it
+    # has to be put back here explicitly.
+    throttle_classes = [LoginThrottle, LoginIPBurstThrottle, LoginIPSustainedThrottle]
     serializer_class = LoginSerializer
 
     def post(self, request):
@@ -1292,7 +1307,11 @@ class RequestPasswordResetEmail(generics.GenericAPIView):
     """Request a password reset email — delegated to RequestPasswordResetUseCase."""
 
     permission_classes = (IsUnauthenticatedOrAdminOrStaff,)
-    throttle_classes = [PasswordResetRequestThrottle]
+    # Per-email 5/hour bounds pestering ONE inbox; the per-IP ceiling bounds
+    # what one host can send in total. Without it, rotating the address turns
+    # this endpoint into an open mail relay pointed at arbitrary inboxes, on
+    # our SES reputation.
+    throttle_classes = [PasswordResetRequestThrottle, AuthEmailSendIPThrottle]
     serializer_class = ResetPasswordEmailRequestSerializer
 
     def post(self, request):
@@ -1323,7 +1342,11 @@ class RequestPasswordResetEmail(generics.GenericAPIView):
 
 class PasswordTokenCheckAPI(generics.GenericAPIView):
     permission_classes = (IsUnauthenticatedOrAdminOrStaff,)
-    throttle_classes = [PasswordResetConfirmThrottle]
+    # PasswordResetConfirmThrottle looks per-IP here because the payload
+    # carries no email — but it reads the QUERY STRING too, so `?email=<rand>`
+    # is enough to mint a fresh bucket per attempt. The explicit IP ceiling is
+    # what actually bounds reset-token grinding.
+    throttle_classes = [PasswordResetConfirmThrottle, AuthTokenVerifyIPThrottle]
     serializer_class = SetNewPasswordSerializer
 
     def get(self, request, uidb64, token):
@@ -1368,7 +1391,11 @@ class SetNewPasswordAPIView(generics.GenericAPIView):
     """
 
     permission_classes = (IsUnauthenticatedOrAdminOrStaff,)
-    throttle_classes = [PasswordResetConfirmThrottle]
+    # PasswordResetConfirmThrottle looks per-IP here because the payload
+    # carries no email — but it reads the QUERY STRING too, so `?email=<rand>`
+    # is enough to mint a fresh bucket per attempt. The explicit IP ceiling is
+    # what actually bounds reset-token grinding.
+    throttle_classes = [PasswordResetConfirmThrottle, AuthTokenVerifyIPThrottle]
     serializer_class = SetNewPasswordSerializer
 
     def patch(self, request):
@@ -1923,10 +1950,14 @@ class MagicLinkRequestView(views.APIView):
 
     def get_throttles(self):
         from components.identity.api.throttles import (
+            AuthEmailSendIPThrottle,
             MagicLinkRequestThrottle,
         )
 
-        return [MagicLinkRequestThrottle()]
+        # Per-email + per-IP, for the same reason as password-reset request:
+        # each accepted call sends real mail to a caller-named address, so the
+        # per-email limit alone bounds nothing an attacker cares about.
+        return [MagicLinkRequestThrottle(), AuthEmailSendIPThrottle()]
 
     def post(self, request):
         from components.identity.application.providers.magic_link_provider import (
@@ -2010,10 +2041,15 @@ class MagicLinkVerifyView(views.APIView):
 
     def get_throttles(self):
         from components.identity.api.throttles import (
+            AuthTokenVerifyIPThrottle,
             MagicLinkVerifyThrottle,
         )
 
-        return [MagicLinkVerifyThrottle()]
+        # MagicLinkVerifyThrottle keys on `email` when the caller sends one —
+        # and this endpoint's real payload is just a token, so an attacker
+        # supplies the email purely to escape the bucket. The IP ceiling is
+        # what bounds token grinding.
+        return [MagicLinkVerifyThrottle(), AuthTokenVerifyIPThrottle()]
 
     def post(self, request):
         from components.identity.application.providers.identity_provider import (
