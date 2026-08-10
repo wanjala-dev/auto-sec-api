@@ -436,6 +436,35 @@ customer-facing use** — a wrong requirement number is exactly what a QSA notic
 That dependency — **identity first, then permissions, then evidence** — is the spine of the phase
 plan in §6.
 
+### D7 — The buying trigger is a **questionnaire from Isaac's own enterprise customers**, not a regulator knocking. Design the output to be forwardable. **[proposed]**
+
+A startup with no security team does not buy governance because it wants governance. It buys when
+**someone it wants money from starts asking**. So the standards question is not "which framework
+applies to Isaac" but "which framework reaches him **through his customers**."
+
+| Instrument | What it says about agent logging | Does it reach Isaac? |
+|---|---|---|
+| **PCI DSS v4.0 Req 10** — 12 months retention / 3 hot; logs protected from modification; change-detection on audit logs | The most concrete retention + integrity requirement in scope | ⭐ **Most likely hard trigger.** He handles card data, and the gap is arithmetic and checkable: **Stripe's Activity Logs retain 6 months against a 12-month requirement.** ⚠ numbering unverified (§7) |
+| **SOC 2** (CC6.1 / CC7.2 / CC7.3 / CC8.1) | Outcome-based; **no prescriptive immutability control**. Auditors look for logs stored separately from the systems that generate them, with restricted access | ⭐ **The likeliest vehicle** — a SOC 2 report is what his enterprise prospects actually ask for. The 12-month/90-day-hot figure is practitioner convention, **not codified** — say so rather than citing it as a requirement |
+| **EU AI Act** — record-keeping / automatic logging for high-risk systems | A direct logging obligation | High-risk enforcement began **2026-08-02**. Whether it bites a US Series-A SaaS running client-facing agents is genuinely open — **do not assume it does** |
+| **MITRE ATLAS** — agentic techniques incl. agent tool credential harvesting (v5.4.0, 2026-02; agentic expansion began 2025-10) | A tagging vocabulary for agent findings, consistent with our existing ATT&CK tagging | Not a trigger; a **credibility and correlation** asset |
+| **OWASP LLM06 Excessive Agency / LLM08** + the Agentic Security Initiative | Names over-permissioned agents as a top-10 risk class | Not a trigger; **the vocabulary the finding copy should use**, because it is what a security reviewer recognizes on sight |
+| **NIST AI RMF + GenAI Profile; NIST CAISI agent-standards initiative (2026-02)** | Traceability and accountability framing; agent-runtime deliverables expected | Tailwind, not a trigger, on this timeline |
+| **ISO/IEC 42001** (AI management systems) | Records/logging duties for an AI management system | Appearing in procurement; relevance to a 60-agent startup **unverified** |
+
+**The design consequence, which is the actual decision here:** the deliverable must be
+**forwardable**. The artifact that closes a sale is not a dashboard — it is *a document Isaac can send
+to his customer's security reviewer*: which agents exist, what each can do, what each actually did,
+under what identity, over a stated window, with provenance and an integrity proof **the reviewer can
+check themselves**. That is precisely ADR 0009's evidence envelope, and it is why Lens-B #3 is a
+downstream consumer of this ADR rather than a competitor to it.
+
+It also sharpens D6: the reason to build a customer-runnable verifier is not cryptographic purity —
+it is that **an integrity claim only we can check is worth nothing to the third party the customer is
+trying to satisfy.**
+
+---
+
 ## 4. Consequences
 
 **Positive.** The back half of the product already exists (§2.1), so the net-new surface is a capture
