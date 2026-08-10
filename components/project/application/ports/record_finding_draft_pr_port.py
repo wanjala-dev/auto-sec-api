@@ -36,6 +36,27 @@ DRAFT_PR_METADATA_PATH: tuple[str, ...] = ("payload", "draft_pr")
 
 DRAFT_PR_JSON_LOOKUP: str = "metadata__" + "__".join(DRAFT_PR_METADATA_PATH)
 
+# ── Canonical stored-diff bound ─────────────────────────────────────────────
+# The ONE definition of how large a stored draft-PR diff may get. Part of the
+# recording CONTRACT (like the metadata path above), not an implementation
+# detail of any single writer: the open step bounds the diff it computes from
+# the advisor's proposal, and the legacy backfill bounds the diff it reads back
+# from the code host. Both go through :func:`bound_diff`, so a stored diff can
+# never depend on which writer produced it — the HUD renders legacy and new
+# records identically.
+
+DRAFT_PR_DIFF_MAX_CHARS: int = 12_000
+
+DRAFT_PR_DIFF_TRUNCATION_MARKER: str = "\n… (diff truncated)"
+
+
+def bound_diff(diff: str, *, max_chars: int = DRAFT_PR_DIFF_MAX_CHARS) -> str:
+    """Clamp ``diff`` to the stored-record bound, marking it when truncated."""
+    text = diff or ""
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + DRAFT_PR_DIFF_TRUNCATION_MARKER
+
 
 def draft_pr_candidate_filter() -> dict[str, bool]:
     """ORM filter kwargs selecting Tasks that CARRY a draft-PR record.
@@ -104,6 +125,48 @@ class RecordFindingDraftPrCommand:
 
 
 @dataclass(frozen=True)
+class AttachDraftPrPatchCommand:
+    """Attach the reviewed patch to a draft-PR record that already exists.
+
+    The *repair* counterpart to :class:`RecordFindingDraftPrCommand`. Records
+    opened before the open step began persisting the patch carry a ``draft_pr``
+    with a ``url`` but no ``diff``, so the HUD degrades to a bare "VIEW DRAFT PR"
+    link. This command fills exactly that gap — it never creates a record, never
+    touches the ``url``/``repo``/``branch``/``verification`` facts the open step
+    established, and never adds a card comment (the PR was already announced).
+
+    ``reason`` is stamped onto the provenance event so the board shows WHY the
+    card changed outside a normal open (e.g. ``"legacy_patch_backfill"``).
+    ``pr_state`` / ``merged`` record the PR's live lifecycle at attach time — a
+    legacy PR may since have merged or closed, and the record says so honestly
+    rather than implying it is still awaiting review.
+    """
+
+    workspace_id: str
+    task_id: str
+    path: str
+    diff: str
+    change_summary: str = ""
+    pr_state: str = ""
+    merged: bool = False
+    reason: str = "patch_backfill"
+
+
+@dataclass(frozen=True)
+class AttachDraftPrPatchResult:
+    """Outcome of an attach attempt — ``attached`` false is a SKIP, never an error.
+
+    ``reason`` names the skip so the caller can count outcomes:
+    ``"task_not_found"``, ``"no_draft_pr_record"``, ``"already_has_diff"``
+    (the idempotent re-run case), or ``"empty_diff"`` (refused — a fabricated or
+    empty patch is never stored).
+    """
+
+    attached: bool
+    reason: str = ""
+
+
+@dataclass(frozen=True)
 class RecordFindingDraftPrResult:
     # True when this call performed the write; False when it was a no-op because
     # the task was gone, or a concurrent open already recorded a draft PR (the
@@ -122,5 +185,16 @@ class RecordFindingDraftPrPort(abc.ABC):
         Re-checks ``draft_pr`` right before writing so a concurrent open keeps the
         first PR's record. A task deleted between the caller's precondition and
         this write resolves to ``recorded=False`` (never raises).
+        """
+        ...
+
+    @abc.abstractmethod
+    def attach_draft_pr_patch(self, *, command: AttachDraftPrPatchCommand) -> AttachDraftPrPatchResult:
+        """Fill in the patch on an EXISTING ``draft_pr`` record, leaving it otherwise intact.
+
+        Idempotent by construction: a record that already carries a non-empty
+        ``diff`` is left untouched (``attached=False``, ``reason="already_has_diff"``),
+        so the backfill is safe to re-run. An absent task or a task with no
+        ``draft_pr`` record likewise resolves to a skip — never raises.
         """
         ...
