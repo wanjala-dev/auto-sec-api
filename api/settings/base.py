@@ -414,7 +414,46 @@ USE_TZ = False
 
 CRISPY_TEMPLATE_PACK = "bootstrap4"
 
+
+# ── Trusted reverse proxies (client-IP derivation) ───────────────────────────
+# How many proxies we CONTROL sit between the real client and Django, each
+# APPENDING its view of the peer to `X-Forwarded-For`. DRF's
+# `BaseThrottle.get_ident()` then takes the Nth-from-the-right hop; everything
+# to the LEFT of it is caller-supplied and must never be trusted.
+#
+#   header:  <forged by client>, …, <appended by proxy N>, …, <appended by proxy 1>
+#            \________ untrusted ________/ \____ NUM_PROXIES trusted hops ____/
+#
+# Getting this wrong fails in two directions, and they are NOT symmetric:
+#   * TOO HIGH → DRF reads a hop the caller can forge. Every IP-keyed throttle
+#     is bypassable by rotating a header value. This is a security defect.
+#   * TOO LOW  → DRF reads a proxy's own address, so distinct clients collapse
+#     into one bucket. Blunt and over-restrictive, but never bypassable.
+# So when in doubt, go LOW. `0` means "ignore X-Forwarded-For entirely, trust
+# only REMOTE_ADDR" — correct for a directly-exposed process with no proxy.
+#
+# Derived per environment (2026-08-09):
+#   local k8s (Docker Desktop) → 1. Browser → NGINX Gateway Fabric data plane
+#       → ClusterIP Service → gunicorn. kube-proxy is L3/L4 and touches no
+#       headers; there is no nginx sidecar in the image (WhiteNoise serves
+#       static). One appending hop.
+#   prod (k3s on EC2)         → 1. api.auto-sec.ai → Elastic IP → k3s host →
+#       ServiceLB → the SAME NGF data plane (TLS terminates there) → gunicorn.
+#       The API is deliberately NOT behind CloudFront and there is no ALB/NLB
+#       in the stack — only the HUD (app.auto-sec.ai) is a CloudFront origin.
+#       One appending hop.
+#   bare `runserver` / pytest → the header is absent, and DRF falls back to
+#       REMOTE_ADDR on its own, so `1` stays correct. Set NUM_PROXIES=0
+#       explicitly if you ever expose gunicorn with no proxy in front.
+#
+# Env-driven so a topology change (adding a CDN or an ALB in front of the API)
+# is a config change, not a code change — but note it must then be RAISED in
+# lockstep with the new hop, or the new proxy's appended entry becomes forgeable
+# padding. See docs/adr and the prod secret contract in auto-sec-infra.
+NUM_PROXIES = int(os.environ.get("NUM_PROXIES", "1"))
+
 REST_FRAMEWORK = {
+    "NUM_PROXIES": NUM_PROXIES,
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 10,
     "NON_FIELD_ERRORS_KEY": "error",

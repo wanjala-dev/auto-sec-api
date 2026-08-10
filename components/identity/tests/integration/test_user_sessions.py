@@ -4,7 +4,8 @@ Full-stack through the HTTP endpoints:
 
 * login creates a UserSession row whose refresh_jti matches the returned
   refresh token's jti, with a ``sid`` claim on BOTH tokens;
-* X-Forwarded-For parsing stores the FIRST hop only;
+* X-Forwarded-For parsing stores the TRUSTED hop (the one our own gateway
+  appended), never a caller-supplied one;
 * token refresh bumps last_seen_at (throttled — an immediate second
   refresh does not write);
 * revoke_by_jti blacklists exactly the targeted outstanding token;
@@ -86,18 +87,29 @@ class TestLoginCreatesSession:
         assert login_event.metadata.get("session_jti") == refresh_jti
         assert login_event.session_id == session.id
 
-    def test_xff_first_hop_is_stored_as_session_ip(self, api_client):
+    def test_trusted_xff_hop_is_stored_as_session_ip(self, api_client):
+        """The session IP must be the hop OUR proxy appended, not the caller's.
+
+        This test previously asserted the FIRST hop (``198.51.100.7`` below).
+        That entry is written by the client, so any user could stamp an IP of
+        their choosing onto their own session row, login-activity entry and
+        auth audit event — forging the very records an incident responder would
+        later rely on. With NUM_PROXIES=1 the trusted hop is the RIGHTMOST one.
+        """
         user = _make_user("xff-tester@example.com")
         response = _login(
             api_client,
             user,
+            # 198.51.100.7 and 203.0.113.1 are forged by the caller;
+            # 10.0.0.2 is what our single gateway appended.
             HTTP_X_FORWARDED_FOR="198.51.100.7, 203.0.113.1, 10.0.0.2",
             HTTP_USER_AGENT="pytest-browser/1.0",
         )
         assert response.status_code == 200
         refresh_jti = str(RefreshToken(response.data["tokens"]["refresh"])["jti"])
         session = UserSession.objects.get(refresh_jti=refresh_jti)
-        assert session.ip_address == "198.51.100.7"
+        assert session.ip_address == "10.0.0.2"
+        assert session.ip_address != "198.51.100.7", "client-supplied XFF hop was trusted"
         assert session.user_agent == "pytest-browser/1.0"
 
 
