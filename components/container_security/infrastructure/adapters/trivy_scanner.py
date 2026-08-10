@@ -40,7 +40,8 @@ from components.scanning.application.ports.scan_execution_backend import (
     ScanExecutionBackend,
     ScanJobSpec,
 )
-from components.scanning.domain.errors import ScanExecutionError
+from components.scanning.domain.engine_output import parse_engine_result_document
+from components.scanning.domain.errors import IncompleteScanOutputError, ScanExecutionError
 from components.shared_kernel.application.ports.scanner_port import (
     ProgressCallback,
     ScanArtifact,
@@ -92,6 +93,9 @@ SBOM_ARTIFACT_KIND = "sbom.cyclonedx"
 SBOM_MEDIA_TYPE = "application/vnd.cyclonedx+json"
 
 _ENVELOPE_KEY = "autosec_trivy_envelope"
+
+# The engine name used in fail-loud output-integrity errors.
+_ENGINE_NAME = "trivy"
 
 # The in-Job orchestration script. POSIX sh (the pinned aquasec/trivy image is
 # alpine-based → busybox sh at /bin/sh). SECURITY: only trusted, validated config is
@@ -230,17 +234,27 @@ class TrivyScanner(ScannerPort):
 def _split_envelope(stdout: str, *, image_ref: str) -> tuple[str | dict, str | None]:
     """Split the Job's stdout envelope into (vuln payload, SBOM JSON text or None).
 
-    Tolerates legacy plain-Trivy JSON (no envelope) by treating the whole payload as
-    the vuln report — the normalizer keeps its established leniency for malformed
-    output. SBOM POLICY (honest absent state): ``"sbom": null`` → warn + return None;
-    the vuln pipeline continues untouched.
+    Fails LOUD on an unusable document: this used to hand non-JSON stdout straight to the
+    normalizer, which "leniently" turned it into zero findings — so a truncated envelope
+    (the vuln report is the bulk of the bytes, and a fat image's report is large) recorded a
+    COMPLETED run over a mutilated result. ``parse_engine_result_document`` raises
+    ``IncompleteScanOutputError`` instead (see that module for the full rationale).
+
+    Tolerance kept where it is correct: legacy plain-Trivy JSON (no envelope) is still
+    treated as the vuln report, a clean image's well-formed envelope with no
+    vulnerabilities still completes normally, and the normalizer keeps its leniency for
+    individual malformed records inside a well-formed document. SBOM POLICY (honest absent
+    state) is unchanged: ``"sbom": null`` → warn + return None; the vuln pipeline continues.
     """
-    try:
-        data = json.loads(stdout) if (stdout or "").strip() else {}
-    except ValueError:
-        return stdout, None  # normalizer logs its own non-JSON warning
-    if not isinstance(data, dict) or data.get(_ENVELOPE_KEY) != 1:
-        return data if isinstance(data, dict) else stdout, None
+    data = parse_engine_result_document(stdout, engine=_ENGINE_NAME)
+    if not isinstance(data, dict):
+        # A top-level array is never a Trivy report (envelope or legacy) — unusable, not empty.
+        raise IncompleteScanOutputError(
+            f"Trivy output for {image_ref} is a JSON {type(data).__name__}, expected the "
+            f"envelope object (or a legacy plain-Trivy report object)."
+        )
+    if data.get(_ENVELOPE_KEY) != 1:
+        return data, None  # legacy plain-Trivy JSON: the whole payload IS the vuln report
 
     vuln = data.get("vuln")
     sbom = data.get("sbom")

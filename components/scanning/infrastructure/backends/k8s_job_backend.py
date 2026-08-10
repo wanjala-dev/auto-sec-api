@@ -20,6 +20,7 @@ import os
 import time
 
 from components.scanning.application.ports.scan_execution_backend import (
+    OutputLineCallback,
     ProgressCallback,
     ScanExecutionBackend,
     ScanJobResult,
@@ -31,6 +32,10 @@ logger = logging.getLogger(__name__)
 _NAMESPACE = os.environ.get("SCAN_JOB_NAMESPACE", "autosec")
 _RUNTIME_CLASS = os.environ.get("SCAN_JOB_RUNTIME_CLASS") or None  # e.g. "gvisor" when available
 _POLL_SECONDS = 3
+# Exit code reported when the Job's output could not be RETRIEVED (pod already gone, log
+# read errored) — distinct from the engine's own non-zero exit so an operator can tell
+# "the scanner failed" from "we lost the scanner's output". Either way: a FAILED run.
+_EXIT_OUTPUT_UNAVAILABLE = 125
 
 
 class K8sJobBackend(ScanExecutionBackend):
@@ -156,9 +161,18 @@ class K8sJobBackend(ScanExecutionBackend):
         return True
 
     def _collect(self, batch, core, name: str) -> tuple[str, int]:
+        """Return (raw stdout, exit code). A retrieval failure is a FAILED run.
+
+        Retrieval is a distinct failure from the engine's own exit status: the Job can
+        succeed while we fail to read what it produced. Reporting that as ("" , 0) would
+        hand the adapter an empty-but-successful scan — a COMPLETED run with zero
+        findings over output we never actually saw. ``_EXIT_OUTPUT_UNAVAILABLE`` makes
+        it fail loud at the earliest, most accurate point instead.
+        """
         pods = core.list_namespaced_pod(_NAMESPACE, label_selector=f"job-name={name}")
         if not pods.items:
-            return "", 1
+            logger.error("scan_job pod missing — cannot retrieve output name=%s", name)
+            return "", _EXIT_OUTPUT_UNAVAILABLE
         pod = pods.items[0]
         try:
             # _preload_content=False → get the RAW log bytes. With the default (True) the
@@ -171,7 +185,7 @@ class K8sJobBackend(ScanExecutionBackend):
             logs = resp.data.decode("utf-8")
         except Exception:
             logger.exception("scan_job log read failed name=%s", name)
-            logs = ""
+            return "", _EXIT_OUTPUT_UNAVAILABLE
         job = batch.read_namespaced_job_status(name, _NAMESPACE)
         exit_code = 0 if (job.status.succeeded or 0) else 1
         return logs or "", exit_code
