@@ -64,3 +64,18 @@ class PurePythonColorSpaceAdapter(ColorSpacePort):
         h = (h + degrees / 360.0) % 1.0
         nr, ng, nb = colorsys.hls_to_rgb(h, lightness, s)
         return _to_hex(nr * 255, ng * 255, nb * 255)
+
+    def blend(self, foreground: str, background: str, alpha: float) -> str:
+        a = max(0.0, min(1.0, alpha))
+        fr, fg, fb = _to_rgb(foreground)
+        br, bg, bb = _to_rgb(background)
+        return _to_hex(
+            fr * a + br * (1 - a),
+            fg * a + bg * (1 - a),
+            fb * a + bb * (1 - a),
+        )
+
+    def lightness(self, hex_color: str) -> float:
+        r, g, b = (c / 255.0 for c in _to_rgb(hex_color))
+        _, lightness, _ = colorsys.rgb_to_hls(r, g, b)
+        return lightness
