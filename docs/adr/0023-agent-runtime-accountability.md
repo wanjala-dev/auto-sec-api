@@ -716,9 +716,18 @@ he cannot, that hesitation is the sale.**
 - ⚠ **PCI DSS requirement numbering/wording** (10.3.2 / 10.3.4 / 10.5.1) — corroborated across QSA and
   vendor secondary sources only, **not** the PCI SSC primary document; older sources use the v3.2.1
   number 10.5.5 for what is now 10.3.4. **Confirm before any customer-facing use.**
-- ⚠ **Whether Stripe exposes the acting restricted key per request *programmatically* via API** (the
-  Dashboard per-key view is confirmed; API-level attribution is not). **A load-bearing claim depends
-  on this — verify via the Stripe MCP.**
+- ✅ **RESOLVED 2026-08-09 (Stripe MCP):** Stripe does **NOT** expose the acting API key per request
+  programmatically. Request logs — which *do* show the key — are Dashboard/Workbench only; there is no
+  request-logs API. The v2 Activity Logs API (preview) covers key **lifecycle** (`api_key_created`,
+  `api_key_deleted`, `api_key_updated`, `api_key_viewed`), user invites and role changes — never key
+  **usage**. Event objects carry `request.id` + `idempotency_key`: correlation material, not identity.
+  **Two consequences.** (1) Attribution is a join we perform from our own capture, never a field we
+  read — so "attributable" remains the honest word until D6 ships, exactly as this ADR proposed.
+  (2) Unexpectedly this *helps* D6: because Stripe shows the acting key in **its own** Dashboard, the
+  customer can spot-check our claim against a third party we do not control — the
+  "verifiable outside the operator" property D6 identifies as the one unoccupied claim, available for
+  free on the Stripe path. Note also: if an estate shares one key, Stripe cannot disambiguate either,
+  so the honest finding becomes "nobody can answer this" rather than "we will answer it for you".
 - Whether Vercel fetch spans ever carry request/response bodies (assumed metadata-only).
 - Vercel's AI Gateway page states "AI SDK v5 and v6" while ai-sdk.dev documents 7.x as Latest — the
   vendor's own docs are inconsistent.
