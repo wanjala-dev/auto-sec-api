@@ -436,6 +436,47 @@ not a gate** — the existing `[UNVERIFIED]` convention applies.
 
 ---
 
+## 4. Consequences
+
+**Positive.** The back half of the product already exists (§2.1), so the net-new surface is a capture
+adapter, a connection model, a normalizer, five detectors and a URN namespace — the registry template's
+sixth use, not a new pattern. The data model reuses a context that already has `ai_agent`,
+`vendor_integration` and `vendor_log` in its enums, which means **no new bounded context and no
+Finding-table migration**. Finding F5 is unavailable to any competitor without an asset graph, and we
+have one. The tamper-evidence work (P3) fixes two of our own standing gaps before it ever points
+outward, so it improves our posture even if the outward product stalls. And the primary capture path
+is provisionable **by us, through an API**, rather than requiring the customer to follow a runbook.
+
+**Negative / costs.** Capture is genuinely net-new and carries all the risk (§2.3) — nothing in our
+substrate de-risks it. The primary mechanism's friction **depends on a fact we have not yet confirmed**
+(Isaac's AI SDK major version), and the fallback is materially weaker (no tool semantics, no identity).
+We inherit ADR 0021 D5's cost constraint: Trace Drains are Pro/Enterprise at **$0.50/GB on the
+customer's bill**, which is a real objection from a cost-conscious buyer. The telemetry schema we
+consume is **unversioned and unstable** — the split-out GenAI semconv repo has no releases, and
+OpenInference is a competing convention, so a normalization layer is unavoidable maintenance. We
+would hold a new class of highly sensitive data (agent behaviour against payment systems), which
+raises our own breach blast radius and is why metadata-only is the default. And for shared-credential
+estates — the likely case — **we are reconstructing attribution, not proving it**, which constrains
+the product copy permanently.
+
+## 4a. Non-goals
+
+- **Not a new bounded context, and not a new findings store.** `provenance` + the Finding SSOT carry it.
+- **No new write scope.** This ADR adds none; `open_draft_pr` and `components/response` remain the only
+  write paths, both unchanged.
+- **No content capture by default, ever.** Prompts and tool arguments are off unless separately consented.
+- **Not forensic recovery.** Retention windows on the customer's side may be as short as one hour; we
+  turn on accountability **going forward** and must never imply otherwise.
+- **No claim of a cryptographically provable delegation chain** — RFC 8693 makes nested prior actors
+  informational only.
+- **No use of the word "provable"** in any customer-facing surface until D6 Tier 1 (including the
+  customer-runnable verifier) has landed.
+- **No auto-discovery of agents beyond the allowlist**, mirroring ADR 0021 D3's refusal.
+- **Not red-teaming.** Probing a customer's AI endpoints is the sibling capability scoped in
+  `AI_SECURITY_ARTICLE_MAPPING_2026-08-08.md` §6.1, and stays there.
+
+---
+
 ## 5. Feature or company?
 
 Henry's standing note (`STATE_AND_VISION.md` §1.1) is that three ideas in ~6 weeks each researched to
