@@ -150,6 +150,60 @@ LLM provider's own usage/export APIs, his Stripe API logs, an AWS account if he 
 - **Andrea's signal (§2.2 gap #4):** "Shadow-AI monitoring + AI-governance evidence — *'show how many
   users talk to known AI platforms — bonus if you can enforce.'*" Third named operator, compliance lens.
 
+### The competitive scan for THIS bet already exists in-repo — and says it is unoccupied
+
+`docs/competitive/LANDSCAPE_2026-08.md` §5 ("Segment 4 — AI security & governance: the horizon
+bet") is dated 2026-08-03 and scans exactly this capability. Verdict quoted:
+
+> "Consolidating at machine speed, entirely at enterprise altitude, and **the specific bet Auto-Sec
+> would make is unoccupied**."
+
+- **Consolidation (~12 months):** Protect AI → Palo Alto (~$650–700M, Jul 2025); Prompt Security →
+  SentinelOne ($250M, Sep 2025); Aim → Cato (Sep 2025); Lakera → Check Point (2025); **Langfuse →
+  ClickHouse (Jan 2026)**; Wiz → Google ($32B, Mar 2026).
+- **Independents raising on "agent security":** Noma $100M Series B; **Zenity $125M Series C
+  (2026-08-03)**; Straiker $64M Series A (Jun 2026).
+- **The three nearest players, each holding exactly one fragment:**
+
+  | Player | Has | Missing |
+  |---|---|---|
+  | **Vorlon** ($15.7M, Accel) | The agent flight recorder | Sold as enterprise incident forensics; no compliance output, no security work |
+  | **AIUC** ($15M seed) | The assurance *standard* + audit + insurance | Point-in-time certification with **no operational evidence source** |
+  | **Agnys** (no disclosed funding) | **Hash-chained agent audit logs, $49/mo, self-serve** | Records agents without *doing* anything; indie/unfunded |
+
+- **Regulatory timing:** EU AI Act high-risk enforcement began **2026-08-02**; NIST opened an AI
+  Agent Standards Initiative Feb 2026; "agent audit trail" language appearing across roadmaps.
+- **Key framing conclusion (reuse verbatim):** *"The observability layer is not a competitor for
+  this, by framing.* Langfuse, LangSmith, Arize and Datadog LLM Observability own the developers but
+  frame everything as *debugging and evals* — an engineering tool, not an assurance product with an
+  auditor as the reader. Different buyer, different artifact, different retention guarantees."
+- **Our unfair structural claim:** *"Auto-Sec … is itself a deep-agent system already carrying
+  sign-off gates, tool-risk tiers, a kill switch, DeepRun telemetry and an audit trail. **The
+  dogfooding is the proof.**"* — this is the thesis this ADR is asked to confirm or refute, already
+  asserted independently.
+- **The converged white space (§7):** *"Do the security work for a company with no security staff,
+  and let audit-grade evidence accumulate as the byproduct."*
+
+**Three takeaways that constrain the ADR:**
+1. **Agnys is the direct-competitor datapoint** — hash-chained agent audit logs at $49/mo self-serve
+   already exists. So "record agent actions with tamper-evidence" is *not itself* differentiated.
+   Their named weakness — "records agents without **doing** anything" — is precisely the
+   exposure-anchored gap. Our differentiator must be the join to the graph + the remediation loop,
+   never the recording.
+2. **Vorlon proves the "flight recorder" framing sells** — but at enterprise altitude, as forensics.
+3. **Langfuse being acquired by ClickHouse (Jan 2026)** is directly relevant: it is in our stack, and
+   its trajectory is data-infrastructure, not assurance. Verify this with the competitive research
+   stream before relying on it.
+
+### Earlier internal framing: `SECURITY_POSTURE_VISION_2026-07-20.md` §3.4
+
+Named the AI-governance persona's questions almost exactly as Henry frames them now: *"What is the
+AI itself doing? Which roles did it use? Who granted it which permissions? Can we kill it right
+now?"* — but scoped **inward** (`ai_governance_agent` dogfooding our own fleet: tool usage by risk
+tier, HITL approvals granted/denied, capability grants, credential scopes, MCP/tool inventory, kill
+switch). That is the inward twin of this ADR. The vocabulary is already designed; this ADR points
+it outward.
+
 ## 3. Findings — Stream A (our substrate)
 
 _pending — code-mapping agent running_
