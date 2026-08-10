@@ -208,9 +208,181 @@ it outward.
 
 _pending — code-mapping agent running_
 
-## 4. Findings — Stream B (our ingestion spine)
+## 4. Findings — Stream B (our ingestion spine) — COMPLETE
 
-_pending — code-mapping agent running_
+### 4.0 ⭐ THE HEADLINE FINDING: the granted-vs-used model already exists
+
+`infrastructure/persistence/provenance/models.py` — the `provenance` context (flag-gated dark behind
+`feature.provenance_graph`) **already models exactly the CAN-do vs DID-do gap** this ADR is about:
+
+- **`ProvenanceActor`** — `id, workspace, actor_type, source_system, external_ref, display_name,
+  user(FK null), agent_ref(UUID → Agent.agent_id), integration_ref, is_active, first_seen_at,
+  last_seen_at`; unique `(workspace, source_system, external_ref)`.
+  - **`ActorType` choices already include `ai_agent`** (alongside `human`, `service_account`,
+    `vendor_integration`).
+  - **`SourceSystem`**: `internal | ai | identity | aws | okta | google_workspace | slack | github`.
+- **`ProvenanceResource`** — `resource_type, source_system, external_ref, display_name,
+  **asset_urn**` (stamped by a `pre_save` signal bridge via `AssetUrn.canonical` —
+  `components/provenance/infrastructure/adapters/django_asset_urn_signal_bridge.py`). So a resource
+  is already joined to the asset graph by URN.
+- **`AccessGrant`** = **potential** (what the actor CAN do). `PermissionLevel`: read|write|execute|admin.
+- **`ProvenanceEvent`** = **actual** (what the actor DID).
+
+Today these rows are populated **from OUR agents** by
+`components/provenance/infrastructure/services/ai_backfill_service.py` (reading our `Agent`/`DeepRun`
+rows). ADR 0009 D5 wants the graph un-darkened as access-review evidence.
+
+**Consequence for this ADR (decisive):** the data model question — "what is an agent, a tool grant, an
+agent action, an identity in OUR SSOT terms" — has a pre-existing, ADR-0004-compliant answer. It is
+NOT a new bounded context:
+
+| ADR concept | Existing home |
+|---|---|
+| an **agent** | `ProvenanceActor(actor_type=ai_agent)` |
+| an **identity** | `ProvenanceActor` (+ `user` FK for on-behalf-of; `source_system` for the IdP) |
+| a **tool grant** (CAN) | `AccessGrant(actor, resource, permission_level)` |
+| an **agent action** (DID) | `ProvenanceEvent(actor, resource, …)` |
+| the **resource** it touched | `ProvenanceResource.asset_urn` → joins the asset graph by value |
+| the **exposure statement** | `Finding` (source = new slug), `attributes` JSON bag |
+
+The gap is not the schema. The gap is (a) a **capture path** that fills these rows from a
+*customer's* estate rather than our own, and (b) the **detectors** that turn grant-vs-event deltas
+into findings. That is a much shorter path than building AI-SPM from scratch — **thesis confirmed on
+the storage side**; the capture side is where the real work is (§5).
+
+### 4.1 Finding SSOT — `infrastructure/persistence/findings/models.py`
+
+`Finding` fields: `id(UUID PK)`, `workspace(FK)`, **`source(Char64)`** — the pillar slug and the de
+facto kind discriminator, **`fingerprint(Char255)`**, **`asset_urn(Char512)`**, `severity(Char16)`,
+`status(Char16, default open)`, `title(Char512)`, `description`, `remediation`, `compliance(JSON)`,
+**`attributes(JSON)` — the pillar-specific extension bag**, `scan_run_id(Char64, blank for run-less
+sources)`, `status_reason`, `suppress_expires_at`, `first_seen_at`, `last_seen_at`, `resolved_at`.
+
+- Identity: `UniqueConstraint(workspace, source, fingerprint)`.
+- **`source` is a free CharField — there is NO enum and NO migration needed for a new kind.**
+- Live values: `cloud_posture.prowler`, `cloud_posture.prowler.vercel`, `container_security.trivy`,
+  `code_security.opengrep`, `code_security.planted_instructions`, `cloud_graph.attack_path`,
+  `logwatch.error`, `logwatch.optimization`.
+- `FindingRisk` (ADR 0013) carries `score/band/factors/epss/in_kev/exposure/exposure_unknown`.
+- Write path is ONE use case: `record_observed_finding_use_case.py` (create → `FindingRaised(is_new=True)`;
+  unchanged re-observation bumps `last_seen_at` and **emits nothing** — steady-state noise suppression).
+- Scanners emit `FindingObserved` and **never write a Finding row** (owner-persists).
+
+### 4.2 AssetUrn — `components/shared_kernel/domain/security.py`
+
+`AssetUrn.canonical(source_system, external_ref)` → passes through anything already `arn:`/`urn:`,
+else `urn:<source_system.lower()>:<external_ref>`. `.provider` parses it back. Existing namespaces:
+`arn:aws:…`, `urn:vcs:github:<owner>/<repo>`, `urn:vercel:<ref>`. **A new namespace costs zero schema
+change** — the discipline is that it must be *decided*, never defaulted (ADR 0021 D1's "succeed and
+lie" trap).
+
+Graph nodes are `CloudAsset` (`provider`, `arn` = dedup key, `asset_urn`, `resource_type` free
+CharField, `exposure` public|internal|private, `attributes`, `is_sample`) + `CloudAssetEdge`
+(`relation`: can_assume|attached_to|allows_ingress_from|has_policy) + materialized `AttackPath`.
+Findings attach to assets **purely by URN value — nothing joins by FK.**
+
+### 4.3 ScannerPort + registry
+
+`components/shared_kernel/application/ports/scanner_port.py` — one method
+`scan(target, *, on_progress) -> ScanResult`; dataclasses `ScanTarget(identifier, credentials, params)`,
+`ScanArtifact`, `ScanResult(findings, engine, engine_version, counts, artifacts)`.
+Registry `components/scanning/application/providers/scanner_registry.py`:
+`RegisteredScanner(factory, queue, post_ingest_factory, credentials_factory, failure_factory)`.
+
+**New-pillar copy template (proven 4×):** adapter + normalizer + `application/providers/scanner_provider.py`
++ one `_REGISTRY` line + one `_SOURCE_BOARD` entry. **No new Celery task, no new pipeline** —
+`components/scanning/infrastructure/tasks/scan_tasks.py::dispatch_scan/run_scan` is generic, and
+`run_scan_service.run_scan_and_ingest` records the `ScanRun` then emits one `FindingObserved` per
+finding + one `ScanCompleted` after commit.
+
+### 4.4 LogSourcePort (ADR 0008)
+
+`components/integrations/application/ports/log_source_port.py` — **integrations-internal, NOT shared
+kernel**. Two methods: `verify(config) -> LogSourceHealth`, `read_window(config, *, since, limit) ->
+LogWindow(records, cursor, objects_scanned)`.
+
+Adapters: `s3_log_source_adapter.py` (`KIND="s3"`, always on) and `cloudwatch_log_source_adapter.py`
+(`KIND="cloudwatch"`, behind `feature.log_source_cloudwatch`). Datadog/Splunk/Webhook are **model
+choices only — no adapters exist.** Registry `log_source_provider.py` fails CLOSED on the flag check.
+
+`WorkspaceLogSource`: `workspace, kind, name, config(JSON, opaque per kind), secret_ref(envelope id,
+never plaintext), status, cursor(Char1024), last_verified_at, last_error`.
+Iteration: `components/integrations/application/log_ingest_service.py::read_source_windows(...)`,
+`scan_connection(...)`, `scan_workspace_for_errors(...)`; `LogRecord(service, level, message, raw, ts,
+source_kind, source_id)`.
+
+**Hard rule in that module's docstring: never run an LLM over the raw log firehose.** Deterministic
+first pass; only a CONFIRMED detection reaches the LLM. This binds any log-derived agent detection.
+
+### 4.5 Consent precedents (all fail-closed)
+
+- **`VcsConnection.repo_allowlist`** (JSON list of `owner/repo`) enforced at **five** layers:
+  `vcs_scan_access_provider.py` (`resolve_scan_connection` trigger-time, `vend_repo_read_access`
+  scan-time re-check, `list_scannable_repos`, `read_repo_file` pinned to the scanned SHA),
+  `open_draft_pr_use_case._require_allowlisted_repo`, `check_pull_request_merged_use_case`,
+  `vcs_connection_service.verify` (probes EVERY allowlisted repo), and input validation in
+  `components/code_security/domain/repo_reference.py` (strict regex, no `..`, no shell metachars).
+  `None` from the vend ⇒ the scan **fails loud** rather than running consentless.
+- **AWS**: `AwsOrganizationConnection.external_id` is **vendor-generated**
+  (`aws_connection_service.py:74` → `f"autosec-{secrets.token_urlsafe(24)}"`), never customer-chosen;
+  the onboarding template attaches managed read-only `SecurityAudit` + an inline read-only policy,
+  with the trust policy conditioned on `sts:ExternalId` (confused-deputy defense).
+- **Vercel**: `VercelConnection` — named team is the consent boundary; Viewer-role, single-team,
+  expiring token.
+
+### 4.6 The output loop — where a new finding kind plugs in
+
+1. Emit `FindingObserved` with a new `source`.
+2. Add `_SOURCE_BOARD[source]` in
+   `components/agents/application/handlers/finding_raised_board_handler.py` →
+   `{source_type, detector_key, flag, min_severity, default_agent_type, build: <card builder>}`.
+   **Unmapped sources silently no-op** — the classic miss.
+3. Add the board `source_type` to `ROUTABLE_SOURCE_TYPES` in
+   `components/shared_kernel/domain/triage.py` (and `PR_REMEDIABLE_SOURCE_TYPES` if PR-remediable).
+   Its docstring: *"Growing this is the ENTIRE routing change needed for a new finding kind (plus the
+   specialist's triage tool — routable without a tool is a silent no-op)."*
+4. Give the specialist a triage tool.
+
+`TriageState`: `QUEUED, DRAFTING, FIX_READY, FIX_UNVERIFIED, NO_FIX, NOT_ROUTED`.
+`remediation_target(source_type, payload)` → `TARGET_REPO|TARGET_IMAGE|TARGET_CLOUD|TARGET_SERVICE|
+TARGET_NONE`; **only `repo` gets the draft-PR affordance** — directly relevant to "what does
+remediation mean for an over-permissioned agent" (§6 of the ADR).
+Draft PR is ONE engine (`open_draft_pr_use_case.py`, ADR 0017 D0: a new source adds a patch
+**strategy**, never a second engine), with 5 ordered gates and a throttle.
+
+### 4.7 Detector registry
+
+`components/agents/infrastructure/adapters/actions/detectors/registry.py` — `@registry.register` on a
+`BaseDetector` subclass with a unique `slug`. Domain contract in
+`components/agents/domain/detectors/base.py`: `should_run(ctx)`, `gather_signals(ctx)`,
+`execute(ctx) -> Iterable[DetectorResult]`; `DetectorContext` carries `invoke_agent` (the
+LLM-after-detection hook). Existing: logwatch, cloud_graph_sync, cloud_graph_attack_paths,
+posture_report, projects, provenance, run_quality, finding_observed_bridge.
+
+`finding_observed_bridge.py` carries `LOGWATCH_SSOT_SOURCES` — *"Adding a slug here is how another
+detector-based pillar joins the SSOT."* **This is the seam a detector-based (non-scanner) agent
+accountability pillar would use.**
+
+### 4.8 Does anything already model a CUSTOMER's AI estate? — No.
+
+Verified by broad grep (`ai_asset`, `llm*`, `model_endpoint`, `ai_system`, `agent_inventory`,
+`shadow_ai`, `bedrock`, `sagemaker`, `mcp_server`, `aibom`, …). Every hit is one of:
+
+1. **Our own AI runtime** — `infrastructure/persistence/ai/agents/models.py`.
+2. **Our own AI-SPM narration** — `components/agents/application/services/ai_governance_service.py`
+   (docstring says it covers OUR fleet) + `ai_governance_agent.py`.
+3. **Two thin edges that DO touch customer AI risk and are ALREADY on the spine:**
+   - `components/code_security/planted_instruction_reporter_service.py` —
+     `SOURCE = "code_security.planted_instructions"`, a prompt-injection heuristic over **the
+     customer's own repo content**, emitted as a real `FindingObserved` with
+     `urn:vcs:github:<repo>`, board `source_type` `ai.planted_instructions`. **This is the closest
+     existing precedent for "an AI-shaped finding about the customer" — and proof the pattern works.**
+   - `components/knowledge/domain/value_objects/injection_scan.py` (the reused OWASP-LLM01 heuristic).
+
+Net-new pieces required: a customer-AI-system/endpoint connection model (copy `WorkspaceLogSource`'s
+kind+config+cursor+secret_ref shape and `VercelConnection`'s named-scope consent shape), an
+`ai_*_allowlist` consent boundary (copy `repo_allowlist` enforcement), a decided URN namespace, and
+new `Finding.source` values. **No Finding-table migration.**
 
 ## 5. Findings — Stream C (the capture problem)
 
