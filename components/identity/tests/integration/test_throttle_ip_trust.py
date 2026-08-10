@@ -29,8 +29,15 @@ from __future__ import annotations
 import pytest
 from django.core.cache import cache
 from rest_framework.settings import api_settings
+from rest_framework.throttling import UserRateThrottle
 
 RESEND_URL = "/identity/resend-verification/"
+
+# TOTPCreateView sets no `throttle_classes`, so it inherits
+# DEFAULT_THROTTLE_CLASSES — i.e. the stock AnonRateThrottle + UserRateThrottle.
+# That makes it the honest probe for the per-user default rather than one of
+# identity's bespoke scoped throttles.
+OTP_CREATE_URL = "/identity/otp/create/"
 
 # The resend-verification endpoint carries a pure per-IP throttle
 # (ResendVerificationIPThrottle, 10/hour) alongside its per-email one, which
@@ -49,6 +56,25 @@ def _through_proxy(*, peer: str = _ATTACKER_PEER, spoofed: str | None = None) ->
     appends ``peer``, its own (unforgeable) view of the TCP peer.
     """
     return f"{spoofed}, {peer}" if spoofed else peer
+
+
+def _set_user_rate(monkeypatch, rate: str) -> None:
+    """Lower the stock per-user rate so a test can reach it in a few requests.
+
+    Patches the rate TABLE rather than injecting a ``rate`` attribute, so the
+    test still exercises the real ``scope`` → ``DEFAULT_THROTTLE_RATES``
+    resolution in ``SimpleRateThrottle.get_rate()``.
+
+    Worth noting the contrast: this works because the stock DRF throttles carry
+    only a ``scope``. Identity's own throttles hardcode ``rate`` as well, which
+    short-circuits this lookup entirely and makes their settings entries dead
+    config — see FINDING C in the PR.
+    """
+    monkeypatch.setattr(
+        UserRateThrottle,
+        "THROTTLE_RATES",
+        {**UserRateThrottle.THROTTLE_RATES, "user": rate},
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -148,3 +174,50 @@ class TestAnonThrottleResistsSpoofedForwardedFor:
             email="peer-b@acme-soc.example",
         )
         assert resp.status_code == 202, "Throttle buckets collapsed — distinct clients share one key."
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+class TestPerUserThrottleIsKeyedToThePrincipal:
+    """`UserRateThrottle` keys on the authenticated user, so IP is irrelevant.
+
+    This is the other half of the throttle story: once a request is
+    authenticated the bucket must follow the PRINCIPAL. Two things must hold —
+    a user cannot escape their own quota by moving IP, and one user exhausting
+    their quota must not throttle anybody else.
+    """
+
+    def _verify(self, api_client, *, xff: str | None = None):
+        extra = {"HTTP_X_FORWARDED_FOR": xff} if xff else {}
+        return api_client.get(OTP_CREATE_URL, **extra)
+
+    def _authenticate(self, api_client, user):
+        api_client.credentials(HTTP_AUTHORIZATION=f"Bearer {user.tokens()['access']}")
+        return api_client
+
+    def test_user_quota_survives_a_change_of_ip(self, api_client, user_factory, monkeypatch):
+        """Moving IP — spoofed or genuine — must not reset an authenticated quota."""
+        _set_user_rate(monkeypatch, "3/min")
+        user = user_factory(email="quota-user@acme-soc.example", username="quotauser")
+        client = self._authenticate(api_client, user)
+
+        for i in range(3):
+            resp = self._verify(client, xff=_through_proxy(spoofed=f"198.51.100.{i}"))
+            assert resp.status_code != 429, f"throttled early at attempt {i}"
+
+        blocked = self._verify(client, xff=_through_proxy(spoofed="198.51.100.250"))
+        assert blocked.status_code == 429, "per-user quota was reset by changing the client IP"
+
+    def test_one_users_quota_does_not_throttle_another(self, api_client, user_factory, monkeypatch):
+        _set_user_rate(monkeypatch, "3/min")
+        noisy = user_factory(email="noisy@acme-soc.example", username="noisyuser")
+        quiet = user_factory(email="quiet@acme-soc.example", username="quietuser")
+
+        client = self._authenticate(api_client, noisy)
+        for _ in range(4):
+            self._verify(client)
+        assert self._verify(client).status_code == 429
+
+        # Same source IP, different principal — must be unaffected.
+        client = self._authenticate(api_client, quiet)
+        assert self._verify(client).status_code != 429, "per-user buckets are shared across principals"
