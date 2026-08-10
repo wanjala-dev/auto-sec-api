@@ -39,3 +39,26 @@ class FindingPrRecorderPort(abc.ABC):
         writing) and a no-op if the task was deleted since the precondition check —
         never raises for either case."""
         ...
+
+    @abc.abstractmethod
+    def attach_draft_pr_patch(
+        self,
+        *,
+        workspace_id: str,
+        task_id: str,
+        path: str,
+        diff: str,
+        change_summary: str = "",
+        pr_state: str = "",
+        merged: bool = False,
+        reason: str = "patch_backfill",
+    ) -> tuple[bool, str]:
+        """Fill the patch into a draft-PR record the open step already wrote.
+
+        The repair path for records created before the open step persisted the
+        diff. Returns ``(attached, reason)`` — ``attached=False`` is always a
+        SKIP with a named reason (``"already_has_diff"`` on a re-run,
+        ``"no_draft_pr_record"``, ``"task_not_found"``, ``"empty_diff"``), never
+        an error. The owning context performs the write; the record's identity
+        facts are never rewritten."""
+        ...

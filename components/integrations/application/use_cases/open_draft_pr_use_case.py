@@ -70,6 +70,7 @@ from components.integrations.application.ports.finding_pr_recorder_port import (
     FindingPrRecorderPort,
 )
 from components.integrations.application.ports.vcs_port import VcsApiError, VcsPort
+from components.project.application.ports.record_finding_draft_pr_port import bound_diff
 
 logger = logging.getLogger(__name__)
 
@@ -578,20 +579,23 @@ class OpenDraftPrUseCase:
         )
 
     @staticmethod
-    def _unified_diff(original: str, updated: str, path: str, *, max_chars: int = 12_000) -> str:
+    def _unified_diff(original: str, updated: str, path: str) -> str:
         """A bounded unified diff of the proposed change — what the operator reviews in
-        the preview (the change, not the whole file)."""
-        diff = "".join(
-            difflib.unified_diff(
-                (original or "").splitlines(keepends=True),
-                (updated or "").splitlines(keepends=True),
-                fromfile=f"a/{path}",
-                tofile=f"b/{path}",
+        the preview (the change, not the whole file).
+
+        Bounded through ``bound_diff``, the ONE size limit in the draft-PR record
+        contract, so a diff stored here and a diff recovered from the host by the
+        legacy backfill are clamped identically."""
+        return bound_diff(
+            "".join(
+                difflib.unified_diff(
+                    (original or "").splitlines(keepends=True),
+                    (updated or "").splitlines(keepends=True),
+                    fromfile=f"a/{path}",
+                    tofile=f"b/{path}",
+                )
             )
         )
-        if len(diff) > max_chars:
-            diff = diff[:max_chars] + "\n… (diff truncated)"
-        return diff
 
     def _preview_grounding_sources(
         self, workspace_id: str, payload: dict, *, source_type: str = _LOG_WATCH_SOURCE

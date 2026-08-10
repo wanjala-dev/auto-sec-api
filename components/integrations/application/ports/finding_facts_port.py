@@ -39,6 +39,23 @@ class ActionableFinding:
     source_type: str = ""
 
 
+@dataclass(frozen=True)
+class DraftPrPatchGap:
+    """A finding whose draft-PR record exists but carries no reviewable patch.
+
+    The unit of work for the legacy-record backfill: everything needed to ask the
+    code host for the PR's patch (``pr_url``, plus the ``repo`` the record itself
+    names) and to write the answer back to the right card (``workspace_id`` +
+    ``task_id``). Deliberately carries no metadata blob — the backfill reasons
+    about nothing else on the finding.
+    """
+
+    workspace_id: str
+    task_id: str
+    pr_url: str
+    repo: str = ""
+
+
 class FindingFactsPort(abc.ABC):
     @abc.abstractmethod
     def get_actionable_finding(self, *, workspace_id: str, task_id: str) -> ActionableFinding | None:
@@ -55,4 +72,15 @@ class FindingFactsPort(abc.ABC):
         OPEN (recorded, not yet resolved) draft PR against ``repo``. Feeds the ADR
         0019 D5 per-repo SAST PR throttle — merged PRs resolve their finding via the
         remediation reconciler and stop counting."""
+        ...
+
+    @abc.abstractmethod
+    def list_draft_pr_patch_gaps(self, *, workspace_id: str = "", limit: int = 500) -> tuple[DraftPrPatchGap, ...]:
+        """Findings carrying a draft-PR record with a ``url`` but no stored ``diff``.
+
+        These are the records written before the open step began persisting the
+        patch — the HUD can only show them as a bare link. Empty ``workspace_id``
+        scans every workspace (the one-off repair sweep); a set one scopes the
+        sweep. Ordered oldest-first so a limited run makes deterministic progress.
+        """
         ...
