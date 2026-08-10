@@ -261,11 +261,48 @@ STORAGES = {
     },
 }
 
-# NOTE (named follow-up, review §4.5): report-PDF/SBOM storage still targets
-# the in-cluster MinIO via REPORT_PDF_S3_* / SBOM_S3_* (base.py defaults). The
-# MinIO→real-S3 migration is deliberately out of scope here; until it lands the
-# prod overlay must set REPORT_PDF_S3_PUBLIC_ENDPOINT to a reachable origin or
-# presigned report/SBOM downloads will point at the viewer's localhost.
+# ── Report PDF / SBOM object storage — REAL S3, no split (review §4.5) ──────
+# Closes the named follow-up this file used to carry. Reports and SBOMs used to
+# target the in-cluster MinIO via base.py's REPORT_PDF_S3_* / SBOM_S3_* defaults,
+# which have a DELIBERATE two-endpoint split: an internal origin the app writes
+# through, and a public origin the browser follows a presigned URL to. That split
+# is correct for dev MinIO (``minio:9000`` means nothing to the viewer's browser)
+# and structurally broken for prod, where the public default resolved to
+# ``http://localhost:9100`` — a customer clicking "download SBOM" got a URL
+# pointing at their OWN laptop. The prod overlay had also deleted the
+# ``minio-public`` LoadBalancer, so there was no reachable origin to point at.
+#
+# Real S3 removes the split rather than papering over it, which is the better
+# posture for a security product: nothing about our object store gets exposed to
+# the internet, and there is no second origin to keep in sync. Reports and SBOMs
+# join media/ and scan-artifacts/ as prefixes of the ONE ``autosec-prod-data``
+# bucket (auto-sec-infra terraform/workloads/api/s3.tf).
+#
+# Endpoint = None on BOTH sides. None (not "") is load-bearing: boto3 treats None
+# as "no endpoint override, use the real AWS endpoint", while "" is a malformed
+# override. Setting both from one value makes a prod split unrepresentable.
+#
+# Credentials = None on BOTH keys, which is what makes boto3's default chain fall
+# through to IMDSv2 and pick up the k3s host's instance role. Inheriting base.py's
+# dev MinIO creds ("wanjala"/"wanjaladev") would 403 every upload against AWS —
+# the same trap the scan-artifact channel documents in base.py. Prod has NO static
+# S3 keys; the IAM grant is ReportsPrefixRW / SbomsPrefixRW on the host role
+# (terraform/workloads/api/main.tf).
+REPORT_PDF_BUCKET = env("REPORT_PDF_BUCKET", default="autosec-prod-data")
+REPORT_PDF_S3_ENDPOINT = env("REPORT_PDF_S3_ENDPOINT", default="") or None
+REPORT_PDF_S3_PUBLIC_ENDPOINT = REPORT_PDF_S3_ENDPOINT
+REPORT_PDF_S3_REGION = env("REPORT_PDF_S3_REGION", default="us-east-1")
+REPORT_PDF_S3_ACCESS_KEY = None
+REPORT_PDF_S3_SECRET_KEY = None
+REPORT_PDF_S3_PREFIX = env("REPORT_PDF_S3_PREFIX", default="reports")
+
+SBOM_S3_BUCKET = env("SBOM_S3_BUCKET", default=REPORT_PDF_BUCKET)
+SBOM_S3_ENDPOINT = env("SBOM_S3_ENDPOINT", default="") or None
+SBOM_S3_PUBLIC_ENDPOINT = SBOM_S3_ENDPOINT
+SBOM_S3_REGION = env("SBOM_S3_REGION", default=REPORT_PDF_S3_REGION)
+SBOM_S3_ACCESS_KEY = None
+SBOM_S3_SECRET_KEY = None
+SBOM_S3_PREFIX = env("SBOM_S3_PREFIX", default="sboms")
 
 # ── Celery ──────────────────────────────────────────────────────────────────
 CELERY_BEAT_SCHEDULE = {
