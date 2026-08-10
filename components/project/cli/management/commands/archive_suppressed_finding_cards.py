@@ -18,8 +18,10 @@ Usage:
 from __future__ import annotations
 
 import logging
+import time
 
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
+from django.db.utils import InterfaceError, OperationalError
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +40,16 @@ class Command(BaseCommand):
             action="store_true",
             help="Report the counts without archiving anything.",
         )
+        parser.add_argument(
+            "--pause-ms",
+            type=float,
+            default=0.0,
+            help=(
+                "Sleep this many milliseconds between findings so a bulk run does not "
+                "starve the database (each card is ~5 writes). Use ~10-20 against a "
+                "live cluster; 0 (default) for tests and idle environments."
+            ),
+        )
 
     def handle(self, *args, **options):
         from django.db.models import Q
@@ -55,6 +67,7 @@ class Command(BaseCommand):
 
         workspace_id = options.get("workspace")
         dry_run = bool(options.get("dry_run"))
+        pause_seconds = max(0.0, float(options.get("pause_ms") or 0.0)) / 1000.0
 
         findings = Finding.objects.filter(status="suppressed")
         if workspace_id:
@@ -112,6 +125,16 @@ class Command(BaseCommand):
                 already_archived += result.already_archived
                 if result.archived_count == 0 and result.already_archived == 0:
                     no_card += 1
+            except (OperationalError, InterfaceError) as exc:
+                # NOT a per-item failure — the database went away (restart, failover,
+                # killed connection). Continuing would burn through every remaining
+                # finding logging an identical traceback and leave the operator with
+                # a "failed=5000" summary that hides the real cause. Abort loudly with
+                # the progress so far; the command is idempotent, so a re-run resumes.
+                raise CommandError(
+                    f"database connection lost after {processed}/{total} findings "
+                    f"(archived {archived_cards} cards) — aborting; re-run to resume: {exc}"
+                ) from exc
             except Exception:
                 # Log-and-continue per-item (the bulk-loop pattern) — one broken
                 # card must not strand the rest of the backfill.
@@ -121,6 +144,14 @@ class Command(BaseCommand):
                     finding.workspace_id,
                     finding.id,
                 )
+
+            if pause_seconds:
+                # Pacing so a bulk run cannot starve a small Postgres. Archiving one
+                # card is ~5 writes; 9k unpaced findings once drove pg_isready past the
+                # 1s liveness-probe timeout on the local cluster and got the database
+                # restarted mid-run. A maintenance job must not take down the system
+                # it is maintaining.
+                time.sleep(pause_seconds)
 
             if processed % 500 == 0:
                 self.stdout.write(f"  … {processed}/{total} findings (archived {archived_cards} cards so far)")

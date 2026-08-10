@@ -21,6 +21,8 @@ from datetime import UTC, datetime
 
 import pytest
 from django.core.management import call_command
+from django.core.management.base import CommandError
+from django.db.utils import OperationalError
 from django.urls import reverse
 
 from components.agents.application.handlers.finding_resolved_board_handler import (
@@ -32,6 +34,9 @@ from components.findings.application.commands.change_finding_status_command impo
 from components.findings.application.providers.finding_provider import FindingProvider
 from components.findings.application.use_cases.change_finding_status_use_case import (
     ChangeFindingStatusUseCase,
+)
+from components.project.application.use_cases.archive_finding_cards_use_case import (
+    ArchiveFindingCardsUseCase,
 )
 from components.recycle_bin.application.commands.restore_command import RestoreCommand
 from components.recycle_bin.application.providers.recycle_bin_provider import (
@@ -305,6 +310,37 @@ class TestBackfillCommand:
         call_command("archive_suppressed_finding_cards", workspace=str(workspace.id))
         assert Task.objects.filter(workspace=workspace, status=Task.ARCHIVED).count() == 3
         assert TaskComment.objects.filter(task__in=archived).count() == 3
+
+    def test_backfill_aborts_on_database_loss_instead_of_looping(self, board, monkeypatch):
+        """A dead database is a RUN failure, not a per-item one.
+
+        The first live run of this backfill hit a Postgres restart mid-way; the
+        per-item ``except Exception`` swallowed it and burned through every
+        remaining finding logging an identical traceback. The command must abort
+        loudly with its progress instead — it is idempotent, so a re-run resumes.
+        """
+        owner, workspace, team, column = board
+        for i in range(3):
+            _card(workspace, team, column, owner, _finding(workspace, fingerprint=f"fp-db{i}", status="suppressed"))
+
+        calls = {"n": 0}
+        real_execute = ArchiveFindingCardsUseCase.execute
+
+        def flaky_execute(self, *, command):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise OperationalError("terminating connection due to administrator command")
+            return real_execute(self, command=command)
+
+        monkeypatch.setattr(ArchiveFindingCardsUseCase, "execute", flaky_execute)
+
+        with pytest.raises(CommandError, match="database connection lost"):
+            call_command("archive_suppressed_finding_cards", workspace=str(workspace.id))
+
+        # It stopped at the failure — it did not grind through the remaining findings.
+        assert calls["n"] == 2
+        # The work done before the loss is durable (idempotent re-run picks up the rest).
+        assert Task.objects.filter(workspace=workspace, status=Task.ARCHIVED).count() == 1
 
     def test_backfill_dry_run_archives_nothing(self, board):
         owner, workspace, team, column = board
