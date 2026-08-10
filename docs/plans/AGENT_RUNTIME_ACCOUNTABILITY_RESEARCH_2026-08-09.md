@@ -56,13 +56,107 @@ completion of Lens-B #2, and the prerequisite of Lens-B #3.**
 | G | Standards / buying trigger (ATLAS agentic, OWASP LLM06/08 + ASI, NIST AI RMF, EU AI Act logging, CAISI) | pending |
 | H | Competitive (Zenity/Noma/WitnessAI/Lakera/Prompt Security/PANW-Protect AI/Wiz vs Langfuse/LangSmith/Arize/Braintrust) | pending |
 
+## 2.5 In-repo grounding already gathered (2026-08-09)
+
+### This ADR is the sanctioned "now build it" moment
+
+`docs/architecture/ARCHITECTURE_REVIEW_2026-08-09.md` §1.1 correction #1 states it outright:
+
+> "Provenance/audit of **our own agents** is BUILT and is a strength (agent service principal
+> SEE-201, per-call `DeepRunLog` + Langfuse, `AIAction` rows, sign_off gates, the board-provenance
+> HARD rule) … Monitoring the **customer's** agents (Isaac's ~60: 'what did MY agents do, under what
+> identity') is the genuinely unbuilt bet. **There is no ADR for it** — it is deliberately
+> written-down-not-built … **When you decide to build it, that's the moment it gets an ADR.**"
+
+So: the review independently confirms both halves of the thesis — our substrate is real, the outward
+version is unbuilt — and pre-authorizes this ADR as the artifact.
+
+### ADR 0021 (Vercel posture provider) is the closest precedent — reuse, do not re-derive
+
+ADR 0021 already did the Isaac/Vercel grounding pass. Load-bearing facts to inherit rather than
+re-research:
+
+- **Isaac confirmed on Vercel (2026-08-09)**, ~60 agents, Stripe card data, no security team. ADR
+  0021 §"customer-driven work" + OQ1.
+- **`VercelConnection` (D2)** — token-shaped connection mirroring `VcsConnection`: workspace FK,
+  `team_id`, `team_slug`, `token_ciphertext` via the ONE integrations Fernet envelope
+  (`components/integrations/infrastructure/adapters/secret_envelope.py`), a `credential_kind`
+  discriminator (`token` | `oauth_integration`), `verify()` against `GET /v2/user`, health fields,
+  Settings ▸ Integrations panel. **If agent capture needs a Vercel credential, it rides this row —
+  it must not mint a second Vercel connection model.**
+- **Consent stance (D3):** the connection names ONE team; Prowler's "no team ⇒ auto-discover and
+  scan every team the user belongs to" is explicitly called **"a consent violation in our model."**
+  That is the consent precedent for this ADR: enumerate exactly what was named, never what the
+  token can reach.
+- **Read-only precedent** (architecture review §1): AWS = customer-side role with
+  `ViewOnlyAccess`/`SecurityAudit` + ExternalId (confused-deputy protection), STS AssumeRole vended
+  per run; Vercel = read-only **Viewer-role** token; VCS write is used **only** by `open_draft_pr`,
+  never merges. `components/response` is the single named write exception (propose→approve→execute,
+  boto3 `DryRun` default) and its write scopes are "a separate, explicitly-consented role add-on,
+  never folded into the audit role."
+- **Flag-gating pattern (D6):** `feature.<x>` sibling flag, seeded in `seed_feature_flags`, listed in
+  `PROD_DISABLED_FLAGS`, un-darkened per workspace; fail closed (missing ⇒ off). Never reuse an
+  adjacent pillar's flag — "a workspace opted into AWS CSPM has not consented to a Vercel scan
+  surface." Same logic applies doubly to agent telemetry.
+- **The board/triage seam is a proven ~1-day recipe, "fifth use" as of ADR 0021 D4:** a `_SOURCE_BOARD`
+  entry + a `ROUTABLE_SOURCE_TYPES` entry + a triage tool **in the same phase**, because
+  "routable without a tool is a silent no-op."
+- **`AssetUrn.canonical(source_system, ref)`** takes the provider as a free string and already
+  namespaces `urn:vercel:<ref>` (`components/shared_kernel/domain/security.py:210-226`);
+  `CloudAssetEntity.provider` is a plain `str`. So a new `urn:` namespace costs nothing in the
+  kernel — the discipline is that the namespace must be *decided*, never defaulted (ADR 0021 D1's
+  "silently poisoned asset graph" trap: a finding entering the SSOT wearing the wrong URN namespace
+  "would not fail loudly; it would succeed and lie").
+
+### ⚠ The constraint that reshapes the capture decision: Vercel logs are already a NO
+
+ADR 0021 **D5 ruled Vercel log ingestion out of scope**, with evidence:
+
+- **No `logs` integration scope exists** — runtime logs 403 even with every scope granted.
+- **Log Drains are Pro/Enterprise-gated at $0.50/GB on the customer's bill.**
+- **Drain payloads are attacker-authored strings** (`proxy.path`, `userAgent`, `message`) entering
+  the AI triage pipeline — "the first ingest source where an unauthenticated internet client writes
+  the LLM's input."
+
+Re-entry requires ALL of: a paying Pro+ customer asking; an injection-fence test passing; the
+`process_records()` extraction + workspace-keyed ingest + nullable-connection rollup FKs landed; and
+per-source byte/rate caps + `clientIp`/JA3 retention-purge designed.
+
+**Implication for this ADR (important):** the generic "log-based reconstruction rides LogSourcePort"
+fallback is *much weaker for Isaac specifically* than it looks on paper. His agents run on Vercel;
+Vercel runtime logs are not cheaply reachable, and the drain path is already refused. Any fallback I
+recommend must either (a) target a log surface Isaac actually has that ISN'T Vercel drains (e.g. his
+LLM provider's own usage/export APIs, his Stripe API logs, an AWS account if he has one), or
+(b) explicitly inherit D5's re-entry conditions. Do not casually re-open a door ADR 0021 closed.
+
+### Other in-repo anchors
+
+- **`docs/competitive/LANDSCAPE_2026-08.md`** — current market scan; its stance on this capability is
+  "write it down, do not build it yet." `docs/product/STATE_AND_VISION.md` §2 is partly superseded by it.
+- **`STATE_AND_VISION.md` §1.1** — the moat sentence and the design instruction this ADR must obey:
+  *"write exposure-anchored rules, never absence-anchored ones"* — match the missing guard **joined
+  to** reachability. Converts a precision problem into a filter problem; the filter is the moat.
+  Also the standing note: three ideas in ~6 weeks all researched to *feature, not company* — "the
+  next idea of this shape should cost an hour against this page, not another research fleet." This
+  ADR must answer feature-vs-company explicitly and cheaply.
+- **`STATE_AND_VISION.md` §4.4:** "**Traces: none for customer workloads** (Langfuse traces *our own
+  agents* — a different concern). This is the net-new pillar." Confirms no existing home.
+- **§4.5:** response actions are propose → approve → execute → rollback with dry-run + credential
+  vending; **one** live action (`REVOKE_SG_INGRESS`); approve-to-execute orchestration is minimal.
+  Any "revoke the agent's scope" remediation must be honest that this rail is thin today.
+- **Tom's signal (§2.1 gap #5):** "LLM / agent-trace observability in the HUD — his home turf; eval
+  the whole agent *trace*, replay provenance if something escapes the sandbox." A **second** named
+  operator already asked for this. He cross-referenced Datadog LLM Observability + Langfuse.
+- **Andrea's signal (§2.2 gap #4):** "Shadow-AI monitoring + AI-governance evidence — *'show how many
+  users talk to known AI platforms — bonus if you can enforce.'*" Third named operator, compliance lens.
+
 ## 3. Findings — Stream A (our substrate)
 
-_pending_
+_pending — code-mapping agent running_
 
 ## 4. Findings — Stream B (our ingestion spine)
 
-_pending_
+_pending — code-mapping agent running_
 
 ## 5. Findings — Stream C (the capture problem)
 
