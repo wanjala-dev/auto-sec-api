@@ -38,6 +38,27 @@ It is a multi-section scrolling marketing site. Auto-Sec's landing page should b
 anti-thesis: one viewport, our own components, no template, near-zero dependencies. The medium is part of
 the message — a security product whose landing page ships 1 MB of carousel libraries is telling on itself.
 
+### The one honest tension in this brief
+
+A survey of ~20 archived pre-launch dev/security pages (§11) surfaces a real pattern: **page density
+splits by what you're selling.**
+
+- Selling a **primitive** (Resend, Modal, Terra) → one viewport, no scroll, no nav. The reader already
+  knows they need an email API; you only have to say you exist.
+- Selling **judgement or workflow** (Prophet Security, Zed, Dropzone) → a long scroll that argues the
+  problem *first*, because the reader must be convinced the problem is theirs before the product means
+  anything. Prophet devotes a whole block to alert fatigue before mentioning its product.
+
+**Auto-Sec is the second kind, and Henry has specified the first kind's layout.** That is a genuine
+constraint, not a mistake — but it must be named, because it relocates the difficulty:
+
+> If the page gets one viewport, **the headline has to *be* the argument** (Prophet's alert-fatigue block
+> compressed to one sentence), and **the proof has to be a single artifact**, not a five-step walkthrough.
+
+That is achievable — §2 is built precisely this way — but it is a **harder writing problem than a layout
+problem**, and it is where the effort should go. If a reviewer ever feels the page is thin, the fix is a
+sharper headline and a more concrete receipt (§2.2b), **not** more sections.
+
 ### The audience
 Tom/Isaac-shaped (`docs/product/STATE_AND_VISION.md` §2.1, §2.3): technical founders and small teams
 shipping fast with AI-generated code, on AWS, no security team, no budget for one. They are allergic to
@@ -107,6 +128,37 @@ Cites Veracode (2025, 100+ models — `STATE_AND_VISION.md` §1.1). Highest-tens
 with fear and a borrowed stat rather than our own capability. Hold in reserve for paid-acquisition
 variants, not the apex.
 
+### 2.2b The receipt — the strongest upgrade available to this page
+
+A survey of ~20 archived pre-launch dev/security pages (§11) produces one finding that outranks the
+rest: **at zero customers, the two things that build trust are pedigree and receipts — and for a security
+tool, receipts win.** A receipt is a *verifiable artifact a stranger can click and confirm*.
+
+The benchmark is **Antithesis** (2023 pre-launch), whose page had no signup form at all but did carry a
+section headed *"a few of the bugs Antithesis found"* — a list of clickable upstream issue URLs in
+MongoDB, FoundationDB, CockroachDB, Materialize and Prysm. A reader verifies the claim in one click.
+Nothing else on a pre-launch page comes close to that.
+
+**We can do this, and we uniquely should.** `STATE_AND_VISION.md` §1.1 records that the full loop is
+*"proven end-to-end on a real dogfood draft PR"* — our own agent found a real issue in our own
+infrastructure and opened a real pull request with the fix. `auto-sec-api` is already a public repo.
+
+**Recommendation:** under the proof block, one dim line:
+
+```
+▪ we ran this on ourselves — PR #NNN
+```
+
+…linking a genuine agent-opened draft PR. It converts the entire page from a claim into a demonstration,
+it costs one line of vertical space, and it is the one thing on the page a funded competitor cannot
+fake. **This needs Henry's call** — it means pointing prospects at a specific PR in our own repo, so pick
+one that reads well (clear finding, clean patch, one sentence of *why* in the body).
+
+If we don't want to point at a specific PR, the fallback rung is **pedigree** (Linear's founder
+one-liners; RunSybil's *"alumni from OpenAI, Bishop Fox, Rapid7, Crowdstrike"*), and below that
+**anonymised-but-titled** quotes (Wiz's *"CISO, Fortune 50 company"*). Both are weaker. Do not fabricate
+either.
+
 ### 2.3 Copy rules for whoever builds it
 - No word that could appear on any other security company's page ("comprehensive", "seamless",
   "next-generation", "end-to-end", "AI-powered").
@@ -173,7 +225,7 @@ and assumes a centre core to avoid, which we don't have.
 ### Interaction inventory (deliberately tiny)
 | Element | Behaviour |
 |---|---|
-| Email input | Autofocus on desktop only (never on touch — it summons the keyboard on load). `type="email"`, `inputmode="email"`, `autocomplete="email"`. |
+| Email input | **No `autofocus` — not even on desktop** (see below). `type="email"`, `inputmode="email"`, `autocomplete="email"`, a real `<label>`. |
 | Enter | Submits. |
 | `NOTIFY ME` | Submits; becomes a `HexLoader` for the request; then the card body swaps to the success state in place. |
 | `what is this?` | Toggles the lunar callout. |
@@ -212,6 +264,40 @@ Development, Docker/K8s, Editors, File Managers, Games, …). The strongest entr
 not skinned like a terminal.** It's a clean card list: functional minimalism, no animations, no flashy
 interactions, consistent metadata (language, licence, stars) per entry. A site *about* terminal apps
 declines to cosplay as one — and it reads as more credible for it.
+
+### 4.0b The finding that should give us pause — and why we proceed anyway
+
+A sweep of security-company homepages found **almost none use the terminal aesthetic**. Checked and
+rejected as non-terminal: ProjectDiscovery, GreyNoise, runZero, Semgrep, watchTowr, Trail of Bits,
+Latacora, Shodan, Chainguard, Teleport, Infisical, Zellic, Hack The Box. The sharpest data point:
+**ProjectDiscovery — the company that makes Nuclei, a CLI scanner — has zero monospace elements on its
+homepage** and a "Talk to an expert" CTA. Warp, a *terminal company*, sells with a light enterprise SaaS
+site and "Book a demo."
+
+This is a convention, not an oversight: security sells to buyers who sign contracts, and a page that
+reads as a hobby project undermines the thing being sold. Terminal aesthetics live in devtools and
+AI-infra, where **the buyer is the user**.
+
+**Why we proceed:** our ICP *is* the user — engineers with no security team, not a CISO running an RFP
+(§1). The convention we'd be breaking was built for a buyer we aren't selling to yet. But the risk is
+real and it sets a bar: **the execution has to read as competence, not costume**, because for a security
+vendor "they don't check their work" is disqualifying.
+
+**The one security exemplar worth studying is [Dreadnode](https://dreadnode.io)** — near our exact
+category (AI infrastructure for security agents). Measured: sans for prose, mono for *technical chrome
+only*, at roughly **25% of elements**; near-black `#030303`; one hot accent (`#EF562F`); ALL-CAPS mono
+eyebrows; zero-padded step numbers. And structurally: **DreadIndex, a public model-eval leaderboard,
+sits above the pitch as a credibility artifact** — which is the same move as our §2.2b receipt.
+
+We diverge on one point deliberately: Dreadnode's ~25% mono ratio suits a sans-prose page, whereas our
+HUD is monospace-first by design and that *is* our identity. Keep the mono, but take the lesson that
+**mono should be carrying technical meaning**, not decorating prose.
+
+**The specific trap for us:** a fake terminal printing scan output our product didn't actually produce
+is the one thing that would get mocked — and it directly contradicts our own standing rule that findings
+must carry real artifacts. If we show a readout, it must be a *real* one (§2.2b).
+
+### 4.0c Synthesis
 
 **The synthesis, and it is the argument for Direction B:** what makes terminal-adjacent design feel
 *deliberate* is **restraint and information honesty** — monospace, tight alignment, a status line, no
@@ -301,6 +387,24 @@ the landing page would make it *less* like our product, not more.
 
 The one motion allowance: the `GlitchHex` mark (already in `AuthShell`, one small canvas RAF) and the
 lunar callout's spring + line-draw on open. Both must be disabled under `prefers-reduced-motion`.
+
+**The no-scanlines call is not just taste — it's a safety finding, and it inverts the design instinct.**
+Full-viewport scanline overlays are a repeating stripe pattern, and clinical pattern-glare research puts
+**peak discomfort at ~3 cycles/degree**, disproportionately affecting people with migraine or visual
+stress. At normal viewing distance that maps to roughly a **13 px stripe period** — meaning the chunky,
+obviously-retro scanlines people reach for (8–16 px) sit *closest to the worst frequency*, while hairline
+1–2 px scanlines are both safer and more CRT-accurate. MDN, citing the Epilepsy Foundation working group,
+separately flags patterns with **more than five light-dark stripe pairs**; a full-viewport overlay has
+hundreds.
+
+And the widely-copied CRT *flicker* animation (Alec Lownes' canonical snippet) runs at **0.15 s/cycle ≈
+6.7 Hz** — inside the 5–30 Hz seizure-provocative band and roughly **double the 3 Hz limit** of
+**WCAG 2.3.1 (Level A)**. It is a plain Level A failure. Do not ship it, and do not ship a softened
+variant without measuring the rate.
+
+Honest caveat: there is no published design critique of CRT effects on marketing pages, so the
+"it cheapens the page" half of this argument is *constructed*, not cited. The safety half is sourced and
+is sufficient on its own.
 
 ---
 
@@ -656,8 +760,18 @@ the browser either the visual viewport shrinks (the field can end up hidden behi
 layout viewport does (the whole centred layout jumps).
 
 Mitigations, in order:
-1. **Never autofocus the input on touch.** Autofocus on desktop only (`matchMedia('(hover: hover)')`).
-   Summoning the keyboard on page load is the single worst thing this page could do on a phone.
+1. **Do not `autofocus` at all.** *(Corrected during review — an earlier draft of this doc said
+   "autofocus on desktop only". That was wrong.)* Two independent reasons:
+   - **Screen readers "teleport" to the focused control without warning** (MDN). The visitor hears the
+     field label and **nothing that preceded it** — our entire pitch is skipped. On a page whose whole
+     job is one argument, autofocus deletes the argument for those users.
+   - On touch it summons the keyboard on load, so the first frame of a single-viewport page is half
+     keyboard.
+
+   Autofocus optimises for the one visitor who had already decided, at the cost of everyone still
+   deciding. Tab reaches the only input in one keystroke. **If we want the "cursor is waiting" feel**,
+   render a decorative prompt caret in the input's visual position and focus the real input on first
+   keypress or click — the look without the theft.
 2. **`<meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">`**
    — makes the layout viewport shrink with the keyboard, which keeps a focused field in view. Supported in
    Chrome/Android; Safari ignores it (harmless).
@@ -718,16 +832,42 @@ design — correct, as long as it never carries information.
   `CalloutLine` line-draw. The callout must still *open*, instantly. Note `index.css` already guards
   `.cc-skeleton` this way — follow that precedent.
 - **Keyboard:** the page must be fully operable with Tab / Enter / Esc. Focus order: input → submit →
-  `what is this?`. Visible focus rings — do not remove outlines (`hudInput.css` resets them; restore a
-  `:focus-visible` ring).
+  `what is this?`. Enter-to-submit comes free from a real `<form>` with a real `<button type="submit">`
+  — do not hand-roll a keydown handler (it breaks IME composition and native validation).
+- **Focus appearance is where a one-hue-on-near-black palette is genuinely at risk.** WCAG 2.2
+  **SC 2.4.11 Focus Appearance (AA)** requires the indicator to be at least a 2 px perimeter and to have
+  ≥3:1 contrast between focused and unfocused states. `hudInput.css` resets outlines, so this must be
+  restored deliberately. Use Sara Soueidan's **"Oreo focus"** — a light ring sandwiched against dark —
+  which is exactly the right technique for our palette:
+  ```css
+  :focus-visible {
+    outline: 2px solid #050814;                       /* inner, against the surface */
+    box-shadow: 0 0 0 4px rgb(var(--hud-accent));     /* outer ring, 11.8:1 */
+    outline-offset: 2px;
+  }
+  @media (forced-colors: active) { :focus-visible { outline-color: Highlight; } }
+  ```
+  `:focus-visible`, never `:focus`. The `forced-colors` block matters because `box-shadow` is forced to
+  `none` there, leaving the outline to carry the indicator alone.
 - **Screen readers:** the ASCII/box-drawing decoration and the starfield SVG get `aria-hidden="true"`.
   The proof block is real text, not an image — keep it that way. Submission result must be announced via
   `role="status"` / `aria-live="polite"`, otherwise a non-sighted user gets no feedback that the form
   worked.
 - **The form is a real `<form>`** with a real `<label>` (visually hidden is fine) — not a bare styled
   `<input>` with a click handler. Enter-to-submit then comes free.
-- **No keyboard-shortcut cleverness.** A `/`-to-focus hint is charming on a tool and noise on a page with
-  one field. Skipped deliberately.
+- **No keyboard-shortcut cleverness** — and this is now a compliance point, not a taste one.
+  **WCAG 2.1.4 Character Key Shortcuts (Level A)** requires any single-character shortcut to be
+  disableable, remappable, or focus-scoped. The Understanding doc's worked example: a speech-input user
+  with focus in the page has a coworker say *"Hey Kim"* — and `k`, `i`, `m` all fire. It states plainly
+  that single-key shortcuts are *"disastrous for speech users."* A page-level `/` binding also collides
+  with screen readers' own browse-mode single-letter navigation (`h` headings, `b` buttons, `f` fields).
+  Note that GitHub — which popularised `/` — ships a setting to turn it off.
+
+  A `⌘K` palette is outside 2.1.4's scope (modifier combos are exempt) but is friction dressed as
+  delight on a page with one action. **The defensible version of the TUI signal is a *static,
+  non-interactive* status line** — `[TAB] focus · [ENTER] submit` — which carries the idiom and **binds
+  no keys at all**. Gate it on `@media (hover: hover) and (pointer: fine)` so touch users don't see dead
+  weight. This is the same footer-keybinding idiom §4.0 identified as worth stealing.
 
 ---
 
@@ -740,7 +880,16 @@ Naming these prevents scope creep from re-litigating them:
 - **Feature lists, screenshots, demo video, architecture diagrams.** All require scroll. The lunar
   callout is the *entire* depth budget.
 - **Logos / social proof / testimonials / "backed by".** We have none. Fabricating or padding this is
-  exactly the credibility failure this audience detects instantly.
+  exactly the credibility failure this audience detects instantly — and there are two cautionary
+  precedents in the sample: **Escape** shipped lorem-ipsum testimonials attributed to *"Afred Smith, CTO,
+  Banking App"* (typo theirs) three times over, and **Terra Security** shipped Webflow's unedited default
+  share widgets, so their tweet button pointed at `webflow.com` and their footer socials at
+  `facebook.com/webflowapp`. Use the §2.2b receipt instead, or nothing.
+- **A signup counter, queue position, or referral mechanic.** Now evidence-backed rather than taste:
+  **zero of ~20 archived dev/security pre-launch pages used one.** The only real referral loop in the
+  sample (Warp) ran on Discord invite codes, not on-page. Serious tools substitute plain scarcity framing
+  — *"Currently in private beta"* — for gamification, and a technical audience reads a counter as
+  growth-hacking. Our `▪ PRE-LAUNCH` status line is that framing.
 - **Docs, blog, changelog, careers, about.** No secondary pages. The apex is one file.
 - **Light mode.** The HUD has `.hud-light`, but the landing page commits to dark. One less thing.
 - **Analytics beyond CloudFront access logs** (already enabled on the frontend distribution and
@@ -785,6 +934,10 @@ Naming these prevents scope creep from re-litigating them:
 - [ ] Deploy script (explicit sync + invalidation, no CD-through-Terraform).
 
 **Phase 5 — verify**
+- [ ] **Proofread gate — treat as blocking.** Two precedents in §11: Escape shipped lorem-ipsum
+      testimonials, Terra shipped Webflow's default share links pointing at `webflow.com`. For a security
+      vendor an unproofread detail is disproportionately damaging. Check every link target, every
+      placeholder, every default string, and the page `<title>`.
 - [ ] Bundle budget met (< 100 KB gz total).
 - [ ] Lighthouse a11y 100; manual check at 200% zoom and 320 px width.
 - [ ] Real iOS Safari + Android Chrome pass with keyboard open on the email field.
@@ -813,9 +966,33 @@ Naming these prevents scope creep from re-litigating them:
 - Infra: `auto-sec-infra/terraform/modules/cloudfront-s3-private/main.tf`,
   `workloads/api/ses.tf`, `workloads/frontend/dns.tf:14-40`, `backend.tf.example:6`.
 - [rothgar/awesome-tuis](https://github.com/rothgar/awesome-tuis) and [terminal-apps.dev](https://terminal-apps.dev/) — Henry's two references, studied in §4.0.
-- WCAG 2.2 success criteria 1.4.3 (Contrast Minimum), 1.4.4 (Resize Text), 1.4.10 (Reflow),
-  1.4.11 (Non-text Contrast), 2.3.3 (Animation from Interactions). Contrast ratios in §8.5 computed
-  directly from our own tokens against `#050814`.
+- WCAG 2.2 success criteria **1.4.3** (Contrast Minimum), **1.4.4** (Resize Text), **1.4.10** (Reflow),
+  **1.4.11** (Non-text Contrast), **2.1.4** (Character Key Shortcuts), **2.3.1** (Three Flashes),
+  **2.4.11** (Focus Appearance). Contrast ratios in §8.5 computed directly from our own tokens against
+  `#050814`.
+- W3C Technique **H86** (ASCII art / `role="img"` + `aria-label`) — the entire authoritative corpus on
+  ASCII-art accessibility. If we ever ship an ASCII wordmark: `<pre>` with explicit `white-space: pre`,
+  `aria-hidden` when it duplicates visible text, and 2–3 width variants rather than scaling.
+- Sara Soueidan, *A Guide to Designing Accessible, WCAG-Conformant Focus Indicators* (the "Oreo focus"
+  technique used in §8.6) — cited by the W3C Understanding doc for 2.4.11.
+- Adrian Roselli, *Custom Carets and Users* (2025) — why a CSS-animated caret can't be overridden by the
+  OS "prefer non-blinking cursor" setting. Relevant only if we ever add a decorative cursor.
+- MDN on `autofocus` (screen-reader "teleport") — the basis for the §8.3 correction.
+- Oskar Wickström, *How I Built The Monospace Web* — `max-width: calc(min(80ch, round(down, 100%, 1ch)))`
+  if we ever want true character-cell alignment.
+- **Pre-launch page teardowns** (live Wayback snapshots, ~20 pages): Antithesis (2023, the clickable
+  upstream-bug receipt), Prophet Security (named-CISO endorsement wall), Linear (2019, founder
+  one-liners + `> enter your work email`), Resend (2023, one viewport, `Press A`, physical address in
+  footer), Zed (manifesto homepage + 4-question waitlist + "an email every one to three months"), Warp,
+  Modal, Chainguard, Wiz (2020, anonymised-but-titled quotes), RunSybil, Sourcegraph Cody
+  (*"often frustratingly wrong"*), Terra Security and Escape (both cautionary).
+- **Terminal-aesthetic exemplars measured live:** Dreadnode (~25% mono; the one security-adjacent
+  exemplar), Ghostty (189 DOM elements, ratio 1.00, zero img/canvas/video), terminal.shop (93 elements;
+  shell-comment voice + a real published host key), e2b, SST, OpenCode, pico.sh, Axiom (simulated query
+  console), and Charm (the counter-example: builds TUI libraries, sells with a purple sans site).
+- Evil Martians, *We studied 100 devtool landing pages* — two hero CTAs with a visually subordinate
+  secondary; hand-curated testimonials. **Note: it publishes no percentages**; any numeric stat
+  attributed to it elsewhere is invented.
 
 ---
 
@@ -823,12 +1000,34 @@ Naming these prevents scope creep from re-litigating them:
 
 - [ ] **Sign-off on Direction B**, the headline, and `NOTIFY ME` as the CTA (§2, §4).
 - [ ] **Double opt-in: yes or no?** §7.7 recommends yes; it adds a confirm click. Henry's call.
+- [ ] **The receipt (§2.2b) — ship it, and if so which PR?** This is the highest-leverage single line on
+      the page. It means pointing prospects at a specific agent-opened draft PR in our own public repo,
+      so it needs a deliberate pick (clear finding, clean patch, a good one-sentence *why* in the body).
+      If Henry says no, the page falls back to no credibility signal at all — which is what Modal and
+      Terra did, and they survived, but we'd be leaving our strongest card unplayed.
 - [ ] **Wordmark** — reuse `ShieldLogo` + `GlitchHex` as on the login page (recommended for v1), or
       commission a dedicated apex mark?
 - [ ] **`hello@auto-sec.ai`** (or similar) needs to exist for the §7.7 failure fallback.
 - [ ] **Blocked on infra:** none of the Terraform is applied yet and the domain's public NS is still
       GoDaddy. **No email can send and no cert can validate until that delegation lands** — the landing
       page cannot go live before the api + frontend workloads do.
+### Evidence gaps — stated honestly
+
+So a future reader knows which claims here are sourced and which are constructed:
+
+- **There is no conversion data for the monospace/brutalist trend.** The design commentary that
+  describes it explicitly reports no conversion or usability numbers either way. Direction B is argued
+  on fit, honesty and cost — not on measured lift.
+- **No published critique exists of CRT effects or ASCII art on marketing pages.** The safety half of
+  the no-scanlines argument (§4 Recommendation) is sourced; the aesthetic half is constructed.
+- **No authoritative ruling** on whether a decorative blinking cursor triggers WCAG 2.2.2. Moot for us —
+  we ship no cursor.
+- The px↔cycles-per-degree mapping in the scanline discussion is arithmetic from the clinical 3 cpd
+  figure, not a directly published table.
+- **`--hud-dim` ≈4.1:1 and the WCAG ratios in §8.5 are computed, not measured in situ** — re-verify with
+  a checker against the real rendered page, since backdrop-blur and the gradient backdrop shift the
+  effective background.
+
 - [ ] **Follow-up ticket (not this page):** `--hud-dim` at ~4.1:1 is below AA for small body text
       across the HUD generally (§8.5), and `NUM_PROXIES` being unset undermines every IP-keyed anon
       throttle in the API (§7.5). Both found while writing this doc; both are real.
