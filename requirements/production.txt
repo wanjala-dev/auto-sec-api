@@ -1,1 +1,7 @@
 -r base.txt
+
+# Prod-only: WhiteNoise serves collectstatic output from gunicorn — the k8s
+# stack has no nginx sidecar and DEBUG=False disables Django's static serving
+# (without this the /octopus/ admin ships unstyled). Wired in
+# api/settings/prod.py (middleware + manifest static storage).
+whitenoise==6.12.0

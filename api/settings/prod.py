@@ -1,10 +1,30 @@
-"""
-Production settings for wanjala-api-v2.0
+"""Production settings for the Auto-Sec API (api.auto-sec.ai).
+
+Rewritten 2026-08-09 from the wanjala fork-drift version the prod-readiness
+review flagged (blocker #5): the old file defaulted the database to the
+wanjala compose stack (``DB_HOST=db`` / ``wanjala-api-database``), pointed
+CORS/CSRF at octopusintl.org/literacyseed, sent email from
+``info@octopusintl.org`` and wrote media uploads into the CROSS-PROJECT
+``wanjala-demo-sandbox-data`` bucket. Every one of those universes is gone:
+
+- DB is ``DATABASE_URL``-driven (required, single-DB — autosec dropped the
+  tenant router; there are no workspace/art/linkthegap aliases).
+- Hosts/CORS/CSRF default to the real prod domains (app/api.auto-sec.ai) and
+  stay env-overridable.
+- Email defaults to the SES-verified auto-sec.ai identity.
+- Media goes to the ``media/`` prefix of ``autosec-prod-data`` via the k3s
+  host's instance role (IMDSv2 — no static keys).
+- Static files are served by WhiteNoise (there is no nginx sidecar in the k8s
+  stack; gunicorn is the only web process).
+
+Secrets/env are injected by the k8s prod overlay (auto-sec-infra
+``k8s/overlays/prod`` — rendered from SSM Parameter Store by manage-prod.sh).
 """
 
 import os
 from datetime import timedelta
 
+import dj_database_url
 import environ
 from celery.schedules import crontab
 from corsheaders.defaults import default_headers
@@ -24,34 +44,65 @@ if os.path.isfile(env_file):
 
 SECRET_KEY = env("SECRET_KEY")
 
-# ── Email (AWS SES) ────────────────────────────────────────────────────────
+# SECURITY WARNING: don't run with debug turned on in production!
+DEBUG = False
+SITE_ID = 2
+
+# ── Hosts / origins (auto-sec.ai universe; env-overridable) ─────────────────
+ALLOWED_HOSTS = [h.strip() for h in env("ALLOWED_HOSTS", default="api.auto-sec.ai").split(",") if h.strip()]
+
+# FRONTEND_URL is the single source of truth for emailed links — REQUIRED (a
+# boot crash beats silently mailing localhost links). LOCALHOST_FRONTEND_URL is
+# the legacy name core_utils still reads.
+FRONTEND_URL = env("FRONTEND_URL")
+LOCALHOST_FRONTEND_URL = env("LOCALHOST_FRONTEND_URL", default=FRONTEND_URL)
+EMAIL_CONFIRMATION_REDIRECT_PATH = env("EMAIL_CONFIRMATION_REDIRECT_PATH", default="/identity/email-confirmed")
+
+CORS_ORIGIN_ALLOW_ALL = False
+CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOWED_ORIGINS = [
+    o.strip() for o in env("CORS_ALLOWED_ORIGINS", default="https://app.auto-sec.ai").split(",") if o.strip()
+]
+CORS_ALLOW_METHODS = ["DELETE", "GET", "OPTIONS", "PATCH", "POST", "PUT"]
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    "cache-control",
+    "pragma",
+    "sec-ch-ua",
+    "sec-ch-ua-mobile",
+    "sec-ch-ua-platform",
+]
+
+# The Django admin (mounted at /octopus/ — /admin/ is the honeypot) is
+# session+CSRF authenticated, so the API origin itself must be trusted too.
+CSRF_TRUSTED_ORIGINS = [
+    o.strip()
+    for o in env("CSRF_TRUSTED_ORIGINS", default="https://api.auto-sec.ai,https://app.auto-sec.ai").split(",")
+    if o.strip()
+]
+
+# ── Email (AWS SES — the auto-sec.ai SESv2 identity) ────────────────────────
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
 EMAIL_HOST = env("EMAIL_HOST", default="email-smtp.us-east-1.amazonaws.com")
 EMAIL_PORT = env.int("EMAIL_PORT", default=587)
 EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
 # celery-tasks skill §3c (backoff ≠ timeout): bound every SMTP/SES send with a
-# per-attempt socket timeout. Without it a hung SES connection pins a Celery
-# worker slot until the task's hard time-limit SIGKILLs it — and under
-# worker_prefetch_multiplier=1 that's a whole worker doing nothing. Applies to
-# every email task at once (contact form, donation/sponsorship notifications,
-# newsletters, KYC staff notices).
+# per-attempt socket timeout so a hung SES connection can't pin a worker slot.
 EMAIL_TIMEOUT = env.int("EMAIL_TIMEOUT", default=10)
 EMAIL_HOST_USER = env("SES_SMTP_USER", default=env("EMAIL_HOST_USER", default=""))
 EMAIL_HOST_PASSWORD = env("SES_SMTP_PASSWORD", default=env("EMAIL_HOST_PASSWORD", default=""))
-DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="Auto-Sec <info@octopusintl.org>")
-SERVER_EMAIL = env("SERVER_EMAIL", default="Auto-Sec <info@octopusintl.org>")
-# Newsletter dispatch knobs. ``EMAIL_FROM`` is the address-only form
-# used by the per-recipient newsletter adapter when stitching together
-# ``From: "{workspace_name}" <info@octopusintl.org>``. ``EMAIL_UNSUBSCRIBE_MAILTO``
-# fills the second slot of the RFC 8058 ``List-Unsubscribe`` header so
-# strict-CSP inbox clients can still unsubscribe via a mailto.
-EMAIL_FROM = env("EMAIL_FROM", default="info@octopusintl.org")
-EMAIL_UNSUBSCRIBE_MAILTO = env("EMAIL_UNSUBSCRIBE_MAILTO", default="unsubscribe@octopusintl.org")
-# SES bounce + complaint SNS topic ARN — set to the topic that the SES
-# configuration set forwards bounces + complaints to. When empty, the
-# SNS handler rejects ALL inbound notifications as topic-mismatch (safe
-# default: in a misconfigured environment, we'd rather reject than
-# trust unverified events).
+# Must stay an identity SES has verified — that's no-reply@auto-sec.ai (the
+# domain identity lives in auto-sec-infra terraform/workloads/api/ses.tf).
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="Auto-Sec <no-reply@auto-sec.ai>")
+SERVER_EMAIL = env("SERVER_EMAIL", default="Auto-Sec <no-reply@auto-sec.ai>")
+# Address-only form used when stitching "From: {workspace} <addr>" headers, and
+# the RFC 8058 List-Unsubscribe mailto slot. NOTE: auto-sec.ai has no inbound
+# MX — the unsubscribe mailto is a dead drop until inbound mail exists; the
+# one-click HTTPS unsubscribe path is the working one.
+EMAIL_FROM = env("EMAIL_FROM", default="no-reply@auto-sec.ai")
+EMAIL_UNSUBSCRIBE_MAILTO = env("EMAIL_UNSUBSCRIBE_MAILTO", default="unsubscribe@auto-sec.ai")
+# SES bounce + complaint SNS topic ARN — the topic the SES configuration set
+# forwards bounces/complaints to. Empty ⇒ the SNS webhook handler rejects ALL
+# inbound notifications (safe default: reject rather than trust unverified).
 SES_SNS_TOPIC_ARN = env("SES_SNS_TOPIC_ARN", default="")
 
 # ── Stripe ──────────────────────────────────────────────────────────────────
@@ -68,11 +119,6 @@ STRIPE_CONNECT_DONATIONS_WEBHOOK_SECRET = env("STRIPE_CONNECT_DONATIONS_WEBHOOK_
 STRIPE_SUBSCRIPTIONS_WEBHOOK_SECRET = env("STRIPE_SUBSCRIPTIONS_WEBHOOK_SECRET", default="")
 SUBSCRIPTION_WEBHOOK_URL = env("SUBSCRIPTION_WEBHOOK_URL", default="")
 WORKSPACE_BILLING_WEBHOOK_URL = env("WORKSPACE_BILLING_WEBHOOK_URL", default="")
-# FRONTEND_URL is the single source of truth — set it in .env on the server.
-# LOCALHOST_FRONTEND_URL is the legacy name used by core_utils and email links.
-FRONTEND_URL = env("FRONTEND_URL")
-LOCALHOST_FRONTEND_URL = env("LOCALHOST_FRONTEND_URL", default=FRONTEND_URL)
-EMAIL_CONFIRMATION_REDIRECT_PATH = env("EMAIL_CONFIRMATION_REDIRECT_PATH", default="/identity/email-confirmed")
 
 # ── AI / LLM ───────────────────────────────────────────────────────────────
 LANGFUSE_SECRET_KEY = env("LANGFUSE_SECRET_KEY", default="")
@@ -80,51 +126,20 @@ LANGFUSE_PUBLIC_KEY = env("LANGFUSE_PUBLIC_KEY", default="")
 LANGFUSE_BASE_URL = env("LANGFUSE_BASE_URL", default="")
 OPEN_AI_SECRET_KEY = env("OPEN_AI_SECRET_KEY", default="")
 
-# ── Tenant routing ──────────────────────────────────────────────────────────
-ART_API_URL = env("ART_API_URL", default="api.wanjala.art")
-LTG_API_URL = env("LTG_API_URL", default="api.wanjala.art")
-WORKSPACE_API_URL = env("WORKSPACE_API_URL", default="api.wanjala.art")
+# ── Fork-drift placeholders still read by base settings ─────────────────────
+# autosec is single-tenant-DB; these tenant-routing URLs are dead but required
+# by inherited code paths. Same placeholders the k8s configmap uses.
+ART_API_URL = env("ART_API_URL", default="http://localhost")
+LTG_API_URL = env("LTG_API_URL", default="http://localhost")
+WORKSPACE_API_URL = env("WORKSPACE_API_URL", default="http://localhost")
 EMAIL_CLICK_REDIRECT_LINK = env("EMAIL_CLICK_REDIRECT_LINK", default=FRONTEND_URL)
 
-# ── Strip dev-only / heavy apps not needed in the lean EC2 stack ────────────
+# ── Strip dev-only / heavy apps not needed in prod ──────────────────────────
 # Elasticsearch is replaced by pgvector + PostgreSQL full-text search.
 # Haystack is unused (Solr backend, never deployed). django_seed is dev-only.
 _EXCLUDED_APPS = {"django_elasticsearch_dsl", "haystack", "django_seed"}
 INSTALLED_APPS = [app for app in INSTALLED_APPS if app not in _EXCLUDED_APPS]
-
-# Disable haystack since the app is removed
 HAYSTACK_CONNECTIONS = {}
-
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
-SITE_ID = 2
-
-ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "*").split(",")
-
-# ── CORS ────────────────────────────────────────────────────────────────────
-CORS_ORIGIN_ALLOW_ALL = False
-CORS_ALLOW_CREDENTIALS = True
-# The landing site (octopusintl.org / www.octopusintl.org) calls the contact
-# endpoint cross-origin; http://localhost:5173 is its local Vite preview, which
-# hits this API directly (there is no local landing backend). Kept in the code
-# default — an env override replaces the WHOLE list, so env-only additions
-# silently mask future default changes.
-CORS_ALLOWED_ORIGINS = [
-    o.strip()
-    for o in env(
-        "CORS_ALLOWED_ORIGINS",
-        default="https://app.octopusintl.org,https://www.octopusintl.org,https://octopusintl.org,https://www.literacyseed.com,https://api.wanjala.art,https://d2wnv83yfoz6nw.cloudfront.net,https://demo.octopusintl.org,http://localhost:5173",
-    ).split(",")
-    if o.strip()
-]
-CORS_ALLOW_METHODS = ["DELETE", "GET", "OPTIONS", "PATCH", "POST", "PUT"]
-CORS_ALLOW_HEADERS = list(default_headers) + [
-    "cache-control",
-    "pragma",
-    "sec-ch-ua",
-    "sec-ch-ua-mobile",
-    "sec-ch-ua-platform",
-]
 
 # ── JWT ─────────────────────────────────────────────────────────────────────
 SIMPLE_JWT = {
@@ -143,7 +158,7 @@ SIMPLE_JWT = {
 
 DATA_UPLOAD_MAX_MEMORY_SIZE = 10485760
 
-# ── Redis ───────────────────────────────────────────────────────────────────
+# ── Redis (app-level client; broker config is under Celery below) ───────────
 import redis  # noqa: E402
 
 redis_host = env("REDIS_SERVICE_HOST", default="redis")
@@ -166,127 +181,75 @@ LOGGING = {
     "root": {"level": "INFO", "handlers": ["console"]},
 }
 
-
-def _parse_env_bool(value: str | None) -> bool:
-    if value is None:
-        return False
-    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
-
-
-def _build_postgres_pool_options(prefix: str = "DB_POOL_") -> dict:
-    """Build psycopg3 pool options for Django's PostgreSQL backend.
-
-    Django's native pooling requires psycopg3 (`psycopg`) with the pool extra
-    installed. When psycopg2 is used, Django ignores `OPTIONS["pool"]`.
-    """
-    enabled = _parse_env_bool(os.environ.get(f"{prefix}ENABLED"))
-    if not enabled:
-        return {}
-
-    max_size = os.environ.get(f"{prefix}MAX_SIZE")
-    if not max_size:
-        return {"pool": True}
-
-    def _int(name: str, default: int | None = None) -> int | None:
-        raw = os.environ.get(f"{prefix}{name}")
-        if raw is None:
-            return default
-        raw = raw.strip()
-        if not raw:
-            return default
-        return int(raw)
-
-    def _float(name: str, default: float | None = None) -> float | None:
-        raw = os.environ.get(f"{prefix}{name}")
-        if raw is None:
-            return default
-        raw = raw.strip()
-        if not raw:
-            return default
-        return float(raw)
-
-    pool = {
-        "min_size": _int("MIN_SIZE", 1),
-        "max_size": int(max_size),
-        "timeout": _float("TIMEOUT"),
-        "max_idle": _int("MAX_IDLE"),
-        "max_lifetime": _int("MAX_LIFETIME"),
-        "reconnect_timeout": _float("RECONNECT_TIMEOUT"),
-    }
-    pool = {k: v for k, v in pool.items() if v is not None}
-    return {"pool": pool}
-
-
-# Database — single PG instance, all aliases point to the same DB.
-# The tenant router expects workspace/art/linkthegap aliases to exist.
-_DEFAULT_DB = {
-    "ENGINE": "django.db.backends.postgresql",
-    "NAME": os.environ.get("DB_NAME", os.environ.get("POSTGRES_DB", "wanjala-api-database")),
-    "USER": os.environ.get("DB_USER", os.environ.get("POSTGRES_USER", "wanjala-art-sql-user")),
-    "PASSWORD": os.environ.get("DB_PASSWORD", os.environ.get("POSTGRES_PASSWORD", "")),
-    "HOST": os.environ.get("DB_HOST", "db"),
-    "PORT": os.environ.get("DB_PORT", "5432"),
-    "OPTIONS": _build_postgres_pool_options(),
-}
+# ── Database — DATABASE_URL-driven, single-DB (no tenant aliases) ───────────
+# REQUIRED: no default. The old wanjala fallbacks (DB_HOST=db /
+# wanjala-api-database / wanjala-art-sql-user) meant a missing env var booted
+# the app pointed at a database that doesn't exist in this universe — a boot
+# crash on a missing DATABASE_URL is strictly better.
 DATABASES = {
-    "default": _DEFAULT_DB,
-    "workspace": {**_DEFAULT_DB},
-    "art": {**_DEFAULT_DB},
-    "linkthegap": {**_DEFAULT_DB},
+    "default": dj_database_url.config(default=env("DATABASE_URL")),
 }
 
-# Apply PgBouncer transaction-mode adjustments (DISABLE_SERVER_SIDE_CURSORS when
-# DB_PGBOUNCER=true; bypass the pooler at db:5432 when DB_USE_DIRECT=true, e.g.
-# migrations). No-op unless those env vars are set — a direct-to-Postgres deploy
-# is unchanged.
+# Optional psycopg3 native pooling (Django ignores OPTIONS["pool"] on psycopg2).
+DB_POOL_ENABLED = env.bool("DB_POOL_ENABLED", default=False)
+if DB_POOL_ENABLED:
+    pool_max_size = env.int("DB_POOL_MAX_SIZE", default=0)
+    if pool_max_size <= 0:
+        pool_setting = True
+    else:
+        pool_setting = {
+            "min_size": env.int("DB_POOL_MIN_SIZE", default=1),
+            "max_size": pool_max_size,
+            "timeout": env.float("DB_POOL_TIMEOUT", default=10.0),
+            "max_idle": env.int("DB_POOL_MAX_IDLE", default=300),
+            "max_lifetime": env.int("DB_POOL_MAX_LIFETIME", default=3600),
+            "reconnect_timeout": env.float("DB_POOL_RECONNECT_TIMEOUT", default=5.0),
+        }
+    for db_config in DATABASES.values():
+        if db_config.get("ENGINE") != "django.db.backends.postgresql":
+            continue
+        options = db_config.setdefault("OPTIONS", {})
+        options["pool"] = pool_setting
+
+# PgBouncer transaction-mode adjustments (no-op unless DB_PGBOUNCER /
+# DB_USE_DIRECT env vars are set — a direct-to-Postgres deploy is unchanged).
 apply_pgbouncer_settings(DATABASES)  # noqa: F405
 
-# Static files stay on local disk -- collectstatic regenerates them
-# on every deploy and there's nothing to back up.
+# ── Static files — WhiteNoise (gunicorn is the only web process) ────────────
+# There is no nginx sidecar in the k8s stack and DEBUG=False disables Django's
+# static serving, so without WhiteNoise the admin at /octopus/ ships unstyled.
+# collectstatic runs at container boot (docker/scripts/prod/start-web.sh);
+# the manifest storage gives hashed, immutably-cacheable names.
 STATIC_ROOT = os.path.join(BASE_DIR, "static")
 STATIC_URL = "/static/"
+MIDDLEWARE = (
+    MIDDLEWARE[: MIDDLEWARE.index("django.middleware.security.SecurityMiddleware") + 1]  # noqa: F405
+    + ["whitenoise.middleware.WhiteNoiseMiddleware"]
+    + MIDDLEWARE[MIDDLEWARE.index("django.middleware.security.SecurityMiddleware") + 1 :]  # noqa: F405
+)
 
-# MEDIA_ROOT is kept defined (pointing at the legacy on-disk location)
-# even though writes go straight to S3 via S3MediaStorage. Two reasons:
-# (a) Any code path that still constructs paths from settings.MEDIA_ROOT
-#     gets something sane instead of falling back to Django's default
-#     of "" which resolves to the container cwd (/app).
-# (b) The `migrate_media_to_s3` management command walks this directory
-#     to lift pre-existing files into S3 -- without MEDIA_ROOT set, it
-#     would walk the entire repo. After the lift completes and we've
-#     verified nothing left on disk, this line can be deleted.
+# ── Media — S3 on the autosec data bucket's media/ prefix ───────────────────
+# MEDIA_ROOT stays defined so legacy code paths constructing paths from it get
+# something sane (writes actually go to S3 via S3MediaStorage).
 MEDIA_ROOT = os.path.join(BASE_DIR, "media")
 
-# Media files live in S3 in prod -- the EC2 disk has no role in
-# serving user uploads after this PR, so the instance becomes
-# effectively stateless from a media standpoint. AWS_LOCATION =
-# "media" routes uploads into the `media/` prefix of the shared
-# data bucket, alongside backup/ but isolated at the IAM-statement
-# level on the EC2 instance role.
-#
-# Auth: NO explicit AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY in
-# this stack. boto3's default credential chain reaches the EC2
-# instance metadata service (IMDSv2 at 169.254.169.254 from inside
-# the container) and picks up `wanjala-demo-sandbox-host` role
-# credentials transparently. Zero long-lived AWS keys on the host
-# means no rotation problem and a leaked .env doesn't leak S3 access.
-AWS_STORAGE_BUCKET_NAME = os.environ.get("MEDIA_S3_BUCKET", "wanjala-demo-sandbox-data")
+# Auth: NO explicit AWS keys. boto3's default chain reaches IMDSv2 and picks up
+# the autosec-prod-host instance role (which grants exactly the media/* prefix
+# of this bucket — see auto-sec-infra terraform/workloads/api/main.tf).
+AWS_STORAGE_BUCKET_NAME = os.environ.get("MEDIA_S3_BUCKET", "autosec-prod-data")
 AWS_S3_REGION_NAME = os.environ.get("MEDIA_S3_REGION", "us-east-1")
-AWS_LOCATION = "media"
+AWS_LOCATION = os.environ.get("MEDIA_S3_PREFIX", "media")
 AWS_S3_ADDRESSING_STYLE = "virtual"
 AWS_S3_SIGNATURE_VERSION = "s3v4"
 AWS_S3_FILE_OVERWRITE = False
 AWS_DEFAULT_ACL = None
 AWS_QUERYSTRING_AUTH = True
-# 15 minutes is long enough for a single page-load to fetch every
-# image without expiring mid-render; short enough that a leaked URL
-# stops being useful before the day is out.
+# 15 minutes: long enough for one page-load to fetch every image, short enough
+# that a leaked URL stops being useful quickly.
 AWS_QUERYSTRING_EXPIRE = 60 * 15
 
-# MEDIA_URL is informational once S3 takes over -- S3MediaStorage
-# generates signed URLs directly via storage.url(). Kept set so any
-# code path that still constructs URLs from MEDIA_URL gets a sane
-# https origin instead of a broken /media/ path.
+# MEDIA_URL is informational once S3 takes over (S3MediaStorage signs real
+# URLs); kept sane for any code path still reading it.
 MEDIA_URL = f"https://{AWS_STORAGE_BUCKET_NAME}.s3.{AWS_S3_REGION_NAME}.amazonaws.com/{AWS_LOCATION}/"
 
 STORAGES = {
@@ -294,22 +257,26 @@ STORAGES = {
         "BACKEND": "infrastructure.storage.backends.S3MediaStorage",
     },
     "staticfiles": {
-        "BACKEND": "infrastructure.storage.backends.LocalStaticStorage",
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
     },
 }
 
+# NOTE (named follow-up, review §4.5): report-PDF/SBOM storage still targets
+# the in-cluster MinIO via REPORT_PDF_S3_* / SBOM_S3_* (base.py defaults). The
+# MinIO→real-S3 migration is deliberately out of scope here; until it lands the
+# prod overlay must set REPORT_PDF_S3_PUBLIC_ENDPOINT to a reachable origin or
+# presigned report/SBOM downloads will point at the viewer's localhost.
+
+# ── Celery ──────────────────────────────────────────────────────────────────
 CELERY_BEAT_SCHEDULE = {
-    # auto-sec fork: nonprofit aggregation/search/payment/budget beats
-    # removed. Only kept-context schedules remain.
+    # auto-sec fork: nonprofit aggregation/search/payment/budget beats removed.
+    # Keep this dict in lockstep with api/settings/local.py — a schedule
+    # missing HERE silently disables that pipeline in prod.
     "identity_sweep_user_sessions": {
         "task": "identity.sweep_user_sessions",
         "schedule": crontab(minute="*/15"),
     },
-    # Weekly push/delivery hygiene: delete PushSubscription rows dead
-    # (expired/revoked) > PUSH_SUBSCRIPTION_PRUNE_AFTER_DAYS, expire active
-    # subscriptions unseen > PUSH_SUBSCRIPTION_STALE_AFTER_DAYS, and prune
-    # terminal NotificationDelivery ledger rows >
-    # NOTIFICATION_DELIVERY_RETENTION_DAYS. Idempotent reconciliation.
+    # Weekly push/delivery hygiene (idempotent reconciliation).
     "notifications_prune_stale_push_subscriptions": {
         "task": "notifications.prune_stale_push_subscriptions",
         "schedule": crontab(hour=4, minute=40, day_of_week=0),
@@ -326,24 +293,14 @@ CELERY_BEAT_SCHEDULE = {
         "task": "sign_off.materialize_pending_signoff_tasks",
         "schedule": crontab(minute="*/5"),
     },
-    # AI-teammate cycle — fans out run_ai_teammate_cycle to every AI-enabled
-    # workspace, which runs the detector cycle (LogWatchErrorDetector files
-    # evidence findings, AiFindingRouterDetector dispatches them to their
-    # specialist, e.g. triage_agent). This entry is what makes the SOC
-    # log-watch → triage pipeline autonomous; without it the detectors never
-    # run and findings are only ever routed by hand (route_findings command).
-    # Self-gating keeps it safe in prod: the fan-out skips workspaces without
-    # ai_teammate_enabled, honors feature.ai_kill_switch, and the router holds
-    # a dispatch lease so overlapping cycles can't double-dispatch. Routed to
-    # the dedicated ai_teammate queue by CELERY_TASK_ROUTES below.
+    # AI-teammate cycle — the detector fan-out that makes the SOC log-watch →
+    # triage pipeline autonomous. Self-gating (ai_teammate_enabled flag,
+    # feature.ai_kill_switch, dispatch lease).
     "schedule_ai_teammate_runs": {
         "task": "infrastructure.ai.agents.tasks.schedule_ai_teammate_runs",
         "schedule": crontab(minute="*/5"),
     },
-    # Daily AI-action rollup — recomputes yesterday's AiActionDailyRollup
-    # rows (runs, tool calls, tokens, spend). The posture dashboard's
-    # governance charts read these rollup rows instead of live-aggregating
-    # DeepRun/DeepRunLog on the request path.
+    # Daily AI-action rollup for the governance charts.
     "rollup_ai_action_daily": {
         "task": "ai.rollup_ai_action_daily",
         "schedule": crontab(minute=20, hour=0),
@@ -353,32 +310,35 @@ CELERY_BEAT_SCHEDULE = {
         "task": "cloud_posture.schedule_prowler_runs",
         "schedule": crontab(hour=2, minute=0),
     },
-    # Nightly Vercel posture scan (ADR 0021 D3) — fans out per CONNECTED VercelConnection
-    # of opted-in workspaces (feature.vercel_posture). Dark until opt-in; the task
-    # self-gates on the flag AND the scanning dispatch gate (cooldown/in-flight).
+    # Nightly Vercel posture scan (ADR 0021 D3) — dark until opt-in.
     "schedule_vercel_posture_scans": {
         "task": "cloud_posture.schedule_vercel_prowler_runs",
         "schedule": crontab(hour=2, minute=30),
     },
-    # Daily threat-intel feed refresh (ADR 0013 D2) — EPSS + CISA KEV → immutable dated
-    # snapshots; publishes VulnIntelRefreshed so findings rescores contextual risk.
+    # Daily Trivy container-SCA rescan — dark until opt-in
+    # (feature.container_security). Was MISSING here (fork-drift) while present
+    # in local.py — prod would have silently never rescanned images.
+    "schedule_container_scans": {
+        "task": "container_security.schedule_container_scans",
+        "schedule": crontab(hour=3, minute=0),
+    },
+    # Nightly Opengrep SAST rescan (ADR 0019 D3) — dark until opt-in
+    # (feature.code_security). Also previously missing here; same drift class.
+    "schedule_repo_scans": {
+        "task": "code_security.schedule_repo_scans",
+        "schedule": crontab(hour=3, minute=30),
+    },
+    # Daily threat-intel feed refresh (ADR 0013 D2) — EPSS + CISA KEV.
     "vuln_intel_refresh_feeds": {
         "task": "vuln_intel.refresh_feeds",
         "schedule": crontab(hour=1, minute=30),
     },
-    # Hourly Remediation Memory capture reconciler (ADR 0012 P4a) — scans findings
-    # carrying an open draft PR, checks merge via VcsPort, resolves the merged
-    # finding, and offers it to the gated corpus capture. This is the driver of the
-    # whole capture loop: without a schedule nothing is ever captured autonomously.
-    # Idempotent (already-resolved / already-captured is a no-op).
+    # Hourly Remediation Memory capture reconciler (ADR 0012 P4a).
     "reconcile_applied_remediations": {
         "task": "remediation.reconcile_applied_remediations",
         "schedule": crontab(minute=15),
     },
-    # Daily Remediation Memory orphan-recovery sweep (ADR 0012 P6) — re-embeds
-    # vetted fixes that cleared the D1 gate but whose after-commit embed never
-    # landed (admitted-but-unretrievable) or whose rating changed after their last
-    # embed. Idempotent: a healthy corpus dispatches nothing.
+    # Daily Remediation Memory orphan-recovery sweep (ADR 0012 P6).
     "reindex_remediation_corpus": {
         "task": "remediation.reindex_remediation_corpus",
         "schedule": crontab(hour=3, minute=30),
@@ -386,15 +346,8 @@ CELERY_BEAT_SCHEDULE = {
 }
 
 # Routing — NAMESPACE GOTCHA: with config_from_object(namespace="CELERY") only
-# NEW-style names apply. The old-style CELERY_ROUTES / CELERY_QUEUES dicts that
-# used to sit here were silently ignored (task_routes was None at runtime on
-# Celery 5.4 — every "routed" task ran on the default queue). They also carried
-# fork-dead routes (process_payment_event / send_donation_notification /
-# workspace aggregations — tasks and queues that no longer exist and no k8s
-# worker consumes). Canonical task->queue map + the full story live in
+# NEW-style names apply. Canonical task->queue map lives in
 # infrastructure/celery/routes.py; locked by tests/test_celery_task_routes.py.
-# Scan pillars (cloud_posture, container_security) pin their queue at the task
-# decorator / dispatch_scan instead — don't re-add routes for them here.
 CELERY_TASK_DEFAULT_QUEUE = "default"
 CELERY_TASK_ROUTES = TASK_ROUTES
 
@@ -422,10 +375,6 @@ CELERY_BROKER_TRANSPORT_OPTIONS = {
 }
 
 # Lossless-deploy reliability — see celery-tasks skill rule 5.
-# Without ACKS_LATE, an in-flight task is acknowledged the moment a worker
-# picks it up, so a SIGKILL/SIGTERM during a deploy silently drops the work.
-# The trade-off is duplicate execution on the (rare) crash-after-completion
-# path, which is why every task MUST be idempotent (rule 2).
 CELERY_TASK_ACKS_LATE = True
 CELERY_TASK_REJECT_ON_WORKER_LOST = True
 CELERY_WORKER_PREFETCH_MULTIPLIER = int(os.environ.get("CELERY_WORKER_PREFETCH_MULTIPLIER", 1))
@@ -433,7 +382,7 @@ CELERY_WORKER_MAX_TASKS_PER_CHILD = int(os.environ.get("CELERY_WORKER_MAX_TASKS_
 CELERY_RESULT_EXPIRES = int(os.environ.get("CELERY_RESULT_EXPIRES", 3600))
 CELERY_WORKER_HIJACK_ROOT_LOGGER = False
 
-# Security settings for production
+# ── Security headers / TLS (NGF terminates TLS and sets X-Forwarded-Proto) ──
 SECURE_BROWSER_XSS_FILTER = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = "DENY"
@@ -443,13 +392,3 @@ SECURE_HSTS_PRELOAD = True
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
-# Env-driven like CORS_ALLOWED_ORIGINS. app.octopusintl.org is the canonical
-# frontend domain; the raw CloudFront URL stays as a legacy alias.
-CSRF_TRUSTED_ORIGINS = [
-    o.strip()
-    for o in env(
-        "CSRF_TRUSTED_ORIGINS",
-        default="https://api.wanjala.art,https://app.octopusintl.org,https://www.octopusintl.org,https://octopusintl.org,https://d2wnv83yfoz6nw.cloudfront.net,https://demo.octopusintl.org",
-    ).split(",")
-    if o.strip()
-]
