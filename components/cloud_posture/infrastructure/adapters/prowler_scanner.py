@@ -26,7 +26,6 @@ for Trivy too — is an artifact/volume output channel on the backend rather tha
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 
@@ -38,7 +37,8 @@ from components.scanning.application.ports.scan_execution_backend import (
     ScanExecutionBackend,
     ScanJobSpec,
 )
-from components.scanning.domain.errors import ScanExecutionError
+from components.scanning.domain.engine_output import parse_engine_result_document
+from components.scanning.domain.errors import IncompleteScanOutputError, ScanExecutionError
 from components.shared_kernel.application.ports.scanner_port import (
     ProgressCallback,
     ScannerPort,
@@ -142,17 +142,22 @@ class ProwlerScanner(ScannerPort):
 
 
 def _parse_ocsf_stdout(stdout: str | None) -> list:
-    """Defensively parse the OCSF JSON array Prowler wrote to stdout.
+    """Parse the OCSF JSON array Prowler wrote to stdout — fail LOUD if it is unusable.
 
-    Prowler's OCSF output has had validity bugs (prowler-cloud/prowler#3675) and pod-log stdout can
-    truncate a large result — either way the JSON may not parse, so return ``[]`` rather than raise
-    (``records_to_scan_result`` also skips individual malformed records)."""
-    text = (stdout or "").strip()
-    if not text:
-        return []
-    try:
-        data = json.loads(text)
-    except ValueError:
-        logger.warning("prowler OCSF output was not valid JSON (bytes=%d)", len(text))
-        return []
-    return data if isinstance(data, list) else []
+    This used to swallow bad JSON and return ``[]``. That was the silent-false-negative hole:
+    ``cat``ing a truncated OCSF file exits 0, so the spine recorded a COMPLETED run with zero
+    findings over a mutilated result — worst on the biggest accounts, which produce the most
+    output and truncate first. ``parse_engine_result_document`` now raises
+    ``IncompleteScanOutputError`` instead (see that module for the full rationale).
+
+    Still tolerant where tolerance is correct: a genuinely clean account emits ``[]``, which
+    parses and completes normally, and ``records_to_scan_result`` keeps skipping individual
+    malformed records inside a well-formed array (one bad record ≠ a failed scan).
+    """
+    data = parse_engine_result_document(stdout, engine=_ENGINE)
+    if not isinstance(data, list):
+        raise IncompleteScanOutputError(
+            f"Prowler OCSF output is a JSON {type(data).__name__}, expected the top-level array "
+            f"of OCSF records — the engine did not produce a usable result document."
+        )
+    return data
