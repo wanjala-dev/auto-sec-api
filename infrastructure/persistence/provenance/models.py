@@ -235,9 +235,16 @@ class ProvenanceEvent(models.Model):
     # Provenance metadata: ip, session id, request id, tool, etc.
     metadata = models.JSONField(default=dict, blank=True)
 
-    # Idempotent projection key back to the originating store.
+    # Idempotent projection key back to the originating store. This field IS the
+    # idempotency key (see the unique constraint below), so its width is a
+    # correctness property, not a storage preference: a producer whose key does
+    # not fit does not lose a suffix, it MERGES two distinct actions into one
+    # event. 128 holds every producer we have (an audit-row UUID = 36, an
+    # ``<ai_task_uuid>:<index>`` = ~40, W3C trace context = 49, AWS X-Ray = 52, a
+    # runtime keying spans with UUIDs = 73) with headroom. Producers must refuse
+    # over-length keys rather than truncate them — see AgentActivityRecord.
     origin = models.CharField(max_length=24, choices=Origin.choices)
-    origin_id = models.CharField(max_length=64)
+    origin_id = models.CharField(max_length=128)
 
     recorded_at = models.DateTimeField(auto_now_add=True)
 

@@ -157,6 +157,57 @@ def test_ingest_is_idempotent_on_trace_and_span(workspace_factory):
     assert ProvenanceEvent.objects.filter(workspace=ws, origin="agent_runtime").count() == 1
 
 
+def test_spans_of_one_long_trace_are_not_merged_into_a_single_event(workspace_factory):
+    """Regression: ``origin_id`` used to be truncated to 64 chars on the way in.
+
+    With a trace id of 64+ chars the span id was cut off entirely, so every span
+    in that trace produced an identical idempotency key — the first was stored
+    and the rest were counted as *duplicates* and silently dropped. Two distinct
+    agent actions became one, and the ledger's answer to "what did this agent do"
+    was quietly wrong. Both must now land, whole.
+    """
+    ws = workspace_factory()
+    _enable_flag()
+    source = _source(ws)
+    trace = "t" * 90
+    payload = _payload()
+    spans = payload["resourceSpans"][0]["scopeSpans"][0]["spans"]
+    spans[0]["traceId"] = trace
+    spans.append({**spans[0], "spanId": "99e0f1a2b3c4d5e6"})
+
+    resp = _client(ws).post(_url(ws, source), payload, format="json")
+
+    assert resp.status_code == 202
+    assert resp.json()["data"]["accepted"] == 2
+    assert resp.json()["data"]["duplicates"] == 0
+
+    stored = set(
+        ProvenanceEvent.objects.filter(workspace=ws, origin="agent_runtime").values_list("origin_id", flat=True)
+    )
+    assert stored == {f"{trace}:051581bf3cb55c13", f"{trace}:99e0f1a2b3c4d5e6"}
+    # Whole, not trimmed to the column's old width.
+    assert all(len(value) == 107 for value in stored)
+
+
+def test_identity_too_long_for_its_column_is_reported_never_stored(workspace_factory):
+    """The loud failure. One span is lost and the response says exactly why —
+    the alternative was storing it under someone else's key."""
+    ws = workspace_factory()
+    _enable_flag()
+    source = _source(ws)
+    payload = _payload()
+    payload["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["traceId"] = "t" * 300
+
+    resp = _client(ws).post(_url(ws, source), payload, format="json")
+
+    assert resp.status_code == 202
+    data = resp.json()["data"]
+    assert data["accepted"] == 0
+    assert data["skipped"] == 1
+    assert data["skip_reasons"] == {"oversized_identity": 1}
+    assert ProvenanceEvent.objects.filter(workspace=ws, origin="agent_runtime").count() == 0
+
+
 def test_ingest_writes_the_did_axis_only_never_a_grant(workspace_factory):
     """``AccessGrant`` is the CAN axis and is read from the customer's grant
     surface — inferring one from observed behaviour would fabricate a claim."""
