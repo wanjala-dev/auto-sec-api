@@ -32,6 +32,17 @@ class WcagContrastPolicy:
     def is_accessible(self, foreground: str, background: str, target: float = AA_NORMAL) -> bool:
         return self._cs.contrast_ratio(foreground, background) >= target
 
+    def worst_contrast(self, color: str, backgrounds: tuple[str, ...]) -> float:
+        """The lowest contrast ``color`` reaches across ``backgrounds``.
+
+        A colour is only as legible as the least-forgiving surface it lands on,
+        so every guard in this codebase measures the worst case — never the
+        canvas alone. (Frontend #175 learned this the expensive way: the worst
+        surface for the dim token was an accent-tinted card fill, not the
+        canvas.)
+        """
+        return min(self._cs.contrast_ratio(color, bg) for bg in backgrounds)
+
     def accessible_pair(self, seed: str, target: float = AA_NORMAL) -> tuple[str, str]:
         """Return ``(background, foreground)`` guaranteed to meet ``target``.
 

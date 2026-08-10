@@ -13,6 +13,9 @@ from components.workspace.application.use_cases.resolve_workspace_brand_use_case
 )
 from components.workspace.domain.policies.wcag_contrast_policy import WcagContrastPolicy
 from components.workspace.domain.services.brand_resolution_service import BrandResolutionService
+from components.workspace.domain.services.ui_accent_derivation_service import (
+    UiAccentDerivationService,
+)
 from components.workspace.infrastructure.adapters.pure_python_color_space_adapter import (
     PurePythonColorSpaceAdapter,
 )
@@ -28,12 +31,14 @@ class BrandResolutionProvider:
     @staticmethod
     def port() -> BrandResolutionPort:
         color_space = PurePythonColorSpaceAdapter()
-        service = BrandResolutionService(color_space, WcagContrastPolicy(color_space))
+        contrast_policy = WcagContrastPolicy(color_space)
+        service = BrandResolutionService(color_space, contrast_policy)
         return ResolveWorkspaceBrandUseCase(
             store=WorkspaceThemeRepository(),
             resolution_service=service,
             color_space=color_space,
             font_catalog=BrandFontCatalogRepository(),
+            ui_accent_service=UiAccentDerivationService(color_space, contrast_policy),
         )
 
 

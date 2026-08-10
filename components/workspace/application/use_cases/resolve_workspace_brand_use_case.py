@@ -19,6 +19,9 @@ from components.workspace.application.ports.color_space_port import ColorSpacePo
 from components.workspace.application.ports.font_catalog_port import FontCatalogPort, FontOption
 from components.workspace.application.ports.workspace_theme_store_port import WorkspaceThemeStorePort
 from components.workspace.domain.services.brand_resolution_service import BrandResolutionService
+from components.workspace.domain.services.ui_accent_derivation_service import (
+    UiAccentDerivationService,
+)
 from components.workspace.domain.value_objects.brand_seed import BrandSeed
 from components.workspace.domain.value_objects.font_tokens import (
     DEFAULT_BODY,
@@ -29,6 +32,7 @@ from components.workspace.domain.value_objects.semantic_token_set import (
     BrandOutputShape,
     SemanticTokenSet,
 )
+from components.workspace.domain.value_objects.ui_surface_palette import APP_SURFACE_PALETTES
 
 _DEFAULT_RADIUS = "0.5rem"
 _DEFAULT_MODE = "light"
@@ -41,19 +45,20 @@ class ResolveWorkspaceBrandUseCase(BrandResolutionPort):
         resolution_service: BrandResolutionService,
         color_space: ColorSpacePort,
         font_catalog: FontCatalogPort,
+        ui_accent_service: UiAccentDerivationService,
     ) -> None:
         self._store = store
         self._service = resolution_service
         self._cs = color_space
         self._fonts = font_catalog
+        self._ui_accent = ui_accent_service
 
     def resolve(self, workspace_id: UUID, output_shape: BrandOutputShape = BrandOutputShape.CSS) -> dict:
         stored = self._store.find_by_workspace(workspace_id)
 
-        if stored and stored.brand_seed.strip():
-            token_set = self._service.resolve(
-                BrandSeed(primary=stored.brand_seed, secondary=stored.secondary_seed or None)
-            )
+        seed_hex = stored.brand_seed.strip() if stored and stored.brand_seed else ""
+        if seed_hex:
+            token_set = self._service.resolve(BrandSeed(primary=seed_hex, secondary=stored.secondary_seed or None))
         else:
             token_set = SemanticTokenSet.default()
 
@@ -78,7 +83,43 @@ class ResolveWorkspaceBrandUseCase(BrandResolutionPort):
                 "heading": self._font_token(stored.font_heading if stored else "", DEFAULT_HEADING).as_dict(),
                 "body": self._font_token(stored.font_body if stored else "", DEFAULT_BODY).as_dict(),
             },
+            "ui_accent": self._ui_accent_payload(seed_hex, output_shape),
         }
+
+    def _ui_accent_payload(self, seed_hex: str, shape: BrandOutputShape) -> dict | None:
+        """The brand accent made legible on the app's own surfaces, per theme.
+
+        ``None`` when the workspace has not branded — the app then keeps its
+        built-in accent tokens untouched, so an unbranded workspace renders
+        exactly as it does today.
+
+        ``brand.primary`` (inside ``light``/``dark``) remains the brand FILL and
+        is unchanged; this key is the brand as a *foreground* on our canvas,
+        which nothing guaranteed before. Splitting ``text`` from ``decorative``
+        keeps the raw colour on brand-carrying chrome (WCAG 1.4.11, 3:1) while
+        anything that renders text or state uses the AA-guaranteed variant.
+        """
+        if not seed_hex:
+            return None
+
+        payload: dict = {"source": self._cs.normalize_hex(seed_hex)}
+        for palette in APP_SURFACE_PALETTES:
+            derived = self._ui_accent.derive(seed_hex, palette)
+            payload[palette.key] = {
+                "text": self._value(derived.text, shape),
+                "decorative": self._value(derived.decorative, shape),
+                "adjusted": derived.adjusted,
+                # Rounded so the payload is stable/diffable; the guarantee is
+                # the >= comparison in the derivation, not this reported number.
+                "text_contrast": round(derived.text_ratio, 2),
+                "decorative_contrast": round(derived.decorative_ratio, 2),
+            }
+        return payload
+
+    def _value(self, hex_color: str, shape: BrandOutputShape) -> str:
+        if shape == BrandOutputShape.CSS:
+            return self._cs.to_channels(hex_color)
+        return self._cs.normalize_hex(hex_color)
 
     def _font_token(self, key: str, default: FontToken) -> FontToken:
         """Resolve a stored catalog key to a full font token.
@@ -105,10 +146,5 @@ class ResolveWorkspaceBrandUseCase(BrandResolutionPort):
     def _format(self, tokens: dict, shape: BrandOutputShape, radius: str) -> dict:
         formatted = {}
         for key, value in tokens.items():
-            if key == "radius":
-                formatted[key] = radius
-            elif shape == BrandOutputShape.CSS:
-                formatted[key] = self._cs.to_channels(value)
-            else:
-                formatted[key] = self._cs.normalize_hex(value)
+            formatted[key] = radius if key == "radius" else self._value(value, shape)
         return formatted
