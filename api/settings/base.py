@@ -698,6 +698,29 @@ SBOM_S3_ACCESS_KEY = os.environ.get("SBOM_S3_ACCESS_KEY", os.environ.get("REPORT
 SBOM_S3_SECRET_KEY = os.environ.get("SBOM_S3_SECRET_KEY", os.environ.get("REPORT_PDF_S3_SECRET_KEY", "wanjaladev"))
 SBOM_S3_PRESIGNED_TTL_SECONDS = int(os.environ.get("SBOM_S3_PRESIGNED_TTL_SECONDS", "600"))
 
+# ── Scan-output artifact channel (ADR 0022) ────────────────────────────────
+# Raw engine output (Prowler OCSF, the Trivy/Opengrep envelopes) travels to the
+# worker as an object-storage artifact instead of pod-log stdout, which silently
+# truncated at the kubelet's 10Mi containerLogMaxSize — a COMPLETED scan with
+# zero findings over a mutilated result, worst on the biggest accounts.
+#
+# SCAN_ARTIFACT_S3_ENDPOINT is DELIBERATELY only defined when the env var is set,
+# because its presence is the switch between the two deployments (see the adapter's
+# _targets_own_endpoint): absent = inherit the MinIO/SBOM settings including its
+# credentials (local); present = this deployment configures the store itself, and
+# credentials are NOT inherited — an empty value means real AWS S3 reached with the
+# instance role. Inheriting MinIO's keys against AWS would 403 every upload.
+SCAN_ARTIFACT_S3_BUCKET = os.environ.get("SCAN_ARTIFACT_S3_BUCKET", "autosec-scan-artifacts")
+if "SCAN_ARTIFACT_S3_ENDPOINT" in os.environ:
+    SCAN_ARTIFACT_S3_ENDPOINT = os.environ["SCAN_ARTIFACT_S3_ENDPOINT"]
+    SCAN_ARTIFACT_S3_ACCESS_KEY = os.environ.get("SCAN_ARTIFACT_S3_ACCESS_KEY", "")
+    SCAN_ARTIFACT_S3_SECRET_KEY = os.environ.get("SCAN_ARTIFACT_S3_SECRET_KEY", "")
+SCAN_ARTIFACT_S3_REGION = os.environ.get("SCAN_ARTIFACT_S3_REGION", "us-east-1")
+# TTL of the one-object write capability handed to an untrusted scan Job.
+SCAN_ARTIFACT_S3_PUT_TTL_SECONDS = int(os.environ.get("SCAN_ARTIFACT_S3_PUT_TTL_SECONDS", "3600"))
+# Hard cap on an artifact the worker will load (ADR 0022 D4) — over it is a FAILED run.
+SCAN_ARTIFACT_MAX_BYTES = int(os.environ.get("SCAN_ARTIFACT_MAX_BYTES", str(512 * 1024 * 1024)))
+
 # Vector store backend used by the RAG pipeline (PDF chunking,
 # document embeddings, similarity search). The lean prod stack runs
 # without Elasticsearch — pgvector via the existing Postgres + pgvector

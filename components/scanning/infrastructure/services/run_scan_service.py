@@ -91,6 +91,13 @@ def run_scan_and_ingest(
     # Operator action on customer infrastructure → immutable trail (audit R4).
     audit_scan_started(run)
 
+    # The artifact channel stores raw output under the run's identity (ADR 0022 D2), so the
+    # adapters need to know which run they are — the ScanRun row already exists by here.
+    target = replace(
+        target,
+        params={**target.params, "workspace_id": str(workspace_id), "scan_run_id": str(run.id)},
+    )
+
     try:
         if credentials_provider is not None:
             target = replace(target, credentials=credentials_provider())
@@ -133,6 +140,7 @@ def run_scan_and_ingest(
             total_checks=result.total_checks,
             passed_count=result.passed_count,
             failed_count=result.failed_count,
+            raw_artifact_ref=(result.raw_artifact_ref or "")[:512],
             completed_at=timezone.now(),
         )
         _publish_after_commit([*observed, completed_event], event_publisher)

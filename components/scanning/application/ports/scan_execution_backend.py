@@ -29,6 +29,37 @@ from components.scanning.domain.errors import InvalidScanSpecError
 ProgressCallback = Callable[[float], None]
 OutputLineCallback = Callable[[str], None]
 
+# ── The Job-side artifact protocol (ADR 0022 D2) ────────────────────────────────────
+# Defined ONCE, here, because it is the contract between two things that must agree
+# exactly: the engine script (which writes) and the backend's uploader co-container
+# (which ships). Three engines speaking three dialects of this would be the per-engine
+# transport the design exists to avoid — so every adapter renders its emit step from
+# ``artifact_emit_tail`` rather than hand-rolling one.
+SCAN_ARTIFACT_PATH = "/tmp/autosec-scan-result.json"
+SCAN_SENTINEL_PATH = "/tmp/.autosec-scan-complete"
+
+
+def artifact_emit_tail(source_path: str) -> str:
+    """Render the sh tail every engine script ends with to publish its result.
+
+    ``source_path`` is the file the engine's own CLI wrote — the ONLY thing that differs
+    per engine, because each tool names its output its own way. Everything after this
+    point (upload, fetch, size caps, failure semantics) is shared machinery.
+
+    It publishes the document to the canonical artifact path and then writes the engine's
+    exit code to the sentinel, in that order. The order is the correctness bit: the
+    uploader waits on the sentinel, so the artifact is always complete before anything
+    can observe that it is ready — no torn read, no racing a half-written file.
+
+    Callers must interpolate this into a script that captured the engine's exit status in
+    ``$code`` first.
+    """
+    return (
+        f'if [ "$code" = "0" ] && [ -s "{source_path}" ]; then '
+        f'cp "{source_path}" "{SCAN_ARTIFACT_PATH}"; fi; '
+        f'printf "%s" "$code" > "{SCAN_SENTINEL_PATH}"; '
+    )
+
 
 @dataclass(frozen=True)
 class ScanJobSpec:
@@ -47,6 +78,21 @@ class ScanJobSpec:
     # and enumerates a whole account in-memory (Prowler, all regions) overrides it upward — at
     # 2Gi a real Prowler account scan is OOMKilled and silently yields zero findings.
     memory_limit: str | None = None
+    # ── The artifact output channel (ADR 0022 D2) ──────────────────────────────────────
+    # Absolute path, inside the shared scratch volume, where the engine writes its result
+    # DOCUMENT. When set, the backend transports the result as an object-storage artifact
+    # instead of pod-log stdout — the transport that silently truncated at the kubelet's
+    # 10Mi containerLogMaxSize, under-reporting exactly on the biggest accounts.
+    #
+    # It is ONE channel for every engine: what differs per engine is only which file its
+    # CLI happens to write, so each adapter points this at that file. Everything after —
+    # upload, fetch, size caps, failure semantics — is shared here. Empty keeps the legacy
+    # stdout path (LocalSubprocessBackend, where a pipe has no such ceiling).
+    artifact_path: str = ""
+    # Identity the artifact is stored under, so a run's raw output is retrievable for
+    # debugging/replay. Empty means "the backend picks an ephemeral key".
+    workspace_id: str = ""
+    scan_run_id: str = ""
 
     def __post_init__(self) -> None:
         if not self.image:
@@ -66,6 +112,13 @@ class ScanJobResult:
     stdout: str  # the scanner's raw output (the adapter parses this)
     exit_code: int
     timed_out: bool = False
+    # Where the raw output was persisted, as "<bucket>/<key>" — set only when the run used
+    # the artifact channel. Rides up to ``ScanRun.raw_artifact_ref`` so a run's untouched
+    # engine output stays retrievable for debugging, support and (later) replay. Note the
+    # adapter still parses ``stdout``: the artifact channel changes HOW the bytes travel,
+    # not what an adapter does with them — which is what keeps it one channel and not a
+    # per-engine rewrite.
+    artifact_ref: str = ""
 
     @property
     def ok(self) -> bool:
