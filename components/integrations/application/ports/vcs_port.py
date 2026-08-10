@@ -85,6 +85,28 @@ class PullRequestState:
     merged_at: str = ""
 
 
+@dataclass(frozen=True)
+class PullRequestPatch:
+    """The code change a pull request actually carries, read back from the host.
+
+    Shaped to the ONE question the legacy-record backfill asks — *what patch is in
+    this PR?* — not to any host's file-list object. ``diff`` is a unified diff in
+    the same shape the open step computes locally (``--- a/<path>`` / ``+++ b/<path>``
+    headers followed by hunks), so a backfilled record and a freshly-opened one
+    render identically in the HUD. ``path`` is the primary changed file;
+    ``file_count`` is how many files the PR touches (Auto-Sec's own draft PRs
+    commit exactly one, so >1 means a human pushed to the branch — worth logging).
+
+    An empty ``diff`` means the host returned no reviewable patch (a binary-only
+    or too-large change). Callers must treat that as "nothing to store" and skip;
+    a diff is never synthesized.
+    """
+
+    path: str
+    diff: str
+    file_count: int = 0
+
+
 class VcsPort(ABC):
     """Driving-side contract for opening a draft PR against an allowlisted repo on a
     code host (GitHub / GitLab / Bitbucket)."""
@@ -156,3 +178,17 @@ class VcsPort(ABC):
         before its finding may enter the vetted corpus. Raises :class:`VcsApiError`
         on an API failure (never swallowed); a missing PR (404) surfaces as such so
         the caller can treat it as "cannot confirm merged" and skip."""
+
+    @abstractmethod
+    def get_pull_request_patch(self, repo: str, pr_ref: int | str) -> PullRequestPatch:
+        """Read back the patch pull request ``pr_ref`` carries in ``repo``.
+
+        A pure READ of an already-opened PR — it changes nothing on the host. It
+        exists because a draft PR's patch is a fact that lives on the host: a
+        record written before the open step persisted its diff can only recover
+        that diff by asking. Works for any lifecycle state (open, closed, merged) —
+        the patch of a merged PR is still the patch it carried.
+
+        Raises :class:`VcsApiError` on an API failure (404 = the PR is gone or the
+        token cannot see it), never swallowed, so the caller skips that record
+        with a logged reason instead of storing something invented."""

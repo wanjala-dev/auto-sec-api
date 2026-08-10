@@ -19,6 +19,7 @@ from components.integrations.application.ports.vcs_port import (
     CommittedFile,
     DefaultBranch,
     DraftPullRequest,
+    PullRequestPatch,
     PullRequestState,
     RepoFile,
     VcsApiError,
@@ -46,7 +47,16 @@ class GitHubVcsAdapter(VcsPort):
     # ── HTTP core ─────────────────────────────────────────────────────
 
     @sensitive_variables("headers")
-    def _request(self, method: str, path: str, *, json_body: dict | None = None, params: dict | None = None) -> dict:
+    def _request(
+        self, method: str, path: str, *, json_body: dict | None = None, params: dict | None = None
+    ) -> dict | list:
+        """Issue one authenticated GitHub API call and return its decoded JSON.
+
+        The return type is genuinely ``dict | list``: collection endpoints
+        (``contents`` on a directory, ``pulls/{n}/files``) answer a JSON array.
+        Callers that can receive either check with ``isinstance`` — the previous
+        ``-> dict`` annotation understated it.
+        """
         url = f"{self._base_url}{path}"
         headers = {
             "Authorization": f"Bearer {self._token}",
@@ -217,3 +227,34 @@ class GitHubVcsAdapter(VcsPort):
             state=str(data.get("state") or ""),
             merged_at=str(data.get("merged_at") or ""),
         )
+
+    def get_pull_request_patch(self, repo: str, pr_ref: int | str) -> PullRequestPatch:
+        """Read a PR's patch via ``GET /repos/{repo}/pulls/{number}/files``.
+
+        GitHub returns one entry per changed file carrying ``filename`` plus
+        ``patch`` — the unified-diff HUNKS, without the ``---``/``+++`` file
+        headers. We prepend those headers so the result matches, byte-shape for
+        byte-shape, what ``difflib.unified_diff`` produces at open time; the HUD
+        then renders a backfilled record exactly like a freshly-opened one.
+
+        A file with no ``patch`` key (binary, or a change too large for GitHub to
+        inline) contributes nothing — it is never replaced with a placeholder.
+        """
+        files = self._request("GET", f"/repos/{repo}/pulls/{pr_ref}/files", params={"per_page": 100})
+        if not isinstance(files, list):
+            raise VcsApiError(f"GitHub returned an unexpected file list for {repo}#{pr_ref}", status_code=None)
+
+        sections: list[str] = []
+        primary_path = ""
+        for entry in files:
+            if not isinstance(entry, dict):
+                continue
+            filename = str(entry.get("filename") or "")
+            hunks = entry.get("patch")
+            if not filename or not hunks:
+                continue
+            if not primary_path:
+                primary_path = filename
+            sections.append(f"--- a/{filename}\n+++ b/{filename}\n{hunks}\n")
+
+        return PullRequestPatch(path=primary_path, diff="".join(sections), file_count=len(files))

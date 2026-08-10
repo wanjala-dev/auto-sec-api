@@ -52,3 +52,36 @@ class ProjectFindingPrRecorder(FindingPrRecorderPort):
                 change_summary=change_summary,
             )
         )
+
+    def attach_draft_pr_patch(
+        self,
+        *,
+        workspace_id: str,
+        task_id: str,
+        path: str,
+        diff: str,
+        change_summary: str = "",
+        pr_state: str = "",
+        merged: bool = False,
+        reason: str = "patch_backfill",
+    ) -> tuple[bool, str]:
+        """Delegate the patch attach to ``project`` — same C2 route as the open write."""
+        from components.project.application.ports.record_finding_draft_pr_port import (
+            AttachDraftPrPatchCommand,
+        )
+        from components.project.application.providers.project_provider import ProjectProvider
+
+        use_case = ProjectProvider.build_attach_finding_draft_pr_patch_use_case()
+        result = use_case.execute(
+            command=AttachDraftPrPatchCommand(
+                workspace_id=str(workspace_id),
+                task_id=str(task_id),
+                path=path,
+                diff=diff,
+                change_summary=change_summary,
+                pr_state=pr_state,
+                merged=merged,
+                reason=reason,
+            )
+        )
+        return result.attached, result.reason

@@ -168,6 +168,28 @@ def get_check_pr_merged_use_case():
     )
 
 
+def get_backfill_draft_pr_patches_use_case():
+    """Composition root for the legacy draft-PR patch backfill.
+
+    Wires the same three seams the merge-check read uses (connection resolver,
+    secret envelope, adapter registry) plus the two board ports the open step
+    uses — the C3 read that finds patch-less records and the C2 recorder that
+    writes the patch back through ``project``. The CLI command holds no ORM,
+    crypto, or SDK import."""
+    from components.integrations.application.providers.secret_envelope_provider import decrypt_secret
+    from components.integrations.application.use_cases.backfill_draft_pr_patches_use_case import (
+        BackfillDraftPrPatchesUseCase,
+    )
+
+    return BackfillDraftPrPatchesUseCase(
+        finding_facts=get_finding_facts_reader(),
+        pr_recorder=get_finding_pr_recorder(),
+        resolve_connection=resolve_vcs_connection,
+        decrypt=decrypt_secret,
+        resolve_adapter=get_vcs_adapter,
+    )
+
+
 def get_vcs_connection_service():
     """Composition root for the VcsConnection lifecycle service (ADR 0010 Phase 3) —
     wires the repository, the adapter registry (for verify), and the secret envelope.

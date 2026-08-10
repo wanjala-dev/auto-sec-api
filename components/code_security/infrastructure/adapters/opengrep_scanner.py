@@ -49,7 +49,8 @@ from components.scanning.application.ports.scan_execution_backend import (
     ScanExecutionBackend,
     ScanJobSpec,
 )
-from components.scanning.domain.errors import ScanExecutionError
+from components.scanning.domain.engine_output import parse_engine_result_document
+from components.scanning.domain.errors import IncompleteScanOutputError, ScanExecutionError
 from components.shared_kernel.application.ports.scanner_port import (
     ProgressCallback,
     ScanArtifact,
@@ -83,6 +84,9 @@ _EXCLUDE_SAFE_RE = re.compile(r"^[A-Za-z0-9_.*-]+$")
 _ENVELOPE_KEY = "autosec_opengrep_envelope"
 
 _ARTIFACT_KIND_SCAN_META = "code_security.scan_meta"
+
+# The engine name used in fail-loud output-integrity errors.
+_ENGINE_NAME = "opengrep"
 
 # The in-Job orchestration script. POSIX sh. Interpolations ({fetch_cap}, {excludes},
 # {jobs}) are trusted constants validated below; ARCHIVE_URL/VCS_TOKEN/OPENGREP_RULES
@@ -225,16 +229,31 @@ class OpengrepScanner(ScannerPort):
 
 
 def _unwrap_envelope(stdout: str, *, repo: str) -> dict:
-    """Extract the SARIF body from the Job's stdout envelope (defensive parse — the
-    content is influenced by the scanned repo, D6)."""
-    try:
-        data = json.loads(stdout) if (stdout or "").strip() else {}
-    except ValueError:
-        logger.warning("opengrep_envelope_not_json repo=%s", repo)
-        return {}
+    """Extract the SARIF body from the Job's stdout envelope — fail LOUD if unusable.
+
+    This used to warn and return ``{}`` on non-JSON stdout, which the normalizer turned
+    into zero findings: a truncated SARIF envelope (a monorepo's SARIF is easily the
+    largest output we handle) recorded a COMPLETED run over a mutilated result — a repo
+    reported clean because its findings were cut off. ``parse_engine_result_document``
+    raises ``IncompleteScanOutputError`` instead (see that module for the full rationale).
+
+    Tolerance kept where it is correct: bare SARIF (LocalSubprocessBackend dev harnesses)
+    is still accepted, and a genuinely clean repo's well-formed SARIF with no results
+    still completes normally. The content is repo-influenced (D6), so it is parsed as
+    untrusted DATA — but "untrusted" means never executed, not silently discarded.
+    """
+    data = parse_engine_result_document(stdout, engine=_ENGINE_NAME)
     if not isinstance(data, dict):
-        return {}
+        raise IncompleteScanOutputError(
+            f"Opengrep output for {repo} is a JSON {type(data).__name__}, expected the "
+            f"envelope object (or a bare SARIF object)."
+        )
     if data.get(_ENVELOPE_KEY) == 1:
         sarif = data.get("sarif")
-        return sarif if isinstance(sarif, dict) else {}
+        if not isinstance(sarif, dict):
+            raise IncompleteScanOutputError(
+                f"Opengrep envelope for {repo} carries no SARIF object "
+                f"(sarif={type(sarif).__name__}) — the engine produced no usable result."
+            )
+        return sarif
     return data  # tolerate bare SARIF (e.g. LocalSubprocessBackend dev harnesses)

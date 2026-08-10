@@ -21,9 +21,12 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from components.project.application.ports.record_finding_draft_pr_port import (
+    AttachDraftPrPatchCommand,
+    AttachDraftPrPatchResult,
     RecordFindingDraftPrCommand,
     RecordFindingDraftPrPort,
     RecordFindingDraftPrResult,
+    bound_diff,
     get_draft_pr,
     set_draft_pr,
 )
@@ -98,3 +101,61 @@ class OrmRecordFindingDraftPrRepository(RecordFindingDraftPrPort):
             TaskComment.objects.create(task=task, author=author, comment=comment)
 
         return RecordFindingDraftPrResult(recorded=True)
+
+    def attach_draft_pr_patch(self, *, command: AttachDraftPrPatchCommand) -> AttachDraftPrPatchResult:
+        """Fill the patch into an existing ``draft_pr`` record (legacy repair path).
+
+        Deliberately narrow: it only ever ADDS ``path`` / ``diff`` /
+        ``change_summary`` (plus the PR's lifecycle state) to a record the open
+        step already wrote. The identity facts (``url``, ``repo``, ``branch``,
+        ``opened_by``, ``opened_at``, ``verification``) are re-written verbatim
+        from what is already stored, so a backfill can never rewrite history or
+        upgrade a finding's confidence label. No card comment is added — the PR
+        was announced when it was opened; this only completes its record.
+        """
+        from infrastructure.persistence.project.models import Task
+
+        if not (command.diff or "").strip():
+            # Never store an empty/fabricated patch — an unreadable PR stays honest.
+            return AttachDraftPrPatchResult(attached=False, reason="empty_diff")
+
+        task = Task.objects.filter(id=command.task_id, workspace_id=command.workspace_id).first()
+        if task is None:
+            return AttachDraftPrPatchResult(attached=False, reason="task_not_found")
+
+        meta = task.metadata or {}
+        record = get_draft_pr(meta)
+        if not record.get("url"):
+            return AttachDraftPrPatchResult(attached=False, reason="no_draft_pr_record")
+        if str(record.get("diff") or "").strip():
+            # Idempotent: a record that already renders inline is left alone.
+            return AttachDraftPrPatchResult(attached=False, reason="already_has_diff")
+
+        attached_at = datetime.now(UTC).isoformat()
+        patched = dict(record)
+        patched["path"] = command.path
+        # Bounded through the ONE contract helper, so a backfilled diff is clamped
+        # exactly like one the open step computes.
+        patched["diff"] = bound_diff(command.diff)
+        patched["change_summary"] = command.change_summary
+        if command.pr_state:
+            patched["pr_state"] = command.pr_state
+            patched["merged"] = bool(command.merged)
+        set_draft_pr(meta, patched)
+
+        provenance = meta.get("provenance") or {"events": []}
+        provenance.setdefault("events", [])
+        provenance["events"].append(
+            {
+                "actor": "system:autosec",
+                "action": (
+                    f"attached the draft PR's patch to this record ({command.reason}) — "
+                    f"`{command.path}` now reviewable inline"
+                ),
+                "at": attached_at,
+            }
+        )
+        meta["provenance"] = provenance
+        task.metadata = meta
+        task.save(update_fields=["metadata", "updated_at"])
+        return AttachDraftPrPatchResult(attached=True, reason="attached")

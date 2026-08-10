@@ -123,6 +123,15 @@ Selected by config: `SCAN_EXECUTION_BACKEND=k8s_job` (prod) / `local_subprocess`
     multi-MB, K8s-Prowler output should move to a shared-`emptyDir`/object-store transport —
     **pod-log stdout truncates large outputs** (trivy-operator has hit exactly this). Trivy
     (small per-image output) and Prowler-on-local (a pipe) are unaffected.
+    - **RESOLVED — superseded by [ADR 0022](0022-scan-output-artifact-channel.md)** (2026-08-09).
+      The follow-up was correct and measured: kubelet's `containerLogMaxSize` default is **10Mi**,
+      and a Prowler scan of our *demo* account already emits **3.98 MB**. Two corrections to the
+      note above, both verified rather than assumed: (a) the truncation is **not Prowler-specific**
+      — Trivy and Opengrep parse the same way and had the same silent-zero-findings hole, so the
+      artifact channel is one shared transport, not a Prowler patch; and (b) it does **not**
+      reproduce locally — Docker Desktop's `cri-dockerd` + unbounded `json-file` driver bypasses
+      kubelet rotation entirely, while production k3s (containerd) enforces it. ADR 0022 D1
+      (the fail-loud guard) is shipped; D2–D5 (the artifact channel) are decided there.
 
 ### D5 — Untrusted-input gate: the image-reference validator
 

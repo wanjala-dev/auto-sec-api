@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from components.project.application.use_cases.archive_finding_cards_use_case import ArchiveFindingCardsUseCase
+from components.project.application.use_cases.attach_finding_draft_pr_patch_use_case import (
+    AttachFindingDraftPrPatchUseCase,
+)
 from components.project.application.use_cases.batch_move_tasks_use_case import BatchMoveTasksUseCase
 from components.project.application.use_cases.create_project_use_case import CreateProjectUseCase
 from components.project.application.use_cases.create_task_use_case import CreateTaskUseCase
@@ -67,6 +70,14 @@ class ProjectProvider:
         )
 
         return RecordFindingDraftPrUseCase(port=OrmRecordFindingDraftPrRepository())
+
+    @staticmethod
+    def build_attach_finding_draft_pr_patch_use_case() -> AttachFindingDraftPrPatchUseCase:
+        from components.project.infrastructure.repositories.record_finding_draft_pr_repository import (
+            OrmRecordFindingDraftPrRepository,
+        )
+
+        return AttachFindingDraftPrPatchUseCase(port=OrmRecordFindingDraftPrRepository())
 
     @staticmethod
     def build_record_finding_preview_use_case() -> RecordFindingPreviewUseCase:

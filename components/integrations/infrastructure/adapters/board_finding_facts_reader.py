@@ -19,7 +19,12 @@ from __future__ import annotations
 
 from components.integrations.application.ports.finding_facts_port import (
     ActionableFinding,
+    DraftPrPatchGap,
     FindingFactsPort,
+)
+from components.project.application.ports.record_finding_draft_pr_port import (
+    draft_pr_candidate_filter,
+    get_draft_pr,
 )
 from components.shared_kernel.domain.triage import PR_REMEDIABLE_SOURCE_TYPES
 
@@ -75,3 +80,41 @@ class BoardFindingFactsReader(FindingFactsPort):
                 continue
             open_count += 1
         return open_count
+
+    def list_draft_pr_patch_gaps(self, *, workspace_id: str = "", limit: int = 500) -> tuple[DraftPrPatchGap, ...]:
+        """Sweep for draft-PR records that carry a ``url`` but no stored ``diff``.
+
+        The candidate set comes from ``draft_pr_candidate_filter()`` — the SAME
+        canonical path definition the writer and the remediation reconciler use,
+        so a writer-side move of the record can never silently empty this sweep.
+        The "has a diff" test is then applied in Python: JSON key-ABSENCE is what
+        distinguishes a legacy record, and that is expressed portably here rather
+        than as a backend-specific JSON lookup (the suite runs on SQLite, the
+        cluster on Postgres — one predicate, both backends).
+        """
+        from infrastructure.persistence.project.models import Task
+
+        rows = Task.objects.filter(**draft_pr_candidate_filter())
+        if workspace_id:
+            rows = rows.filter(workspace_id=workspace_id)
+
+        gaps: list[DraftPrPatchGap] = []
+        for task_id, task_workspace_id, metadata in (
+            rows.order_by("id").values_list("id", "workspace_id", "metadata").iterator(chunk_size=500)
+        ):
+            record = get_draft_pr(metadata or {})
+            if not record.get("url"):
+                continue
+            if str(record.get("diff") or "").strip():
+                continue  # already renders inline — nothing to repair
+            gaps.append(
+                DraftPrPatchGap(
+                    workspace_id=str(task_workspace_id),
+                    task_id=str(task_id),
+                    pr_url=str(record.get("url") or ""),
+                    repo=str(record.get("repo") or ""),
+                )
+            )
+            if len(gaps) >= limit:
+                break
+        return tuple(gaps)
