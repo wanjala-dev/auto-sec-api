@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 
+from django.contrib import messages
 from django.core.exceptions import RequestDataTooBig
 
 from components.shared_kernel.application.providers.django_orm_provider import (
@@ -66,6 +67,7 @@ from components.workspace.api.permissions import IsOrgOwnerOrMember
 from components.workspace.api.workspace_permissions import (
     IsAdminUser,
 )
+from infrastructure.api.client_ip import trusted_client_ip
 
 logger = logging.getLogger(__name__)
 
@@ -236,10 +238,13 @@ class HoneypotLoginView(FormView):
         messages.error(self.request, _("Your account doesn't have access to this site."))
 
     def _client_ip(self) -> str | None:
-        forwarded_for = self.request.META.get("HTTP_X_FORWARDED_FOR")
-        if forwarded_for:
-            return forwarded_for.split(",")[0].strip()
-        return self.request.META.get("REMOTE_ADDR")
+        """Trusted client IP — see ``infrastructure.api.client_ip``.
+
+        The honeypot exists to attribute intrusion attempts to a real origin.
+        Reading the caller's own ``X-Forwarded-For`` prefix would let the very
+        scanner we are trying to fingerprint dictate the IP we record about it.
+        """
+        return trusted_client_ip(self.request)
 
 
 # =============================================================================
