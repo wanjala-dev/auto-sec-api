@@ -808,3 +808,71 @@ consolidation list; the observability-framing conclusion) · `docs/product/STATE
 `docs/architecture/ARCHITECTURE_REVIEW_2026-08-09.md` §1.1 (the unbuilt-bet finding) ·
 `docs/plans/SECURITY_POSTURE_VISION_2026-07-20.md` §3.4 (the inward twin of this vocabulary) ·
 ADR 0004, 0008, 0009, 0010, 0013, 0017, 0019, 0021.
+
+---
+
+## 9. Build notes — base setup (2026-08-09), and corrections found against the code
+
+Henry **cut the G0 gate**: the three Isaac facts (AI SDK major version, Vercel plan
+tier, drain consent) no longer block the build. So the half of this ADR that is
+**independent of how telemetry is captured** ships now, and capture stays a
+pluggable adapter behind `AgentTelemetryPort`. Everything below is base setup —
+detectors (D4/P1), the capability axis, the asset-graph join (P2), tamper-evidence
+(D6/P3), remediation (D5/P4) and any Vercel-specific adapter remain unbuilt.
+
+### 9.1 Implementation details this ADR deliberately left open, now settled
+
+| Left open in | Settled as |
+|---|---|
+| **D1.1** — reuse `vendor_log` or add an origin | **Added `ProvenanceEvent.Origin.AGENT_RUNTIME`.** The idempotency key is `(workspace, origin, origin_id)`, so sharing `vendor_log` with an unrelated ingester would make two feeds collide on it. Same reasoning added `SourceSystem.AGENT_RUNTIME`, kept distinct from `AI` (which is *our* agents — the two identity spaces must never merge). |
+| **D1.2** — the URN namespace | **`urn:agent:<platform>:<external_ref>`**, constructed only via `AgentUrn.build()` (`components/provenance/domain/value_objects/agent_urn.py`), which lowercases the platform, validates both segments against a conservative charset, and **raises rather than truncating**. It is carried as `ProvenanceActor.external_ref`. |
+| **D1.3** — the capture-connection model | **`AgentTelemetrySource`** (`infrastructure/persistence/provenance/models.py`) — `kind` + `platform` + `agent_allowlist` + `config` + `secret_ref` + `status` + `cursor`-equivalent, copying `WorkspaceLogSource`'s shape and `VercelConnection`'s named-scope consent. |
+| **D3** — content capture off by default | **Enforced by refusal (HTTP 422), not by stripping.** The AI SDK records inputs/outputs *by default*; a silent strip would let a misconfigured exporter stream prompt content at us indefinitely with no signal. The refusal names the offending attribute keys (never the values) so the fix lands at the source. The trade — a fire-and-forget drain loses the refused batch — is accepted deliberately. There is also **no `capture_content` column**: a consent field with no honouring code would be a lie the schema tells. |
+| **D3** — the flag | **`feature.agent_runtime_accountability`**, dark, in `PROD_DISABLED_FLAGS`, a sibling of `feature.provenance_graph` and never a reuse. |
+
+### 9.2 Corrections to this ADR, found by checking it against the code
+
+Everything §2.1 claims about the provenance graph **verified true**: `ActorType`
+already carries `ai_agent` and `vendor_integration`, `SourceSystem` already
+enumerates `aws / okta / google_workspace / slack / github`, `Origin` already
+carries `vendor_log`, `AccessGrant`-vs-`ProvenanceEvent` is the CAN-vs-DID model,
+and the projection is idempotent on `(workspace, origin, origin_id)`. Four things
+were **not** right:
+
+1. ⚠ **"The graph is a projection index over source-of-truth stores" stops being
+   true here.** For the three internal backfills there is always another record
+   (an `EntityAuditLog` row, a board event). For externally-reported agent
+   telemetry **there is no other store — the `ProvenanceEvent` row IS the
+   record.** This materially raises the stakes of D6: what P3 would have to
+   hash-chain is a *primary* record, not an index that can be rebuilt from source.
+2. ⚠ **D1's "`asset_urn` joins the asset graph by value" does not yet hold for
+   agent resources.** The existing `pre_save` bridge derives the URN via
+   `AssetUrn.canonical(source_system, external_ref)`, which yields
+   `urn:agent_runtime:api.stripe.com` — that will not match the asset graph's
+   `arn:aws:…` / `urn:vercel:…` URNs. The bridge does preserve an explicitly-set
+   value, so **P2's real work is resolving an agent's target to a canonical asset
+   URN**, not writing a join. The ADR states this more optimistically than the
+   code supports.
+3. ⚠ **Undocumented column widths constrain the design.** `ProvenanceEvent.origin_id`
+   is `CharField(64)` — a W3C `<trace_id>:<span_id>` pair is 49 chars and fits, but
+   a longer vendor correlation id would silently truncate into a collision.
+   `ProvenanceActor.external_ref` is `CharField(255)` (hence `AgentUrn`'s hard
+   length check) and `source_system` / `origin` are `CharField(24)`.
+4. ✅ **§7 "could not verify" is now resolved, negatively.** Verified via the
+   Stripe MCP (2026-08-09): **Stripe does not expose the acting API key per
+   request programmatically** — request logs are a Dashboard/Workbench surface,
+   and the v2 Activity Logs API covers key *lifecycle*, not key *usage*. D2's
+   framing therefore holds in the strongest form: **attribution is a join we
+   perform, never a field we read.** The code says so in the `AgentUrn` docstring
+   and stamps `identity_assertion: "self_reported"` on every event, so nobody
+   later assumes we can query it.
+
+### 9.3 How a Vercel Trace Drain plugs in later without touching the ledger
+
+The first adapter parses **OTLP/HTTP JSON**, which is exactly what a Trace Drain
+emits. So the drain is a *deployment* change, not a code change below the port:
+provision the drain at this endpoint via Vercel's Drains REST API, and add a
+drain-token authenticator (a drain cannot present a user JWT) alongside the
+existing JWT + membership auth. The adapter, the consent model, the ledger and
+the graph do not move. An AI-SDK-native or pull-based capture path lands the same
+way — a sibling class plus one line in `AgentTelemetryProvider`.

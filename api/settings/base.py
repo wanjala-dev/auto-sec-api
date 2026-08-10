@@ -504,6 +504,14 @@ REST_FRAMEWORK = {
         "sns_webhook": "200/min",
         # Public pre-auth login-brand lookup (anonymous, keyed on workspace id).
         "workspace_login_brand": "60/min",
+        # Agent-runtime telemetry ingest (ADR 0023). Authenticated + workspace
+        # scoped, but it is the one WRITE surface intended to face a customer's
+        # own exporter (and eventually a Vercel Trace Drain), so it carries its
+        # own bucket rather than riding the generic "user" rate: a runaway
+        # exporter must not be able to consume a tenant's whole request budget.
+        # Generous because a drain batches and retries; the 1 MiB body cap and
+        # the 1000-span batch cap are the real ceilings.
+        "agent_telemetry_ingest": "300/min",
     },
     "DEFAULT_SCHEMA_CLASS": "infrastructure.api.schema.ContextualAutoSchema",
     "EXCEPTION_HANDLER": "infrastructure.api.exception_handler.custom_exception_handler",

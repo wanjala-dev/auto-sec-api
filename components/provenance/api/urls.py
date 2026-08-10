@@ -2,6 +2,7 @@ from django.urls import path
 
 from components.provenance.api.controller import (
     AccessReviewView,
+    AgentTelemetryIngestView,
     GraphOverviewView,
     HallTreeView,
     LeastPrivilegeView,
@@ -9,6 +10,11 @@ from components.provenance.api.controller import (
 )
 
 urlpatterns = [
+    path(
+        "workspaces/<uuid:workspace_id>/agent-telemetry/<uuid:source_id>/ingest/",
+        AgentTelemetryIngestView.as_view(),
+        name=AgentTelemetryIngestView.name,
+    ),
     path(
         "workspaces/<uuid:workspace_id>/graph/",
         GraphOverviewView.as_view(),
