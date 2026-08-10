@@ -615,13 +615,531 @@ kind+config+cursor+secret_ref shape and `VercelConnection`'s named-scope consent
 `ai_*_allowlist` consent boundary (copy `repo_allowlist` enforcement), a decided URN namespace, and
 new `Finding.source` values. **No Finding-table migration.**
 
-## 5. Findings — Stream C (the capture problem)
+## 5. Findings — Stream C (the capture problem) — COMPLETE
 
-_pending_
+### 5.0 ⭐ The single most important sentence in the whole research pass
 
-## 6. Findings — Streams D–H
+> **Identity is absent by construction from the AI-observability stack.** Verified across the OTel
+> registry, the GenAI agent-spans doc, and the genai repo's own attribute registry: **there is no
+> principal / subject / credential / authorization attribute anywhere in `gen_ai.*`.** The only
+> verified identity in any of the five mechanisms is MCP's OAuth token `sub` — and MCP Authorization
+> is optional and covers only MCP-routed tools.
+> **Every accountability claim a security product makes here is a JOIN it performs, not a field it
+> reads.** That join — behaviour telemetry × credential provenance — is the defensible product surface.
 
-_pending_
+This is the moat sentence for this ADR, and it is a research result, not an assertion.
+
+### 5.1 OpenTelemetry GenAI semantic conventions — useful schema, unstable footing
+
+- **Moved out of the main semconv repo during 2026.** Main repo **v1.42.0 (2026-06-12)** deprecated
+  and moved all `gen_ai.*`; **v1.43.0 (2026-07-03)** ships none of it. New home:
+  https://github.com/open-telemetry/semantic-conventions-genai
+  (https://john-hodge.com/blog/opentelemetry-genai-semantic-conventions/,
+  https://opentelemetry.io/docs/specs/semconv/gen-ai/)
+- **Nothing is Stable.** As of 2026-07-17 no GenAI span/event/metric/attribute is marked Stable, and
+  ⚠ **the new repo has NO releases or tags** (verified:
+  https://github.com/open-telemetry/semantic-conventions-genai/releases → "There aren't any releases
+  here"). **Pinning means pinning a commit on `main`** — a real problem under `pin-versions.md`.
+- `gen_ai.operation.name` ∈ `chat, create_agent, embeddings, execute_tool, generate_content,
+  invoke_agent, invoke_workflow, retrieval, text_completion`.
+- **Agent spans:** `create_agent {name}`, `invoke_agent {name}`; attributes `gen_ai.agent.id`,
+  `.name`, `.description`, `.version`, `gen_ai.conversation.id`, plus request/response/usage.
+  Content (`gen_ai.input.messages`, `gen_ai.output.messages`, `gen_ai.system_instructions`,
+  `gen_ai.tool.definitions`) is **Opt-In (off by default)**.
+- **Tool spans:** name `execute_tool {tool}`, kind INTERNAL. Required `gen_ai.operation.name`,
+  `gen_ai.tool.name`; recommended `gen_ai.tool.call.id`; **Opt-In** `gen_ai.tool.call.arguments`,
+  `gen_ai.tool.call.result`. `gen_ai.tool.type` ∈ `function | extension | datastore` only.
+- Native emitters: **Vercel AI SDK 7** (best), Mastra (pins semconv v1.38.0 — interop wrinkle),
+  Pydantic AI, Strands. **OpenAI Agents SDK does NOT emit OTel GenAI natively** (own tracing;
+  bridge via `openinference-instrumentation-openai-agents`).
+- ⚠ **OpenInference (Arize) is a COMPETING convention, not the OTel one** — ingesting both requires a
+  normalization layer. Budget for it. (https://arize-ai.github.io/openinference/spec/)
+
+### 5.2 Vercel AI Gateway — good identity axis, blind to tools
+
+- Code change is a **base-URL swap** (`https://ai-gateway.vercel.sh/v1`) or, with the AI SDK, just a
+  plain model string (`model: 'openai/gpt-5.6-sol'`) — **Isaac may already be on it**. OIDC tokens
+  work instead of an API key when running on Vercel.
+  (https://vercel.com/docs/ai-gateway/getting-started/text)
+- **Logs per request:** time, status, model, provider, tokens (input/output/cache-read/reasoning),
+  cost, duration, region; detail adds generation ID, **the originating API key or project**, TTFT,
+  ZDR flag, and a **Fallback Path**. **No prompt/completion bodies. No tool calls.**
+  (https://vercel.com/docs/ai-gateway/observability-and-spend/logs)
+- ⭐ **`ai-reporting-user` and `ai-reporting-tags` HTTP headers** — documented explicitly for a
+  "platform or proxy layer [that] stamps context onto traffic **without modifying application
+  code**"; up to 10 tags, `user` ≤256 chars; become queryable `group_by` dimensions.
+  **This is the cheapest per-agent identity axis that exists.**
+  (https://vercel.com/docs/ai-gateway/observability-and-spend/custom-reporting)
+- **Custom Reporting API**: `GET https://ai-gateway.vercel.sh/v1/report`, Bearer auth, `group_by` ∈
+  {day, user, model, tag, provider, credential_type, zero_data_retention, api_key_name}. **Pro/Ent
+  only, beta, returns AGGREGATES not per-request rows**, priced at $0.075/1k tag-or-user-ID writes
+  and $5/1k queries. `gateway.getGenerationInfo({id})` fetches one generation.
+- **Retention 30 days** for request details (date picker allows 36 → a documented 6-day gap).
+- **Structurally cannot see:** tool execution, direct-to-Stripe calls, MCP tool calls, or any agent
+  that bypasses the gateway. **You cannot prove coverage completeness from inside a gateway.**
+
+### 5.3 ⭐⭐ Vercel Tracing — outbound fetch spans with ZERO code change
+
+Verified verbatim at https://vercel.com/docs/tracing (updated 2026-07-06):
+
+> "Vercel automatically instruments your application **without needing any additional code
+> changes**. When you have set up Trace Drains or enabled Session Tracing … you'll be able to
+> visualize traces for: **Vercel infrastructure** … **Outbound HTTP calls**: The HTTP requests made
+> from your function will be displayed as **fetch spans**, displaying information on the length of
+> time, location, and other attributes."
+
+- **Trace Drains** (https://vercel.com/docs/drains/reference/traces): **OTLP/HTTP exclusively**
+  (no gRPC; port 4318 `/v1/traces`), JSON or Protobuf, to **any custom endpoint**. Vercel stamps
+  `vercel.projectId` / `vercel.deploymentId`. **Per-drain sampling rules** by environment,
+  percentage, path prefix. **Pro/Enterprise, $0.50/GB.**
+- ⭐ **Provisionable via the Drains REST API** (`POST` with `schemas: {trace: {version: "v1"}}` —
+  https://vercel.com/docs/rest-api/drains/create-a-new-drain) — **so we can create the drain
+  ourselves rather than walking the customer through a UI.**
+- Limits: 10 MB compressed per request; spans >1 MB dropped after attribute truncation (marker
+  `<attr>.truncated: true`); **custom spans from Edge-runtime functions do NOT appear** in Session
+  Tracing or Trace Drains.
+- `@vercel/otel` (`registerOTel({serviceName})` in `instrumentation.ts`) is a separate ADDITIVE layer
+  for framework/custom spans — **not required** for infra + fetch spans.
+- ⚠ **[UNVERIFIED]** whether fetch spans ever carry request/response bodies. Standard OTel fetch
+  instrumentation does not. **Do not claim fetch spans reveal what was sent to Stripe** — they reveal
+  *that* Stripe was called, when, and with what status.
+
+### 5.4 ⚠ How this squares with ADR 0021 D5 (must be stated precisely)
+
+ADR 0021 D5 refused **Log Drains**. Trace Drains are a **different product with a different data
+shape**, so this is not a silent re-opening — but the distinction must be made explicitly:
+
+| D5's reason to refuse Log Drains | Does it bind Trace Drains? |
+|---|---|
+| No `logs` integration scope exists (runtime logs 403 even with every scope) | **No** — Trace Drains are provisioned through the Drains REST API, a different surface. |
+| Pro/Enterprise-gated at **$0.50/GB on the customer's bill** | **YES — binds identically.** Trace Drains are also Pro/Ent at $0.50/GB. Inherit this constraint; mitigate with the per-drain sampling rules. |
+| Drain payloads are **attacker-authored strings** (`proxy.path`, `userAgent`, `message`) entering the AI pipeline | **Materially weaker.** Fetch spans are **platform-generated** (host, method, status, duration), not attacker-authored free text. ⚠ But this protection **evaporates the moment AI SDK content attributes are enabled** — `gen_ai.input.messages` IS attacker-influenced text. Hence the metadata-only default in D3. |
+
+### 5.5 ⭐ Vercel AI SDK 7 — the richest signal, one line, once
+
+From https://ai-sdk.dev/docs/ai-sdk-core/telemetry (documented for **AI SDK 7.x, Latest**):
+
+```ts
+import { registerTelemetry } from 'ai';
+import { OpenTelemetry } from '@ai-sdk/otel';
+registerTelemetry(new OpenTelemetry());   // once, at startup
+```
+
+> *"Once a telemetry integration is registered, all AI SDK calls emit telemetry events by default."*
+
+Per-call config exists only to **opt out** (`telemetry: {isEnabled: false}`) or attach a `functionId`.
+
+- Emits native GenAI-semconv spans: `invoke_agent {modelId}` (root), `chat {modelId}` (per step),
+  **`execute_tool {toolName}`** (per tool call), `embeddings`, `rerank`.
+- Tool span attributes: `gen_ai.tool.name`, `.call.id`, `.type`, **`.call.arguments`**,
+  **`.call.result`**, `gen_ai.execute_tool.duration`.
+- ⚠⚠ **"By default, both inputs and outputs are recorded"** — the **OPPOSITE** of the OTel spec's
+  Opt-In posture. Disable via `recordInputs` / `recordOutputs: false`. **For a customer handling card
+  data this is a privacy hazard that must be called out and defaulted off.**
+- ⚠ **The version split is the single biggest friction variable.** AI SDK **v6 and earlier** used
+  per-call `experimental_telemetry: {isEnabled: true}` — i.e. **one edit per call site across 60
+  agents** instead of one edit total. Confirmed by Langfuse's integration doc, which documents both
+  (v7 `registerTelemetry(...)`, Node 22+; v6 `experimental_telemetry`).
+  (https://langfuse.com/integrations/frameworks/vercel-ai-sdk)
+- ⚠ Doc inconsistency **[UNVERIFIED]**: Vercel's AI Gateway page (2026-07-28) says it "works with AI
+  SDK v5 and v6" while ai-sdk.dev documents 7.x as Latest.
+
+**⭐ The key architectural insight: AI SDK 7 telemetry + a Vercel Trace Drain = agent/tool spans
+delivered to an arbitrary OTLP endpoint, with one line of app code and one dashboard/API config —
+and the tool layer (which a gateway cannot see) and the egress layer (which the SDK cannot see)
+arrive in ONE correlated trace, because both ride the same `traceId`.**
+
+### 5.6 MCP server-side capture — the only verified identity, but no audit trail
+
+- Current revision **`2026-07-28`** (https://modelcontextprotocol.io/specification/versioning).
+  It is a big revision: **stateless architecture** (`initialize` handshake and `Mcp-Session-Id`
+  removed), **W3C Trace Context formalized in `_meta`**, six authorization-hardening SEPs, JSON
+  Schema 2020-12, and **Logging / Roots / Sampling all DEPRECATED**.
+- **MCP `logging` is server→client and is now deprecated** (SEP-2577: "New implementations SHOULD NOT
+  adopt it… migrate to `stderr` … **or to OpenTelemetry for structured observability**"). It also
+  explicitly **forbids** the content an audit trail needs: log messages *"MUST NOT contain:
+  Credentials or secrets, Personal identifying information, Internal system details…"*
+- **There is NO audit event schema, no standard for recording tool-call arguments/results
+  server-side, no cross-server correlation ID, no retention or tamper-evidence model.** A server
+  operator builds all of it.
+- Two open, **unmerged, unsponsored** SEPs confirm the gap: **SEP-2817** "AI Invocation Audit Context
+  in Request `_meta`" (Draft, seeking sponsor; carries **client-asserted** `invocationReason`,
+  `model`, `userIntent`, `turnId` and says outright these are **"not authorization evidence"**), and
+  **SEP-3004** "Tamper-Evident Audit Record Contract" (no sponsor) **[UNVERIFIED in detail]**.
+- ⭐ **Authorization is the one real identity primitive**: an MCP server acts as an **OAuth 2.1
+  resource server**; RFC 9728 Protected Resource Metadata (servers MUST), RFC 8707 Resource
+  Indicators (clients MUST send `resource`), RFC 9207. *"MCP servers MUST validate that access tokens
+  presented to them were specifically issued for their use."* A compliant server can log `sub`/`aud`/
+  `scope`. **Authorization is OPTIONAL overall** and SHOULD NOT be used over stdio.
+- Confused-deputy rules: *"The MCP server MUST NOT pass through the token it received."* Spec warns
+  tokens "cached or **logged on the server**" are a theft vector → **log derived claims, never the
+  raw bearer.**
+- `_meta.io.modelcontextprotocol/clientInfo` is **self-reported and explicitly NOT verified** —
+  *"Implementations SHOULD NOT … rely on them for security decisions."*
+- **Enterprise-Managed Authorization** (SEP-990) is the closest standardized delegation story — an
+  **ID-JAG** carrying a `sub` claim — but is an **opt-in extension, not core**. **SEP-1028**
+  "Delegated Authorization" (on-behalf-of) is still **Proposal, unmerged**.
+- ⚠ Tool annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) exist,
+  but the spec is blunt: *"clients MUST consider tool annotations to be untrusted unless they come
+  from trusted servers."* **You cannot ground a risk classification on declared hints** — classify by
+  observed behaviour or pin known-good servers.
+- `mcp.*` semconv also moved to the genai repo, Development-stage, captures `mcp.method.name`,
+  `mcp.protocol.version`, `mcp.resource.uri`, `mcp.session.id` — **no tool arguments, no caller
+  identity.**
+
+### 5.7 Log-based reconstruction elsewhere (for contrast)
+
+- **Vercel Log Drains carry NO outbound-call field at all** — every field describes the **inbound**
+  request (`proxy.method/host/path/userAgent/clientIp/wafAction/...`).
+  (https://vercel.com/docs/drains/reference/logs)
+- ⚠ **Retention is brutal and the window may already be closed:** Vercel runtime logs retain
+  **Hobby 1 hour · Pro 1 day · Enterprise 3 days · +Observability Plus 30 days** (viewable in any
+  14-consecutive-day window; $1.20 per 1M events; on by default only for paid Pro teams created or
+  upgraded **on or after 2026-04-03**). (https://vercel.com/docs/logs/runtime,
+  https://vercel.com/docs/observability/observability-plus)
+- **AWS (not Isaac's stack, but the contrast matters):** Bedrock `InvokeModel`/`Converse` are
+  CloudTrail **management** events (free, default); `InvokeAgent`/`Retrieve`/`InvokeFlow` are **data
+  events requiring advanced selectors at extra cost**. CloudTrail proves **which IAM role** called
+  Bedrock — never which of 60 in-app agents unless each assumes a distinct role. **Bedrock Model
+  Invocation Logging** has an optional caller-supplied **`requestMetadata`** bag that CAN say
+  "agent #37" — **and it requires a code change**. VPC Flow Logs are L3/L4 only and useless against
+  shared CDN IPs.
+- **Stripe:** Workbench Logs record every API request, filterable by date/status/method/endpoint/
+  resource ID/source. The native attribution primitive is **Restricted API Keys (`rk_…`), which
+  Stripe recommends creating one per part of your integration** — named, scoped, independently
+  revocable. **One RAK per agent is the correct answer, and it is a provisioning decision, not a
+  logging one.** ⚠ **[UNVERIFIED]**: request-log retention, whether a "Key name" column is exposed,
+  and `X-Stripe-Client-User-Agent` as a caller-tagging mechanism (**do not cite**).
+
+### 5.8 Ranking by deployment friction FOR ISAAC
+
+| # | Mechanism | Code change | Once or per-agent? | Signal |
+|---|---|---|---|---|
+| **1** | **Vercel Trace Drains** | **NONE** | **Once** (provisionable by API) | Infra spans + **outbound fetch spans** for every function — sees egress to both the LLM provider and Stripe. No content, no tool semantics, **no identity**. Pro/Ent, $0.50/GB. |
+| **2** | **AI SDK 7 `registerTelemetry()`** | **One line, once** | Once per app (**per call site on v6**) | **Richest available**: `invoke_agent`/`chat`/**`execute_tool`** with tool name, call id, arguments, results, tokens. Rides the same drain. Inputs/outputs on by default — card-data hazard. |
+| **3** | **Vercel AI Gateway** | Base-URL/model-string swap (may already be on it) | Per client construction site | Model/provider/tokens/cost/status/routing + **originating API key**; **`ai-reporting-*` headers give a per-agent identity axis with no app-code change**. No content, **no tool calls**, blind to direct-to-Stripe. |
+| **4** | **OTel GenAI semconv** | — | — | **A schema, not a mechanism.** Free if AI SDK 7 emits it. Unversioned-`main` pinning risk; OpenInference normalization tax. **Zero identity attributes.** |
+| **5** | **MCP server-side** | Server implementation work | Per MCP server, MCP-routed tools only | **The only verified caller identity (OAuth `sub`)** — but the spec gives no audit trail; you build all of it. Invisible to Isaac's direct Stripe calls. Not deployable against 60 existing agents. |
+
+### 5.9 Three cross-cutting facts to carry into the ADR verbatim
+
+1. **Identity is absent by construction** (§5.0) — every accountability claim is a **join**, not a
+   field read.
+2. **The tool-execution blind spot is where the risk lives.** Gateways see the LLM hop. The agent's
+   `charge_card` tool calling `api.stripe.com` traverses **no gateway**. Only two things see it: the
+   framework's `execute_tool` span and Vercel's platform fetch spans. **Any architecture relying on
+   gateway logs alone is blind precisely where money moves.**
+3. **Retroactive reconstruction is largely impossible and the window may already be closed.** Frame
+   the product as **"turn on accountability going forward,"** never as forensic recovery.
+
+## 6. Findings — Stream D (identity / permission surface / tamper-evidence) — COMPLETE
+
+### 6.1 What a shared API key structurally destroys (primary source)
+
+Google Cloud IAM best practices, verbatim:
+
+> "Cloud Audit Logs creates a log when a service account modifies a resource, but **if the service
+> account is authenticated with a service account key, there is no reliable way to tell who used the
+> key.**" … "if multiple applications share a service account, you might not be able to trace
+> activity back to the correct application."
+> — https://docs.cloud.google.com/iam/docs/best-practices-service-accounts
+
+Note the contrast Google draws: **impersonation preserves accountability where key-based auth
+destroys it** — "authenticating … by impersonating the service account with user credentials logs
+the principal who acted as the service account." **The credential type determines whether
+attribution is even possible.**
+
+Three losses, in ADR language:
+1. **Attribution** — the identifier in the log is the key, not the agent. **No downstream correlation
+   recovers it, because the information was never transmitted.** Anything else is inference, not
+   evidence, and will not survive a dispute.
+2. **Selective revocation** — you cannot revoke agent 7 of 60 without revoking all 60.
+3. **Differential scoping** — the grant is the union of what all 60 agents need; **every agent holds
+   the maximum privilege of the noisiest one.** For a shared-key fleet the granted-vs-used gap is not
+   sloppiness, it is arithmetic.
+
+### 6.2 Entra Agent ID — **GA (April 2026)**, and it independently validates our D1 data model
+
+- GA per https://learn.microsoft.com/en-us/entra/agent-id/whats-new-agent-id (`ms.date: 2026-05-01`).
+  Conditional Access for Agents + ID Protection for Agents GA rolled out **early July → early August
+  2026** (MC1395007). Some sub-features (admin-center blueprint wizard) remain **Preview**.
+- **Object model:** *agent identity blueprint* (holds the credentials — like an app registration) →
+  *agent identity* (the running instance; **has NO credentials of its own**, authenticates via
+  blueprint-issued tokens) → *blueprint principal* (tenant-local, "enables it to acquire tokens and
+  appear in audit logs") → optional *agent's user account* (1:1, for systems needing a user object).
+  **N instances, one credential, N distinct identities in the token and the log.**
+- **Two patterns:** interactive agents use **delegated permissions + OBO**; autonomous agents use
+  **client credentials** with their own identity.
+- **Governance:** Owners (technical) / **Sponsors (business accountability, no technical access)** /
+  Managers, plus lifecycle workflows that "automatically transfer sponsorship when a sponsor changes
+  roles or leaves, to prevent orphaned agents."
+- ⭐ **Audit design — the part to copy.** Microsoft did NOT build a new log; they **extended the
+  existing audit schema**: a new `agentType` property on `auditAppIdentity`, `auditUserIdentity`,
+  `targetResource`; a new `auditActivityPerformer` type; a new **`blueprintId`** to correlate
+  instance → blueprint; and a new `agentSignIn` sign-in event type, filterable in Graph beta.
+  (https://learn.microsoft.com/en-us/entra/agent-id/sign-in-audit-logs-agents)
+  > **"Agent-ness is a property stamped onto the existing actor fields, not a parallel log."**
+  This independently validates ADR D1: extend `ProvenanceActor`/`ProvenanceEvent`, do **not** build a
+  parallel agent-events table.
+- **Caveat:** attributes actions to **Entra-protected resources**. Tells you nothing about Stripe.
+
+### 6.3 RFC 8693 — the cleanest conceptual frame, and its honest limit
+
+https://www.rfc-editor.org/rfc/rfc8693.html
+
+> **Impersonation:** "when principal A impersonates principal B, then insofar as any entity receiving
+> such a token is concerned, they are actually dealing with B."
+> **Delegation:** "principal A still has its own identity separate from B, and it is explicitly
+> understood that while B may have delegated some of its rights to A, any actions taken are being
+> taken by A representing B."
+
+**Impersonation is the accountability-destroying pattern** — name it as the anti-pattern. The `act`
+claim carries the chain (outermost = current actor, nested = prior); `may_act` pre-authorizes.
+
+⚠ **The limit the ADR must not gloss:**
+> "For the purpose of applying access control policy, the consumer of a token MUST only consider the
+> token's top-level claims and the party identified as the current actor by the `act` claim. **Prior
+> actors identified by any nested `act` claims are informational only.**"
+
+So token exchange proves the **immediate** delegation hop authoritatively; the deeper chain is
+informational. **Do not claim "cryptographically provable delegation chain."** For a multi-hop agent
+chain you get an auditable record, not an enforceable one — and that gap is itself sellable.
+
+Newer IETF work: **`draft-ietf-oauth-identity-chaining-17` (2026-07-19, expires 2027-01-20)**,
+Standards Track WG doc — a **profile** of RFC 7523 + RFC 8693, never mentions agents.
+**Identity Assertion Authorization Grant** — `draft-parecki-…-05` expired, **replaced by
+`draft-ietf-oauth-identity-assertion-authz-grant`** (WG adoption = maturity signal). Keycloak 26.5
+shipped JWT authorization grant + identity chaining (Jan 2026).
+**AIP / Invocation-Bound Capability Tokens** (arXiv 2603.24775, 2026-03-27 + `draft-prakash-aip-00`)
+— ⚠ individual submission + preprint, **cite as directional only**; its "~2,000 MCP servers scanned,
+all lacked authentication" figure is uncorroborated.
+
+### 6.4 Okta / Auth0
+
+- **Okta for AI Agents** — vendor-stated **GA 2026-04-30**; framed as *"where are my agents, what can
+  they connect to, and what can they do?"*; agent discovery incl. **shadow agents**, credential vault
+  with rotation, and a **kill switch**. ⚠ the press-release fetch returned a garbled announcement
+  date — treat announcement date as unverified.
+- **Identity Security Fabric** (Oktane 2025) — ISPM discovers AI agents and risks around service
+  accounts/API keys/OAuth tokens; Universal Directory attributes **risk classification and ownership
+  to every non-human identity**.
+- **Cross App Access (XAA)** — the substantive standards contribution, built on the Identity
+  Assertion Authorization Grant. Okta Workforce access via OIN **from August 2026**; Auth0 B2B early
+  access **end of July 2026**. ⭐ **Anthropic's beta program includes Okta as featured IdP** for
+  governing Claude's access to participating MCP providers — the clearest signal XAA is the emerging
+  MCP authorization path.
+- **Auth0 for AI Agents — GA 2025-11-19.** Token Vault (35+ apps, agent never holds credentials);
+  ⭐ **Asynchronous Authorization (CIBA)** — human-in-the-loop approval for critical actions with rich
+  authorization data shown to the approver — *the single most directly relevant primitive to "an agent
+  holds write access to Stripe"*, and the external analogue of our `sign_off` kernel; FGA for RAG.
+  ⚠ **Honest finding: the GA announcement does not describe individual agent identities, attribution,
+  or audit trails.** Auth0 is strong on delegated access + approval, **weaker on attribution** than Entra.
+
+### 6.5 SPIFFE/SPIRE — solves workload identity, not on-behalf-of
+
+> SPIFFE can say "this workload is X," but it cannot say "this workload is X, **acting on behalf of
+> user Y**, with a limited scope, for a bounded time, and here is the audit record."
+
+IETF **WIMSE** is addressing it; emerging consensus is layered — **SPIFFE underneath for machine
+identity, OAuth/OBO on top for the on-behalf-of assertion**. For a 60-agent Vercel/TypeScript
+startup, **SPIFFE is not the answer** (SPIRE server + per-workload attestors is real cost).
+
+### 6.6 ⭐ Can you attribute to a specific agent AND the human? — For Isaac, in practice: no.
+
+Five conditions must ALL hold: (1) per-agent identity, (2) **delegation not impersonation**,
+(3) the resource server **records both subject and actor** — *"this is where most integrations fail:
+the token carries the information and the log discards it"*, (4) no static long-lived secret, (5)
+retained + tamper-evident logs.
+
+Entra satisfies 1–3 for Entra-protected resources. **Nothing satisfies this across a third-party SaaS
+API like Stripe without the customer building it.** For Isaac — Vercel functions are stateless and
+ephemeral so the natural credential is a shared env var; Node/TS agent frameworks default to one API
+key per integration per process, not per agent.
+
+> **The wedge, stated honestly: the market has built the standards for agent attribution and the
+> IdP-side implementations, but the delegation chain terminates at the edge of the SaaS APIs where
+> the money actually moves — provided we are honest that for shared-key customers we are
+> RECONSTRUCTING, not PROVING.**
+
+⚠ The circulating stats (97% of NHIs overprivileged; 80% of agents act beyond scope; 18% of MCP
+deployments scope tool permissions) trace to vendor blogs with **no cited methodology — do not use
+them as facts.**
+
+### 6.7 Enumerating the capability surface — what is programmatically discoverable
+
+| Surface | How | Programmatic? |
+|---|---|---|
+| **MCP tools** | `tools/list` | **Yes — fully, at runtime** |
+| In-code tool definitions | AST/grep, framework-specific | Partially |
+| OAuth scopes granted | IdP admin API, token introspection | Yes |
+| Cloud IAM roles assumable | IAM policy APIs, assume-role trust policies | Yes |
+| API keys in env | env scan / secrets-manager inventory | Presence yes; **key→capability needs the provider API** |
+| **Effective permission of an API key** | provider-specific; **Stripe = Dashboard only** | **Largely no** |
+
+⭐ **MCP is the best-instrumented surface.** `tools/list` is paginated and first-class; a tool carries
+`name/title/description/inputSchema/outputSchema/annotations`. Servers declare
+`capabilities.tools.listChanged` and **SHOULD emit `notifications/tools/list_changed`** →
+**capability-surface drift is detectable in real time.** *"Agent X gained a new write tool at 14:02
+Tuesday" is a finding* (this is ADR detector F4). ⚠ But annotations are **untrusted** per spec — never
+score risk on declared hints. Also: the MCP spec's own security guidance already says clients should
+*"Log tool usage for audit purposes"* — we are aligned with the protocol's intent, not fighting it.
+
+### 6.8 ⭐⭐ Stripe — the vendor already recommends our recommendation, and already ships manual CIEM
+
+https://docs.stripe.com/keys/restricted-api-keys
+
+- RAKs (`rk_live_`/`rk_test_`) assign **per-resource None / Read / Write**; all Stripe APIs support them.
+- > *"Stripe recommends always using RAKs instead of unrestricted secret keys, **especially when
+  > giving a key to an AI agent.** Use RAK permissions to limit what an agent can do in your account."*
+- > *"**Use one restricted key per service or use case.**"* → maps 1:1 onto one key per agent.
+  **Our core provisioning recommendation is the vendor's own guidance, not our invention.**
+- ⭐ **Stripe already documents the granted-vs-used loop, done by hand:** create key with broad
+  permissions → run it → *"View request logs to see all of the requests made with that key"* →
+  map `GET`→read, `POST`/`DELETE`→write → *"remove any permissions your key did not use."*
+  **That is CIEM, manually, for Stripe. Automating exactly this for agents is the product.**
+- **Attribution:** request logs are **per-key**. So per-agent Stripe attribution works **if and only
+  if keys are per-agent** — the single highest-leverage recommendation to make to a customer.
+- ⚠⚠ **Retention gap = the reason an independent evidence store must exist:** Stripe **Activity Logs**
+  (programmatic access added 2026-04-22) retain **6 months**; **PCI DSS requires 12** (§6.10).
+  **Stripe's own retention cannot satisfy PCI 10.5.1 for a card-handling customer.**
+- ⚠ **[UNVERIFIED]** whether request logs expose the acting key **programmatically via API** (vs the
+  Dashboard's per-key view). **Verify via the Stripe MCP before depending on it** — per-agent Stripe
+  attribution is the load-bearing customer-facing claim.
+
+### 6.9 CIEM prior art — how to frame a granted-vs-used finding
+
+- **AWS IAM Access Analyzer unused-access findings** — three types (unused roles, unused keys/passwords,
+  **unused permissions**). ⭐ **The finding schema is three fields and should be copied verbatim**
+  (`UnusedPermissionDetails`): **`serviceNamespace`, `actions[]`, `lastAccessed`**. Findings have a
+  lifecycle — active / resolved / **archived**, with **archive rules** for accepted risk. ⚠ Unused-access
+  analysis needs a **separate analyzer** and is **billed per role/user/month** (external-access findings
+  are free) — **continuous usage analysis has real cost; price accordingly.**
+- **Microsoft Permission Creep Index (PCI)** — the most product-ready *presentation*: a single **0–100
+  score** comparing granted vs exercised, bucketed low/medium/high, with drill-down.
+  ⚠ **Status correction: Microsoft Entra Permissions Management is RETIRED — support ended
+  2025-11-01.** The **metric** survives inside Defender for Cloud's CIEM. Cite the metric design, not
+  the product. *That a hyperscaler killed its standalone CIEM is itself a strategic datapoint.*
+- **GCP IAM Recommender** — compares total vs used permissions over a **90-day window** (configurable
+  30/60), and ⭐ uses ML to **predict permissions likely needed in future**, avoiding the classic false
+  positive of revoking a quarterly-cadence permission on day 91. Presents a **recommendation** (a
+  concrete smaller role), not just a finding.
+
+**The seven transferable rules:** (1) two sets, one delta, each independently defensible; (2) **the
+window is a first-class configurable parameter — a finding without a stated window is unfalsifiable**;
+(3) **`lastAccessed` is the killer field** ("never used" ≠ "unused since March"); (4) two altitudes —
+a rollup score for the exec, an itemised list for the engineer; (5) **ship a remediation, not a
+complaint** (→ our draft-PR seam); (6) **prioritise by reachable impact, not count** — Wiz: unused
+admin on a prod DB with sensitive data ≫ a test account; for agents **unused Stripe *write* ≫ unused
+Stripe *read***; (7) findings need archive/accepted-risk lifecycle or the customer drowns.
+
+### 6.10 Tamper-evidence — the proportionate bar
+
+**Separate the two properties.** Tamper-**evidence** = modification is *detectable* (hash chains,
+Merkle trees, signatures, anchoring — cheap). Tamper-**proofing** = modification is *prevented* (WORM,
+S3 Object Lock Compliance, independent custodian — expensive and rigid). Hash-chaining alone does not
+stop a writer who controls the whole chain **unless the head is externally witnessed**.
+
+**Compliance, honestly:**
+- **PCI DSS v4.0 Req 10** — **10.3.2** logs protected from modification; **10.3.4** FIM/change-detection
+  on audit logs; ⭐ **10.5.1 retain 12 months, 3 months immediately available.**
+  ⚠ **VERIFICATION FLAG: corroborated only across QSA/vendor secondary sources — NOT fetched from the
+  PCI SSC primary document (click-through licence). Older sources use the v3.2.1 number 10.5.5 for what
+  is now 10.3.4. CONFIRM NUMBERING BEFORE THIS SHIPS** — a wrong requirement number is exactly what a
+  customer's QSA notices.
+  Useful implementation caveat: FIM should watch files that don't regularly change — **appending log
+  data must not alarm**, or you get pure noise.
+- **SOC 2** — genuinely outcome-based; **no prescriptive immutability control**. CC6.1 / CC7.2 / CC7.3 /
+  CC8.1. Auditors want logs "stored separately from the systems generating them, with access restricted."
+  The commonly cited 12-months/90-days-hot is **practitioner convention, not codified** — say so.
+
+**Real vs theatre:**
+
+| Real | Theatre |
+|---|---|
+| Logs in a **separate trust domain** from the system that generates them | Blockchain anchoring |
+| Write-only credentials for the emitter | RFC 3161 on every individual record |
+| Hash chain + periodically published root | Compliance-mode WORM before you have a retention policy |
+| 12-month retention, 3 hot (PCI 10.5.1) | "Immutable" as a marketing adjective with no verifier shipped |
+| **A verifier the customer can run themselves** | An integrity claim only your own product can check |
+
+> ⭐ **The sharpest test: does the customer possess a tool that can independently detect tampering —
+> INCLUDING TAMPERING BY US? If not, the integrity claim is unfalsifiable, and unfalsifiable is
+> theatre.** AWS passes (`aws cloudtrail validate-logs`); most "immutable audit log" SaaS does not.
+
+**Reference implementations:**
+- ⭐ **CloudTrail log file integrity validation** — the best model to copy. SHA-256 hashing + SHA-256/RSA
+  signing; **hourly digest files** referencing the prior hour's logs; **each digest contains the digital
+  signature of the previous digest** (the chain); signature lives in **S3 object metadata**, not the body;
+  ⭐ **digest files live in a SEPARATE FOLDER** from logs — *"enables you to enforce granular security
+  policies and permits existing log processing solutions to continue to operate without modification"*
+  (different access-control posture for evidence-of-integrity vs the evidence itself, zero disruption to
+  consumers). Delivers: detect modification, detect **deletion**, and ⭐ **positively assert that no logs
+  were delivered during a given period** — proving absence, usually the hard part, free.
+  **Verification is customer-runnable via the AWS CLI.**
+- ⚠ **Amazon QLDB is RETIRED** (support ended 2025-07-31; AWS recommends Aurora PostgreSQL, which
+  **explicitly does not provide cryptographic verifiability**). **Strategic lesson: AWS could not
+  sustain a managed cryptographic-ledger business — do NOT make a bespoke ledger DB a load-bearing
+  dependency, and do not position the evidence store as one.** Surviving managed alternative: Azure SQL
+  ledger.
+- **Sigstore Rekor / Trillian** — append-only transparency log, SHA-256 binary Merkle tree, inclusion +
+  consistency proofs, clients can ⭐ **"staple"** an inclusion proof next to the artifact. Rekor v2 moves
+  to tile-based Trillian-Tessera. Sigstore also runs a **free RFC 3161 TSA**
+  (https://github.com/sigstore/timestamp-authority) — the cheapest credible third-party timestamping.
+  ⭐ **Stapled inclusion proofs are the strongest transferable idea:** every finding/PR/evidence artifact
+  carries its own portable proof, verifiable **without trusting us** and without downloading the log.
+  That is what turns "we have an audit trail" into "here is the trace, and you can check it yourself."
+
+**Recommended tiers** — Tier 1 (days, ~free, non-negotiable): append-only by construction (INSERT-only
+emitter role, corrections are compensating records); **per-record hash chain** (`prev_hash`,
+`hash = SHA-256(canonical_serialization || prev_hash)`); ⚠ **canonical serialization, pinned and
+versioned** (drift silently makes every historical hash unverifiable — the most common way homegrown
+chains die); **evidence in a different trust domain from the writer**; ⭐ **a standalone verifier the
+customer runs** (without it, everything above is theatre); **12-month retention, 3 hot**.
+Tier 2 (when the first QSA asks): periodic **Merkle root per window** stored separately (CloudTrail's
+separated-digest pattern), **signed** with KMS/HSM keys, **published where the customer can see but we
+cannot silently rewrite** (a customer-owned bucket, or emailed to their security contact — the cheapest
+possible witness, and what makes a full-chain rewrite by us detectable), **stapled inclusion proofs on
+exports**. Tier 3 (only on contractual demand): S3 Object Lock **Governance** (never start with
+Compliance — an accidental 7-year retention is genuinely unfixable), RFC 3161 on **roots not records**.
+**Do not build:** a bespoke ledger DB, blockchain anchoring, per-record third-party timestamping.
+
+> ⭐⭐ **The honest sentence for the ADR:** *tamper-evidence at Tier 1–2 means we can prove our records
+> were not altered after we wrote them; it does not prove they were true when we wrote them.* The truth
+> of the record rests on the fidelity of collection — and **a shared API key means the record cannot
+> have been true about WHICH AGENT ACTED in the first place. No amount of cryptography downstream
+> repairs an attribution that was never captured.**
+> **That dependency — identity first, then permissions, then evidence — is the spine the ADR is built around.**
+
+### 6.11 The gap, named
+
+**Microsoft's "Least privilege for AI agents: identity, access, and tool binding"** (2026-07-16,
+https://www.microsoft.com/en-us/security/blog/2026/07/16/least-privilege-for-ai-agents-identity-access-and-tool-binding/)
+is the most authoritative treatment: agents as **first-class principals**, dedicated identities,
+**tool binding** ("a curated and approved set of tools/actions" with "explicit allowlists for
+high-impact operations"), task-based RBAC, multi-dimensional scoping, JIT elevation.
+
+⭐ **But Microsoft does NOT discuss granted-vs-used analysis for agents.** Their answer is entirely
+**preventive**. Everything else found in the space is preventive too (MCP RBAC, request-time authz,
+OpenFGA per-tool checks, Claude permission policies).
+
+> **Conclusion: "CIEM for agents" — retrospective, observed-usage-based narrowing of an agent's tool
+> and credential surface — is an identified gap with NO mature product. The building blocks (MCP
+> `tools/list` + `list_changed`, Stripe per-key request logs, IdP scope APIs, cloud IAM last-accessed)
+> all exist and are all programmatically accessible. That is a defensible thing to build.**
+
+### 6.12 Could-not-verify list from this stream
+
+1. **PCI DSS numbering/wording (10.3.2, 10.3.4, 10.5.1)** — secondary sources only. **Confirm.**
+2. **All over-privilege percentages** — vendor blogs, no methodology. Do not cite.
+3. **Okta announcement date** — inconsistent fetch; GA 2026-04-30 is vendor-stated.
+4. Commercial RFC 3161 TSA pricing — not found.
+5. **AIP / IBCT** — individual submission + preprint, not a standard.
+6. ⚠ **Whether Stripe exposes the acting key per-request programmatically via API** — Dashboard surface
+   confirmed, API attribution **not**. **Verify via the Stripe MCP; a load-bearing claim depends on it.**
+
+## 7. Findings — Stream H (standards + competitive)
+
+_pending — research agent running_
 
 ## 7. Open questions / could-not-verify
 
