@@ -12,19 +12,22 @@ The engine is multi-provider (``prowler aws`` / ``prowler vercel``); WHICH provi
 it supplies the argv word, the ``ScanJobSpec.source``, the target validator (the injection gate),
 the credential env mapping, and the memory profile. Nothing provider-shaped is hardcoded here.
 
-Getting the OCSF out of an ephemeral Job: Prowler writes OCSF to a *file* (no stdout mode), and the
-K8sJobBackend collects *stdout* — so the Job runs Prowler then ``cat``s the file to stdout. The only
-interpolated inputs are the provider's validated tokens (AWS regions; the Vercel team never enters
-argv at all — it rides the ``VERCEL_TEAM`` env var), which closes the shell-injection surface — the
-same "validate the untrusted input, then it's safe in the command" gate Trivy uses for its image
-ref. Credentials are the already-vended envelope, mounted as ``secret_env`` (never in argv or logs).
-
-Scale note (ADR 0006 D4 follow-up): a full-account OCSF result can exceed pod-log limits and be
-truncated (``records_to_scan_result`` then defensively yields fewer/zero findings). The fix — shared
-for Trivy too — is an artifact/volume output channel on the backend rather than pod-log stdout.
+Getting the OCSF out of an ephemeral Job: Prowler writes OCSF to a *file* (no stdout mode). That
+file used to be ``cat``ed to stdout for the backend to collect — the hop that silently truncated at
+the kubelet's 10Mi ``containerLogMaxSize``, under-reporting on exactly the biggest accounts (a real
+demo-account scan is already 3.98 MB). Per **ADR 0022** the file is now published to the canonical
+artifact path and shipped to object storage by the backend's uploader co-container; the ``cat`` to
+stdout remains only as a diagnostic and as the LocalSubprocessBackend path, where a pipe has no
+such ceiling. The only interpolated inputs are the provider's validated tokens (AWS regions; the
+Vercel team never enters argv at all — it rides the ``VERCEL_TEAM`` env var), which closes the
+shell-injection surface — the same "validate the untrusted input, then it's safe in the command"
+gate Trivy uses for its image ref. Credentials are the already-vended envelope, mounted as
+``secret_env`` (never in argv or logs).
 """
 
 from __future__ import annotations
+
+from dataclasses import replace
 
 import logging
 import os
@@ -34,8 +37,10 @@ from components.cloud_posture.domain.posture_provider import (
     resolve_posture_provider,
 )
 from components.scanning.application.ports.scan_execution_backend import (
+    SCAN_ARTIFACT_PATH,
     ScanExecutionBackend,
     ScanJobSpec,
+    artifact_emit_tail,
 )
 from components.scanning.domain.engine_output import parse_engine_result_document
 from components.scanning.domain.errors import IncompleteScanOutputError, ScanExecutionError
@@ -95,13 +100,22 @@ class ProwlerScanner(ScannerPort):
         # interpolated; the Vercel team rides env-only but is validated to the same bar).
         identifier, extra_flags = provider.validate_target(target.identifier, target.params)
 
-        # Official Prowler writes OCSF to a file (no stdout mode) → run it, suppress its
-        # progress/table output, then cat the OCSF file to stdout for the backend to collect.
+        # Official Prowler writes OCSF to a file (no stdout mode). It used to be `cat`ed to
+        # stdout — the pod-log hop that silently truncated at 10Mi. Now the file is published
+        # to the canonical artifact path and the backend ships it to object storage (ADR
+        # 0022). `cat` to stdout is kept ONLY as the small-output/local-backend fallback and
+        # as a diagnostic in the pod log; it is no longer the result transport.
         script = (
             f'export PATH="{_PROWLER_BIN_DIR}:$PATH"; '
             f"prowler {provider.token} --output-formats json-ocsf --output-directory /tmp "
             f"--output-filename scan {extra_flags} >/dev/null 2>&1; "
-            "cat /tmp/*.ocsf.json 2>/dev/null"
+            "code=$?; "
+            "ocsf=$(ls /tmp/*.ocsf.json 2>/dev/null | head -1); "
+            # Prowler exits non-zero merely for HAVING failed findings, so its exit code is
+            # not a health signal — the OCSF file existing is. Normalize before the sentinel.
+            'if [ -s "$ocsf" ]; then code=0; else code=1; fi; '
+            + artifact_emit_tail("$ocsf")
+            + 'cat "$ocsf" 2>/dev/null; exit "$code"'
         )
 
         result = self._backend.run(
@@ -113,6 +127,9 @@ class ProwlerScanner(ScannerPort):
                 secret_env=provider.credential_env(target.credentials, identifier),
                 run_as_user=_PROWLER_UID,  # the official image's uid; the venv binary needs it
                 memory_limit=_memory_limit_for(provider),
+                artifact_path=SCAN_ARTIFACT_PATH,
+                workspace_id=str(target.params.get("workspace_id") or ""),
+                scan_run_id=str(target.params.get("scan_run_id") or ""),
             ),
             on_progress=on_progress,  # K8s elapsed-time heartbeat (Prowler has no stdout progress)
         )
@@ -138,7 +155,11 @@ class ProwlerScanner(ScannerPort):
                 f"Prowler {provider.token} scan of {identifier} failed "
                 f"(exit_code={result.exit_code}, timed_out={result.timed_out})"
             )
-        return records_to_scan_result(_parse_ocsf_stdout(result.stdout), engine_version=_ENGINE, provider=provider)
+        scan_result = records_to_scan_result(
+            _parse_ocsf_stdout(result.stdout), engine_version=_ENGINE, provider=provider
+        )
+        # Carry the raw-output reference up to the ScanRun (ADR 0022 D2).
+        return replace(scan_result, raw_artifact_ref=result.artifact_ref)
 
 
 def _parse_ocsf_stdout(stdout: str | None) -> list:

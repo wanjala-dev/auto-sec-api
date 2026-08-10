@@ -56,6 +56,13 @@ class ScanRun(models.Model):
     engine_version = models.CharField(max_length=64, blank=True, default="")
     error = models.CharField(max_length=255, blank=True, default="")
 
+    # Where this run's RAW engine output was persisted, as "<bucket>/<key>" (ADR 0022 D2).
+    # Blank for runs that predate the artifact channel or used the local subprocess backend
+    # (a pipe, no size ceiling). This is what makes "why did this scan find nothing" an
+    # answerable question instead of a shrug: the untouched engine document is still there.
+    # A plain reference, NOT a FK — object storage is not the SSOT and must not gain one.
+    raw_artifact_ref = models.CharField(max_length=512, blank=True, default="")
+
     # Scan-level counts describe the whole run; the actionable findings are the SSOT's.
     total_checks = models.PositiveIntegerField(default=0)
     passed_count = models.PositiveIntegerField(default=0)
