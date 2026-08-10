@@ -69,6 +69,10 @@ class SourceSystem(models.TextChoices):
     GOOGLE_WORKSPACE = "google_workspace", "Google Workspace"
     SLACK = "slack", "Slack"
     GITHUB = "github", "GitHub"
+    # A CUSTOMER's own AI agent runtime, reported to us as telemetry (ADR 0023 D1).
+    # Deliberately distinct from ``AI`` (which is autosec's own agents): the two
+    # must never share an actor identity space.
+    AGENT_RUNTIME = "agent_runtime", "Customer AI agent runtime (reported telemetry)"
 
 
 class ProvenanceActor(models.Model):
@@ -213,6 +217,11 @@ class ProvenanceEvent(models.Model):
         AI_ACTION = "ai_action", "AI action"
         IDENTITY_SESSION = "identity_session", "Identity session"
         VENDOR_LOG = "vendor_log", "Vendor audit log"
+        # Externally-reported spans from a CUSTOMER's agent runtime (ADR 0023 D1).
+        # A sibling of VENDOR_LOG rather than a reuse: the idempotency key is
+        # ``(workspace, origin, origin_id)``, so sharing an origin value with a
+        # different ingester would make two unrelated feeds collide on it.
+        AGENT_RUNTIME = "agent_runtime", "Customer agent runtime telemetry"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name="provenance_events")
@@ -247,3 +256,78 @@ class ProvenanceEvent(models.Model):
 
     def __str__(self) -> str:
         return f"{self.actor_id} {self.action} {self.resource_id} @ {self.occurred_at:%Y-%m-%d}"
+
+
+class AgentTelemetrySource(models.Model):
+    """A workspace's CONSENT boundary for observing its own AI agents (ADR 0023 D1/D3).
+
+    Shaped after ``WorkspaceLogSource`` (``kind`` + opaque ``config`` + ``secret_ref``
+    + ``status``) and ``VercelConnection``'s named-scope consent: this row is the
+    only thing that makes an agent observable. It is the registry template's sixth
+    use (ADR 0008 → 0010 → 0016 → 0019 → 0021 → here), not a new pattern.
+
+    Two properties are load-bearing and must not be relaxed:
+
+    * **``agent_allowlist`` is fail-closed.** We observe exactly the agents named
+      here and never auto-discover the rest — the identical refusal ADR 0021 D3
+      made of Prowler's "no team ⇒ scan every team the token can see". An empty
+      allowlist ingests nothing; it is not a wildcard.
+    * **Metadata-only, always, in this slice.** There is deliberately no
+      ``capture_content`` column: content capture (prompts, tool arguments) is a
+      separately-consented capability that does not exist yet, and a consent field
+      with no honouring code would be a lie the schema tells.
+
+    ``kind`` selects the ``AgentTelemetryPort`` adapter that parses this source's
+    payloads. Adding a capture mechanism (a Vercel Trace Drain shape, an SDK
+    exporter, a pull adapter) is a new adapter + a registry line — never a new
+    ingest pipeline, and never a change to the ledger below.
+    """
+
+    class Kind(models.TextChoices):
+        OTLP_JSON = "otlp_json", "OTLP/HTTP JSON spans (push)"
+
+    class Status(models.TextChoices):
+        DRAFT = "draft", "Draft"
+        ACTIVE = "active", "Active"
+        ERROR = "error", "Error"
+        DISABLED = "disabled", "Disabled"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name="agent_telemetry_sources")
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="agent_telemetry_sources",
+    )
+
+    kind = models.CharField(max_length=24, choices=Kind.choices, default=Kind.OTLP_JSON)
+    name = models.CharField(max_length=120, default="Agent telemetry")
+    # The customer's agent platform. Becomes the middle segment of the actor URN
+    # (``urn:agent:<platform>:<external_ref>``), so two platforms' opaque agent ids
+    # can never collide on one workspace.
+    platform = models.CharField(max_length=32, default="unknown")
+    # THE consent boundary. A list of agent identifiers we may observe. Fail-closed:
+    # empty ⇒ nothing is ingested.
+    agent_allowlist = models.JSONField(default=list, blank=True)
+    # Per-kind and opaque to the core, exactly like WorkspaceLogSource.config.
+    config = models.JSONField(default=dict, blank=True)
+    # For a future pull/drain adapter that needs a credential. Rides the ONE
+    # integrations Fernet envelope; NEVER plaintext, NEVER logged.
+    secret_ref = models.CharField(max_length=255, blank=True, default="")
+
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT)
+    last_ingest_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["workspace", "status"], name="agent_tel_src_ws_status_idx"),
+            models.Index(fields=["workspace", "kind"], name="agent_tel_src_ws_kind_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.kind}:{self.name} [{self.workspace_id}]"
