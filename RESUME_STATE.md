@@ -213,6 +213,25 @@ the confirming re-run had not been executed when the session ended.
 
 ---
 
+## STATUS: PR OPEN — https://github.com/wanjala-dev/auto-sec-api/pull/310 (DO NOT MERGE)
+
+Everything in §5 below is **DONE** except items 3 and 4, which are deliberately
+deferred and called out in the PR body:
+
+- **Finding B** (login has no per-IP ceiling) — reported, not built. It changes an
+  auth-path rate limit and deserves its own review. Proposed shape is in §3 above.
+- **Infra PR** (`NUM_PROXIES` in the prod ConfigMap) — not opened. The code default
+  is already the correct `1` for both environments, so the ConfigMap entry is
+  contract documentation rather than a functional change, and the real infra
+  decision (whether NGF needs `rewriteClientIP` / PROXY protocol) depends on the
+  klipper-lb measurement that cannot be taken until NS delegation completes.
+
+Final verification: `components/identity/` + `components/shared_platform/` +
+`infrastructure/api/` → 596 passed, 9 failed; `tests/architecture/` → 81 passed.
+The 9 failures are identical on `origin/main` (verified by stash + re-run) and out
+of lane: 4× `test_user_summary` (Workspace `sector_id` fork-drift), 5×
+`test_api_deprecation_middleware`.
+
 ## 5. NEXT STEPS, in order
 
 1. **Re-run the suite** and confirm green (nothing has been run since the
