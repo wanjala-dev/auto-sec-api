@@ -191,6 +191,39 @@ Redirecting to a /thanks page would break the one-page rule and lose the aesthet
 
 ## 4. Aesthetic directions
 
+### 4.0 What Henry's two references actually teach
+
+Both references were studied. The useful lesson from each is the *opposite* of "add terminal chrome".
+
+**[awesome-tuis](https://github.com/rothgar/awesome-tuis)** (rothgar) — 13 categories (Dashboards,
+Development, Docker/K8s, Editors, File Managers, Games, …). The strongest entries — `btop++`, `k9s`,
+`lazygit`, `lazydocker`, `bottom`, `htop`, `yazi` — share a consistent design language:
+
+| TUI idiom | Does it belong on our page? |
+|---|---|
+| **Box-drawing borders** (`┌─┐│└┘`) for panels | **Conceptually yes — we already have it.** Our chamfered `HudCard` *is* our box-border. Don't literally draw `┌─┐` in text; that's the costume version. |
+| **Status bar at the bottom** with keybinding hints (`q:quit  ?:help`) | **Yes — steal this.** It's the single most characteristic TUI idiom, and our `▪ PRE-LAUNCH · we'll email once, when it's ready.` line is exactly that shape. |
+| **Colour-coded status** (green/red/amber) | **Sparingly.** One accent only. The HUD's severity palette is a product surface, not a landing-page one. |
+| **Multi-pane density** (2–3 columns of live data) | **No.** Density is what makes a *tool* good and a *landing page* bad. |
+| **Vi keybindings** (`hjkl`) | **No.** Charming in a tool you live in; friction on a page with one field. |
+
+**[terminal-apps.dev](https://terminal-apps.dev/)** — a curated showcase (lazygit 79.2K★, lazydocker
+51.3K★, yazi, btop, superfile, posting, gh-dash, oha). The instructive thing is that **the site itself is
+not skinned like a terminal.** It's a clean card list: functional minimalism, no animations, no flashy
+interactions, consistent metadata (language, licence, stars) per entry. A site *about* terminal apps
+declines to cosplay as one — and it reads as more credible for it.
+
+**The synthesis, and it is the argument for Direction B:** what makes terminal-adjacent design feel
+*deliberate* is **restraint and information honesty** — monospace, tight alignment, a status line, no
+decoration that isn't carrying meaning. What makes it feel *gimmicky* is simulated chrome: scanlines, CRT
+curvature, phosphor bloom, fake `$` prompts, and typed-output animation. None of the top TUIs use any of
+those; they're a web affectation applied *to* the aesthetic, not *from* it.
+
+So: adopt the **discipline** of the terminal (mono, alignment, a status line, no ornament), not its
+**costume**.
+
+---
+
 Three genuinely distinct options. Recommendation follows.
 
 ### Direction A — Literal terminal emulator
@@ -779,6 +812,7 @@ Naming these prevents scope creep from re-litigating them:
   `tests/architecture/test_explicit_architecture_layout.py:37-80`.
 - Infra: `auto-sec-infra/terraform/modules/cloudfront-s3-private/main.tf`,
   `workloads/api/ses.tf`, `workloads/frontend/dns.tf:14-40`, `backend.tf.example:6`.
+- [rothgar/awesome-tuis](https://github.com/rothgar/awesome-tuis) and [terminal-apps.dev](https://terminal-apps.dev/) — Henry's two references, studied in §4.0.
 - WCAG 2.2 success criteria 1.4.3 (Contrast Minimum), 1.4.4 (Resize Text), 1.4.10 (Reflow),
   1.4.11 (Non-text Contrast), 2.3.3 (Animation from Interactions). Contrast ratios in §8.5 computed
   directly from our own tokens against `#050814`.
