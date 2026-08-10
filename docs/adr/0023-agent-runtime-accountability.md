@@ -90,6 +90,14 @@ Applied here, this rule is not a slogan — it is a **test every capability in �
 each one below carries its terminal exposure statement explicitly. A capability that can only
 produce "we don't know" output does not ship.
 
+⭐ **And the rule now has external backing, which is worth knowing because it is what makes the
+exposure framing sayable to a security reviewer rather than merely to a founder:** the OWASP Agentic
+Security Initiative's threat taxonomy carries **`T8` "Repudiation & Untraceability"** — *a standards
+body has made "the agent acted and you cannot prove what it did" a **named threat class in its own
+right**, not a missing control.* CSA's MAESTRO framework names the same thing at Layer 7. So the
+exposure statement "this agent acted and nothing can attribute it" is not us inventing a worry; it is
+us instantiating a catalogued threat against the customer's actual estate.
+
 ---
 
 ## 2. The running start, measured honestly
@@ -716,6 +724,24 @@ he cannot, that hesitation is the sale.**
   vendor's own docs are inconsistent.
 - All circulating agent over-privilege percentages (97% / 80% / 18%) trace to vendor blogs with no
   methodology. **Not used anywhere in this ADR, and must not be.**
+- ⚠️ **ISO/IEC 42001 A.6.2.8 normative text** — iso.org returned 403; wording is from ISMS.online.
+  **Verify against the purchased standard before quoting it to a customer**, since D7 ranks it #1.
+- ⚠️ **MITRE ATLAS mitigation text (M0024 / M0029)** — `atlas.mitre.org/mitigations/*` 404s and the
+  source YAML exceeded fetch limits; wording came from third-party mirrors. **Do not quote as
+  MITRE-verbatim.**
+- ⚠️ **Zenity's data-capture architecture is undisclosed** — the single biggest hole in the competitive
+  picture, and it matters because Zenity is the best-funded independent in the OBSERVE tier.
+  WitnessAI's deployment model and Noma's non-gateway capture path are likewise unconfirmed.
+- ⚠️ **AICPA's position on AI-specific Trust Services Criteria** — aicpa.org unreachable; the "no SOC 2
+  for AI" claim rests on practitioner sources only.
+- ⚠️ Whether **Google Cloud Audit Logs** carry tool-call detail (vs only Cloud Trace) is unconfirmed —
+  relevant because Google's SPIFFE-based agent identity is the architecturally strongest competitor.
+- **Do not propagate** (encountered and rejected): a "Langfuse $50M Series B March 2026" claim
+  (contradicted by the ClickHouse acquisition); AI 600-1 "tool call logging" language (not in the
+  PDF); named ISO 42001 certificate-holder lists (single marketing blog).
+- **Reported-but-undisclosed deal values** are flagged as such throughout and should not be repeated as
+  fact (Check Point/Lakera ~$300M; SentinelOne/Prompt ~$180M vs ~$250M; PANW/Protect AI $650–700M is a
+  Jefferies estimate; Cyera/Oasis $1B agreed 2026-07-28 with **closure unconfirmed**).
 
 ---
 
