@@ -204,9 +204,240 @@ tier, HITL approvals granted/denied, capability grants, credential scopes, MCP/t
 switch). That is the inward twin of this ADR. The vocabulary is already designed; this ADR points
 it outward.
 
-## 3. Findings — Stream A (our substrate)
+## 3. Findings — Stream A (our substrate) — COMPLETE
 
-_pending — code-mapping agent running_
+### 3.0 The thesis verdict: CONFIRMED, but only for the back half
+
+The claim under test was *"turning our own accountability substrate outward is a much shorter path
+than building AI-SPM from scratch."* The code map splits our substrate cleanly in two, and the
+answer differs per half:
+
+| Half | Components | Verdict |
+|---|---|---|
+| **The ledger / governance half** | `provenance` graph (`ProvenanceActor`/`Resource`/`AccessGrant`/`Event`), `EntityAuditLog`, `sign_off` kernel, `response` action ledger, Finding SSOT, board-provenance JSON, the WS-redaction + owner-only authz contract | **Source-agnostic today.** Ports outward with little or no schema change. `SourceSystem` already enumerates `aws/okta/google_workspace/slack/github`; `ActorType` already has `ai_agent` and `vendor_integration`; `ProvenanceEvent.Origin` already has **`vendor_log`**. The `sign_off` kernel is a pure ABC + value-object kernel with **zero** runtime assumptions. |
+| **The capture half** | `DeepRunLog` writer, the `@tool(risk=…)` gate, the Langfuse callback, the AI service principal | **Structurally ours-only.** Does NOT port. |
+
+**So the honest answer is: we get the storage, correlation, evidence, approval and remediation
+back-end essentially free — and the capture front-end is genuinely net-new and is the entire risk of
+the project.** That is still a large head start (it is most of a product), but the ADR must not claim
+the hard part is done. The hard part is §5.
+
+### 3.1 DeepRun / DeepRunLog — `infrastructure/persistence/ai/agents/models.py`
+
+- **`DeepRun`** (L344–377): `thread_id(unique)`, `plan_id`, **`user` FK(CASCADE) ← the principal**,
+  `workspace` FK(SET_NULL), `status`, `state(JSON — plan, goal, usage)`, `checkpoints(JSON)`,
+  `last_error`, timestamps. Indexes on `thread_id`, `plan_id`, `(status, updated_at)`.
+- **`DeepRunLog`** (L380–419): `deep_run` FK(CASCADE), `event_type` (`run_started`, `worker_started`,
+  **`tool_observation`**, `tool_log`, `tool_progress`, `run_failed`, `llm_call`), `status`,
+  `agent_type`, **`tool_name`**, **`payload(JSON)`** — for a tool observation
+  `{tool_input, tool_output, truncated_input, truncated_output}` — plus `system_prompt`,
+  `user_prompt`, `llm_response`, `model_used`, `prompt_tokens`, `completion_tokens`, `latency_ms`,
+  **`cost_usd(10,6)`** computed at write time, `created_at`.
+- Tool IO truncated at `_TOOL_OBSERVATION_MAX_CHARS = 4000` with explicit truncation flags
+  (`base.py:2179–2264`).
+- **Append-only by convention, not by constraint.** Only production writer is
+  `DeepRunLog.objects.create(...)` in `components/agents/infrastructure/gateways/deep/logging.py:29`;
+  no `.update(`/`.delete(` outside tests. But: **no `editable=False`, no DB trigger, no hash chain,
+  no signature**, and rows CASCADE-delete with `DeepRun` → with `User`. No retention/purge job.
+- **Principal lives on the parent `DeepRun.user`, not on the log row.**
+- **Coupling: HIGH.** `log_deep_event(thread_id, …)` resolves the run by an **in-memory
+  `thread_id`** and silently no-ops if absent; the observation writer reads LangChain's
+  `intermediate_steps` tuples directly. The REST surface (`DeepRunViewSet`,
+  `components/agents/api/controller.py:1594`) is **read-only — there is no ingest endpoint.**
+  The *schema* is source-agnostic; pointing it outward is a `RunEventIngestPort` problem. The one
+  real obstacle is the `DeepRun.user` FK into `CustomUser`.
+
+### 3.2 ⚠ `AIAction` NO LONGER EXISTS — correct the premise
+
+The task brief (and CLAUDE-adjacent memory) refers to `AIAction`; it was **deleted in Phase 5 of the
+Agents-as-Teammates migration**. Evidence: `components/agents/infrastructure/services/actions_service.py:1–26`
+(docstring is the migration note; the class keeps the legacy name `AIActionService` but only manages
+teammate lifecycle); `base.py:1982–1985` — *"nothing writes to the deleted AIAction table"*;
+`infrastructure/persistence/project/models.py:248–257` records which `Task` fields absorbed
+`AIAction.summary`/`.payload`/`.context`.
+
+**An "action" today = a `project.Task` row with `source_type="ai.<action_type>"`,** created by
+`persist_finding_as_task` (`specialist_persistence_service.py:65–219`). `metadata` carries
+`agent_type, detector, action_type, severity, impact_score, ai_headline, ai_narrative,
+idempotency_key, provenance{…}, triage{status}, payload{…}, context{…}`. Idempotency key is
+`(workspace_id, source_type, metadata.idempotency_key)`.
+
+**Named gap:** there is **no FK from an action to the DeepRun that produced it** — the only link is
+`Task.metadata["run_telemetry"]["source_thread_id"]`, stamped post-hoc by
+`stamp_run_telemetry_on_findings` (`_finding_processing.py:395–456`) via a **heuristic match**
+(`metadata.triage.agent == specialist AND updated_at >= since`). For an accountability product whose
+whole claim is "here's the trace", a heuristic action→run link is a real weakness worth naming.
+
+### 3.3 WS redaction + owner-only run detail — the read-authz contract
+
+- Redactor: `components/agents/infrastructure/adapters/deep_run_realtime_signal_bridge.py`.
+  **`_ALLOWED_PAYLOAD_KEYS` is a hard allowlist of six: `progress_percent, current, total, severity,
+  task_id, plan_id`.** Defence in depth: `_MAX_ALLOWED_STR_LEN = 100` — an allowlisted key holding a
+  >100-char string, or any non-scalar, is dropped. Explicitly redacted: `tool_input`, `tool_output`,
+  `message`, `question`, `error`, `telemetry`. Publish deferred via `transaction.on_commit`.
+- Authz: `_is_run_owner` (`components/agents/api/controller.py:157–169`) — **only the user who
+  started the run, plus `is_staff`**; enforced on `retrieve` and `events`. Teammates get
+  `DeepRunSummaryView` (`deep_run_query_port.py:100–131`), which **deliberately omits `goal`**
+  because it is the raw user prompt; `DeepRunSnapshotView` carries `goal`/`last_error` and is
+  owner-only.
+- Test: `components/agents/tests/integration/test_deep_run_ws_envelope_redaction.py` — 4 cases,
+  asserting on the serialized JSON so a leak anywhere in the envelope fails.
+- **Coupling: LOW — operates on stored rows; works unchanged over externally-reported data.** This is
+  a genuine asset: a multi-tenant, least-disclosure read contract for agent traces already exists and
+  is tested. (Matches the standing memory: run detail is OWNER-ONLY; never re-widen.)
+
+### 3.4 `sign_off` — the strongest "point it outward" candidate
+
+- State machine (`domain/value_objects/review_state.py`): `PENDING → {APPROVED, CHANGES_REQUESTED,
+  REJECTED}`; `CHANGES_REQUESTED → {PENDING, REJECTED}`; **`APPROVED → {PENDING}`** (an edit after
+  sign-off re-opens review); `REJECTED` terminal.
+- `RiskBand` GREEN|AMBER|RED governs **friction, never bypass**. `SignOffTarget(audience, high_stakes)`
+  where `Audience = INTERNAL_SELF|INTERNAL_TEAM|EXTERNAL`; `.escalates` bumps the band.
+- **Anti-rubber-stamp receipts** (`reviewer_receipts.py`): `FigureCheck(claim_text, stated_value,
+  source_value, verified, source_ref)`, `ClaimProvenance(claim_text, source_record_ref, grounded)`,
+  `VoiceFlag`, aggregated by `ReviewerReceipts.has_flags/has_contradictions/is_clean`.
+- `sign_off_service.approve()` **raises `SignOffError` if RED without a non-empty `override_reason`**
+  — forced justification. Every transition calls `SignOffAuditPort.record(...)` → `EntityAuditLog`
+  under `entity_type="signoff.<artifact_type>"` (audit failure is logged and swallowed, never breaks
+  the decision).
+- The teeth: `require_approved(artifact_type, artifact_id)` raises `NotApprovedError` unless APPROVED.
+- Queue projects onto the Kanban via `materialize_signoff_tasks.py` as
+  `source_type="ai.sign_off_pending"`.
+- **Coupling: NONE — pure ABC + VO kernel.** ⚠ **But the registry ships EMPTY**
+  (`sign_off_registry_provider.py:41–46` — "Phase 2-5: register per-context adapters here"). So the
+  kernel is real and unused; the ADR must not describe it as a live gate today.
+
+### 3.5 Board provenance — three writers, one JSON structure
+
+All at `project.Task.metadata["provenance"]` — **not a separate table**:
+1. **Creation** (`specialist_persistence_service.py:151–168`): `created_by_kind, detector,
+   assigned_specialist, source_type, created_at, confidence, impact_score, events[]`.
+2. **Acting** (`_finding_processing.py:280–296`) — inside `select_for_update(of=("self",))` with a
+   status re-check so overlapping cycles can't double-act; appends
+   `{"actor": "agent:<slug>", "action": …, "at": …, "moved": true}` plus `last_handled_by/at` and a
+   `metadata.triage` block (`status, agent, triaged_at, actions[], suggested, verification,
+   verification_gap, needs_human, no_fix_reason`). The verifier is **a labeler, not a gate** —
+   ungrounded gets ONE re-advise then ships labeled `unverified`.
+3. **Draft PR** (`record_finding_draft_pr_repository.py:40–110`): writes
+   `metadata.payload.draft_pr{url, repo, branch, opened_by, opened_at, verification,
+   verification_gap, path, diff, change_summary}` and appends
+   **`{"actor": "agent:<agent> via user:<human>", …}`** — ⭐ **the dual-principal actor string is the
+   closest thing in the codebase to a delegated-identity record**, and is directly the shape Stream D
+   (agent-acting-on-behalf-of-human) needs. Backfill writes `"system:autosec"` and **can never
+   rewrite identity facts or upgrade a confidence label**.
+- Canonical path + bound live in the **port** (`record_finding_draft_pr_port.py`):
+  `DRAFT_PR_METADATA_PATH`, `DRAFT_PR_DIFF_MAX_CHARS = 12_000`.
+- Projected into the `provenance` context by `ai_backfill_service.py`, which **parses `agent:<slug>`
+  actor strings into `ProvenanceActor(actor_type="ai_agent", source_system="ai")`** and each event
+  into a `ProvenanceEvent` keyed idempotently on `<task_id>:<index>`.
+
+### 3.6 EntityAuditLog + the provenance graph
+
+- `EntityAuditLog` (`infrastructure/persistence/audit/models.py`): `id(UUID, editable=False)`,
+  `workspace` FK(CASCADE, null), `content_type` FK(PROTECT) + `object_id` + GenericFK, `field_name`,
+  `previous_value(JSON)`, `new_value(JSON)`, `actor` FK(SET_NULL, null — nullable for system writes),
+  `reason`, `created_at`. Four indexes. **New entity type or tracked field = zero schema change.**
+- **Immutability is documented convention, not enforcement**: module docstring says "Append-only… add
+  a compensating row rather than rewriting history"; the repository exposes only `record` + reads.
+  But **no DB trigger, no WORM, no hash chain**, and `workspace` is CASCADE so deleting a workspace
+  deletes its audit trail. **No retention policy anywhere.**
+- Read authz: `IsAuditWorkspaceMember` — deliberately **membership, not admin** ("a read surface for
+  every operator in the tenant, including the read-only auditor persona"); requires explicit
+  `workspace_id` (missing → 400, unknown → 403 so existence doesn't leak).
+- `provenance` models per §4.0. `ProvenanceEvent` docstring: *"Action edge (Actor → Resource) — the
+  **actual**. Append-only."*; `metadata` docstring names *"ip, session id, request id, **tool**"*;
+  unique `(workspace, origin, origin_id)` = idempotent projection. **`Origin = audit_log | ai_action |
+  identity_session | vendor_log`.** Backfills exist for three internal origins; **a fourth for
+  external agents is the same pattern.**
+- API is read-only, gated by `feature.provenance_graph` + `HasWorkspaceMembership`: graph overview,
+  vendor blast-radius, hall-tree, access-review, **least-privilege**.
+
+### 3.7 Langfuse / `TracingPort` — ⚠ not part of the queryable substrate
+
+`components/agents/application/ports/tracing_port.py`: `is_available()`,
+`get_langchain_callback(*, agent_id, user_id, session_id)`, plus default-no-op
+`trace_conversation` / `trace_llm_call` / `trace_retrieval`. **Only three span verbs; NO read/query
+verb at all — no `get_trace`, no `search`.** Adapter pins `langfuse==3.15.0` (OTEL-based) and
+**overrides a private hook** (`_parse_langfuse_trace_attributes_from_metadata`) to restore 2.x
+`session_id`/`user_id` seams — flagged as needing re-verification on any version bump. Degrades
+silently to `None` everywhere.
+
+**Consequence for the ADR: Langfuse is an outbound-only vendor mirror. Our queryable evidence store
+is Postgres (`DeepRunLog` + the provenance graph). We cannot build a customer-facing accountability
+feature on Langfuse without adding read verbs** — which matters because Langfuse was acquired by
+ClickHouse (Jan 2026) and is the obvious "why not just use Langfuse" objection.
+
+### 3.8 Response framework — the remediation rail (thin but real)
+
+- Lifecycle: `PROPOSED --approve--> EXECUTED --rollback--> ROLLED_BACK`; `PROPOSED --reject-->
+  REJECTED`; execute-fail → `FAILED`. Terminal = {REJECTED, ROLLED_BACK}.
+- Aggregate is a frozen dataclass; every transition returns a NEW entity, guarded by `_guard` →
+  `IllegalTransitionError`. ORM adds `kind`, indexes `(workspace, status, -requested_at)` and
+  `(workspace, finding_fingerprint)`. Docstring: *"`spec` and `inverse_spec` are written once and
+  never change — that immutability is what makes the rollback trustworthy."*
+- ⚠ **The "registry" of actions is a 2-value enum, not a plugin registry**: `REVOKE_SG_INGRESS` +
+  inverse `AUTHORIZE_SG_INGRESS`. Adding a kind = enum entry + a boto3 branch.
+- **Dry-run default TRUE** at three layers (settings `SOC_RESPONSE_DRY_RUN_DEFAULT`, request parsing,
+  model default), threading to AWS's native `DryRun`.
+- Key sentence for this ADR (`ProposeResponseActionUseCase` docstring): *"Proposing has NO external
+  effect … That is why an autonomous agent is allowed to propose (a `reversible_write`) while only a
+  human may approve the execution (the `irreversible` step)."*
+- `requested_by` is a bare `CharField(64)` — an external agent id fits with no schema change.
+
+### 3.9 Tool risk ladder — the MOST coupled piece
+
+`components/agents/application/policies/tool_risk.py` (SEE-203). Tiers `read < reversible_write <
+irreversible`; two orthogonal gates — an **autonomy cap** (`_AUTONOMOUS_ALLOWED = {read,
+reversible_write}`; autonomous may NEVER run irreversible even with approval) and **human approval**
+for irreversible. `resolve_tool_risk`: explicit `@tool(risk=…)` wins, else registry, else `read`.
+Enforcement is `_risk_gated` (`base.py:467–501`), applied in the tool-promotion loop
+(`base.py:875–882`); fail-closed on both identity and approval; the tool body never runs on refusal.
+
+- **Coupling: HIGHEST — a Python decorator wrapping a bound method on our `BaseAgent`. It cannot
+  observe a tool call it does not wrap.** For a customer's agents, the *tier taxonomy and refusal
+  semantics* port cleanly; the *enforcement mechanism* does not — it would have to live at their tool
+  boundary or in a proxy/MCP layer we control. This is the single most important negative result in
+  the map, and it directly shapes what §5's capture mechanism can and cannot promise.
+- **Named gap:** there is **no first-class refusal event type**. A refusal is a *return string*, so it
+  survives only as the `tool_output` of a `tool_observation` row. "Provably logged denials" is not
+  true today.
+
+### 3.10 The AI service principal (SEE-201)
+
+- `AITeammateProfile` (`infrastructure/persistence/ai/models.py:119–163`): `workspace(OneToOne)`,
+  **`user` FK(PROTECT)**, `display_name`, `avatar_url`, `status`, `is_enabled`, `last_run_at`, `config`.
+- `AIPermissionGrant` (L166–210): `workspace`, `principal` FK(User), `role="ai_executor"`, `status`,
+  `scope_type(workspace|department|project)`, `scope_id`, `actions(JSON)`, `scopes(JSON)`; unique
+  `(workspace, principal, role, scope_type, scope_id)`.
+- Minting (`actions_service.ensure_teammate`, under `select_for_update`): creates a **real
+  `CustomUser`** (`<slug>@<DEFAULT_TEAMMATE_EMAIL_DOMAIN>`, username `<slug>-ai`, random password,
+  `is_staff=False`) *"so `Task.created_by` is a real user the team-membership checks accept"*, plus a
+  default workspace-scoped `ai_executor` grant with `actions=["*"]`.
+- `is_ai_service_principal(user_id, workspace_id)` (`base.py:441–466`) — identity is the profile's
+  user, **deliberately independent of any `WorkspaceMembership`** so the write cap holds even if a
+  membership is later granted.
+- **Asymmetric cap:** writes → `requires_role` refuses with *"Autonomous AI runs cannot perform this
+  action directly. Surface it as a finding for a workspace admin to review."*; reads → pseudo-role
+  `"ai_service"`, a trusted internal reader that sees every sensitivity tier.
+- Kill switch `feature.ai_kill_switch` resolves user → workspace → global, **fail-OPEN by design**
+  ("a kill switch that self-engages whenever the flag store hiccups would be its own outage").
+- **Coupling: MEDIUM.** The *concept* — an agent is a first-class principal with its own identity
+  row, its own grant, and an asymmetric read-everything/write-nothing cap — ports outward perfectly
+  and is our strongest conceptual asset. The *implementation* forces every agent principal to be a
+  Django `CustomUser` with a synthetic email, which does not fit a customer's agent identity (an
+  external ref / OIDC subject / IAM role ARN). **`ProvenanceActor.external_ref` +
+  `actor_type="ai_agent"` is the existing escape hatch**; `DeepRun.user` and `Task.created_by` are the
+  two hard FKs that would need nullable-plus-external-ref.
+
+### 3.11 The five gaps to name honestly in the ADR
+
+1. **"Provably logged" is currently "conventionally logged"** — no DB-level immutability, no hash
+   chain, no signature, no retention policy on `DeepRunLog` or `EntityAuditLog`; both CASCADE away
+   with their parent.
+2. **No FK from an AI action to the run that produced it** — only a heuristic time+agent match.
+3. **Tool-risk refusals have no first-class event type** — denials are return strings.
+4. **The sign-off registry has zero registered adapters** — the kernel is real but not wired.
+5. **`TracingPort` has no query verb** — Langfuse cannot back a customer-facing feature as-is.
 
 ## 4. Findings — Stream B (our ingestion spine) — COMPLETE
 
