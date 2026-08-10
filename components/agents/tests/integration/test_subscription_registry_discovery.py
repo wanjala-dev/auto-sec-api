@@ -39,6 +39,7 @@ EXPECTED_SUBSCRIPTIONS: set[tuple[str, str]] = {
     (f"{_AGENTS_HANDLERS}.project_specialist_handler", "ProjectCreated"),
     (f"{_AGENTS_HANDLERS}.sign_off_feedback_handler", "SignOffDecisionRecorded"),
     (f"{_AGENTS_HANDLERS}.finding_raised_board_handler", "FindingRaised"),
+    (f"{_AGENTS_HANDLERS}.finding_resolved_board_handler", "FindingResolved"),
 }
 
 
