@@ -35,8 +35,16 @@ class FindingProvider:
         from components.findings.application.use_cases.change_finding_status_use_case import (
             ChangeFindingStatusUseCase,
         )
+        from components.shared_kernel.infrastructure.adapters.celery_event_publisher import (
+            CeleryEventPublisher,
+        )
 
-        return ChangeFindingStatusUseCase(store=FindingProvider.build_finding_store())
+        return ChangeFindingStatusUseCase(
+            store=FindingProvider.build_finding_store(),
+            # Terminal transitions (resolve/suppress) emit FindingResolved so the
+            # board can archive the finding's card (suppress) / other lenses react.
+            event_publisher=CeleryEventPublisher(),
+        )
 
     @staticmethod
     def build_list_findings_use_case():

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from components.project.application.use_cases.archive_finding_cards_use_case import ArchiveFindingCardsUseCase
 from components.project.application.use_cases.attach_finding_draft_pr_patch_use_case import (
     AttachFindingDraftPrPatchUseCase,
 )
@@ -109,3 +110,14 @@ class ProjectProvider:
         )
 
         return ResolveFindingTaskUseCase(port=OrmResolveFindingTaskRepository())
+
+    @staticmethod
+    def build_archive_finding_cards_use_case() -> ArchiveFindingCardsUseCase:
+        """The suppressed-finding card archive write (recycle-bin tombstone,
+        never a delete) — driven by the agents ``FindingResolved`` board handler
+        and the ``archive_suppressed_finding_cards`` backfill command."""
+        from components.project.infrastructure.repositories.archive_finding_cards_repository import (
+            OrmArchiveFindingCardsRepository,
+        )
+
+        return ArchiveFindingCardsUseCase(port=OrmArchiveFindingCardsRepository())

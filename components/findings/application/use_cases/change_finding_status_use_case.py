@@ -36,8 +36,11 @@ logger = logging.getLogger(__name__)
 
 
 class ChangeFindingStatusUseCase:
-    def __init__(self, *, store: FindingStorePort) -> None:
+    def __init__(self, *, store: FindingStorePort, event_publisher=None) -> None:
         self._store = store
+        # Duck-typed ``publish`` (same contract as RecordObservedFindingUseCase);
+        # optional so a mis-wired publisher can never break the status write.
+        self._publisher = event_publisher
 
     def execute(self, command: ChangeFindingStatusCommand) -> ChangeFindingStatusResult:
         if command.action not in VALID_ACTIONS:
@@ -72,7 +75,43 @@ class ChangeFindingStatusUseCase:
             updated.status.value,
             command.actor_id,
         )
+        self._publish_terminal_transition(updated, command)
         return ChangeFindingStatusResult(finding_id=updated.id, status=updated.status.value, changed=True)
+
+    def _publish_terminal_transition(self, updated: FindingEntity, command: ChangeFindingStatusCommand) -> None:
+        """Best-effort ``FindingResolved`` emission on a terminal transition.
+
+        ``FindingResolved`` is the shared-kernel "this finding reached a terminal
+        state (resolved or suppressed)" signal — its documented purpose is that
+        consumers can close/archive a board card. The suppress path carries
+        ``reason="suppressed"`` so the agents board handler auto-archives the
+        card (Henry's 2026-08-09 ruling); the resolve path carries
+        ``reason="resolved"``. REOPEN publishes nothing — there is no
+        ``FindingReopened`` event today, so an un-suppress does NOT auto-restore
+        the card (operator restores from the RECYCLE BIN tray; see the handler's
+        docstring). A publish failure is logged, never raised — the status
+        change is the fact, the event a side-effect.
+        """
+        if self._publisher is None or command.action not in (RESOLVE, SUPPRESS):
+            return
+        try:
+            from components.shared_kernel.domain.events import FindingResolved
+
+            self._publisher.publish(
+                FindingResolved(
+                    workspace_id=command.workspace_id,
+                    finding_id=updated.id,
+                    fingerprint=updated.fingerprint,
+                    reason="suppressed" if command.action == SUPPRESS else "resolved",
+                )
+            )
+        except Exception:
+            logger.exception(
+                "finding_resolved_event_publish_failed workspace_id=%s finding_id=%s action=%s",
+                command.workspace_id,
+                command.finding_id,
+                command.action,
+            )
 
     @staticmethod
     def _transition(finding: FindingEntity, command: ChangeFindingStatusCommand) -> FindingEntity:
