@@ -34,6 +34,22 @@ def _bucket() -> str:
     return getattr(settings, "SBOM_S3_BUCKET", "autosec-sboms")
 
 
+def _prefix() -> str:
+    """Key prefix inside the bucket — empty in dev, ``sboms`` in prod.
+
+    Same rationale as the report store's ``_prefix``: dev MinIO gives SBOMs their
+    own bucket, prod shares ONE ``autosec-prod-data`` bucket whose IAM and
+    lifecycle rules are prefix-scoped. Stored on the ImageSbom row at write time,
+    so already-written objects keep resolving if the prefix ever changes.
+    """
+    return str(getattr(settings, "SBOM_S3_PREFIX", "") or "").strip("/")
+
+
+def _targets_own_endpoint() -> bool:
+    """True when this deployment points the store at an endpoint we operate (MinIO)."""
+    return bool(getattr(settings, "SBOM_S3_ENDPOINT", None))
+
+
 def _presigned_ttl() -> int:
     return int(getattr(settings, "SBOM_S3_PRESIGNED_TTL_SECONDS", 600))
 
@@ -41,6 +57,7 @@ def _presigned_ttl() -> int:
 def _client(*, public: bool = False):
     """Lazy boto3 client — internal endpoint for writes, public for presigns."""
     import boto3
+    from botocore.config import Config
 
     endpoint = (
         getattr(settings, "SBOM_S3_PUBLIC_ENDPOINT", None) if public else getattr(settings, "SBOM_S3_ENDPOINT", None)
@@ -51,6 +68,12 @@ def _client(*, public: bool = False):
         aws_access_key_id=getattr(settings, "SBOM_S3_ACCESS_KEY", None),
         aws_secret_access_key=getattr(settings, "SBOM_S3_SECRET_KEY", None),
         region_name=getattr(settings, "SBOM_S3_REGION", "us-east-1"),
+        # SigV4 EXPLICITLY — see the full note (including the CONVERGENCE NOTE about
+        # fix/presign-sigv4's shared build_object_storage_client factory) in the
+        # report store's _client. Default botocore presigns SigV2, which real AWS S3
+        # no longer accepts in most regions; this is what keeps the "download SBOM"
+        # link working after the move off MinIO.
+        config=Config(signature_version="s3v4"),
     )
 
 
@@ -58,7 +81,9 @@ class MinioSbomStore(SbomStorePort):
     @staticmethod
     def object_key(*, workspace_id: UUID, image_ref: str, scan_run_id: UUID) -> str:
         digest = hashlib.sha256(image_ref.encode("utf-8")).hexdigest()
-        return f"{workspace_id}/{digest}/{scan_run_id}.cdx.json"
+        key = f"{workspace_id}/{digest}/{scan_run_id}.cdx.json"
+        prefix = _prefix()
+        return f"{prefix}/{key}" if prefix else key
 
     def store(self, *, workspace_id: UUID, scan_run_id: UUID, image_ref: str, content: str) -> StoredSbom:
         from infrastructure.persistence.container_security.models import ImageSbom
@@ -110,8 +135,18 @@ class MinioSbomStore(SbomStorePort):
 
     @staticmethod
     def _ensure_bucket(client) -> None:
-        """Create the SBOM bucket if missing (idempotent — same first-run rationale as
-        the report bucket: a fresh MinIO must not fail the first stored SBOM)."""
+        """Create the SBOM bucket if missing — DEV (MinIO) ONLY.
+
+        Idempotent, same first-run rationale as the report bucket: a fresh MinIO
+        must not fail the first stored SBOM. Skipped against real S3, where the
+        bucket is terraform-managed and a HeadBucket carries no ``s3:prefix``
+        context key for the prefix-conditioned ListBucket grant to match — it 403s,
+        and the CreateBucket fallback is denied too. See the report store's
+        ``_ensure_bucket`` for the full write-up.
+        """
+        if not _targets_own_endpoint():
+            return
+
         from botocore.exceptions import ClientError
 
         bucket = _bucket()

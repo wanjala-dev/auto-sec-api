@@ -20,6 +20,26 @@ def _bucket() -> str:
     return getattr(settings, "REPORT_PDF_BUCKET", "auto-sec-reports")
 
 
+def _prefix() -> str:
+    """Key prefix inside the bucket — empty in dev, ``reports`` in prod.
+
+    Dev MinIO gives reports a bucket of their own, so keys start at the workspace
+    id. Prod shares ONE ``autosec-prod-data`` bucket across media/, scan-artifacts/
+    and now reports/, and that prefix is exactly what the IAM statement and the
+    lifecycle rule are scoped to — so it must be part of the key, not the bucket.
+    """
+    return str(getattr(settings, "REPORT_PDF_S3_PREFIX", "") or "").strip("/")
+
+
+def _targets_own_endpoint() -> bool:
+    """True when this deployment points the store at an endpoint we operate (MinIO).
+
+    False means real AWS S3, where the bucket is terraform-managed — see
+    ``_ensure_bucket`` for why that distinction has to gate bucket creation.
+    """
+    return bool(getattr(settings, "REPORT_PDF_S3_ENDPOINT", None))
+
+
 def _presigned_ttl() -> int:
     return int(getattr(settings, "REPORT_PDF_S3_PRESIGNED_TTL_SECONDS", 600))
 
@@ -27,6 +47,7 @@ def _presigned_ttl() -> int:
 def _client(*, public: bool = False):
     """Lazy boto3 client — internal endpoint for writes, public for presigns."""
     import boto3
+    from botocore.config import Config
 
     endpoint = (
         getattr(settings, "REPORT_PDF_S3_PUBLIC_ENDPOINT", None)
@@ -39,13 +60,35 @@ def _client(*, public: bool = False):
         aws_access_key_id=getattr(settings, "REPORT_PDF_S3_ACCESS_KEY", None),
         aws_secret_access_key=getattr(settings, "REPORT_PDF_S3_SECRET_KEY", None),
         region_name=getattr(settings, "REPORT_PDF_S3_REGION", "us-east-1"),
+        # SigV4 EXPLICITLY, matching the scan-artifact store. Without it botocore
+        # mints a LEGACY SigV2 presigned URL (AWSAccessKeyId=/Signature=) even
+        # though the client's own resolved signature_version reads "s3v4" —
+        # verified empirically against MinIO on this branch. That mattered little
+        # while these objects lived on MinIO, which still accepts SigV2 for GET; it
+        # becomes load-bearing the moment prod points at real AWS S3, where S3
+        # supports ONLY SigV4 in most regions and SigV2 is deprecated and being
+        # turned off. A presigned download signed SigV2 is a SignatureDoesNotMatch
+        # waiting to happen, so the S3 migration cannot ship without this.
+        #
+        # CONVERGENCE NOTE — deliberate, temporary duplication. The concurrent
+        # `fix/presign-sigv4` branch introduces
+        # `infrastructure/storage/object_storage.build_object_storage_client`, ONE
+        # factory every object-storage client is built from, precisely so this
+        # setting cannot be forgotten again. That is the better home for it. This
+        # inline Config exists only so THIS branch is correct on its own — shipping a
+        # prod S3 migration whose presigned URLs work only if another unmerged branch
+        # lands is exactly the kind of hidden coupling that breaks quietly.
+        # Whichever of the two merges SECOND: delete this `config=` line and the
+        # botocore import, and call the factory instead. Do not keep both.
+        config=Config(signature_version="s3v4"),
     )
 
 
 class ReportPdfStorageService:
     @staticmethod
     def object_key(*, workspace_id: str, report_id: str) -> str:
-        return f"{workspace_id}/{report_id}.pdf"
+        prefix = _prefix()
+        return f"{prefix}/{workspace_id}/{report_id}.pdf" if prefix else f"{workspace_id}/{report_id}.pdf"
 
     def put_pdf(self, *, key: str, body: bytes) -> None:
         client = _client(public=False)
@@ -55,13 +98,24 @@ class ReportPdfStorageService:
 
     @staticmethod
     def _ensure_bucket(client) -> None:
-        """Create the reports bucket if it is missing.
+        """Create the reports bucket if it is missing — DEV (MinIO) ONLY.
 
-        A fresh MinIO / a new AWS environment has no reports bucket yet, so
-        the first generation would fail with NoSuchBucket. Creating on demand
-        (idempotent — BucketAlreadyOwnedByYou is swallowed) keeps first-run
-        report generation working without a separate provisioning step.
+        A fresh MinIO has no reports bucket yet, so the first generation would
+        fail with NoSuchBucket. Creating on demand (idempotent —
+        BucketAlreadyOwnedByYou is swallowed) keeps first-run report generation
+        working without a separate provisioning step.
+
+        Skipped entirely against real S3, and that is not an optimization — it is
+        required for prod to work at all. The prod bucket is terraform-managed and
+        the host role's ``s3:ListBucket`` is conditioned on ``s3:prefix``; a
+        HeadBucket request carries no prefix context key, so the condition cannot
+        match and the call 403s. The old unconditional code would then attempt
+        CreateBucket, get AccessDenied (correctly — no security product's app role
+        should hold s3:CreateBucket), and raise, failing every prod report upload.
         """
+        if not _targets_own_endpoint():
+            return
+
         from botocore.exceptions import ClientError
 
         bucket = _bucket()

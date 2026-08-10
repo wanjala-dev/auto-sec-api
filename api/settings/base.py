@@ -644,24 +644,42 @@ GOTENBERG_URL = os.environ.get("GOTENBERG_URL", "http://gotenberg:3000")
 GOTENBERG_TIMEOUT_SECONDS = int(os.environ.get("GOTENBERG_TIMEOUT_SECONDS", "30"))
 
 # ── Report PDF object storage ──────────────────────────────────────────
-# In dev we point at MinIO (S3-compatible); in prod we point at real S3.
-# The storage helper uses boto3 directly (not django-storages) because
-# this bucket is operated outside Django's MEDIA/STATIC surface — it's an
-# application bucket keyed by workspace/report uuids, not uploaded files.
+# THESE DEFAULTS ARE THE DEV (MinIO) DEPLOYMENT. Prod overrides all of them in
+# api/settings/prod.py to point at real S3 — see that file's "Report/SBOM object
+# storage" block, which is the authority for the prod shape.
+#
+# The storage helper uses boto3 directly (not django-storages) because this
+# bucket is operated outside Django's MEDIA/STATIC surface — it's an application
+# bucket keyed by workspace/report uuids, not uploaded files.
 REPORT_PDF_BUCKET = os.environ.get("REPORT_PDF_BUCKET", "wanjala-reports")
 # Internal endpoint — used by the Django / Celery containers to upload
-# PDFs. Points at the Docker-network hostname ``minio:9000`` in dev.
+# PDFs. Points at the in-cluster hostname ``minio:9000`` in dev.
 REPORT_PDF_S3_ENDPOINT = os.environ.get("REPORT_PDF_S3_ENDPOINT", "http://minio:9000")
-# Public endpoint — used when generating the presigned URL the browser
-# follows. In dev this must be host-reachable (the mapped MinIO port).
-# In prod both values are the same — real S3 has no split.
+# Public endpoint — used when generating the presigned URL the browser follows.
+# In dev this MUST be host-reachable (the mapped MinIO port), because the
+# in-cluster hostname means nothing to the viewer's browser: hence the split.
+#
+# The split is a DEV-ONLY concession. In prod both values are None (real S3 needs
+# no endpoint override at all), so there is exactly one origin and it is the
+# public AWS one — enforced by tests/test_object_storage_settings.py, which fails
+# if a prod-shaped config ever produces a split or a localhost public endpoint.
+# Until 2026-08-09 that "prod has no split" claim was aspirational: prod still ran
+# in-cluster MinIO, so a customer clicking "download SBOM" got a presigned URL
+# pointing at their OWN laptop's localhost:9100.
 REPORT_PDF_S3_PUBLIC_ENDPOINT = os.environ.get(
     "REPORT_PDF_S3_PUBLIC_ENDPOINT",
     os.environ.get("REPORT_PDF_S3_ENDPOINT", "http://localhost:9100"),
 )
 REPORT_PDF_S3_REGION = os.environ.get("REPORT_PDF_S3_REGION", "us-east-1")
+# Dev MinIO root creds. Prod sets these to None so boto3's default chain reaches
+# IMDSv2 and picks up the k3s host's instance role — prod has NO static S3 keys.
 REPORT_PDF_S3_ACCESS_KEY = os.environ.get("REPORT_PDF_S3_ACCESS_KEY", "wanjala")
 REPORT_PDF_S3_SECRET_KEY = os.environ.get("REPORT_PDF_S3_SECRET_KEY", "wanjaladev")
+# Key prefix inside the bucket. EMPTY in dev (MinIO gives reports their own
+# bucket, so keys start at the workspace id). In prod everything shares the one
+# ``autosec-prod-data`` bucket, so reports live under ``reports/`` — which is what
+# the prefix-scoped IAM statement and the lifecycle rule both key off.
+REPORT_PDF_S3_PREFIX = os.environ.get("REPORT_PDF_S3_PREFIX", "")
 REPORT_PDF_S3_PRESIGNED_TTL_SECONDS = int(os.environ.get("REPORT_PDF_S3_PRESIGNED_TTL_SECONDS", "600"))
 
 # ── Image SBOM object storage (container_security, task #99 P1) ────────
@@ -679,6 +697,10 @@ SBOM_S3_PUBLIC_ENDPOINT = os.environ.get(
 SBOM_S3_REGION = os.environ.get("SBOM_S3_REGION", os.environ.get("REPORT_PDF_S3_REGION", "us-east-1"))
 SBOM_S3_ACCESS_KEY = os.environ.get("SBOM_S3_ACCESS_KEY", os.environ.get("REPORT_PDF_S3_ACCESS_KEY", "wanjala"))
 SBOM_S3_SECRET_KEY = os.environ.get("SBOM_S3_SECRET_KEY", os.environ.get("REPORT_PDF_S3_SECRET_KEY", "wanjaladev"))
+# See REPORT_PDF_S3_PREFIX. Empty in dev (own bucket); ``sboms`` in prod (shared
+# bucket, prefix-scoped IAM). NOT inherited from the report prefix — the two must
+# land under DIFFERENT prod prefixes, so a fallback would be actively wrong.
+SBOM_S3_PREFIX = os.environ.get("SBOM_S3_PREFIX", "")
 SBOM_S3_PRESIGNED_TTL_SECONDS = int(os.environ.get("SBOM_S3_PRESIGNED_TTL_SECONDS", "600"))
 
 # ── Scan-output artifact channel (ADR 0022) ────────────────────────────────

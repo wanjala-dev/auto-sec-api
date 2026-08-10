@@ -182,7 +182,23 @@ class MinioScanArtifactStore(ScanArtifactStorePort):
 
     @staticmethod
     def _ensure_bucket(client, bucket: str) -> None:
-        """Create the artifact bucket if missing (same first-run rationale as the SBOM store)."""
+        """Create the artifact bucket if missing — DEV (MinIO) ONLY.
+
+        Same first-run rationale as the SBOM store, and the same prod carve-out:
+        against real S3 the bucket is terraform-managed, and HeadBucket 403s because
+        it carries no ``s3:prefix`` context key for ListBucket's prefix condition to
+        match — then CreateBucket is denied and the whole presign raises. Prod would
+        have failed its FIRST scan on this; found while migrating reports/SBOMs onto
+        the same bucket, fixed here in lockstep so all three adapters agree.
+
+        NOTE the predicate is ``_endpoint()``, NOT ``_targets_own_endpoint()``: prod
+        sets SCAN_ARTIFACT_S3_ENDPOINT to the EMPTY string, so "an endpoint var is
+        present" is true there while the resolved endpoint is None (real S3). Only
+        the resolved value distinguishes MinIO from AWS.
+        """
+        if not _endpoint():
+            return
+
         from botocore.exceptions import ClientError
 
         try:
