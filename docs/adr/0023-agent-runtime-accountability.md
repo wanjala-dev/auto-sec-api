@@ -438,16 +438,157 @@ not a gate** — the existing `[UNVERIFIED]` convention applies.
 
 ## 5. Feature or company?
 
-**TO BE COMPLETED.**
+Henry's standing note (`STATE_AND_VISION.md` §1.1) is that three ideas in ~6 weeks each researched to
+*"feature, not company"*, and that *"the next idea of this shape should cost an hour against this
+page, not another research fleet."* So this answer is given directly.
+
+### The verdict: **a FEATURE of Auto-Sec — and the strongest one available to us right now.** It is not a company.
+
+**Why not a company.** The recording layer is already commoditized and consolidating:
+
+- **Agnys** already sells **hash-chained agent audit logs at $49/mo, self-serve.** Their named
+  weakness in our own competitive scan is *"records agents without **doing** anything."* If recording
+  were the product, a $49/mo indie tool would already be it.
+- **Vorlon** ($15.7M, Accel) already sells the **agent flight recorder** — as enterprise incident
+  forensics.
+- The consolidation rate in this segment over ~12 months is brutal: Protect AI → Palo Alto
+  (~$650–700M), Prompt Security → SentinelOne ($250M), Aim → Cato, Lakera → Check Point, **Langfuse →
+  ClickHouse**, Wiz → Google ($32B). A standalone agent-recording company is an acquisition target
+  with a 12-month clock, not a durable business.
+- The observability incumbents (Langfuse, LangSmith, Arize, Datadog LLM Observability) already hold
+  the developer relationship and the same data.
+
+**Why it is nonetheless a strong feature for us, and why the observability players are not the
+competitor here.** Our own competitive scan already reached this and it survives the new research:
+
+> "The observability layer is not a competitor for this, **by framing**. Langfuse, LangSmith, Arize
+> and Datadog LLM Observability own the developers but frame everything as *debugging and evals* — an
+> engineering tool, not an assurance product with an auditor as the reader. **Different buyer,
+> different artifact, different retention guarantees.**"
+
+Three things make it ours rather than theirs, and all three are structural:
+
+1. **The join is the product, and we already hold one side of it.** Identity is absent by
+   construction from every telemetry standard — accountability is a *join* between behaviour and
+   credential provenance. An observability vendor holds behaviour. **We hold the asset graph, the
+   Finding SSOT, the cloud/VCS/Vercel connections, and contextual risk** — the other side. Finding
+   **F5** ("this agent can write to the bucket that this critical public-exposure finding is about")
+   is unavailable to anyone without the graph. That is `STATE_AND_VISION.md` §1.1's moat sentence,
+   replayed on agents.
+2. **We already own the back half** (§2.1) — grants-vs-events modelling, approval gate, evidence
+   provenance, board/triage/draft-PR remediation. A trace viewer would have to build all of it to
+   compete; we would have to build only capture.
+3. **"CIEM for agents" is an identified gap with no mature product.** Microsoft's own July 2026
+   least-privilege-for-agents guidance is entirely **preventive** (tool binding, scoping, JIT) and
+   **does not discuss granted-vs-used analysis for agents at all**. Meanwhile Stripe documents the
+   granted-vs-used loop *as a manual procedure*. The retrospective, observed-usage narrowing of an
+   agent's tool and credential surface is unoccupied, and every building block is programmatically
+   accessible.
+
+### What would have to be true for it to be a company
+
+Stated so it can be tested rather than argued:
+
+1. **Capture would have to become a standard we own or strongly shape** — e.g. the accountability
+   layer MCP's SEP-2817/SEP-3004 are reaching for lands as something we authored or co-authored,
+   rather than something the MCP spec absorbs. (Today both SEPs are unmerged and unsponsored — a
+   window, but a narrow one, and Anthropic + Okta's XAA beta suggests the incumbents intend to own it.)
+2. **The buying trigger would have to be regulatory and universal, not incidental** — every company
+   running agents *must* produce an agent audit trail, on a deadline, to a named standard. EU AI Act
+   high-risk enforcement (began 2026-08-02) and the NIST CAISI agent-standards initiative are the
+   candidates; whether they bite for a US Series-A SaaS with 60 agents is the open question §7 puts
+   to Henry.
+3. **The evidence artifact would have to be portable and third-party-verifiable** — stapled inclusion
+   proofs a customer's auditor accepts without trusting us (D6 Tier 2). That is what AIUC ($15M seed)
+   is reaching for from the *standard* side while having **no operational evidence source** — which
+   is exactly what we would be.
+
+If all three became true, the company is "the agent evidence layer." **None of them is true today**,
+and the standing rule is that we do not build for a hypothetical. So: build it as the feature, and
+treat 1–3 as the tripwires that would change the answer.
 
 ---
 
-## 6. Phasing
+## 6. Phasing — and an honest word about sequencing
 
-**TO BE COMPLETED.**
+**This does not outrank Tom's loops or go-live.** The customer-driven rule is explicit: does this move
+Tom, Isaac, or the Sephora deployment forward *now*? Isaac's ADR 0021 P0 (a working Vercel Prowler
+scan producing findings in his SSOT) is **already the named minimum bar for this same buyer**, is
+smaller, and is closer to shipping. **This ADR queues behind it.** Every phase below awaits Henry's
+explicit go.
+
+There is also a real dependency to name up front: **`feature.provenance_graph` is dark today.**
+Un-darkening it is shared prerequisite work that ADR 0009 D5 already wants for access-review evidence.
+
+**The spine, which the phasing follows: identity → permissions → evidence.** Capture without identity
+produces records that cannot be true about *which agent acted*; cryptography added later does not
+repair that.
+
+| Phase | Scope | Rough effort |
+|---|---|---|
+| **G0 — questions, zero code** | The Isaac questions in §7 — above all **which AI SDK version** (it swings the primary mechanism between "one line" and "sixty edits"), his Vercel plan tier (Trace Drains are Pro/Ent), and whether his agents share one Stripe key. Plus verify via the Stripe MCP whether request logs expose the acting key **programmatically**. | ~half a day |
+| **P0 — the 1-week proof with Isaac: an inventory + ONE exposure statement** | Trace Drain provisioned via API (zero code change on his side), spans landing on an OTLP receiver, normalized into `ProvenanceActor`/`ProvenanceResource`/`ProvenanceEvent` rows under a decided `urn:agent:` namespace. Deliverable: *"here are your agents, here is which ones called Stripe and which called LLM providers, here is the one that has write access it used on Tuesday."* Metadata-only. Read-only. Flag-gated dark. **Exit criterion: one finding of class F2 or F3 on his real estate, with his consent.** | ~1 week |
+| **P1 — the capability axis (the actual differentiator)** | The grant surface: MCP `tools/list`, Stripe restricted-key permissions, IdP scopes. `AccessGrant` rows populated. Detectors **F1** (granted-but-unused) and **F4** (capability drift) land, following AWS's three-field finding schema (`scope`, `unused actions`, `lastAccessed`) with a **stated window** and an archive/accepted-risk lifecycle. Board + `ROUTABLE_SOURCE_TYPES` + the specialist triage tool **in the same phase**. | ~1.5–2 weeks |
+| **P2 — F5, the moat finding** | Join agent grants to the asset graph and the Finding SSOT by `asset_urn`: *"this agent can write to the resource this critical exposure finding is about."* Cheap **because the graph already exists** — this is the phase that makes the capability un-copyable by a trace viewer. | ~3–4 days |
+| **P3 — evidence you can hand an auditor** | D6 Tier 1 in full (hash chain, canonical serialization, separate trust domain, **the customer-runnable verifier**, 12-month retention). **Do this inward first** — it fixes §2.4 gaps 1 and 3 on our own `DeepRunLog`/`EntityAuditLog`, improving our own posture, and only then points outward. | ~1 week |
+| **P4 — remediation** | Narrowed tool manifest / narrowed restricted key as a **draft PR** where the grant lives in code (a new *patch strategy* on the ONE engine, never a second engine). Scope-revocation as a **proposed** response action only when there is a named customer asking — the response framework is a two-value enum today and this is a real build. | ~1 week+ |
+| **Later / not now** | MCP server-side capture as a first-class source; the compliance pack (ADR 0009 lane); Tier 2 tamper-evidence; anything requiring a write scope. |
+
+**Recommended cut: G0 → P0 → P1 → P2.** P0 alone is the validation moment and a clean stopping point
+if Isaac's engagement dictates pace. **P3 is the phase that licenses the word "provable"** — until it
+lands, the product copy says "logged and attributable", not "provable".
 
 ---
 
 ## 7. Open questions
 
-**TO BE COMPLETED.**
+### For Henry
+
+1. **Sequencing.** ADR 0021 P0 (Vercel Prowler scan) is already Isaac's named minimum bar and is
+   smaller. Confirm this ADR queues behind it — or, if agent accountability is now the *sharper*
+   Isaac wedge, say so explicitly, because that is a change to the customer-driven ordering.
+2. **`feature.provenance_graph` un-darkening** is a shared prerequisite with ADR 0009 D5. Should it be
+   scheduled on its own merits (access-review evidence) rather than as a dependency discovered inside
+   this build?
+3. **Content capture policy.** D3 defaults to metadata-only, with prompts/tool-arguments off and
+   separately consented. Is holding *any* customer prompt content ever acceptable, or should it be a
+   permanent product boundary? (A permanent "we never hold your prompts" is a real differentiator
+   against the observability vendors — and would also permanently close ADR 0021 D5's injection
+   concern.)
+4. **The "provable" claim.** Do you want P3 (Tier 1 + verifier) treated as a **gate** on the marketing
+   word, as this ADR proposes? It is the difference between a defensible claim and the kind of
+   overclaim an operator catches in five minutes.
+5. **Feature-vs-company tripwires.** §5 names three conditions that would change the answer. Worth
+   revisiting if the MCP audit SEPs find a sponsor, or if EU AI Act enforcement starts reaching
+   US SaaS vendors through their enterprise customers' questionnaires.
+
+### ⭐ The single question to ask Isaac
+
+> **"When one of your ~60 agents charges a card through Stripe, whose credential does it use — and
+> could you tell me which agent it was?"**
+
+It is one question that tests everything at once: whether agents share a key (which decides whether we
+can *prove* or merely *reconstruct*, and whether F3 is his headline finding), whether he has ever
+needed to answer it (the buying trigger), and — from how fast he answers — whether this is a felt pain
+or a hypothetical. **If he can answer it precisely, the product is much less interesting to him. If
+he cannot, that hesitation is the sale.**
+
+**The three follow-ups that unblock the build** (G0):
+- **Which version of the Vercel AI SDK?** (v7 → one line; v6 → sixty edits. This single fact swings
+  the primary capture mechanism.)
+- **Which Vercel plan?** (Trace Drains are Pro/Enterprise at $0.50/GB **on his bill**.)
+- **Consent to provision a read-only Trace Drain against one project** as the P0 validation moment.
+
+### Could not verify (carried from the research notes)
+
+- ⚠ **PCI DSS requirement numbering/wording** (10.3.2 / 10.3.4 / 10.5.1) — corroborated across QSA and
+  vendor secondary sources only, **not** the PCI SSC primary document; older sources use the v3.2.1
+  number 10.5.5 for what is now 10.3.4. **Confirm before any customer-facing use.**
+- ⚠ **Whether Stripe exposes the acting restricted key per request *programmatically* via API** (the
+  Dashboard per-key view is confirmed; API-level attribution is not). **A load-bearing claim depends
+  on this — verify via the Stripe MCP.**
+- Whether Vercel fetch spans ever carry request/response bodies (assumed metadata-only).
+- Vercel's AI Gateway page states "AI SDK v5 and v6" while ai-sdk.dev documents 7.x as Latest — the
+  vendor's own docs are inconsistent.
+- All circulating agent over-privilege percentages (97% / 80% / 18%) trace to vendor blogs with no
+  methodology. **Not used anywhere in this ADR, and must not be.**
