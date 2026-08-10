@@ -295,61 +295,6 @@ runs 60 agents on one shared key, *"there is no reliable way to tell who used th
 IAM). **For shared-key estates we are reconstructing, not proving** — and F3 exists precisely to make
 that reconstruction gap itself the exposure statement.
 
-### D6 — Tamper-evidence: Tier 1 now, Tier 2 when the first auditor asks, and **ship a verifier the customer can run against us** — or the claim is theatre. **[proposed]**
-
-Our current honest position (§2.4): `DeepRunLog` and `EntityAuditLog` are append-only **by convention
-and documentation only** — no DB constraint, no hash chain, no signature, no retention policy.
-"Provable after the fact" is therefore **not a claim we may make today.**
-
-**Tier 1 — non-negotiable before the word "provable" is used in any customer-facing surface:**
-1. **Append-only by construction** — INSERT-only grant for the emitter; corrections are new
-   compensating records, never edits.
-2. **Per-record hash chain** — `prev_hash` + `hash = SHA-256(canonical_serialization || prev_hash)`.
-3. ⚠ **Canonical serialization, pinned and versioned.** Serialization drift silently makes every
-   historical hash unverifiable — *the most common way homegrown chains die.*
-4. **Evidence in a different trust domain from the system that writes it.** This is what SOC 2
-   auditors actually look for, and it does more real work than any cryptography.
-5. ⭐ **A standalone verifier the customer can run themselves.** **Without this, everything above is
-   theatre.** The test: *does the customer possess a tool that can independently detect tampering —
-   including tampering by us?* AWS passes (`aws cloudtrail validate-logs`); most "immutable audit
-   log" SaaS does not.
-6. **Retention: 12 months, 3 months hot.**
-
-**Tier 2 — when the first buyer with a QSA asks:** a periodic **Merkle root per window**, stored
-**in a separate location from the records** (CloudTrail's separated-digest-folder pattern, which also
-"permits existing log processing solutions to continue to operate without modification"); roots
-**signed** with KMS-held keys; roots **published where the customer can see them but we cannot
-silently rewrite them** (a customer-owned bucket, or emailed to their security contact) — the
-cheapest possible witness, and what makes a full-chain rewrite *by us* detectable; and **stapled
-inclusion proofs on exported artifacts**, so a single finding can be verified without trusting us and
-without downloading the log.
-
-**Explicitly not built:** a bespoke ledger database (⚠ **Amazon QLDB was retired 2025-07-31 and AWS
-now recommends Aurora PostgreSQL, which explicitly does not provide cryptographic verifiability** —
-if a hyperscaler could not sustain a managed cryptographic-ledger business, we must not make one
-load-bearing), blockchain anchoring, or per-record third-party timestamping. S3 Object Lock only on
-contractual demand, and **Governance mode never Compliance** — an accidental multi-year retention in
-Compliance mode is genuinely unfixable.
-
-**The compliance hook that makes this concrete rather than aspirational:** PCI DSS v4.0 requires
-**12 months of audit-log retention with 3 months immediately available**; **Stripe's own Activity
-Logs retain 6 months.** For a card-handling customer, **Stripe's retention cannot satisfy the
-requirement** — an independent evidence store is not a nice-to-have, it is the gap.
-⚠ **Verification flag: the PCI requirement numbering (10.3.2 / 10.3.4 / 10.5.1) is corroborated only
-across QSA and vendor secondary sources, not fetched from the PCI SSC primary document. Older sources
-use the v3.2.1 number 10.5.5 for what is now 10.3.4. Confirm against the PCI SSC library before any
-customer-facing use** — a wrong requirement number is exactly what a QSA notices.
-
-**And the honest sentence that bounds the whole capability:**
-
-> Tamper-evidence proves our records **were not altered after we wrote them**. It does not prove they
-> **were true when we wrote them.** The truth of the record rests on the fidelity of collection — and
-> a shared API key means the record cannot have been true about *which agent acted* in the first
-> place. **No amount of cryptography downstream repairs an attribution that was never captured.**
-
-That dependency — **identity first, then permissions, then evidence** — is the spine of the phase
-plan in §6.
-
 ### D3 — Consent boundary: read-only, named-scope, fail-closed — the `repo_allowlist` / ExternalId pattern, sixth use. **[proposed]**
 
 - **An `agent_allowlist`** on the capture connection, mirroring `VcsConnection.repo_allowlist`
@@ -435,6 +380,61 @@ downgrades the **confidence label**, it never withholds the artifact. The verifi
 not a gate** — the existing `[UNVERIFIED]` convention applies.
 
 ---
+
+### D6 — Tamper-evidence: Tier 1 now, Tier 2 when the first auditor asks, and **ship a verifier the customer can run against us** — or the claim is theatre. **[proposed]**
+
+Our current honest position (§2.4): `DeepRunLog` and `EntityAuditLog` are append-only **by convention
+and documentation only** — no DB constraint, no hash chain, no signature, no retention policy.
+"Provable after the fact" is therefore **not a claim we may make today.**
+
+**Tier 1 — non-negotiable before the word "provable" is used in any customer-facing surface:**
+1. **Append-only by construction** — INSERT-only grant for the emitter; corrections are new
+   compensating records, never edits.
+2. **Per-record hash chain** — `prev_hash` + `hash = SHA-256(canonical_serialization || prev_hash)`.
+3. ⚠ **Canonical serialization, pinned and versioned.** Serialization drift silently makes every
+   historical hash unverifiable — *the most common way homegrown chains die.*
+4. **Evidence in a different trust domain from the system that writes it.** This is what SOC 2
+   auditors actually look for, and it does more real work than any cryptography.
+5. ⭐ **A standalone verifier the customer can run themselves.** **Without this, everything above is
+   theatre.** The test: *does the customer possess a tool that can independently detect tampering —
+   including tampering by us?* AWS passes (`aws cloudtrail validate-logs`); most "immutable audit
+   log" SaaS does not.
+6. **Retention: 12 months, 3 months hot.**
+
+**Tier 2 — when the first buyer with a QSA asks:** a periodic **Merkle root per window**, stored
+**in a separate location from the records** (CloudTrail's separated-digest-folder pattern, which also
+"permits existing log processing solutions to continue to operate without modification"); roots
+**signed** with KMS-held keys; roots **published where the customer can see them but we cannot
+silently rewrite them** (a customer-owned bucket, or emailed to their security contact) — the
+cheapest possible witness, and what makes a full-chain rewrite *by us* detectable; and **stapled
+inclusion proofs on exported artifacts**, so a single finding can be verified without trusting us and
+without downloading the log.
+
+**Explicitly not built:** a bespoke ledger database (⚠ **Amazon QLDB was retired 2025-07-31 and AWS
+now recommends Aurora PostgreSQL, which explicitly does not provide cryptographic verifiability** —
+if a hyperscaler could not sustain a managed cryptographic-ledger business, we must not make one
+load-bearing), blockchain anchoring, or per-record third-party timestamping. S3 Object Lock only on
+contractual demand, and **Governance mode never Compliance** — an accidental multi-year retention in
+Compliance mode is genuinely unfixable.
+
+**The compliance hook that makes this concrete rather than aspirational:** PCI DSS v4.0 requires
+**12 months of audit-log retention with 3 months immediately available**; **Stripe's own Activity
+Logs retain 6 months.** For a card-handling customer, **Stripe's retention cannot satisfy the
+requirement** — an independent evidence store is not a nice-to-have, it is the gap.
+⚠ **Verification flag: the PCI requirement numbering (10.3.2 / 10.3.4 / 10.5.1) is corroborated only
+across QSA and vendor secondary sources, not fetched from the PCI SSC primary document. Older sources
+use the v3.2.1 number 10.5.5 for what is now 10.3.4. Confirm against the PCI SSC library before any
+customer-facing use** — a wrong requirement number is exactly what a QSA notices.
+
+**And the honest sentence that bounds the whole capability:**
+
+> Tamper-evidence proves our records **were not altered after we wrote them**. It does not prove they
+> **were true when we wrote them.** The truth of the record rests on the fidelity of collection — and
+> a shared API key means the record cannot have been true about *which agent acted* in the first
+> place. **No amount of cryptography downstream repairs an attribution that was never captured.**
+
+That dependency — **identity first, then permissions, then evidence** — is the spine of the phase
+plan in §6.
 
 ## 4. Consequences
 
