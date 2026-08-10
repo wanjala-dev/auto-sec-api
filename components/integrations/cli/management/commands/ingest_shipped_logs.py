@@ -13,6 +13,8 @@ import json
 
 from django.core.management.base import BaseCommand
 
+from infrastructure.storage.object_storage import build_object_storage_client
+
 
 class Command(BaseCommand):
     help = "Assume the customer role and parse the newest shipped log batch."
@@ -31,11 +33,10 @@ class Command(BaseCommand):
             RoleSessionName="autosec-ingest",
             ExternalId=conn.external_id,
         )["Credentials"]
-        s3 = boto3.client(
-            "s3",
-            aws_access_key_id=creds["AccessKeyId"],
-            aws_secret_access_key=creds["SecretAccessKey"],
-            aws_session_token=creds["SessionToken"],
+        s3 = build_object_storage_client(
+            access_key=creds["AccessKeyId"],
+            secret_key=creds["SecretAccessKey"],
+            session_token=creds["SessionToken"],
         )
         objs = []
         paginator = s3.get_paginator("list_objects_v2")

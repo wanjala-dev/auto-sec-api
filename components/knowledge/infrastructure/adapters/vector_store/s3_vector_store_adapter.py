@@ -11,7 +11,6 @@ Requires ``faiss-cpu`` and ``boto3``.  Install with::
 
 from __future__ import annotations
 
-import io
 import json
 import logging
 import os
@@ -52,9 +51,9 @@ class S3VectorStoreAdapter(VectorStorePort):
 
     def _get_s3(self) -> Any:
         if self._s3_client is None:
-            import boto3  # type: ignore[import-untyped]
+            from infrastructure.storage.object_storage import build_object_storage_client
 
-            self._s3_client = boto3.client("s3", region_name=self._region)
+            self._s3_client = build_object_storage_client(region_name=self._region)
         return self._s3_client
 
     @property
@@ -86,7 +85,9 @@ class S3VectorStoreAdapter(VectorStorePort):
             self._documents = data.get("documents", [])
             logger.info(
                 "Loaded FAISS index from s3://%s/%s (%d vectors)",
-                self._bucket, self._s3_index_key, self._index.ntotal,
+                self._bucket,
+                self._s3_index_key,
+                self._index.ntotal,
             )
         except s3.exceptions.NoSuchKey:
             dim = self._dimension or self._detect_dimension()

@@ -13,6 +13,8 @@ import logging
 
 from django.conf import settings
 
+from infrastructure.storage.object_storage import build_object_storage_client
+
 logger = logging.getLogger(__name__)
 
 
@@ -25,19 +27,16 @@ def _presigned_ttl() -> int:
 
 
 def _client(*, public: bool = False):
-    """Lazy boto3 client — internal endpoint for writes, public for presigns."""
-    import boto3
-
+    """Lazy object-storage client — internal endpoint for writes, public for presigns."""
     endpoint = (
         getattr(settings, "REPORT_PDF_S3_PUBLIC_ENDPOINT", None)
         if public
         else getattr(settings, "REPORT_PDF_S3_ENDPOINT", None)
     )
-    return boto3.client(
-        "s3",
+    return build_object_storage_client(
         endpoint_url=endpoint,
-        aws_access_key_id=getattr(settings, "REPORT_PDF_S3_ACCESS_KEY", None),
-        aws_secret_access_key=getattr(settings, "REPORT_PDF_S3_SECRET_KEY", None),
+        access_key=getattr(settings, "REPORT_PDF_S3_ACCESS_KEY", None),
+        secret_key=getattr(settings, "REPORT_PDF_S3_SECRET_KEY", None),
         region_name=getattr(settings, "REPORT_PDF_S3_REGION", "us-east-1"),
     )
 

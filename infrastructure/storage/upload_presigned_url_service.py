@@ -1,8 +1,9 @@
 """Generate presigned PUT URLs for direct browser uploads to S3.
 
-Mirrors ``ReportPdfStorageService`` — same boto3 client construction
-(``s3v4`` signature, virtual-host addressing in prod), same separation
-between operations and signing — but pointed at the Django MEDIA bucket
+Shares its client construction with every other object-storage caller via
+``infrastructure.storage.object_storage.build_object_storage_client`` (SigV4
+always; virtual-host addressing pinned here because the media bucket is real
+AWS S3), but is pointed at the Django MEDIA bucket
 (``AWS_STORAGE_BUCKET_NAME``) so a single browser PUT goes straight to
 the bucket and bypasses Django gunicorn for the bytes.
 
@@ -33,14 +34,15 @@ Dev fallback: when ``AWS_STORAGE_BUCKET_NAME`` is unset (local
 falls back to the multipart upload endpoint. We don't run MinIO for
 the media bucket in dev today — adding that is a separate task.
 """
+
 from __future__ import annotations
 
 import logging
 from functools import cached_property
 
-import boto3
-from botocore.client import Config
 from django.conf import settings
+
+from infrastructure.storage.object_storage import build_object_storage_client
 
 logger = logging.getLogger(__name__)
 
@@ -59,29 +61,12 @@ class UploadPresignedUrlService:
         presigned_ttl: int | None = None,
     ) -> None:
         self._bucket = bucket or getattr(settings, "AWS_STORAGE_BUCKET_NAME", None)
-        self._endpoint_url = (
-            endpoint_url
-            or getattr(settings, "MEDIA_S3_ENDPOINT", None)
-            or None
-        )
-        self._region = region or getattr(
-            settings, "AWS_S3_REGION_NAME", "us-east-1"
-        )
-        self._access_key = access_key or getattr(
-            settings, "MEDIA_S3_ACCESS_KEY", None
-        )
-        self._secret_key = secret_key or getattr(
-            settings, "MEDIA_S3_SECRET_KEY", None
-        )
-        self._location = (
-            location or getattr(settings, "AWS_LOCATION", "media") or "media"
-        ).strip("/")
-        self._presigned_ttl = int(
-            presigned_ttl
-            or getattr(
-                settings, "MEDIA_S3_PRESIGNED_PUT_TTL_SECONDS", 900
-            )
-        )
+        self._endpoint_url = endpoint_url or getattr(settings, "MEDIA_S3_ENDPOINT", None) or None
+        self._region = region or getattr(settings, "AWS_S3_REGION_NAME", "us-east-1")
+        self._access_key = access_key or getattr(settings, "MEDIA_S3_ACCESS_KEY", None)
+        self._secret_key = secret_key or getattr(settings, "MEDIA_S3_SECRET_KEY", None)
+        self._location = (location or getattr(settings, "AWS_LOCATION", "media") or "media").strip("/")
+        self._presigned_ttl = int(presigned_ttl or getattr(settings, "MEDIA_S3_PRESIGNED_PUT_TTL_SECONDS", 900))
 
     @property
     def enabled(self) -> bool:
@@ -94,24 +79,21 @@ class UploadPresignedUrlService:
         return bool(self._bucket)
 
     def _build_client(self):
-        kwargs: dict = {
-            "service_name": "s3",
-            "region_name": self._region,
-            "config": Config(
-                signature_version="s3v4",
-                s3={"addressing_style": "virtual"},
-            ),
-        }
-        if self._endpoint_url:
-            kwargs["endpoint_url"] = self._endpoint_url
-        if self._access_key and self._secret_key:
-            kwargs["aws_access_key_id"] = self._access_key
-            kwargs["aws_secret_access_key"] = self._secret_key
-        # Else: boto3's default credential chain. In prod this resolves
-        # to the EC2 instance metadata service (IMDSv2), picking up the
-        # ``wanjala-demo-sandbox-host`` role credentials — same as
-        # ``S3MediaStorage`` for django-storages writes.
-        return boto3.client(**kwargs)
+        # Credentials: when the static pair is absent this falls through to boto3's
+        # default chain. In prod that resolves to the instance metadata service
+        # (IMDSv2) — the same credentials ``S3MediaStorage`` uses for django-storages
+        # writes.
+        return build_object_storage_client(
+            endpoint_url=self._endpoint_url,
+            region_name=self._region,
+            access_key=self._access_key,
+            secret_key=self._secret_key,
+            # The media bucket is real AWS S3, which serves virtual-host style.
+            # NOTE: this is the one call site that pins addressing — pointing
+            # ``MEDIA_S3_ENDPOINT`` at MinIO would need it dropped, because MinIO has
+            # no per-bucket DNS and ``<bucket>.minio:9000`` does not resolve.
+            addressing_style="virtual",
+        )
 
     @cached_property
     def _client(self):
@@ -138,10 +120,7 @@ class UploadPresignedUrlService:
         relative storage key (e.g. ``uploads/<uuid>/photo.jpg``).
         """
         if not self.enabled:
-            raise RuntimeError(
-                "UploadPresignedUrlService is not configured "
-                "(AWS_STORAGE_BUCKET_NAME is unset)."
-            )
+            raise RuntimeError("UploadPresignedUrlService is not configured (AWS_STORAGE_BUCKET_NAME is unset).")
         full_key = self.storage_key_with_location(key)
         url = self._client.generate_presigned_url(
             "put_object",
