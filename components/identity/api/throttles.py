@@ -98,39 +98,46 @@ class _ScopedIPThrottle(SimpleRateThrottle):
 
 # ---------------------------------------------------------------------------
 # Authentication throttles
+#
+# None of these declare a ``rate``. That is load-bearing, not an omission:
+# ``SimpleRateThrottle.__init__`` only calls ``get_rate()`` when ``rate`` is
+# falsy, so a class attribute WINS over ``DEFAULT_THROTTLE_RATES`` and turns
+# the settings entry into dead config that looks authoritative and does
+# nothing. Rates live in ``api/settings/base.py``; per-environment relief lives
+# in ``local.py``. Adding a ``rate`` here re-breaks both.
+#
+# A missing scope in ``DEFAULT_THROTTLE_RATES`` now raises
+# ``ImproperlyConfigured`` at first use rather than silently falling back —
+# which is the point: the rate is either declared where operators look for it,
+# or the endpoint refuses to serve.
 # ---------------------------------------------------------------------------
 
 
 class LoginThrottle(_ScopedIdentityThrottle):
     scope = "auth_login"
-    rate = "10/min"
 
 
 class PasswordResetRequestThrottle(_ScopedIdentityThrottle):
     scope = "auth_password_reset_request"
-    rate = "5/hour"
 
 
 class PasswordResetConfirmThrottle(_ScopedIdentityThrottle):
     scope = "auth_password_reset_confirm"
-    rate = "10/hour"
 
 
 class EmailVerifyThrottle(_ScopedIdentityThrottle):
     scope = "auth_email_verify"
-    rate = "15/hour"
 
 
 class ResendVerificationEmailThrottle(_ScopedIdentityThrottle):
     """Per-email (falling back to per-IP) resend-verification throttle.
 
-    Tight (3/hour) because every accepted request can enqueue a real email
-    send for the named address — flooding it would both spam the inbox and
-    burn the SMTP/SES sender reputation.
+    Tight (3/hour by default) because every accepted request can enqueue a
+    real email send for the named address — flooding it would both spam the
+    inbox and burn the SMTP/SES sender reputation.
     """
 
     scope = "auth_resend_verification"
-    rate = "3/hour"
 
 
 class ResendVerificationIPThrottle(_ScopedIPThrottle):
@@ -152,13 +159,13 @@ class ResendVerificationIPThrottle(_ScopedIPThrottle):
 class MagicLinkRequestThrottle(_ScopedIdentityThrottle):
     """Anonymous magic-link request throttle.
 
-    Tight rate (5/hour per email+IP) because this endpoint sends real
-    email — an attacker who could enumerate accounts by flooding it
-    would also blow up the SES bounce/complaint rate.
+    Tight rate (5/hour by default) because this endpoint sends real email —
+    an attacker who could enumerate accounts by flooding it would also blow
+    up the SES bounce/complaint rate. Note this keys on the CALLER-supplied
+    email, so it is not a per-host limit; AuthEmailSendIPThrottle is.
     """
 
     scope = "auth_magic_link_request"
-    rate = "5/hour"
 
 
 class MagicLinkVerifyThrottle(_ScopedIdentityThrottle):
@@ -171,7 +178,6 @@ class MagicLinkVerifyThrottle(_ScopedIdentityThrottle):
     """
 
     scope = "auth_magic_link_verify"
-    rate = "10/hour"
 
 
 # ---------------------------------------------------------------------------
@@ -257,11 +263,9 @@ class OTPVerifyThrottle(_ScopedPrincipalThrottle):
     """Throttle OTP verification attempts per principal."""
 
     scope = "otp_verify"
-    rate = "10/min"
 
 
 class StaticVerifyThrottle(_ScopedPrincipalThrottle):
     """Throttle static recovery code verification attempts per principal."""
 
     scope = "otp_static_verify"
-    rate = "5/min"

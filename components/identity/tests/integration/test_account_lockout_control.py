@@ -22,8 +22,8 @@ from __future__ import annotations
 
 import pytest
 from django.core.cache import cache
+from rest_framework.throttling import SimpleRateThrottle
 
-from components.identity.api.throttles import LoginThrottle
 from components.identity.domain.enums import (
     LOCKOUT_THRESHOLD,
     LOCKOUT_WARN_AT,
@@ -54,14 +54,31 @@ def _relax_login_throttle(monkeypatch):
     would be rejected by the throttle before the view could tell us what the
     lockout did.
 
-    Note we monkeypatch the CLASS ATTRIBUTE rather than using
-    ``override_settings(REST_FRAMEWORK=...)``. The settings route does not work
-    here: every throttle in ``components/identity/api/throttles.py`` hardcodes a
-    ``rate`` alongside its ``scope``, and ``SimpleRateThrottle.__init__`` only
-    consults ``DEFAULT_THROTTLE_RATES`` when ``rate`` is falsy. So the settings
-    entries for these scopes are dead config. See FINDING C in the PR.
+    This now patches the rate TABLE, which is the honest way round: it
+    exercises the real ``scope`` → ``DEFAULT_THROTTLE_RATES`` resolution in
+    ``SimpleRateThrottle.get_rate()`` instead of bypassing it.
+
+    It previously had to patch the class attribute instead, because every
+    identity throttle hardcoded ``rate`` and ``SimpleRateThrottle.__init__``
+    only consults the settings table when ``rate`` is falsy — so the settings
+    entries were dead config (FINDING C from #310, now fixed). The login
+    endpoint also carries per-IP ceilings, so those scopes are relaxed too;
+    otherwise this file would measure the IP throttle rather than lockout.
+
+    ``override_settings`` still would NOT work here: ``THROTTLE_RATES`` is
+    bound to the settings dict at class-definition time, so re-reading
+    ``api_settings`` does not reach it.
     """
-    monkeypatch.setattr(LoginThrottle, "rate", "1000/min")
+    monkeypatch.setattr(
+        SimpleRateThrottle,
+        "THROTTLE_RATES",
+        {
+            **SimpleRateThrottle.THROTTLE_RATES,
+            "auth_login": "1000/min",
+            "auth_login_ip": "1000/min",
+            "auth_login_ip_sustained": "1000/min",
+        },
+    )
 
 
 @pytest.fixture
