@@ -442,15 +442,17 @@ A startup with no security team does not buy governance because it wants governa
 **someone it wants money from starts asking**. So the standards question is not "which framework
 applies to Isaac" but "which framework reaches him **through his customers**."
 
-| Instrument | What it says about agent logging | Does it reach Isaac? |
-|---|---|---|
-| **PCI DSS v4.0 Req 10** — 12 months retention / 3 hot; logs protected from modification; change-detection on audit logs | The most concrete retention + integrity requirement in scope | ⭐ **Most likely hard trigger.** He handles card data, and the gap is arithmetic and checkable: **Stripe's Activity Logs retain 6 months against a 12-month requirement.** ⚠ numbering unverified (§7) |
-| **SOC 2** (CC6.1 / CC7.2 / CC7.3 / CC8.1) | Outcome-based; **no prescriptive immutability control**. Auditors look for logs stored separately from the systems that generate them, with restricted access | ⭐ **The likeliest vehicle** — a SOC 2 report is what his enterprise prospects actually ask for. The 12-month/90-day-hot figure is practitioner convention, **not codified** — say so rather than citing it as a requirement |
-| **EU AI Act** — record-keeping / automatic logging for high-risk systems | A direct logging obligation | High-risk enforcement began **2026-08-02**. Whether it bites a US Series-A SaaS running client-facing agents is genuinely open — **do not assume it does** |
-| **MITRE ATLAS** — agentic techniques incl. agent tool credential harvesting (v5.4.0, 2026-02; agentic expansion began 2025-10) | A tagging vocabulary for agent findings, consistent with our existing ATT&CK tagging | Not a trigger; a **credibility and correlation** asset |
-| **OWASP LLM06 Excessive Agency / LLM08** + the Agentic Security Initiative | Names over-permissioned agents as a top-10 risk class | Not a trigger; **the vocabulary the finding copy should use**, because it is what a security reviewer recognizes on sight |
-| **NIST AI RMF + GenAI Profile; NIST CAISI agent-standards initiative (2026-02)** | Traceability and accountability framing; agent-runtime deliverables expected | Tailwind, not a trigger, on this timeline |
-| **ISO/IEC 42001** (AI management systems) | Records/logging duties for an AI management system | Appearing in procurement; relevance to a 60-agent startup **unverified** |
+| Rank | Instrument | What it actually says | Does it reach Isaac? |
+|---|---|---|---|
+| **🥇 1** | **ISO/IEC 42001 arriving via the enterprise vendor questionnaire** — control **A.6.2.8 "AI system recording of event logs"** | Deliberately weak: the org "shall **determine at which phases** of the AI system life cycle event log recording is enabled" — it obliges you to *decide*, not to log anything specific | ⭐ **This is the trigger.** It is the only instrument here that **blocks revenue today** — regulation creates future liability, procurement creates a *now* blocker. Evidence is from a neutral body, not vendors: the **Shared Assessments SIG Workbook added ISO 42001 + AI-lifecycle content in its 2025-09-19 release, carried into the 2026 SIG.** The SIG is the artefact enterprises actually email to vendors. And **A.6.2.8 gives a buyer a named control ID to demand evidence for** — frameworks without control IDs don't generate asks |
+| **🥈 2** | **SOC 2 Type II auditor asks in the current observation window** (CC6 / CC7 / CC8) | **There is no "SOC 2 for AI"** — AICPA has published no AI-specific TSCs as of mid-2026. But AI-fluent auditors are mapping model lineage, **prompt/inference logs with PII redaction applied before logging**, and per-LLM vendor risk assessments onto the existing criteria | ⭐ **The accelerant.** He already has an auditor relationship, and unlike the AI Act **there is no deferral to hide behind** — it lands inside the current Type II period. Uncodified and negotiable, so cite it as auditor expectation, never as a requirement |
+| **🥉 3** | **EU AI Act — as anxiety, not obligation** | ⚠️ **Correction:** the **logging articles are NOT in force.** Regulation (EU) 2026/1744 (in force 2026-07-27) **deferred Articles 12 / 19 / 26(6) to 2 December 2027.** What went live 2026-08-02 is **Article 50 transparency — a disclosure duty, not a record-keeping duty.** Art. 12 is a *capability* requirement that never enumerates tool calls or agent decision traces | Art. 50 carries **€15M / 3% of turnover** penalties, which is why AI compliance is on buyers' legal desks right now. **Use the Act to explain why buyers are asking; never as the obligation itself — the first competent counsel in the room will correct you.** Isaac is realistically **not** in Annex III scope (the plausible path is 4(b) worker monitoring; a client-facing support/sales agent is not) |
+| 4 | **PCI DSS v4.0 Req 10** — 10.2.1.2 (all actions by anyone with administrative access, **including interactive use of application or system accounts**), 10.2.2 (**user identification** per entry), 10.5.1 (12 months / 3 hot) | 10.2.2's user-identification field is **precisely what agents break** | ⚠️ **Materially weaker than it looks, and this corrects an earlier draft.** **Stripe Checkout / Payment Links with full redirect → SAQ A, where Requirement 10 is essentially not among the applicable requirements.** No CDE, nothing to log. SAQ A-EP (site controls the payment page) *is* heavier. **Confirm which Isaac is** before leaning on PCI at all |
+| 5 | ⭐ **PCI SSC "AI Principles" (2025-09-11)** — non-binding guidance | The tightest product-spec-shaped language found anywhere: AI should be *"**deployed so that the actions performed by the AI can be logged and monitored, and a (human) individual held responsible for those actions**"*, with *"logging … sufficient to audit the prompt inputs and reasoning process."* Recommends treating AI as a potential **"malicious insider"** | Not binding, but **it is our product spec written by a payments authority** — high rhetorical value with a card-handling buyer |
+| 6 | **OWASP Agentic Security Initiative — threat `T8` "Repudiation & Untraceability"**; **`ASI03` Identity & Privilege Abuse**; ASI08/ASI10 mitigations | ⭐ **A standards body has made *"the agent acted and you cannot prove what it did"* a named threat class in its own right** — not a missing control, a **threat**. ASI10 demands "**immutable and signed** audit logs of all agent actions, tool calls, and inter-agent communication"; ASI08 demands "**tamper-evident, time-stamped logs bound to cryptographic agent identities**"; ASI03: without its own identity an agent operates in an "**attribution gap**" | Not a trigger — **the vocabulary the product copy and finding text should use.** ⚠️ **But read ASI03 mitigation 6, which is the sharpest counter-argument to us and is in the primary source: OWASP tells buyers to "evaluate agentic identity management platforms… Microsoft Entra, AWS Bedrock Agents, Salesforce Agentforce…"** |
+| 7 | **OWASP Top 10 for LLM Apps — 2026 edition (August 2026)**; ⚠️ **Excessive Agency is now `LLM03:2026`**, not LLM06; Vector/Embedding is `LLM09:2026` | Ranking is now 75% practitioner vote + 25% incident data over 7,714 real incidents — **and Excessive Agency's climb to #3 is driven by that data.** ⚠️ **OWASP places monitoring under *"the following options will not prevent Excessive Agency but can limit the level of damage caused."*** | **Consequence for our copy: lead with prevention (least-privilege tools, complete mediation, HITL); position telemetry as detection / forensics / attribution / replay. Claiming prevention contradicts the source we cite** |
+| 8 | **MITRE ATLAS** — content **`v2026.07` (2026-08-07)**; ⚠️ agent tool credential harvesting is **`AML.T0098`, added v5.2.0 (2026-01-30)**, not v5.4.0 | ⭐ **There is no separate agentic matrix** — format v6.0.0 added a **`platform` field** (`Agentic AI`), so agentic coverage is a *filter*. ~40 agentic techniques added in ten months. Mitigation **`M0024` AI Telemetry Logging** was **revised twice in 2026** | A **credibility and correlation** asset that plugs into our existing ATT&CK tagging. Its real value: a defensible list of techniques **detectable only with runtime agent telemetry** (T0086, T0098, T0101, T0084, T0094, **T0110.002**) — ⚠️ and an equally important list where **EDR/CSPM already win**, which we must not over-claim |
+| 9 | **NIST** — AI RMF **GOVERN 1.6** (inventory AI systems), **MEASURE 2.8** (maintain histories, audit logs); **CAISI agent-standards initiative (2026-02-17)**; **NCCoE agent identity/authorization draft (2026-02-05)** seeking input on "**auditing and non-repudiation** of AI agents"; **COSAIS SP 800-53 overlays for "AI Agent Systems"** | ⚠️ **Correction — do not propagate** the circulating claim that AI 600-1 "recommends logging detailed enough to reconstruct what an agent did, including tool calls." **That language is not in the PDF** (600-1 predates the agent wave; its provenance emphasis is *content* provenance) | Most intellectually on-point, **none of it finished.** ⭐ **COSAIS is the thing to watch** — when the agent overlays land they define what "agent logging" means for anyone touching FedRAMP. **Roadmap justification, not 2026 revenue** |
 
 **The design consequence, which is the actual decision here:** the deliverable must be
 **forwardable**. The artifact that closes a sale is not a dashboard — it is *a document Isaac can send
@@ -514,6 +516,17 @@ page, not another research fleet."* So this answer is given directly.
 
 ### The verdict: **a FEATURE of Auto-Sec — and the strongest one available to us right now.** It is not a company.
 
+⚠️ **First, a correction to our own prior competitive read.** `LANDSCAPE_2026-08.md` §5 called this bet
+*"unoccupied."* **That verdict must be qualified: Microsoft shipped it.** **Agent 365 went GA on
+2026-05-01 at $15/user/month**, and **Purview Audit for Agent 365 covers "all agent-to-human,
+human-to-agent, agent-to-tools, and agent-to-agent interactions,"** auto-enabled per agent instance,
+with `AgentId` / `AgentName` / `AccessedResources[]` on the audit record. Its capture is
+**identity-anchored** (every instance holds an Entra Agent ID), which is *structurally stronger than a
+network proxy — it does not matter where the traffic goes if the actor is an identity that logs.*
+And the pricing tell: from **2026-07-01, third-party cloud-agent discovery requires an Agent 365
+licence** — **Microsoft is already monetizing exactly the cross-platform agent-visibility function a
+startup would sell.** Assume **6–12 months** to "good enough for most buyers," not 2–3 years.
+
 **Why not a company.** The recording layer is already commoditized and consolidating:
 
 - **Agnys** already sells **hash-chained agent audit logs at $49/mo, self-serve.** Their named
@@ -554,6 +567,42 @@ Three things make it ours rather than theirs, and all three are structural:
    granted-vs-used loop *as a manual procedure*. The retrospective, observed-usage narrowing of an
    agent's tool and credential surface is unoccupied, and every building block is programmatically
    accessible.
+
+### ⭐ The one claim that survives commoditization — and it sharpens D6
+
+The competitive research produced a clean three-way split that should govern the product copy:
+
+| Claim | Verdict |
+|---|---|
+| *"We show you what your agents did"* | ❌ **Already commoditized.** Every platform emits OTel tool-call spans. **Do not build here.** |
+| *"We inventory agents across your estate"* | ❌ **Commoditized within 12 months** — Agent 365, ServiceNow AI Control Tower, Wiz, Zenity, Noma, Astrix all ship it |
+| ⭐ *"**Tamper-evident, portable, offline-verifiable evidence that a specific human approved a specific agent action — verifiable OUTSIDE the operator**"* | ✅ **Not shipped by anyone.** Every platform log surveyed is operator-controlled, mutable by that operator, retention-capped (Purview non-Microsoft **180 days**; OpenAI ~30 days), and stops at that vendor's boundary |
+
+**Three reasons the last row is defensible:**
+
+1. **The standards bodies name the gap as a threat.** OWASP ASI **T8 "Repudiation & Untraceability"**
+   and CSA **MAESTRO Layer 7** both class un-attributable agent action as a threat in its own right;
+   ASI08 demands logs "**bound to cryptographic agent identities**" and ASI10 "**immutable and
+   signed**."
+2. **Seven IETF drafts in two months**, one of which —
+   **`draft-schrock-ep-authorization-receipts-10` (2026-08-06), "Authorization Receipts for High-Risk
+   Agent Actions"** — is almost a specification of this product, naming the **action gap**, the
+   **accountability gap** ("approvals are mutable database records") and the **verification gap**:
+   *"evidence must be auditable **outside the operator**."* Its mechanism (an approver signs an
+   authorization context *before* execution; the receipt carries a **Merkle inclusion proof against a
+   signed log checkpoint**, verifiable **fully offline**) is D6 Tier 2 plus our `sign_off` kernel.
+3. ⭐ **It is the one framing the platforms are structurally disincentivized to build.** *An operator
+   cannot credibly sell evidence designed to be verifiable **against** the operator.* CSA reinforces
+   it: a compromised orchestrator controls its own audit trail, so you need "external, out-of-band
+   monitoring that does not rely on the orchestrator itself for log generation."
+
+**The corollary, which we should state up front as a credibility asset rather than hide as a
+liability:** *self-reported agent telemetry is not trustworthy evidence about that agent.* And: **pure
+inline-proxy accountability is trivially defeated by an agent that does not route through the proxy —
+read every vendor's coverage claim, including any we make, as "of the traffic we see."**
+
+**This is the sharpest argument for D6's verifier, and it upgrades it from hygiene to the wedge.**
+It also reframes the sequencing: **P3 is not the tidy-up phase, it is the differentiated phase.**
 
 ### What would have to be true for it to be a company
 
