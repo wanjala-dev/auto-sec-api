@@ -18,8 +18,20 @@ attributes (which the SDK records **by default** — the opposite of the spec's
 opt-in posture). One match anywhere in the batch refuses the whole batch.
 
 **Untrusted input.** Everything below treats the payload as attacker-authored:
-bounded span count, bounded string lengths, no unbounded recursion, no attribute
+bounded span count, bounded stored strings, no unbounded recursion, no attribute
 value ever interpolated into a log line.
+
+**The length cap is a STORAGE bound, not a parsing bound.**
+:data:`MAX_ATTRIBUTE_VALUE_LENGTH` is applied in :func:`_kept_attributes`, where
+we decide what to persist — deliberately *not* when flattening, because the same
+flattened map also supplies the span's IDENTITY (agent ref, resource ref, trace
+and span ids). Capping an identity while reading it is the truncation bug this
+adapter must not have: two distinct endpoints sharing a 200-char prefix would
+become one resource node. Identities are read whole and then refused if they do
+not fit their column — a span we cannot key correctly is skipped and counted,
+never quietly merged into another one. (Nothing new is held in memory by reading
+whole: these are slices of an already-parsed request body, itself bounded by
+``DATA_UPLOAD_MAX_MEMORY_SIZE``.)
 """
 
 from __future__ import annotations
@@ -43,8 +55,13 @@ logger = logging.getLogger(__name__)
 # Bounds. A drain can retry, so refusing an oversized batch is safe; accepting an
 # unbounded one is not.
 MAX_SPANS_PER_BATCH = 1000
+# Applied to what we STORE (metadata attributes, tool name) — never to a value
+# that decides an identity. See the module docstring.
 MAX_ATTRIBUTE_VALUE_LENGTH = 200
 MAX_STORED_ATTRIBUTES = 12
+# Longest OTLP key we will even look at. Keys are convention names, not customer
+# data, so a bound here is pure defence against a pathological payload.
+MAX_ATTRIBUTE_KEY_LENGTH = 200
 
 # Attribute keys (prefix-matched) that carry prompt or tool-argument CONTENT.
 # Presence of any of these refuses the batch — see AgentTelemetryContentRejectedError.
@@ -172,27 +189,34 @@ class OtlpJsonAgentTelemetryAdapter(AgentTelemetryPort):
         if occurred_at is None:
             return None, "no_timestamp"
 
-        span_id = _clean(span.get("spanId"))
+        span_id = _text(span.get("spanId"))
         if not span_id:
             return None, "no_span_id"
 
-        action = _clean(merged.get("gen_ai.operation.name") or span.get("name") or "span")
+        action = _text(merged.get("gen_ai.operation.name") or span.get("name") or "span")
 
-        return (
-            AgentActivityRecord(
+        try:
+            record = AgentActivityRecord(
                 agent_urn=agent_urn.value,
                 resource_ref=resource_ref,
                 resource_type=resource_type,
                 action=action,
                 occurred_at=occurred_at,
-                trace_id=_clean(span.get("traceId")),
+                trace_id=_text(span.get("traceId")),
                 span_id=span_id,
                 outcome=_outcome_of(span.get("status")),
-                tool_name=_clean(tool_name),
+                tool_name=_bounded(tool_name),
                 attributes=_kept_attributes(merged),
-            ),
-            "",
-        )
+            )
+        except ValueError:
+            # An identity that does not fit its column. Skipping loses ONE span
+            # and says so in the response's skip_reasons; truncating it would
+            # have merged this span into another one, silently and permanently.
+            # The message carries customer data, so it is not logged here — the
+            # counted reason is the signal.
+            return None, "oversized_identity"
+
+        return record, ""
 
 
 def _attributes_of(carrier: dict) -> dict[str, str]:
@@ -206,7 +230,7 @@ def _attributes_of(carrier: dict) -> dict[str, str]:
     for item in carrier.get("attributes") or []:
         if not isinstance(item, dict):
             continue
-        key = _clean(item.get("key"))
+        key = _text(item.get("key"))[:MAX_ATTRIBUTE_KEY_LENGTH]
         if not key:
             continue
         value = item.get("value")
@@ -216,19 +240,29 @@ def _attributes_of(carrier: dict) -> dict[str, str]:
 
 def _scalar_of(value) -> str:
     if not isinstance(value, dict):
-        return _clean(value)
+        return _text(value)
     for field_name in ("stringValue", "intValue", "doubleValue", "boolValue"):
         if field_name in value:
-            return _clean(value[field_name])
+            return _text(value[field_name])
     if "arrayValue" in value or "kvlistValue" in value or "bytesValue" in value:
         return "<structured>"
     return ""
 
 
-def _clean(value) -> str:
+def _text(value) -> str:
+    """Normalize to a stripped string WITHOUT truncating.
+
+    Used for every value that may end up deciding an identity. Length is judged
+    later, by the field's own limit, and refused rather than trimmed.
+    """
     if value is None:
         return ""
-    return str(value).strip()[:MAX_ATTRIBUTE_VALUE_LENGTH]
+    return str(value).strip()
+
+
+def _bounded(value) -> str:
+    """:func:`_text` plus the storage cap. Only for values we persist as metadata."""
+    return _text(value)[:MAX_ATTRIBUTE_VALUE_LENGTH]
 
 
 def _first_present(attrs: dict[str, str], keys: tuple[str, ...]) -> str:
@@ -248,7 +282,12 @@ def _refuse_content(attrs: dict[str, str]) -> None:
 
 
 def _kept_attributes(attrs: dict[str, str]) -> dict[str, str]:
-    kept = {key: attrs[key] for key in _KEPT_ATTRIBUTE_KEYS if attrs.get(key)}
+    """Select the non-content dimensions worth persisting, and bound them.
+
+    This is where :data:`MAX_ATTRIBUTE_VALUE_LENGTH` belongs: these values are
+    stored, compared by nobody, and identify nothing.
+    """
+    kept = {key: attrs[key][:MAX_ATTRIBUTE_VALUE_LENGTH] for key in _KEPT_ATTRIBUTE_KEYS if attrs.get(key)}
     return dict(list(kept.items())[:MAX_STORED_ATTRIBUTES])
 
 
