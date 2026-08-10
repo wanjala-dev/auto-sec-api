@@ -1137,9 +1137,395 @@ OpenFGA per-tool checks, Claude permission policies).
 6. ⚠ **Whether Stripe exposes the acting key per-request programmatically via API** — Dashboard surface
    confirmed, API attribution **not**. **Verify via the Stripe MCP; a load-bearing claim depends on it.**
 
-## 7. Findings — Stream H (standards + competitive)
+## 7. Findings — Stream H (standards + competitive) — COMPLETE
 
-_pending — research agent running_
+### 7.0 ⚠️⚠️ FOUR CORRECTIONS — earlier drafts of this ADR were wrong on all four
+
+| Claimed | Reality |
+|---|---|
+| "EU AI Act high-risk **logging** obligations bit on 2026-08-02" | ❌ **The logging articles did NOT take effect.** **Regulation (EU) 2026/1744** (in force 2026-07-27) **deferred Articles 12 / 19 / 26(6) to 2 December 2027.** What went live 2026-08-02 is **Article 50 transparency only** — a *disclosure* duty, not a *record-keeping* duty. https://eur-lex.europa.eu/eli/reg/2026/1744/oj |
+| "OWASP **LLM06** Excessive Agency / **LLM08**" | ❌ **Stale by six days.** The **2026 edition published August 2026**. **Excessive Agency is now `LLM03:2026`** (the biggest climb on the list); Vector & Embedding Weaknesses is now `LLM09:2026`. https://genai.owasp.org/download/56857 |
+| "MITRE ATLAS **v5.4.0 (2026-02)** added agent tool credential harvesting" | ❌ **Date right, content wrong.** **AI Agent Tool Credential Harvesting is `AML.T0098`, added in v5.2.0 (2026-01-30).** v5.4.0 added T0104–T0108. **Current version is content `v2026.07`, published 2026-08-07** (16 tactics, 101 techniques, 77 sub-techniques, 68 case studies). |
+| Implied: "agent runtime accountability is greenfield / unoccupied" | ❌ **Microsoft shipped it GA on 2026-05-01** as **Agent 365 at $15/user/month**, and **Purview audits agent-to-TOOL interactions**. The in-repo LANDSCAPE_2026-08.md "unoccupied" verdict predates/misses this and must be qualified. |
+
+### 7.1 ⭐ The single most valuable citation in the entire research pass
+
+**OWASP Agentic Security Initiative threat taxonomy, threat T8 = "Repudiation & Untraceability."**
+
+> A standards body has made *"the agent acted and you cannot prove what it did"* a **named threat class
+> in its own right** — not a missing control, a **threat**.
+
+Corroborated independently by **CSA MAESTRO Layer-7**, which names the threat as "AI agents denying
+actions they performed… due to the difficulty in tracing actions back to an AI agent."
+
+**Two more quotable ASI mitigations (verbatim, ASI 2026 PDF, printed pages):**
+- **ASI10 Rogue Agents, mitigation 1 (p37)** — effectively the product definition:
+  > "**Governance & Logging:** Maintain comprehensive, **immutable and signed audit logs of all agent
+  > actions, tool calls, and inter-agent communication** to review for stealth infiltration or
+  > unapproved delegation."
+- **ASI08 Cascading Failures, mitigation 10 (p32):**
+  > "Record all inter-agent messages, policy decisions, and execution outcomes in **tamper-evident,
+  > time-stamped logs bound to cryptographic agent identities.** Maintain lineage metadata for every
+  > propagated action to support forensic traceability, rollback validation, and accountability."
+- **ASI02, attack scenario 6 (p13)** — the argument for why existing tooling cannot see this:
+  > "**EDR Bypass via Tool Chaining:** … **Because every command is executed by trusted binaries under
+  > valid credentials, host-centric monitoring (EDR/XDR) sees no malware or exploit, and the misuse
+  > goes undetected.**"
+- **ASI03 (p15):** "Without a distinct, governed identity of its own, an agent operates in an
+  **attribution gap** that makes enforcing true least privilege impossible."
+
+⚠️ **ASI03 mitigation 6 (p17) is the sharpest counter-argument to a third-party product, and it is in
+the primary source:** OWASP itself tells buyers to *"Evaluate Agentic Identity Management Platforms…
+Examples include **Microsoft Entra, AWS Bedrock Agents, Salesforce Agentforce, Workday's ASOR model,
+and similar emerging patterns in Google Vertex AI.**"*
+
+### 7.2 ⚠️ OWASP explicitly classes logging as damage-limiting, NOT preventive
+
+`LLM03:2026` Excessive Agency lists nine mitigations. **Monitoring (#8) and #9 appear under the
+heading:** *"The following options **will not prevent** Excessive Agency but can limit the level of
+damage caused."*
+
+**Consequence: lead with prevention (least-privilege tools, complete mediation, HITL); position
+telemetry as detection / forensics / attribution / replay. Claiming prevention contradicts the very
+source we cite.** Other LLM03 mitigations worth using: #5 *"preserve the original user context and
+authorization scope across chained tool or agent calls, rather than relying only on the permissions
+of the calling agent"*; #7 complete mediation with a graduated **audit → warn → block → escalate**
+policy; #8 *"Log and monitor the activity of LLM tools and downstream systems."*
+
+**LLM09:2026** (vectors/embeddings) mitigation #6 is the strongest regulatory hook in either list:
+*"Keep **immutable logs of retrieval activity** (tenant scope, query, returned IDs, similarity
+scores)… treated as source-data leaks for breach assessment and notification under **GDPR Article
+33**."*
+
+**And the scope line that matters most** (LLM Top 10 2026, Project Leads' letter, p7):
+> "**The moment that model becomes an actor, with tools it can call, memory it carries between
+> sessions, and consequences it sets in motion downstream, the risk moves to the OWASP Agentic Top
+> 10.**"
+
+### 7.3 MITRE ATLAS — the agentic build-out and what is telemetry-only
+
+- Current: content **`v2026.07` (2026-08-07)** — 16 tactics, **101 techniques, 77 sub-techniques**, 37
+  mitigations, 68 case studies. https://github.com/mitre-atlas/atlas-data/releases/tag/v2026.07
+- ⭐ **There is no separate agentic matrix.** Format v6.0.0 added a **`platform` field** with values
+  **Predictive AI / Generative AI / Agentic AI / Enterprise** — *the agentic matrix is a filter, not a
+  second product.* Build coverage views on `platform: Agentic AI`.
+- **~40 agentic techniques added in ten months.** Highlights: v5.0.0 (2025-10-15, the **Zenity Labs**
+  contribution, 14 entries incl. `T0080` context poisoning, `T0084` discover agent config, `T0085`
+  data from AI services, **`T0086` exfiltration via AI agent tool invocation**); v5.1.0 added a **new
+  Lateral Movement tactic `TA0015`** and **`T0094` Delay Execution of LLM Instructions**; v5.2.0
+  (2026-01-30) added **`T0098` AI Agent Tool Credential Harvesting**, `T0099`, `T0101` data
+  destruction via tool invocation; v5.5.0 added `T0110` AI Agent Tool Poisoning, `T0034.002` agentic
+  cost harvesting, `T0084.003` **call chains**; v2026.07 split `T0110` into **`.000` definition /
+  `.001` implementation / `.002` runtime response**.
+- ⭐ **Detectable ONLY with runtime agent telemetry** (the attack runs via authorized tools, valid
+  credentials, expected network paths — only the tool-call sequence, arguments and identity
+  distinguish it): T0086, T0098, T0101, T0085, T0084 (incl. call chains), T0080, T0081, T0082, T0083,
+  **T0094** (hardest — *the malicious act IS the temporal gap*), T0092, T0099, **T0110.002 Runtime
+  Response** (definitionally runtime-only — MITRE created this sub-technique on 2026-08-07 *precisely
+  because static supply-chain checks miss it*), T0034.002, T0103, T0109.
+- ⚠️ **Do NOT over-claim:** T0105/T0106/T0107/T0112/T0113/T0097 are served by conventional telemetry —
+  **EDR/CSPM own those**; agent telemetry only adds attribution. T0115/T0111 are pre-runtime (registry
+  scanning).
+- Mitigation **`AML.M0024` AI Telemetry Logging** is the direct one ("log AI agent tool invocations to
+  detect malicious calls"), and ⭐ **was revised twice in 2026** — MITRE is actively re-scoping it.
+  Also `M0029` **Human In-the-Loop for AI Agent Actions**, `M0030` restrict tool invocation on
+  untrusted data.
+- ⚠️ `atlas.mitre.org/mitigations/*` **404s** and the 717KB YAML exceeded fetch limits — M0024/M0029
+  wording came from third-party mirrors. **Do not quote as MITRE-verbatim without re-checking.**
+
+### 7.4 ⚠️ PCI — a significant correction to the earlier D7 draft
+
+The relevant hooks are **10.2.1.2** ("all actions taken by any individual with administrative access,
+**including any interactive use of application or system accounts**") + **10.2.2** (each entry records
+**user identification**, event type, timestamp, success/failure, origination, affected resource) +
+**10.5.1** (12 months / 3 hot). An autonomous agent on an admin-scoped service account in a CDE *is* an
+entity taking administrative actions, and **10.2.2's user-identification field is precisely what agents
+break.**
+
+⚠️⚠️ **BUT — does Stripe change the answer? Yes, mostly in Isaac's favour, and this weakens PCI as the
+trigger:**
+- **Stripe Checkout / Payment Links with full redirect, or Elements in an iframe → SAQ A**, ~two dozen
+  requirements, and **Requirement 10 is essentially not among them.** No CDE, nothing to log.
+- **SAQ A-EP** (site controls the payment page) is far heavier and does pull in logging.
+- March 2025: requirements **6.4.3** and **11.6.1** were **removed from SAQ A's requirement list but
+  relocated into its eligibility criteria** — full redirect → don't apply; **iframe → they do.**
+
+> **Verdict: a Stripe-redirect SAQ A merchant will not get Requirement 10 questions.** High rhetorical
+> value, narrow actual applicability. **This must be corrected in the ADR — PCI is NOT the most likely
+> hard trigger.**
+
+⭐ **What IS highly citable — PCI SSC "AI Principles: Securing the Use of AI in Payment Environments"
+(2025-09-11)**, the tightest product-spec-shaped language found anywhere:
+> AI systems should be *"**Deployed so that the actions performed by the AI can be logged and
+> monitored, and a (human) individual held responsible for those actions**"* and *"**logging should be
+> sufficient to audit the prompt inputs and reasoning process used by the AI system.**"*
+
+It further recommends treating AI systems as a potential **"malicious insider"** in threat analysis.
+**Non-binding guidance — but it is our product spec, written by a payments authority.**
+*(Separately: the March 2025 "Integrating AI in PCI Assessments" guidance governs how **QSAs** may use
+AI — **do not cite it as a customer obligation.**)*
+⚠️ v4.0.1 PDF is behind a click-through licence; numbering corroborated across ManageEngine / PCI DSS
+Guide / Basis Theory — **not verbatim.**
+
+### 7.5 ⭐ The actual #1 buying trigger: ISO/IEC 42001 arriving via the enterprise questionnaire (the SIG)
+
+- **Control A.6.2.8 "AI system recording of event logs":** *"The organisation shall determine at which
+  phases of the AI system life cycle event log recording is enabled."* ⚠️ iso.org 403 — text from
+  ISMS.online; verify against the purchased standard.
+  Note the control is deliberately **weak** (it obliges you to *decide* where logging is enabled, not
+  to log anything specific) — **and that weakness is its commercial property: easy to certify against,
+  hard to fail, which is why it spread fast.**
+- ⭐ **The defensible adoption evidence (not vendor marketing):** the **Shared Assessments SIG
+  Workbook added ISO/IEC 42001 references in its 2025-09-19 release**, carried into the **2026 SIG**,
+  alongside AI-governance content covering "the whole AI lifecycle." **The SIG is the actual artefact
+  enterprises email to vendors.** Corroborating: Vanta shipped an ISO 42001 framework and certified
+  itself 2025-04-24; Drata announced its own certification Dec 2025.
+- ⚠️ **Do NOT** put a named certified-company list in the ADR (single marketing blog), and **reject**
+  "every meaningful questionnaire in H2 2026 includes AI governance" — the SIG citation is the
+  defensible version.
+
+**Why this ranks #1:** it is the only mechanism here that **blocks revenue today** (regulation creates
+future liability; procurement creates a *now* blocker); the evidence is from a neutral industry body;
+**A.6.2.8 gives the buyer a named control ID to demand evidence for** (frameworks without control IDs
+don't generate asks); and the gap for a 60-agent fleet is a runtime system, not a document.
+
+**#2 = SOC 2 Type II auditor asks in the current observation window** — the accelerant. There is **no
+"SOC 2 for AI"** (AICPA has published no AI-specific TSCs as of mid-2026), but AI-fluent auditors are
+mapping model lineage, **prompt/inference logs with PII redaction applied before logging**, drift
+output and per-LLM vendor risk assessments onto **CC6 / CC7 / CC8** — uncodified, negotiable, **but it
+lands inside the Type II period with no deferral to hide behind.**
+
+**#3 = EU AI Act as ANXIETY, not obligation.** Art. 50 went live with **€15M / 3% of worldwide
+turnover** penalties, which is why AI compliance is on buyers' legal desks *right now* — but Art. 50
+requires **disclosure, not records**, and Arts. 12/19/26 are deferred to 2027-12-02. **Use the Act to
+explain why buyers are asking; never as the obligation itself — the first competent counsel in the
+room will correct you.**
+
+Also on the Act: **Art. 12 is a *capability* requirement, not a content specification** — outside
+biometric ID (Art. 12(3)) it never enumerates tool calls, prompts, model versions or agent decision
+traces. **Anyone selling "Article 12 compliance" as a per-tool-call trace is over-reading the text.**
+Art. 19/26(6) retention is *"at least six months."* **Would Isaac be in scope? Realistically no** —
+the plausible capture path is Annex III **Point 4(b)** (monitoring/evaluating worker performance and
+behaviour); a customer-support, sales or coding agent is not Annex III. **Zero harmonised standards
+are cited in the OJ, so no Article 40 presumption of conformity exists today** — the best explanation
+for the deferral.
+
+**#4–8:** PCI SSC AI Principles (sharpest sentence, weakest bindingness, §7.4 scope problem) · CSA
+**AICM v1.1 (2026-07-14, 247 control objectives, new Model Security domain)** feeding **CAIQ for AI** ·
+**AIUC-1** · HITRUST (sector-bound) · NIST (most on-point intellectually, **none of it finished** —
+this is roadmap justification, not 2026 revenue).
+
+### 7.6 NIST — and one correction to propagate nowhere
+
+- **AI RMF 1.0** relevant subcategories: **GOVERN 1.6** ("Mechanisms are in place to **inventory AI
+  systems**"), **MEASURE 2.5** ("**Log input data** … whenever there is an attempt to use the system
+  beyond its well-defined range"), ⭐ **MEASURE 2.8** ("**Instrument the system for measurement and
+  tracking, e.g., by maintaining histories, audit logs**"), MANAGE 4.3.
+- ⚠️ **Correction — do NOT propagate:** the circulating claim that **AI 600-1 "recommends logging
+  detailed enough to reconstruct what a generative AI agent did, including tool calls."** **The full
+  PDF text does not contain that language.** AI 600-1 predates the agent wave; its provenance emphasis
+  is *content* provenance (watermarking/C2PA), not *execution* provenance. Also: AI 600-1 was issued
+  under **EO 14110, rescinded January 2025** — current standing unverified.
+- **CAISI AI Agent Standards Initiative (2026-02-17)** — three pillars, one being "AI agent security
+  and identity." Agent-hijacking research: **400+ participants, 13 frontier models, 250,000+ attack
+  attempts; at least one successful hijack against EVERY one of the 13 models; novel strategies hit
+  81% task-hijacking success vs 11% baseline.** Recommended defence: *"**logging all external content
+  the agent processes alongside the actions the agent subsequently takes — creating the audit trail
+  needed to identify retrospectively whether environmental content influenced unexpected agent
+  behavior**"* ⚠️ (this is CSA's framing of CAISI research, not a NIST control statement).
+- **NCCoE "Software and AI Agent Identity and Authorization"** — initial public draft **2026-02-05**;
+  extends OAuth 2.0, **SPIFFE/SPIRE** and **MCP** to agents; explicitly seeks input on "the
+  identification, authorization, **auditing and non-repudiation** of AI agents."
+- ⭐ **COSAIS (SP 800-53 Control Overlays for Securing AI Systems)** — five planned overlays including
+  **"AI Agent Systems – Single Agent"** and **"Multi-Agent."** ⚠️ Only the Predictive-AI overlay has an
+  annotated outline; **the two agent overlays have no publication date.** **This is the thing to
+  watch** — when they land they define what "agent logging" means for anyone touching FedRAMP.
+
+### 7.7 ⚠️⚠️ Competitive — the "unoccupied" verdict must be qualified: Microsoft already shipped it
+
+**Microsoft Agent 365 — GA 2026-05-01, $15/user/month**, admin experience in the M365 admin center,
+**multicloud reach beyond Microsoft's stack**. And **Purview Audit for Agent 365 is the most complete
+shipped agent-action ledger found** (https://learn.microsoft.com/en-us/purview/ai-agent-365):
+- *"When you create an agent instance for Agent 365, it's **automatically enabled for audit**"*
+- ⭐ *"**Supported interactions: All agent-to-human, human-to-agent, agent-to-tools, and agent-to-agent
+  interactions.**"* — **including agent-to-tool**
+- `CopilotInteraction` carries `AgentId`, `AgentName`, `AgentVersion`, `AISystemPlugin`,
+  `AccessedResources[]` with per-resource `Action` / `SensitivityLabelId` / `XPIADetected`, and
+  `JailbreakDetected`. Full DLP / Insider Risk / eDiscovery / retention applies **to agents as if they
+  were users**.
+- **Capture is identity-anchored** (every instance holds an Entra Agent ID) — *structurally stronger
+  than a network proxy: it doesn't matter where the traffic goes if the actor is an identity that logs.*
+- ⚠️ **The pricing tell:** effective **2026-07-01, AI-agent discovery and posture for Foundry and
+  third-party cloud agents requires an Agent 365 license** (moved off Defender CSPM). **Microsoft is
+  monetizing exactly the cross-platform agent-visibility function a startup would sell.**
+
+**The three tiers vendors conflate** (use this taxonomy): **DISCOVER** (inventory — capability, not
+behaviour, ∴ not provable) · **GUARDRAIL** (inline allow/modify/block — provable only for traffic that
+traverses it) · **OBSERVE/ACCOUNT** (durable, queryable, attributable record — the actual
+accountability tier). *Almost every vendor claims all three; very few ship the third usably.*
+
+| Vendor | Tier | Notes |
+|---|---|---|
+| **Zenity** | **OBSERVE — best independent.** Logs "messages, tool calls, retrievals, and handoffs between agents"; step-by-step forensics | **$125M Series C 2026-08-03**, ~$185M total, revenue tripled two years running. **Gartner: "the company to beat in AI agent governance" (April 2026).** ⚠️ **Capture architecture undisclosed — the biggest single hole in this research.** |
+| **Obsidian** | **OBSERVE for agents inside SaaS** | ⭐ **Best-documented capture, two-pronged:** 200+ SaaS API integrations **plus a browser extension** that "captures real-time user and **AI agent activity, confirming what actually happened, not just what server APIs reported**." **$85M Series D 2026-08-04 at $1.1B.** |
+| **Noma** | GUARDRAIL + partial observe | **Rides someone else's gateway** (Kong plugin, LiteLLM, Vercel AI SDK) — **does not own a data plane**. $100M Series B. **No forensic/audit surface published.** |
+| **WitnessAI** | GUARDRAIL + explainability | $58M (2026-01-13). ⚠️ deployment model (proxy vs tap vs inline) unconfirmed |
+| **Lakera → Check Point** | **GUARDRAIL only** — never an agent ledger | Completed 2025-11-11; ~$300M reported, **officially undisclosed** |
+| **Prompt Security → SentinelOne** | DISCOVER + GUARDRAIL | Completed 2025-09-05. ⚠️ price genuinely ambiguous (~$180M vs ~$250M). **Prompt AI Agent Security launched RSAC 2026 — PREVIEW, not GA** |
+| **Palo Alto (Protect AI + Portkey)** | GUARDRAIL + emerging observe | ⭐ **They bought the data plane: Portkey (AI Gateway) closed 2026-05-29**, becoming "the foundational AI gateway inside Prisma AIRS." **The single most important architectural signal in the landscape.** ⚠️ $650–700M for Protect AI is a **Jefferies estimate**, not disclosed |
+| **Wiz (Google)** | **DISCOVER/posture** — its "runtime" is drift + suspicious-DNS anomaly detection, **not a tool-call ledger** | Google deal **closed 2026-03-11, $32B**. Wiz AI-APP 2026-04-22; Wiz MCP GA 2026-07-02 |
+
+**Non-human identity was almost entirely acquired in 2026:** Astrix → **Cisco** (2026-05-04; plan is to
+feed agent-activity intelligence **into Splunk**) · Oasis → **Cyera $1B agreed 2026-07-28** (⚠️ no
+confirmation it closed) · Entro → **SailPoint** (completed 2026-06-29) · **CrowdStrike acquired SGNL
+for $740M (2026-01-08)** and announced **SPIFFE-based agent identity with delegation context preserved
+when an agent delegates to a sub-agent** · Okta **XAA is now an official MCP authorization extension**.
+Still independent: **Token Security** (ships an "intent-based" model evaluating ***why*** an action is
+taken) and **Britive** (patented **JIT ephemeral credentials created at runtime and destroyed when the
+task ends**; ships an MCP Gateway issuing JIT scoped credentials on AWS AgentCore).
+
+**MCP's structural gap, restated from the standards side:** *"MCP has a serious, rapidly-maturing
+**authorization** story and essentially no **audit** story."* No protocol-level requirement that a tool
+invocation be logged, attributed or made tamper-evident — and 2026-07-28 **deprecated the `Logging`
+core feature outright**. Best gateway audit trail found: **Cloudflare MCP Server Portals** ("Cloudflare
+Access logs the individual requests made using the tools in the portal", Logpush to SIEM). **December
+2025: Anthropic donated MCP to the Agentic AI Foundation (Linux Foundation).**
+
+**Platform-native audit — the commoditization check:**
+- **AWS AgentCore:** ⚠️ *"By default, AgentCore outputs a set of span data for memory resources only.
+  To record span data for your agents or gateway resources, you need to instrument your agent."*
+  **CloudTrail sees `InvokeAgentRuntime` — one line. It does not see the 40 tool calls inside.**
+- **Google Cloud:** architecturally most serious — **Agent Identity on SPIFFE**, non-shared,
+  non-impersonable, no long-lived keys, audit showing both agent and **on-behalf-of** user identity.
+  GA for Agent Runtime. ⚠️ Could not confirm tool calls with arguments reach Cloud Audit Logs vs only
+  Cloud Trace.
+- **OpenAI: weakest and retreating** — Audit Log API is ~51 event types, **all control plane, zero
+  agent coverage**; and **OpenAI announced shutdown of Agent Builder and Evals (2026-06-03, effective
+  2026-11-30)** — deleting the surface where governance would live.
+- **Anthropic: best vocabulary, deliberately scoped out** — Agent SDK OTel spans nest subagents so
+  **the full delegation chain is one trace**, `OTEL_LOG_TOOL_DETAILS=1` adds tool arguments, and docs
+  say these "become a per-user audit trail you can forward to a SIEM" — **but the hosted Compliance API
+  states outright: "The API does not log inference activities."**
+- **ServiceNow AI Control Tower** is the closest existing *commercial* product to third-party agent
+  accountability (deliberately cross-vendor, incl. "Audit Logging and Traceability") — but GRC-shaped,
+  not tool-call-shaped, and gated behind being a ServiceNow customer.
+
+### 7.8 Observability vendors — who markets security
+
+- **Datadog is the only one with an actual security product**: **AI Guard** "evaluates prompts,
+  responses, **and tool calls**… [and can] **block it before it can reach critical systems**"
+  (⚠️ Limited Availability, GA unconfirmed); plus **Service Access Tokens / Workload Identity
+  Federation** GA'd at DASH 2026 explicitly for "autonomous AI agents… without relying on long-lived
+  shared credentials"; plus Agent Console inventorying Claude Code / Cursor / Copilot.
+- **LangSmith** has the strongest *governance narrative*: an article-by-article EU AI Act mapping and
+  ⭐ **audit logs emitted in OCSF v1.7.0 API Activity format with 400-day retention and documented SIEM
+  forwarding** — a security-native schema choice. ⚠️ **But it covers admin/config writes only, not
+  agent actions.** Right format, wrong scope.
+- **Arize** — ⚠️ **correction: Arize was not acquired; it ACQUIRED Velvet (AI gateway) 2025-03-13.** Only
+  pure-play with real runtime blocking (Guards).
+- ⭐ **Langfuse (in our stack) — acquired by ClickHouse, announced 2026-01-16** (alongside ClickHouse's
+  $400M Series D at ~$15B). MIT licence intact, self-hosting first-class. **Audit logs are
+  Enterprise-only and admin-action-only.** ⭐ **Their own docs disclaim runtime security — the single
+  most useful quote in the competitive set:** *"LLM Security can be addressed with a combination of —
+  LLM Security libraries for run-time security measures — **Langfuse for the ex-post evaluation of the
+  effectiveness of these measures**."*
+- **Helicone — acquired by Mintlify 2026-03-03, now maintenance mode ("active feature development has
+  ended"). Do not build on it.** **Traceloop → ServiceNow (~$60–80M, 2026-03-02).**
+
+### 7.9 ⭐ IETF agent receipts — the emerging standard nobody is watching
+
+**Seven individual drafts filed July–August 2026 alone.** The critical one:
+
+**`draft-schrock-ep-authorization-receipts-10` (2026-08-06) — "Authorization Receipts for High-Risk
+Agent Actions"** (https://datatracker.ietf.org/doc/draft-schrock-ep-authorization-receipts/). It is
+almost a specification of this product, and names three gaps verbatim:
+- the **action gap** — IAM authorizes sessions, not individual actions;
+- the **accountability gap** — approvals are mutable database records;
+- ⭐ the **verification gap** — **evidence must be auditable *outside the operator*.**
+
+Mechanism: an enrolled approver signs an Authorization Context *before* execution; the resulting
+**Trust Receipt** carries the action object, signatures, consumption record, and a **Merkle inclusion
+proof against a signed log checkpoint**, verifiable **fully offline**, with enforced separation of
+duties. Others: `draft-fane-opena2a-aip-02`, `draft-sharif-x509-agent-identity-profile-03`,
+`draft-reece-wimse-cross-org-delegation-01`. ⚠️ **All individual submissions, none WG-adopted.**
+⚠️ **OpenID Foundation agent-identity work could NOT be verified** — openid.net/specs shows none.
+
+### 7.10 ⭐⭐ Convergence, and what survives commoditization
+
+**Three shipped convergence points, not a trend piece:**
+1. **Splunk AI Security Monitoring** (docs updated 2026-06-16) "integrates Splunk Observability for AI
+   with **Cisco AI Defense**"; the `opentelemetry-instrumentation-aidefense` library adds a
+   **`gen_ai.security_event_id` attribute to chat spans, enabling audit trails for every prompt and
+   response against security guardrails.** ⭐ *An observability trace carrying a security event ID —
+   one product, one schema, two budgets.*
+2. **Datadog moving security-ward** organically off the installed tracer (distribution beats acquisition).
+3. **Security platforms buying the observability data plane** — PANW/Portkey, ServiceNow/Traceloop,
+   Cisco/Astrix→Splunk, CrowdStrike/SGNL.
+
+> **Direction of travel: security is eating observability, not the reverse.** The observability
+> pure-plays move only as far as *compliance narrative*; **agent observability is being commoditized
+> into a sensor feed for a security control plane.**
+
+⭐ **And crucially — nobody's "audit log" is an agent-action audit log.** Every one surveyed is
+admin/config CRUD (Langfuse, LangSmith, OpenAI, Anthropic Compliance API) or ML lineage.
+**Microsoft is the sole exception, and it got there from the identity plane, not the telemetry plane.**
+
+**What survives commoditization:**
+
+| Claim | Verdict |
+|---|---|
+| "We show you what your agents did" | ❌ **Already commoditized.** **Do not build here.** |
+| "We inventory agents across your estate" | ❌ **Commoditized within 12 months** (Agent 365, ServiceNow, Wiz, Zenity, Noma, Astrix) |
+| ⭐ **"Tamper-evident, portable, offline-verifiable evidence that a specific human approved a specific agent action, verifiable *outside the operator*"** | ✅ **Not shipped by anyone.** Every platform log is operator-controlled, mutable-by-the-operator, retention-capped (Purview non-Microsoft **180 days**; OpenAI ~30 days), and stops at that vendor's boundary |
+
+**Three reasons that last row is defensible:** (1) the standards bodies **name the gap** — OWASP **T8**
+and CSA MAESTRO Layer-7 both class un-attributable agent action as a threat in itself, and ASI08/ASI10
+demand logs "**bound to cryptographic agent identities**" and "**immutable and signed**"; (2) **seven
+IETF drafts in two months**, one of which names the **verification gap** as *"evidence must be auditable
+outside the operator"*; (3) ⭐ **it is the one framing the platforms are structurally disincentivized to
+build — an operator cannot credibly sell evidence designed to be verifiable *against* the operator.**
+Reinforced by CSA: a compromised orchestrator controls its own audit trail, so you need "**external,
+out-of-band monitoring… that does not rely on the orchestrator itself for log generation**."
+**Corollary to state up front as a credibility asset, not a liability: self-reported agent telemetry is
+not trustworthy evidence about that agent.**
+
+**Also:** pure inline-proxy accountability is trivially defeated by an agent that doesn't route through
+the proxy — **read every vendor's coverage claim as "of the traffic we see."** The defensible
+architectures anchor on **identity** (Microsoft) or **reconcile independent evidence sources**
+(Obsidian's browser-vs-API model).
+
+### 7.11 Who eats this, and how fast
+
+**Most likely absorber: Microsoft — and it has already substantially done it.** Four layers all GA:
+identity (Entra Agent ID), inventory (Agent 365), **durable tenant-wide agent-to-tool audit**
+(Purview), and framework-agnostic tracing (Foundry, covering LangChain/LangGraph/OpenAI Agents SDK).
+**Assume 6–12 months to "good enough for most buyers," not 2–3 years.**
+**Runner-up and technically more dangerous long-term: Google** (SPIFFE-based agent identity is the
+architecturally correct primitive; also owns Wiz). **Also credible:** Palo Alto (owns the data plane,
+can bundle into platform credits), CrowdStrike, Cisco, ServiceNow. **Least likely:** OpenAI (shutting
+down Agent Builder) and Anthropic (Compliance API explicitly does not log inference).
+
+**Pricing anchors (weak):** Microsoft Agent 365 **$15/user/month** is the only published
+agent-governance price; Wiz ~$24k/yr for 100 workloads; Zenity/Noma/WitnessAI/Obsidian quote-only.
+⭐ **There is no established per-agent pricing model — both a risk and an opening.**
+
+### 7.12 Stream H could-not-verify list
+
+⚠️ **Search budget exhausted (200/200)**; late verification was WebFetch-only.
+**Do not propagate:** a "Langfuse $50M Series B March 2026" claim (contradicted by the ClickHouse
+acquisition) · AI 600-1 "tool call logging" language (not in the PDF) · Docker MCP Gateway "90%
+reduction in incidents" (marketing) · named ISO 42001 certificate-holder lists.
+**Could not verify:** Zenity's capture architecture (biggest hole) · WitnessAI's deployment model ·
+Noma's non-gateway capture path · ATLAS mitigation verbatim text (404 + oversized YAML) · PCI DSS
+v4.0.1 verbatim (licensed PDF) · ISO 42001 A.6.2.8 normative text (iso.org 403) · AICPA's AI position
+(site unreachable) · OpenID Foundation agent drafts (none found) · whether Google Cloud Audit Logs
+carry tool-call detail · Snowflake Cortex Agents audit · Arize AX audit/RBAC docs · CAISI rename from
+US AISI.
+**Deal terms reported-only:** Check Point/Lakera ~$300M · SentinelOne/Prompt ~$180M vs ~$250M
+(genuinely ambiguous) · PANW/Protect AI $650–700M (Jefferies estimate) · Cisco/Astrix ~$300M ·
+SailPoint/Entro ~$200M · **Cyera/Oasis $1B agreed 2026-07-28, closure unconfirmed.**
+**Date conflicts:** Entra Agent ID GA (April/May/June 2026 — say **"GA by mid-2026"**) · OWASP LLM Top
+10 2026 (Aug 3/4/6 — say **"August 2026"**) · ATLAS v5.4.0 (trust the CHANGELOG/API: **2026-02-05/06**).
 
 ## 7. Open questions / could-not-verify
 
