@@ -76,7 +76,24 @@ logger = logging.getLogger(__name__)
 
 _LOG_WATCH_SOURCE = "ai.log_watch"
 _CODE_SECURITY_SOURCE = "ai.code_security"
+#: Fallback attribution for a card that names no specialist. The real actor is
+#: read off the card (``metadata.agent_type``) — see :func:`_acting_agent_for`.
 _ACTING_AGENT = "triage_agent"
+
+
+def _acting_agent_for(task) -> str:
+    """Which specialist gets credit for this PR — read off the card, not assumed.
+
+    The board handler stamps the owning specialist on every finding card, and the
+    router dispatches on it, so the card is the source of truth. Hardcoding
+    ``triage_agent`` here mis-attributed every non-log-watch PR: a SAST fix the
+    ``code_security_agent`` produced was recorded as the triage agent's work, one
+    provenance line below the (correct) "code_security_agent requested its own
+    fix draft". Provenance is the product — the trail must name who actually
+    acted, especially now that PRs open automatically.
+    """
+    return str((getattr(task, "metadata", None) or {}).get("agent_type") or "").strip() or _ACTING_AGENT
+
 
 # ADR 0019 D5 PR throttle: max open (unresolved) SAST draft PRs per repo. Env
 # override (the ``COOLDOWN_SECONDS`` config pattern); the default stays
@@ -352,7 +369,7 @@ class OpenDraftPrUseCase:
             workspace_id=workspace_id,
             task_id=task_id,
             performed_by=performed_by,
-            acting_agent=_ACTING_AGENT,
+            acting_agent=_acting_agent_for(task),
             pr_url=pr.url,
             pr_repo=pr.repo,
             branch=branch,
@@ -447,7 +464,7 @@ class OpenDraftPrUseCase:
             workspace_id=str(workspace_id),
             task_id=str(task_id),
             performed_by=str(performed_by),
-            acting_agent=_ACTING_AGENT,
+            acting_agent=_acting_agent_for(task),
             path=proposal.path,
             code=proposal.updated_content,
             language="",
