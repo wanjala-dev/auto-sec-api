@@ -96,6 +96,33 @@ class TestRecordFindingDraftPr:
         assert comment is not None
         assert draft["url"] in comment.comment
 
+    def test_success_clears_a_stale_blocked_stamp(self, workspace_factory, team_factory):
+        """A card can never read "PR blocked" AND "PR opened" at once.
+
+        A refusal recorded earlier — a throttle, or a guardrail since relaxed (the
+        old low-confidence gate that became the [UNVERIFIED] label) — leaves a
+        ``draft_pr_blocked`` stamp the HUD keeps rendering. The success that
+        supersedes it must clear it, or the operator is told the PR was refused
+        while looking at the PR. Two live findings carried exactly this stamp.
+        """
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _finding(workspace, owner, team, column)
+        meta = task.metadata
+        meta["draft_pr_blocked"] = {
+            "reason": "low_confidence",
+            "message": "The suggested fix's confidence is low — it never becomes an automatic PR.",
+            "at": "2026-08-09T03:01:26+00:00",
+        }
+        task.metadata = meta
+        task.save(update_fields=["metadata"])
+
+        use_case = ProjectProvider.build_record_finding_draft_pr_use_case()
+        assert use_case.execute(command=_cmd(workspace, task, owner)).recorded is True
+
+        task.refresh_from_db()
+        assert task.metadata["payload"]["draft_pr"]["url"]
+        assert "draft_pr_blocked" not in task.metadata
+
     def test_idempotent_when_draft_pr_already_recorded(self, workspace_factory, team_factory):
         from infrastructure.persistence.project.models import TaskComment
 
