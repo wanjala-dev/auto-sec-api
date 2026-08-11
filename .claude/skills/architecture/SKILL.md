@@ -1,5 +1,11 @@
 ---
 name: architecture
+upstream: none
+why: |
+  Deliberately independent of wanjala-nonprofit/architecture, which shares this name but
+  documents the wanjala NONPROFIT platform (grants, sponsorship, donations). This skill is
+  autosec's own CNAPP hub-and-spoke target. Same name, no lineage — nothing to sync.
+  See .claude/rules/skills-and-plugins.md.
 description: |
   Invoke BEFORE any structural or layer-crossing change in the auto-sec (autosec) backend: adding or
   splitting a bounded context, adding a security scanning pillar (a new scanner/engine), touching the

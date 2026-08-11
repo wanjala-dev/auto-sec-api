@@ -1,4 +1,15 @@
 {
+  "extraKnownMarketplaces": {
+    "wanjala-kit": {
+      "source": {
+        "source": "directory",
+        "path": "/Users/henrywanjala/Desktop/wanjala-claude-kit"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "wanjala-core@wanjala-kit": true
+  },
   "permissions": {
     "allow": [
       "Bash(make *)",
@@ -47,6 +58,16 @@
     ]
   },
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "S=/Users/henrywanjala/Desktop/wanjala-claude-kit/bin/skill-drift-check.sh; [ -x \"$S\" ] && \"$S\" --quiet /Users/henrywanjala/Desktop/auto-sec/auto-sec-api; true"
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash",
