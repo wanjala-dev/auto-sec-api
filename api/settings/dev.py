@@ -488,3 +488,6 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": crontab(hour=0, minute=10, day_of_month=1),  # 00:10 UTC on day 1
     },
 }
+
+# Same as local: measure the RubricMiddleware swap on dev before prod inherits it.
+DEEP_RUBRIC_MIDDLEWARE_ENABLED = os.environ.get("DEEP_RUBRIC_MIDDLEWARE_ENABLED", "true").lower() == "true"

@@ -373,6 +373,25 @@ SOC_RESPONSE_DRY_RUN_DEFAULT = os.environ.get("SOC_RESPONSE_DRY_RUN_DEFAULT", "t
 # only with a customer-granted write role + explicit opt-in (a deliberate, reviewable change).
 SOC_RESPONSE_READ_ONLY = os.environ.get("SOC_RESPONSE_READ_ONLY", "true").lower() == "true"
 
+# Verification loop (L2) — which of the TWO implementations grades a worker answer.
+# Exactly one is ever active per run (runner.execute_plan_once skips the hand-rolled
+# reflective_worker wrap when this is on), so this is a swap, not an addition:
+#
+#   off (default) -> deep/critic.py WorkerCritic + reflective_worker (hand-rolled)
+#   on            -> deepagents.RubricMiddleware, grader on the cheap tier
+#                    (gpt-4o-mini), max_iterations capped at 2, and the grader
+#                    carrying verify_suggestion_grounded — a tool wrapping our
+#                    deterministic verifier + the ADR 0025 patch oracles — so the
+#                    verdict is anchored to the finding's real evidence rather than
+#                    the grader's read of the answer text.
+#
+# Defaults off here so production keeps the proven fallback; the local/dev overlays
+# turn it on so the swap is measured before it is trusted anywhere real. This was
+# defined in NO settings module until 2026-08-11, which meant the entire middleware
+# path — grader, tool, evaluation telemetry — was unreachable outside tests while
+# reading, in code and in docs, as though it were live.
+DEEP_RUBRIC_MIDDLEWARE_ENABLED = os.environ.get("DEEP_RUBRIC_MIDDLEWARE_ENABLED", "false").lower() == "true"
+
 AUTH_USER_MODEL = "users.CustomUser"
 
 # Password validation
