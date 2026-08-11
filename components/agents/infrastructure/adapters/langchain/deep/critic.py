@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 # Only agents whose output has a clear, gradable rubric. A reflection loop on an
 # agent with no measurable criteria is latency + cost for no gain.
-CRITIC_ENABLED_AGENTS = {"triage_agent", "optimization_agent"}
+CRITIC_ENABLED_AGENTS = {"triage_agent", "optimization_agent", "code_security_agent"}
 
 # Below this the result is treated as failing even if the grader says "passed".
 _PASS_SCORE = 6
@@ -69,6 +69,29 @@ RUBRICS = {
         "- Proposes a concrete change (longer interval, sampling, or dropping the log),"
         " grounded in the measured frequency.\n"
         "- States the resource win."
+    ),
+    # SAST. Deliberately grades the REASONING, not the artifact: whether a patch
+    # exists, parses, and avoids its class's known-wrong shapes is settled
+    # deterministically by the L0/L1/L3 oracles in finding_verifier.py +
+    # remediation_guidance.py (ADR 0025) — an LLM opinion on those adds nothing and
+    # can only disagree with a fact. What the oracles cannot see is whether the
+    # agent actually understood THIS vulnerability, which is precisely the measured
+    # failure mode: 51.4% of LLM security patches are "semantic misunderstanding"
+    # — syntactically valid code applying a fundamentally wrong repair strategy
+    # (arXiv 2603.10072). Every criterion below is checkable against the finding's
+    # own payload (rule_id / path / snippet) or its remediation class.
+    "code_security_agent": (
+        "- Names the flagged construct from the finding's own snippet — the actual "
+        "call, interpolation, or disabled flag on that line — not the rule's generic "
+        "description.\n"
+        "- Explains why that specific code is exploitable, following from the snippet "
+        "and the file's role, rather than restating the weakness category.\n"
+        "- The repair strategy matches the weakness: it changes the construct that "
+        "makes the code unsafe (how the value reaches the sink), rather than "
+        "sanitising, renaming, or wrapping around it while leaving the sink intact.\n"
+        "- Where the fix is partial or depends on a project-specific value the agent "
+        "could not read (a key source, a config, an allowlist), it says so plainly "
+        "instead of inventing a helper or a constant."
     ),
 }
 
