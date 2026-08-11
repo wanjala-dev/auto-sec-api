@@ -111,7 +111,7 @@ still need trimming; fix the fixture, never baseline a real violation).
   `architecture-manifesto.md`, `bounded-context-structure.md`, `django-conventions.md`,
   `persistence-and-orm.md`, `performance.md`, `logging.md`, `repo-hygiene.md`, `dry-reuse.md`,
   `no-shortcuts.md`, `verify-dont-guess.md`, `improve-dont-replicate.md`, `pin-versions.md`,
-  `branching-strategy.md`. Read them before structural changes. For structural/CNAPP work, **load
+  `branching-strategy.md`, `skills-and-plugins.md`. Read them before structural changes. For structural/CNAPP work, **load
   the architecture skill first** (`.claude/skills/architecture/SKILL.md` — the hub-and-spoke target
   + C1–C7 decoupling rules).
 - **Verify, don't guess** — this is a fork; when something feels off, ground it (research online +
@@ -166,3 +166,19 @@ Never `Co-Authored-By: Claude` on autosec commits. See `.claude/rules/branching-
 - `api/` — Django project (settings, urls, celery, wsgi/asgi). Single-DB; `DATABASE_ROUTERS = []`.
 - `tests/architecture/` — import-boundary enforcement.
 - `.claude/` — rules, hooks, commands, agents (autosec-scoped; some source rules were trimmed).
+
+## Skills — enable the plugin, never copy it
+
+Shared engineering skills (`agents`, `celery-tasks`, `logging`, `sql`, `testing`, `identity`,
+`user-model`, `api-versioning`, `workflow`) come from the **`wanjala-core@wanjala-kit`
+plugin**, enabled in `.claude/settings.json`. autosec deliberately does **not** enable
+`wanjala-nonprofit` — those skills describe grants/sponsorship/donations, the domain this
+fork stripped.
+
+`.claude/skills/` holds autosec-only skills (`architecture` = the CNAPP hub-and-spoke
+target, `integrations`, `personas`, `templates`, `backup-recovery`, `gtm-qa-sweep`).
+**Never copy a kit skill in here** — on 2026-08-11 a five-week-stale copy of the `agents`
+skill (found by grepping the filesystem, because the plugin wasn't enabled) drove an
+architecture decision from a document predating `RubricMiddleware` entirely. If you ever
+find yourself grepping for a SKILL.md, stop: the plugin isn't loaded and whatever you find
+is unowned. See `.claude/rules/skills-and-plugins.md`.
