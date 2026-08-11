@@ -42,6 +42,7 @@
 
 classes:
   argv-list-not-shell:
+    strategy: llm_plus_oracles
     recommendation: >-
       Pass the command as an ARGV LIST to subprocess/execFile and remove the shell
       entirely. Do not try to sanitise a command string.
@@ -61,6 +62,7 @@ classes:
         why: "exec() with a template string still hits the shell; use execFile/spawn"
 
   parse-dont-eval:
+    strategy: llm_plus_oracles
     recommendation: >-
       Replace eval/exec/new Function with a parser for the data you actually expect
       (json.loads, ast.literal_eval, JSON.parse).
@@ -78,6 +80,7 @@ classes:
         why: "new Function is eval by another name"
 
   safe-loader:
+    strategy: llm_plus_oracles
     recommendation: >-
       Use the library's SAFE loader (yaml.safe_load) rather than a loader that can
       construct arbitrary objects.
@@ -93,6 +96,7 @@ classes:
         why: "the fix keeps a non-safe YAML loader"
 
   different-format:
+    strategy: guidance_only
     recommendation: >-
       Stop deserialising untrusted bytes with an executing format. Move the data to
       a non-executing format (JSON) — validation cannot make pickle safe.
@@ -108,6 +112,7 @@ classes:
         why: "the fix still unpickles untrusted input"
 
   parameterise-values-quote-identifiers:
+    strategy: llm_plus_oracles
     recommendation: >-
       Decide FIRST whether the interpolated part is a VALUE or an IDENTIFIER. Bind
       values as query parameters; quote identifiers with the driver's identifier
@@ -134,6 +139,7 @@ classes:
         why: "the fix still builds SQL with string formatting"
 
   verify-with-trust-store:
+    strategy: llm_plus_oracles
     recommendation: >-
       Keep certificate verification ON and point it at the right trust store (the
       system roots, or an explicit CA bundle for a private CA).
@@ -153,6 +159,7 @@ classes:
         why: "InsecureSkipVerify disables hostname AND chain validation"
 
   verify-with-real-key:
+    strategy: guidance_only
     recommendation: >-
       Verify the signature against the issuer's ACTUAL public key with a pinned
       algorithm list, and check audience/issuer. If the key is not available at this
@@ -179,6 +186,7 @@ classes:
         why: "the fix still disables signature verification"
 
   escape-dont-mark-safe:
+    strategy: llm_plus_oracles
     recommendation: >-
       Render user-influenced values through the framework's escaping (format_html,
       template autoescape) and remove mark_safe.
@@ -194,6 +202,7 @@ classes:
         why: "the fix still marks dynamic content as safe"
 
   atomic-create:
+    strategy: llm_plus_oracles
     recommendation: >-
       Create the temporary file atomically with an API that returns an open handle
       (NamedTemporaryFile / mkstemp), never a bare name.
@@ -210,6 +219,7 @@ classes:
         why: "the fix still uses tempfile.mktemp()"
 
   render-as-text-or-sanitise:
+    strategy: llm_plus_oracles
     recommendation: >-
       Render the value as TEXT (the framework escapes by default). If HTML is
       genuinely required, sanitise with a vetted library such as DOMPurify.

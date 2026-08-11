@@ -35,8 +35,10 @@ Framework-free: no Django, no ORM. Pure domain knowledge + stdlib.
 
 from __future__ import annotations
 
+import ast
 import logging
 import re
+import textwrap
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
@@ -74,6 +76,13 @@ class RemediationGuidance:
     """What a correct fix looks like for one remediation class."""
 
     remediation_class: str
+    #: How this class should be REPAIRED. Measured fix rates vary from 0% to
+    #: 45% by weakness type (arXiv 2603.10072), so attempting every class the
+    #: same way manufactures noise. ``guidance_only`` means the correct fix
+    #: depends on knowledge that lives in the customer's codebase (an issuer's
+    #: key source, a serialisation decision) — we hand the operator grounded
+    #: instructions instead of a guessed patch, and say so.
+    strategy: str
     recommendation: str
     correct: str
     wrong: str
@@ -115,11 +124,15 @@ def _load() -> tuple[dict[str, RemediationGuidance], dict[str, str], dict[str, s
     classes: dict[str, RemediationGuidance] = {}
     for name, body in raw_classes.items():
         body = body or {}
-        missing = [k for k in ("recommendation", "correct", "wrong", "why") if not str(body.get(k) or "").strip()]
+        missing = [
+            k for k in ("strategy", "recommendation", "correct", "wrong", "why")
+            if not str(body.get(k) or "").strip()
+        ]
         if missing:
             raise RemediationGuidanceError(f"Remediation class {name!r} is missing: {', '.join(missing)}")
         classes[str(name)] = RemediationGuidance(
             remediation_class=str(name),
+            strategy=str(body["strategy"]).strip(),
             recommendation=str(body["recommendation"]).strip(),
             correct=str(body["correct"]).strip(),
             wrong=str(body["wrong"]).strip(),
@@ -260,3 +273,89 @@ def check_patch(patch_code: str, guidance: RemediationGuidance | None) -> AntiPa
         if anti.matches(code):
             return AntiPatternHit(remediation_class=guidance.remediation_class, why=anti.why, regex=anti.regex)
     return None
+
+
+# ── Repair strategies (research-driven routing) ──────────────────────────────
+#
+# Measured LLM security-patch correctness is 24.8% overall, and 0%–45% depending
+# on the weakness (arXiv 2603.10072). The same paper's other finding is that the
+# outcome distribution is BIMODAL — only 0.3% of patches land near-correct — so
+# better prompting cannot close the gap; the answer is to attempt the classes a
+# model can actually do, and hand the rest to the operator as grounded guidance.
+
+#: The model may propose a patch; the oracles below decide whether it ships.
+STRATEGY_LLM = "llm_plus_oracles"
+#: No patch is attempted. The correct fix depends on knowledge that only exists
+#: in the customer's codebase, so a generated one is a guess wearing a fix's
+#: clothes. The operator gets the recommendation, named as guidance.
+STRATEGY_GUIDANCE_ONLY = "guidance_only"
+
+VALID_STRATEGIES = frozenset({STRATEGY_LLM, STRATEGY_GUIDANCE_ONLY})
+
+
+def patch_is_attempted(guidance: RemediationGuidance | None) -> bool:
+    """Should a PATCH be generated for this class at all?
+
+    Unmapped rules keep today's behaviour (attempt it) — a rule we have not
+    classified must not silently lose its artifact.
+    """
+    if guidance is None:
+        return True
+    return guidance.strategy != STRATEGY_GUIDANCE_ONLY
+
+
+@dataclass(frozen=True)
+class SyntaxVerdict:
+    """Result of the L1 syntactic oracle."""
+
+    ok: bool
+    reason: str = ""
+
+
+def patch_parses(*, patch_code: str, before_code: str, language: str) -> SyntaxVerdict:
+    """L1 oracle: did the model return code that still parses?
+
+    13.2% of LLM security patches simply do not compile (arXiv 2603.10072), and a
+    broken patch is the cheapest possible thing to catch — no model, no network.
+
+    The subtlety is that a patch is a FRAGMENT, not a file: an indented body line
+    fails to parse on its own for reasons that have nothing to do with the fix. So
+    the verdict is COMPARATIVE — we only fail the patch when the ``before``
+    fragment parses and the ``after`` fragment does not, i.e. when the model
+    demonstrably broke something that was fine. When neither parses we cannot tell
+    fragment context from real breakage, and we pass: an oracle that cries wolf
+    gets muted, and muting this one costs more than it saves.
+
+    Python only for now, deliberately: it is the only language whose parser ships
+    in this image. Claiming coverage we do not have would be worse than the gap.
+    """
+    if str(language or "").strip().lower() not in {"python", "py"}:
+        return SyntaxVerdict(ok=True)
+    after = textwrap.dedent(str(patch_code or ""))
+    before = textwrap.dedent(str(before_code or ""))
+    if not after.strip():
+        return SyntaxVerdict(ok=True)  # emptiness is handled by the caller, not here
+    if _parses(after):
+        return SyntaxVerdict(ok=True)
+    if not _parses(before):
+        # The before-fragment does not parse standalone either → this is fragment
+        # context, not a broken patch. Inconclusive, so pass.
+        return SyntaxVerdict(ok=True)
+    return SyntaxVerdict(
+        ok=False,
+        reason=(
+            "The proposed patch is not valid Python, while the code it replaces is — "
+            "the fix introduces a syntax error. Return a patch that parses."
+        ),
+    )
+
+
+def _parses(fragment: str) -> bool:
+    try:
+        ast.parse(fragment)
+    except SyntaxError:
+        return False
+    except (ValueError, MemoryError, RecursionError):
+        # Pathological input — inconclusive rather than "broken".
+        return True
+    return True

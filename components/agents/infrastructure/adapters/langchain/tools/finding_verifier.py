@@ -27,7 +27,12 @@ from dataclasses import dataclass
 # patch advisor can ground against the SAME tokens without a cross-context
 # infrastructure import. This module keeps its public name (`_salient_tokens`)
 # so existing callers/tests are untouched.
-from components.code_security.domain.remediation_guidance import check_patch, guidance_for
+from components.code_security.domain.remediation_guidance import (
+    check_patch,
+    guidance_for,
+    patch_is_attempted,
+    patch_parses,
+)
 from components.shared_kernel.utils.salient_tokens import salient_tokens
 
 _LOG_WATCH_SOURCE = "ai.log_watch"
@@ -134,7 +139,7 @@ def _ground_text_for_triage(payload: dict) -> str:
 
 
 def verify_suggestion(
-    *, source_type: str, payload: dict, suggestion_text: str, patch_code: str = ""
+    *, source_type: str, payload: dict, suggestion_text: str, patch_code: str | None = None
 ) -> VerifyResult:
     """Return whether the suggestion is grounded — and, for SAST, shaped like a fix.
 
@@ -145,7 +150,11 @@ def verify_suggestion(
     separately, against the rule's remediation anti-patterns. The two must not be
     conflated: the grounding text contains the vulnerability by construction, so
     running anti-patterns over it would reject every fix. Empty ``patch_code``
-    simply skips the shape check — callers with no patch to grade lose nothing.
+    ``None`` means THIS CALLER HAS NO PATCH to grade (the preview path, a prose-only
+    grader) and every patch oracle is skipped. An empty STRING means the advisor
+    was asked for a patch and returned none — a different fact, and a failure.
+    Conflating the two would either mute the oracles or reject every prose-only
+    caller.
 
     Deterministic; never raises. Conservative — passes when it cannot decide.
     """
@@ -232,7 +241,39 @@ def verify_suggestion(
         # Graded against ``patch_code`` (the proposed replacement) and NEVER the
         # grounding text, which carries the offending line by design and would
         # match the anti-pattern every time.
-        hit = check_patch(patch_code or "", guidance_for(str(payload.get("rule_id") or "")))
+        guidance = guidance_for(str(payload.get("rule_id") or ""))
+
+        # A suggestion with NO PATCH must never read "verified". The advisor is
+        # instructed to return empty fix_before/fix_after when the evidence will
+        # not support a concrete change — an honest outcome, but the grounding
+        # check only ever graded the PROSE, so guidance-with-no-artifact scored
+        # exactly like a working fix. Three findings shipped that way before this.
+        # Classes we deliberately do not patch (``guidance_only``) are exempt:
+        # for them, prose IS the artifact.
+        if patch_code is not None and patch_is_attempted(guidance) and not patch_code.strip():
+            return VerifyResult(
+                grounded=False,
+                reason=(
+                    "The advisor produced guidance but no patch, so there is nothing to apply. "
+                    "Return the concrete before/after change, or say plainly what evidence is missing."
+                ),
+            )
+
+        # L1 oracle — the cheapest one there is: did the model return code that
+        # still parses? 13.2% of LLM security patches simply do not compile.
+        syntax = patch_parses(
+            patch_code=patch_code or "",
+            # The scanner's matched snippet, not the suggestion's fix_before:
+            # verification runs BEFORE the payload is applied, so fix_before is
+            # not on the payload yet. The snippet is the same code being
+            # replaced, and it is the detector's own evidence.
+            before_code=str(payload.get("snippet") or ""),
+            language=str(payload.get("language") or ""),
+        )
+        if not syntax.ok:
+            return VerifyResult(grounded=False, reason=syntax.reason)
+
+        hit = check_patch(patch_code or "", guidance)
         if hit is not None:
             return VerifyResult(
                 grounded=False,
@@ -257,6 +298,27 @@ def verify_suggestion(
         anchors = {a for a in (rule_id, rule_label, path, path_base) if a} | _code_identifiers(snippet)
         if not anchors:
             return VerifyResult(grounded=True, reason="")  # no checkable specifics
+
+        # ECHOING the rule id and the path is not engagement with the finding. A
+        # live suggestion read, in full, "Apply rule autosec.python.sql-execute-format
+        # to file migrate_schema.py" — it satisfied an anchor check while saying
+        # nothing, because asking for the rule and file by name is a checkable
+        # instruction and the model gave exactly the check. So the labels are
+        # stripped before we look for substance: what remains must still reference
+        # something real (an identifier from the flagged code, or the rest of the
+        # prose), or the suggestion is an echo.
+        substance = text_l
+        for label in (rule_id, rule_label, path, path_base):
+            if label:
+                substance = substance.replace(label, " ")
+        if len(substance.split()) < 5:
+            return VerifyResult(
+                grounded=False,
+                reason=(
+                    "The suggestion only echoes the rule id and the file name — it says nothing about "
+                    "WHAT to change. Describe the actual change to the flagged code."
+                ),
+            )
         if any(a in text_l for a in anchors):
             return VerifyResult(grounded=True, reason="")
         # A fix that quotes the offending line verbatim is grounded by construction.
