@@ -189,3 +189,124 @@ class TestPromptBlock:
         assert "sql.Identifier" in block, "the correct shape must be shown"
         assert "CREATE SCHEMA IF NOT EXISTS %s" in block, "the anti-example must be shown"
         assert "do not produce this" in block
+
+
+class TestExemplarsCannotBePasted:
+    """The failure this class of test exists for, observed live.
+
+    With guidance active, the JWT advisor produced ``key = fetch_jwks_key('kid')``
+    — a verbatim copy of the worked example's INVENTED helper, which does not exist
+    in the target codebase. No anti-pattern catches it: the SHAPE is right and only
+    the symbol is fictional. Few-shot exemplars get copied; that is what they are
+    for. So an exemplar must be written such that copying it cannot produce valid
+    code, and anything codebase-specific must be declared as a placeholder.
+    """
+
+    #: Real APIs the exemplars are allowed to name. Deliberately a small allowlist:
+    #: adding a class that calls something new means adding it here, which forces
+    #: the question "is this a real API, or did I just invent a helper?".
+    REAL_APIS = {
+        "json.loads",
+        "yaml.safe_load",
+        "yaml.load",
+        "subprocess.run",
+        "ast.literal_eval",
+        "pickle.loads",
+        "jwt.decode",
+        "cursor.execute",
+        "sql.SQL",
+        "sql.Identifier",
+        "format",  # psycopg Composed.format — the identifier composer, genuinely real
+        "format_html",
+        "tempfile.NamedTemporaryFile",
+        "requests.get",
+        "execFile",
+        "JSON.parse",
+        "db.Query",
+        "fmt.Sprintf",
+        "escape",
+        "mark_safe",
+        "exec",
+        "eval",
+        "os.system",
+        "new Function",
+        "replace",
+        "tempfile.mktemp",
+    }
+
+    @staticmethod
+    def _code_only(example: str) -> str:
+        """Drop comment prose — an exemplar's comments are English, not API calls.
+
+        Without this the scan reads "…for the issuer (a JWKS fetch…" as a call to
+        ``issuer()``. A checker that cries wolf gets muted, which would cost us the
+        real signal.
+        """
+        lines = []
+        for line in example.splitlines():
+            for marker in ("#", "//"):
+                if marker in line:
+                    line = line.split(marker, 1)[0]
+            lines.append(line)
+        return "\n".join(lines)
+
+    def test_no_exemplar_invents_a_helper_function(self):
+        call = re.compile(r"([A-Za-z_][\w.]*)\s*\(")
+        for name, guidance in remediation_classes().items():
+            for symbol in call.findall(self._code_only(guidance.correct)):
+                assert symbol in self.REAL_APIS, (
+                    f"class {name}: `correct` calls {symbol!r}, which is not a known real API. "
+                    "If it is real, add it to REAL_APIS; if it is a stand-in, write it as a "
+                    "placeholder so it cannot be pasted into a patch."
+                )
+
+    def test_declared_placeholders_actually_appear_in_the_example(self):
+        for name, guidance in remediation_classes().items():
+            for placeholder in guidance.placeholders:
+                assert placeholder in guidance.correct, (
+                    f"class {name}: declares placeholder {placeholder!r} that is not in `correct` — "
+                    "a stale declaration means the prompt promises a substitution that never happens"
+                )
+
+    def test_placeholders_are_syntactically_uncopyable(self):
+        """A placeholder must BREAK if pasted — that is what makes it safe."""
+        for name, guidance in remediation_classes().items():
+            for placeholder in guidance.placeholders:
+                assert placeholder.startswith("<") and placeholder.endswith(">"), (
+                    f"class {name}: placeholder {placeholder!r} looks like valid code. Use angle "
+                    "brackets so copying it verbatim cannot compile."
+                )
+
+    def test_the_jwt_class_declares_its_key_source_as_a_placeholder(self):
+        """Regression lock on the exact live failure."""
+        guidance = guidance_for("autosec.python.jwt-verify-disabled")
+        assert guidance.placeholders, "the JWT exemplar must not hand the model a copyable key source"
+        assert "fetch_jwks_key" not in guidance.correct
+
+
+class TestPromptCarriesTheGeneralConstraints:
+    """A concrete example out-competes a general instruction read earlier.
+
+    Both live patches came back UNVERIFIED for referencing none of the finding's
+    specifics — the system prompt asks for the rule and file by name, but the
+    guidance block was appended after it and dominated. The block therefore has to
+    restate the constraints it would otherwise crowd out.
+    """
+
+    def test_block_forbids_copying_identifiers_from_the_example(self):
+        block = prompt_block(guidance_for("autosec.python.jwt-verify-disabled"))
+        assert "never copy a name from the" in block
+        assert "illustration" in block or "illustrative" in block
+
+    def test_block_restates_the_grounding_requirement(self):
+        block = prompt_block(guidance_for("autosec.python.sql-execute-format"))
+        assert "name the rule and the flagged file" in block
+
+    def test_block_lists_placeholders_when_the_class_has_them(self):
+        block = prompt_block(guidance_for("autosec.python.jwt-verify-disabled"))
+        assert "PLACEHOLDERS" in block
+        assert "<AUDIENCE>" in block
+
+    def test_block_omits_the_placeholder_line_when_there_are_none(self):
+        block = prompt_block(guidance_for("autosec.python.tempfile-mktemp"))
+        assert "PLACEHOLDERS" not in block

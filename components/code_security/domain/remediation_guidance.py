@@ -79,6 +79,12 @@ class RemediationGuidance:
     wrong: str
     why: str
     anti_patterns: tuple[AntiPattern, ...] = ()
+    #: Fragments of ``correct`` that are stand-ins for something only THIS
+    #: codebase can supply. Written so that copying them produces invalid code
+    #: — the live failure was an exemplar helper (``fetch_jwks_key``) pasted
+    #: verbatim into a real patch, which no anti-pattern catches because the
+    #: SHAPE was right and only the symbol was fictional.
+    placeholders: tuple[str, ...] = ()
     #: How this rule resolved to this class — ``"rule"`` (explicit binding) or
     #: ``"cwe"`` (inherited from the weakness). Carried for logging so an
     #: imported pack's coverage is measurable rather than assumed.
@@ -118,6 +124,9 @@ def _load() -> tuple[dict[str, RemediationGuidance], dict[str, str], dict[str, s
             correct=str(body["correct"]).strip(),
             wrong=str(body["wrong"]).strip(),
             why=str(body["why"]).strip(),
+            placeholders=tuple(
+                str(ph) for ph in (body.get("placeholders") or []) if str(ph).strip()
+            ),
             anti_patterns=tuple(
                 AntiPattern(regex=str(ap.get("regex") or ""), why=str(ap.get("why") or ""))
                 for ap in (body.get("anti_patterns") or [])
@@ -210,11 +219,26 @@ def prompt_block(guidance: RemediationGuidance | None) -> str:
         "remediation guidance for this rule class "
         f"({guidance.remediation_class}) — follow it unless the code contradicts it:",
         f"  how to fix: {guidance.recommendation}",
-        "  correct shape:",
+        "  correct SHAPE (an illustration, NOT code to copy):",
         *[f"    {ln}" for ln in guidance.correct.splitlines()],
         "  a WRONG fix that looks right (do not produce this):",
         *[f"    {ln}" for ln in guidance.wrong.splitlines()],
         f"  why the difference matters: {guidance.why}",
+    ]
+    if guidance.placeholders:
+        lines.append(
+            "  the example contains PLACEHOLDERS you must replace with the real "
+            f"symbols from this file: {', '.join(guidance.placeholders)}"
+        )
+    # Restated HERE, last, on purpose. The system prompt already forbids inventing
+    # APIs and already asks for the rule + file by name — and the first live run
+    # violated both the moment this block was added, because a concrete worked
+    # example out-competes a general instruction the model read earlier. The
+    # specific guidance has to carry the general constraints with it.
+    lines += [
+        "  use the identifiers that exist in THIS file — never copy a name from the "
+        "example; it is illustrative and its symbols may not exist here",
+        "  name the rule and the flagged file in suggested_fix, as required above",
         "",
     ]
     return "\n".join(lines)

@@ -138,7 +138,9 @@ classes:
       Keep certificate verification ON and point it at the right trust store (the
       system roots, or an explicit CA bundle for a private CA).
     correct: |-
-      requests.get(url, verify="/etc/ssl/certs/corporate-ca.pem")
+      requests.get(url, verify=<PATH TO THIS PROJECT'S CA BUNDLE>)   # or verify=True for public CAs
+    placeholders:
+      - "<PATH TO THIS PROJECT'S CA BUNDLE>"
     wrong: |-
       requests.get(url, verify=False)
     why: >-
@@ -156,8 +158,14 @@ classes:
       algorithm list, and check audience/issuer. If the key is not available at this
       call site, say so — do not invent one.
     correct: |-
-      key = fetch_jwks_key(kid)
-      decoded = jwt.decode(token, key, algorithms=["RS256"], audience=AUD, issuer=ISS)
+      # Find THIS codebase's key source for the issuer (a JWKS fetch, a cached
+      # cert, a setting) — it is never a literal and never a helper you invent.
+      key = <THE ISSUER PUBLIC KEY FOR THIS CODEBASE>
+      decoded = jwt.decode(token, key, algorithms=["RS256"], audience=<AUDIENCE>, issuer=<ISSUER>)
+    placeholders:
+      - "<THE ISSUER PUBLIC KEY FOR THIS CODEBASE>"
+      - "<AUDIENCE>"
+      - "<ISSUER>"
     wrong: |-
       decoded = jwt.decode(token, '', algorithms=['RS256'], options={'verify_signature': True})
     why: >-
