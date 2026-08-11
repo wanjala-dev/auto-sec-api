@@ -125,6 +125,7 @@ def process_pending_finding(
     apply_payload,
     describe_action,
     suggestion_text=None,
+    patch_text=None,
 ):
     """Handle one pending finding end-to-end (advise → verify → comment → move → stamp).
 
@@ -150,6 +151,17 @@ def process_pending_finding(
             the PR is the human review surface. A confident-but-ungrounded fix
             is never presented as verified. See finding_verifier.py + the
             ICLR-2024 rationale.
+        patch_text(suggestion) -> str: extract the PROPOSED replacement code (a
+            SAST suggestion's ``fix_after``). Optional, and deliberately separate
+            from ``suggestion_text``: the grounding text includes the OFFENDING
+            line so a fix that quotes it counts as anchored, which means running
+            the remediation anti-patterns over it would match the vulnerability
+            every time and reject every fix. Supplying this enables the
+            fix-SHAPE check (ADR 0019 D5) — a patch that reproduces a known-wrong
+            shape for its rule class is sent back through the SAME single
+            re-advise below, carrying the reason, and if it survives it ships
+            labeled unverified rather than silently wrong. Omit it and behaviour
+            is exactly as before.
     """
     from django.db import transaction
 
@@ -195,14 +207,20 @@ def process_pending_finding(
         from components.agents.infrastructure.adapters.langchain.tools.finding_verifier import verify_suggestion
 
         vr = verify_suggestion(
-            source_type=source_type, payload=payload, suggestion_text=suggestion_text(suggestion) or ""
+            source_type=source_type,
+            payload=payload,
+            suggestion_text=suggestion_text(suggestion) or "",
+            patch_code=(patch_text(suggestion) or "") if patch_text is not None else "",
         )
         if not vr.grounded:
             retry = advise(payload, feedback=vr.reason)
             if retry is not None:
                 suggestion = retry
                 vr = verify_suggestion(
-                    source_type=source_type, payload=payload, suggestion_text=suggestion_text(retry) or ""
+                    source_type=source_type,
+                    payload=payload,
+                    suggestion_text=suggestion_text(retry) or "",
+                    patch_code=(patch_text(retry) or "") if patch_text is not None else "",
                 )
         verification = "verified" if vr.grounded else "unverified"
         if not vr.grounded:

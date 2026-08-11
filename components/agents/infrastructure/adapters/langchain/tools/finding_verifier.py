@@ -27,6 +27,7 @@ from dataclasses import dataclass
 # patch advisor can ground against the SAME tokens without a cross-context
 # infrastructure import. This module keeps its public name (`_salient_tokens`)
 # so existing callers/tests are untouched.
+from components.code_security.domain.remediation_guidance import check_patch, guidance_for
 from components.shared_kernel.utils.salient_tokens import salient_tokens
 
 _LOG_WATCH_SOURCE = "ai.log_watch"
@@ -132,8 +133,19 @@ def _ground_text_for_triage(payload: dict) -> str:
     return "\n".join(parts)
 
 
-def verify_suggestion(*, source_type: str, payload: dict, suggestion_text: str) -> VerifyResult:
-    """Return whether ``suggestion_text`` is grounded in the finding's evidence.
+def verify_suggestion(
+    *, source_type: str, payload: dict, suggestion_text: str, patch_code: str = ""
+) -> VerifyResult:
+    """Return whether the suggestion is grounded — and, for SAST, shaped like a fix.
+
+    ``suggestion_text`` is the GROUNDING text: prose plus, for SAST, the offending
+    line, so a fix that quotes the flagged code counts as anchored.
+
+    ``patch_code`` is the PROPOSED replacement (``fix_after``) and is graded
+    separately, against the rule's remediation anti-patterns. The two must not be
+    conflated: the grounding text contains the vulnerability by construction, so
+    running anti-patterns over it would reject every fix. Empty ``patch_code``
+    simply skips the shape check — callers with no patch to grade lose nothing.
 
     Deterministic; never raises. Conservative — passes when it cannot decide.
     """
@@ -209,6 +221,27 @@ def verify_suggestion(*, source_type: str, payload: dict, suggestion_text: str) 
         )
 
     if source_type == _CODE_SECURITY_SOURCE:
+        # BEFORE grounding: does the PROPOSED PATCH reproduce a known-wrong fix
+        # shape for this rule's remediation class (ADR 0019 D5)? A wrong-shape fix
+        # fails regardless of how well it is anchored — PR #866 was perfectly
+        # grounded (it named the rule, the file and the snippet) and still broke
+        # the command, because it bound a schema IDENTIFIER as a query parameter.
+        # Grounding answers "is this about THIS finding"; this answers "is this
+        # answer even a fix".
+        #
+        # Graded against ``patch_code`` (the proposed replacement) and NEVER the
+        # grounding text, which carries the offending line by design and would
+        # match the anti-pattern every time.
+        hit = check_patch(patch_code or "", guidance_for(str(payload.get("rule_id") or "")))
+        if hit is not None:
+            return VerifyResult(
+                grounded=False,
+                reason=(
+                    f"The proposed fix reproduces a known-wrong shape for {hit.remediation_class}: "
+                    f"{hit.why}. Re-read the remediation guidance and produce the correct shape."
+                ),
+            )
+
         # For a SAST finding the grounding anchors are the scanner's own facts:
         # the rule id, the flagged file, and the matched snippet's identifiers. A
         # fix that references none of them is boilerplate that fits any finding.

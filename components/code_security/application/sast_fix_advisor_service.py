@@ -36,6 +36,7 @@ import json
 import logging
 from dataclasses import dataclass, replace
 
+from components.code_security.domain.remediation_guidance import guidance_for, prompt_block
 from components.knowledge.domain.value_objects.injection_scan import is_injection_suspected
 from components.shared_kernel.utils.untrusted_framing import (
     CODE_CLOSE,
@@ -202,8 +203,22 @@ class SastFixAdvisor:
                 rule_id,
             )
 
+        # What a CORRECT fix looks like for this rule's remediation class (ADR 0019
+        # D5). The rule message says only what is WRONG, so without this the model
+        # infers the remediation — and inference produced patches that were
+        # grounded, in-scope and semantically wrong (PR #866: binding a schema
+        # IDENTIFIER as a query parameter). Unmapped rules yield "" and behave
+        # exactly as before: degraded, never broken.
+        #
+        # No CWEs are passed here: every FIRST-PARTY rule carries an explicit
+        # binding, so the CWE fallback would never fire. It exists for imported
+        # third-party packs, whose ingest path supplies the rule's CWE metadata —
+        # wiring it from this call site would mean the application layer reaching
+        # into the infrastructure ruleset loader to re-read the pack.
+        guidance = guidance_for(rule_id)
         prompt = (
             f"{grounding_block}"
+            f"{prompt_block(guidance)}"
             f"rule: {rule_id}\n"
             f"finding: {(message or '')[:600]}\n"
             f"location: {repo or 'repo'} {path}:{start_line}"

@@ -272,4 +272,8 @@ def triage_code_finding(agent, input_str: str) -> str:
         apply_payload=apply_payload,
         describe_action=describe_action,
         suggestion_text=suggestion_text,
+        # The PROPOSED code, graded separately from the grounding text above
+        # (which contains the offending line by design). This is what the
+        # remediation anti-patterns run against — ADR 0019 D5.
+        patch_text=lambda suggestion: suggestion.fix_after,
     )
