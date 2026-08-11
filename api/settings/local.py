@@ -623,3 +623,9 @@ ELASTICSEARCH_DSL = {
 # and the seed-on-startup commands crash the web container in a loop.
 # Matches the test.py pattern (api/settings/test.py:112).
 ELASTICSEARCH_DSL_AUTOSYNC = False
+
+# Verification loop: run the RubricMiddleware swap locally so it is measured
+# before it is trusted anywhere real (base.py defaults it off; prod inherits
+# that until the five-patch corpus re-measures better). Exactly one loop is
+# ever active — this turns the hand-rolled critic OFF and the middleware ON.
+DEEP_RUBRIC_MIDDLEWARE_ENABLED = os.environ.get("DEEP_RUBRIC_MIDDLEWARE_ENABLED", "true").lower() == "true"

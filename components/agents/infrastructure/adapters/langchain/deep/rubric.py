@@ -20,11 +20,16 @@ The three non-negotiables (per the migration plan):
 
 Gating (the hand-rolled critic stays the default until the swap is verified):
 
-- Global: Django setting ``DEEP_RUBRIC_MIDDLEWARE_ENABLED`` (default ``False``).
+- Global: Django setting ``DEEP_RUBRIC_MIDDLEWARE_ENABLED`` — defined in
+  ``api/settings/base.py`` (default ``False``, so production keeps the proven
+  fallback) and turned ON in the local + dev overlays so the swap is measured
+  before it is trusted anywhere real.
 - Per-agent: ``Agent.config["rubric_middleware"]`` (truthy / dict of options).
 - Per-type: only agents in ``critic.CRITIC_ENABLED_AGENTS`` (triage /
-  optimization) get the middleware — same opt-in set the critic used. Other
-  agents get ``None`` (no middleware, no cost).
+  optimization / code_security) get the middleware — same opt-in set the critic
+  used, and every member of it carries a rubric (enforced by
+  ``tests/unit/test_rubric_contract.py``). Other agents get ``None`` (no
+  middleware, no cost).
 
 When the middleware is active for a run, ``runner.execute_plan_once`` skips the
 ``reflective_worker`` wrap so the answer is verified by exactly one loop.
