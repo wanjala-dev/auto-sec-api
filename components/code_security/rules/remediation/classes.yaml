@@ -1,0 +1,217 @@
+# Remediation CLASSES — what a correct fix looks like, keyed by fix SHAPE (ADR 0019 D5).
+#
+# WHY CLASSES AND NOT PER-RULE ENTRIES. The advisor used to receive only a rule id,
+# the rule's one-line message and the matched snippet, then had to invent the
+# remediation. That yields fixes which are grounded, in-scope, parse cleanly — and
+# are semantically wrong. The dogfood case (PR #866, reproduced independently in
+# #869) proposed
+#     cursor.execute("CREATE SCHEMA IF NOT EXISTS %s", (schema,))
+# which binds an IDENTIFIER as a value: Postgres renders it as a quoted literal and
+# the statement is a syntax error, so the "fix" swaps an injection risk for a
+# command that crashes on every run. The model pattern-matched "SQL injection →
+# parameterize" because nothing in the prompt drew the value-vs-identifier line.
+#
+# Remediation knowledge clusters by SHAPE, not by rule: `subprocess-shell-true`,
+# `os-system-dynamic` and `child-process-exec-template` are three rules with one
+# answer (pass an argv list, never a shell string). Keying the knowledge by class
+# is what keeps this file sub-linear as the pack grows — a new rule usually binds
+# to a class that already exists, and only a genuinely new remediation shape costs
+# a new entry. This mirrors CodeQL's `.inc.qhelp` shared-include mechanism, which
+# exists for the same reason: per-query help that duplicates its neighbours does
+# not survive contact with a thousand queries.
+#
+# Each class carries what a rule message cannot:
+#   recommendation  — the shape of the correct fix, in one instruction
+#   correct         — a worked example to imitate
+#   wrong           — the plausible near-miss to avoid (the anti-example)
+#   why             — the distinction that separates the two
+#   anti_patterns   — DETERMINISTIC regexes that catch the wrong shape in a patch
+#
+# `anti_patterns` are the safety net under the prose. The verifier runs them against
+# the proposed patch; a match sends the suggestion back for one grounded re-advise
+# carrying the reason, and a fix that survives ships LABELED unverified rather than
+# silently wrong. Keep them NARROW — they must catch the known-wrong shape without
+# vetoing legitimate fixes; a false positive here costs a real fix.
+#
+# SELF-TESTING (the anti-rot guarantee, per CodeQL's "include the examples in your
+# unit tests"): `test_remediation_guidance.py` asserts that every class's `wrong`
+# example is matched by at least one of its OWN anti_patterns, and that its
+# `correct` example is matched by none of them. A class whose prose and regexes
+# disagree cannot land, and neither can one whose anti-pattern would veto its own
+# recommended fix.
+
+classes:
+  argv-list-not-shell:
+    recommendation: >-
+      Pass the command as an ARGV LIST to subprocess/execFile and remove the shell
+      entirely. Do not try to sanitise a command string.
+    correct: |-
+      subprocess.run(["git", "clone", url], check=True)
+    wrong: |-
+      subprocess.run(f"git clone {url}", shell=True)
+    why: >-
+      Escaping or quoting keeps a shell in the loop, and shell quoting is repeatedly
+      escaped from. Only removing the shell removes the injection sink.
+    anti_patterns:
+      - regex: 'shell\s*=\s*True'
+        why: "the fix still passes shell=True"
+      - regex: '(?<![\w.])os\.system\s*\('
+        why: "os.system() always spawns a shell — it has no safe mode"
+      - regex: '(?<![\w.])exec\s*\(\s*`'
+        why: "exec() with a template string still hits the shell; use execFile/spawn"
+
+  parse-dont-eval:
+    recommendation: >-
+      Replace eval/exec/new Function with a parser for the data you actually expect
+      (json.loads, ast.literal_eval, JSON.parse).
+    correct: |-
+      value = json.loads(raw)
+    wrong: |-
+      eval(raw, {"__builtins__": {}})
+    why: >-
+      Restricted-globals sandboxes around eval are broken out of routinely, so a
+      "hardened" eval is not a fix. Only removing the execution sink is.
+    anti_patterns:
+      - regex: '(?<![\w.])(eval|exec)\s*\('
+        why: "the fix still evaluates the input"
+      - regex: 'new\s+Function\s*\('
+        why: "new Function is eval by another name"
+
+  safe-loader:
+    recommendation: >-
+      Use the library's SAFE loader (yaml.safe_load) rather than a loader that can
+      construct arbitrary objects.
+    correct: |-
+      config = yaml.safe_load(stream)
+    wrong: |-
+      config = yaml.load(stream, Loader=yaml.Loader)
+    why: >-
+      Only SafeLoader refuses arbitrary object construction; the default and full
+      loaders stay unsafe on untrusted input.
+    anti_patterns:
+      - regex: 'Loader\s*=\s*yaml\.(Loader|FullLoader|UnsafeLoader)'
+        why: "the fix keeps a non-safe YAML loader"
+
+  different-format:
+    recommendation: >-
+      Stop deserialising untrusted bytes with an executing format. Move the data to
+      a non-executing format (JSON) — validation cannot make pickle safe.
+    correct: |-
+      data = json.loads(raw)
+    wrong: |-
+      data = pickle.loads(raw)
+    why: >-
+      Pickle executes during load, so an HMAC or schema check upstream does not
+      help if the attacker influences the bytes. The format itself must change.
+    anti_patterns:
+      - regex: 'pickle\.(loads|load)\s*\('
+        why: "the fix still unpickles untrusted input"
+
+  parameterise-values-quote-identifiers:
+    recommendation: >-
+      Decide FIRST whether the interpolated part is a VALUE or an IDENTIFIER. Bind
+      values as query parameters; quote identifiers with the driver's identifier
+      composer (psycopg sql.Identifier) or resolve them from a validated allowlist.
+    correct: |-
+      # value → bind it
+      cursor.execute("SELECT * FROM t WHERE id = %s", [user_id])
+      # identifier → compose it
+      from psycopg import sql
+      cursor.execute(sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(schema)))
+    wrong: |-
+      cursor.execute("CREATE SCHEMA IF NOT EXISTS %s", (schema,))
+    why: >-
+      Placeholders bind VALUES only. A bound identifier is rendered as a quoted
+      string literal ('myschema'), so the statement becomes a syntax error — the
+      patch looks parameterised and breaks at runtime. This is the single most
+      common wrong "SQL injection fix"; it passed grounding and scope review twice.
+    anti_patterns:
+      - regex: '(?is)(CREATE|DROP|ALTER|TRUNCATE)\s+(SCHEMA|TABLE|DATABASE|INDEX|VIEW)[^"'']*%s'
+        why: "a DDL identifier is bound as a parameter — the driver quotes it as a literal and the statement fails"
+      - regex: '(?is)SET\s+search_path[^"'']*%s'
+        why: "SET search_path takes an identifier, not a bound parameter"
+      - regex: '(?is)fmt\.Sprintf\s*\(\s*"[^"]*(SELECT|INSERT|UPDATE|DELETE|CREATE)'
+        why: "the fix still builds SQL with string formatting"
+
+  verify-with-trust-store:
+    recommendation: >-
+      Keep certificate verification ON and point it at the right trust store (the
+      system roots, or an explicit CA bundle for a private CA).
+    correct: |-
+      requests.get(url, verify="/etc/ssl/certs/corporate-ca.pem")
+    wrong: |-
+      requests.get(url, verify=False)
+    why: >-
+      Disabling verification (or silencing the warning) defeats TLS entirely.
+      A private CA is added to the trust store, never worked around.
+    anti_patterns:
+      - regex: 'verify\s*=\s*False'
+        why: "the fix still disables certificate verification"
+      - regex: 'InsecureSkipVerify\s*:\s*true'
+        why: "InsecureSkipVerify disables hostname AND chain validation"
+
+  verify-with-real-key:
+    recommendation: >-
+      Verify the signature against the issuer's ACTUAL public key with a pinned
+      algorithm list, and check audience/issuer. If the key is not available at this
+      call site, say so — do not invent one.
+    correct: |-
+      key = fetch_jwks_key(kid)
+      decoded = jwt.decode(token, key, algorithms=["RS256"], audience=AUD, issuer=ISS)
+    wrong: |-
+      decoded = jwt.decode(token, '', algorithms=['RS256'], options={'verify_signature': True})
+    why: >-
+      Turning verification on while passing an empty or placeholder key raises at
+      runtime: the patch reads secure and breaks login. Verification needs a key
+      source, so the fix has to name one.
+    anti_patterns:
+      - regex: 'jwt\.decode\s*\(\s*[^,]+,\s*(''''|"")'
+        why: "verification cannot succeed against an empty key"
+      - regex: '(''|")verify_signature(''|")\s*:\s*False'
+        why: "the fix still disables signature verification"
+
+  escape-dont-mark-safe:
+    recommendation: >-
+      Render user-influenced values through the framework's escaping (format_html,
+      template autoescape) and remove mark_safe.
+    correct: |-
+      return format_html("<b>{}</b>", user_value)
+    wrong: |-
+      return mark_safe("<b>%s</b>" % escape(user_value))
+    why: >-
+      mark_safe on anything user-influenced re-opens XSS, and pre-escaping then
+      re-marking is a round trip that adds risk without adding safety.
+    anti_patterns:
+      - regex: 'mark_safe\s*\('
+        why: "the fix still marks dynamic content as safe"
+
+  atomic-create:
+    recommendation: >-
+      Create the temporary file atomically with an API that returns an open handle
+      (NamedTemporaryFile / mkstemp), never a bare name.
+    correct: |-
+      with tempfile.NamedTemporaryFile(delete=False) as fh:
+          path = fh.name
+    wrong: |-
+      path = tempfile.mktemp()
+    why: >-
+      mktemp only reserves a name, so the race between name and create is inherent;
+      no amount of checking afterwards closes it.
+    anti_patterns:
+      - regex: 'tempfile\.mktemp\s*\('
+        why: "the fix still uses tempfile.mktemp()"
+
+  render-as-text-or-sanitise:
+    recommendation: >-
+      Render the value as TEXT (the framework escapes by default). If HTML is
+      genuinely required, sanitise with a vetted library such as DOMPurify.
+    correct: |-
+      <div>{userValue}</div>
+    wrong: |-
+      <div dangerouslySetInnerHTML={{__html: userValue.replace(/<script>/g, "")}} />
+    why: >-
+      Hand-written tag stripping is bypassable in ways that are well documented;
+      a sanitiser is a maintained allowlist, a regex is a guess.
+    anti_patterns:
+      - regex: 'replace\s*\(\s*/<'
+        why: "the fix hand-rolls HTML stripping with a regex"

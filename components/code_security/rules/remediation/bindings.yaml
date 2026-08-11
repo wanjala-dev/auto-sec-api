@@ -1,0 +1,66 @@
+# Which remediation CLASS answers which rule (ADR 0019 D5).
+#
+# THE SCALING CONTRACT. Adding a rule must not mean writing a new essay. Resolution
+# is tried in this order, so the common case costs one line and the best case costs
+# nothing:
+#
+#   1. `rules:` below — an explicit rule-id → class binding. One line. Use this for
+#      every first-party rule; the fitness test REQUIRES it (see below).
+#   2. `cwe:` below — a CWE → class fallback. This is the lever that makes a
+#      third-party pack usable on day one: registry rules already carry
+#      `metadata.cwe`, so an imported pack of 300 rules inherits sane guidance with
+#      no authoring at all, and only the ones whose CWE is too coarse need a line
+#      in `rules:`.
+#   3. Nothing — the advisor falls back to today's behaviour (rule message + snippet
+#      only) and logs it as unmapped. Degraded, never broken: a rule with no
+#      guidance still produces a fix, just without the extra grounding.
+#
+# WHY BINDINGS LIVE HERE AND NOT IN THE PACK. `packs/` holds license-audited rule
+# documents that ship verbatim to the scan Job; keeping our remediation opinions out
+# of them means a pack can be re-synced from upstream without a merge conflict, and
+# it means third-party rules — which we cannot edit at all — bind exactly the same
+# way first-party ones do. One resolution path for both is what keeps this honest as
+# the ruleset stops being all ours.
+#
+# THE ANTI-DRIFT GUARANTEE. `test_remediation_guidance.py` asserts that EVERY rule in
+# every first-party pack has a binding here (or an explicit `unmapped:` waiver with a
+# reason). Adding a rule without deciding its remediation class fails the suite — the
+# gap surfaces at authoring time rather than as a wrong patch in a customer's repo.
+
+rules:
+  autosec.python.subprocess-shell-true: argv-list-not-shell
+  autosec.python.os-system-dynamic: argv-list-not-shell
+  autosec.python.eval-exec-dynamic: parse-dont-eval
+  autosec.python.yaml-load-unsafe: safe-loader
+  autosec.python.pickle-load-untrusted: different-format
+  autosec.python.sql-execute-format: parameterise-values-quote-identifiers
+  autosec.python.requests-verify-disabled: verify-with-trust-store
+  autosec.python.jwt-verify-disabled: verify-with-real-key
+  autosec.python.django-mark-safe-dynamic: escape-dont-mark-safe
+  autosec.python.tempfile-mktemp: atomic-create
+  autosec.javascript.eval-dynamic: parse-dont-eval
+  autosec.javascript.child-process-exec-template: argv-list-not-shell
+  autosec.javascript.dangerously-set-inner-html-dynamic: render-as-text-or-sanitise
+  autosec.go.sql-query-sprintf: parameterise-values-quote-identifiers
+  autosec.go.tls-insecure-skip-verify: verify-with-trust-store
+
+# CWE → class. Deliberately conservative: only weaknesses whose remediation shape is
+# genuinely singular appear here. A CWE that admits several correct answers (e.g.
+# CWE-20 "improper input validation") is left out on purpose — a confidently WRONG
+# class is worse than no class, because it puts a bad worked example in the prompt.
+cwe:
+  "CWE-78": argv-list-not-shell            # OS command injection
+  "CWE-77": argv-list-not-shell            # command injection
+  "CWE-89": parameterise-values-quote-identifiers  # SQL injection
+  "CWE-94": parse-dont-eval                # code injection
+  "CWE-95": parse-dont-eval                # eval injection
+  "CWE-502": different-format              # deserialisation of untrusted data
+  "CWE-79": render-as-text-or-sanitise     # XSS
+  "CWE-295": verify-with-trust-store       # improper certificate validation
+  "CWE-347": verify-with-real-key          # improper verification of signature
+  "CWE-377": atomic-create                 # insecure temporary file
+
+# Rules that deliberately have no remediation class, with the reason. An entry here
+# is a DECISION on the record, not an oversight — that is the difference the fitness
+# test is enforcing.
+unmapped: {}
