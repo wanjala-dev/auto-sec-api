@@ -529,3 +529,28 @@ class TestOpenedPrStoresThePatchInline:
         # A real unified diff of the committed change, bounded like the preview's.
         assert record["diff"].startswith(f"--- a/{_PATCH.path}")
         assert "+from psycopg import sql" in record["diff"]
+
+    def test_provenance_credits_the_specialist_that_actually_acted(self, workspace_factory, team_factory):
+        """The trail must name the card's specialist, not a hardcoded default.
+
+        ``acting_agent`` was pinned to ``triage_agent``, so every SAST PR the
+        code_security_agent produced was recorded as the triage agent's work —
+        one line below the (correct) "code_security_agent requested its own fix
+        draft". Provenance is the product; now that PRs open automatically, the
+        trail is the only account of who did what.
+        """
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _sast_finding(workspace, owner, team, column)
+        assert task.metadata["agent_type"] == "code_security_agent"
+        _connection(workspace, owner)
+        _capability(workspace, owner)
+        fake = _FakeGitHub()
+
+        with mock.patch(_REQUESTS_PATH, new=fake), mock.patch(_SAST_PROPOSE, return_value=_PATCH):
+            _use_case().execute(workspace_id=str(workspace.id), task_id=str(task.id), performed_by=str(owner.id))
+
+        task.refresh_from_db()
+        opened = [e for e in task.metadata["provenance"]["events"] if "opened draft PR" in (e.get("action") or "")]
+        assert opened, "the open must leave a provenance event"
+        assert opened[-1]["actor"] == f"agent:code_security_agent via user:{owner.id}"
+        assert task.metadata["provenance"]["last_handled_by"] == "code_security_agent"
