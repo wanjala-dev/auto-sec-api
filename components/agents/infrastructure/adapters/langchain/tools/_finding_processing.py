@@ -210,7 +210,7 @@ def process_pending_finding(
             source_type=source_type,
             payload=payload,
             suggestion_text=suggestion_text(suggestion) or "",
-            patch_code=(patch_text(suggestion) or "") if patch_text is not None else "",
+            patch_code=(patch_text(suggestion) or "") if patch_text is not None else None,
         )
         if not vr.grounded:
             retry = advise(payload, feedback=vr.reason)
@@ -220,7 +220,7 @@ def process_pending_finding(
                     source_type=source_type,
                     payload=payload,
                     suggestion_text=suggestion_text(retry) or "",
-                    patch_code=(patch_text(retry) or "") if patch_text is not None else "",
+                    patch_code=(patch_text(retry) or "") if patch_text is not None else None,
                 )
         verification = "verified" if vr.grounded else "unverified"
         if not vr.grounded:
