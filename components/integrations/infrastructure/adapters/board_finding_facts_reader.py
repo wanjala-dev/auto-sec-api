@@ -61,6 +61,13 @@ class BoardFindingFactsReader(FindingFactsPort):
         A merged PR's finding is resolved by the remediation reconciler
         (``metadata.triage.status = "resolved"`` / ``payload.resolved``), which
         removes it from this count — the throttle window frees as PRs land.
+
+        A CLOSED-without-merge PR frees the window too, once the sweep has stamped
+        ``draft_pr.pr_state = "closed"``. Counting rejected PRs was the silent
+        killer: three patches the operator turned down permanently consumed a
+        repo's entire budget, so Auto-Sec could never open another PR against it —
+        and rejecting bad patches is exactly what a careful operator does. The
+        throttle exists to protect merge RATE, not to punish rejection.
         """
         from infrastructure.persistence.project.models import Task
 
@@ -73,10 +80,13 @@ class BoardFindingFactsReader(FindingFactsPort):
         for metadata in rows:
             meta = metadata or {}
             payload = meta.get("payload") or {}
-            if not (payload.get("draft_pr") or {}).get("url"):
+            record = payload.get("draft_pr") or {}
+            if not record.get("url"):
                 continue
             triage = meta.get("triage") or {}
             if str(triage.get("status", "")).lower() == "resolved" or payload.get("resolved"):
+                continue
+            if str(record.get("pr_state") or "").lower() == "closed" and not record.get("merged"):
                 continue
             open_count += 1
         return open_count

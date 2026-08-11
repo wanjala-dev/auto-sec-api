@@ -42,6 +42,7 @@ import components.findings.infrastructure.tasks.finding_risk_tasks
 import components.identity.workers.tasks
 import components.knowledge.infrastructure.tasks.index_freshness_tasks
 import components.knowledge.infrastructure.tasks.workspace_index_tasks
+import components.agents.infrastructure.tasks.draft_pr_retry_tasks
 import components.notifications.infrastructure.tasks.external_delivery_tasks
 import components.notifications.workers.tasks
 import components.payments.workers.tasks

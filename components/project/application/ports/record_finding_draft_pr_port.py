@@ -167,6 +167,39 @@ class AttachDraftPrPatchResult:
 
 
 @dataclass(frozen=True)
+class MarkDraftPrRejectedCommand:
+    """Record that a draft PR was CLOSED without merging — the operator said no.
+
+    A rejected fix is a first-class outcome, not an absence. Before this, a closed
+    PR left its record looking exactly like a live one: the HUD still offered
+    "VIEW DRAFT PR" for a dead link, and — the load-bearing part — the per-repo
+    open-PR throttle kept counting it, so three rejected patches permanently
+    consumed a repo's entire PR budget and the loop died silently. Marking the
+    record releases the slot and makes the finding eligible for a fresh attempt.
+
+    Deliberately narrow, like the patch-attach command: it stamps lifecycle only
+    (``pr_state`` / ``merged`` / ``rejected_at``). The identity facts — ``url``,
+    ``repo``, ``branch``, ``opened_by``, ``opened_at``, the patch — are kept
+    verbatim, because the rejected attempt is history worth keeping: the next
+    attempt should be able to show what was tried and turned down.
+    """
+
+    workspace_id: str
+    task_id: str
+    #: The host's lifecycle token for the PR (``"closed"``).
+    pr_state: str = "closed"
+    reason: str = "closed_without_merge"
+
+
+@dataclass(frozen=True)
+class MarkDraftPrRejectedResult:
+    """Outcome — ``marked`` false is a SKIP (already marked, no record, task gone)."""
+
+    marked: bool
+    reason: str = ""
+
+
+@dataclass(frozen=True)
 class RecordFindingDraftPrResult:
     # True when this call performed the write; False when it was a no-op because
     # the task was gone, or a concurrent open already recorded a draft PR (the
@@ -185,6 +218,15 @@ class RecordFindingDraftPrPort(abc.ABC):
         Re-checks ``draft_pr`` right before writing so a concurrent open keeps the
         first PR's record. A task deleted between the caller's precondition and
         this write resolves to ``recorded=False`` (never raises).
+        """
+        ...
+
+    @abc.abstractmethod
+    def mark_draft_pr_rejected(self, *, command: MarkDraftPrRejectedCommand) -> MarkDraftPrRejectedResult:
+        """Stamp an existing ``draft_pr`` record as closed-without-merge.
+
+        Idempotent: a record already marked rejected resolves to a skip. An absent
+        task or a task with no ``draft_pr`` record likewise skips — never raises.
         """
         ...
 

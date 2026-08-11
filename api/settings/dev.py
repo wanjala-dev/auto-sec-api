@@ -391,6 +391,15 @@ CELERY_BEAT_SCHEDULE = {
         "task": "remediation.reconcile_applied_remediations",
         "schedule": crontab(minute=15),
     },
+    # The draft-PR retry leg: settle PRs the operator closed without merging (which
+    # otherwise hold a throttle slot FOREVER — three rejections used to kill the
+    # loop for a repo) and re-dispatch the highest-risk finding waiting on the
+    # freed slot. Runs after the merge reconciler so a merged PR is resolved by
+    # its owner first. Idempotent; bounded per sweep.
+    "release_rejected_draft_prs": {
+        "task": "infrastructure.ai.agents.tasks.release_rejected_draft_prs",
+        "schedule": crontab(minute=35),
+    },
     # Daily Remediation Memory orphan-recovery sweep (ADR 0012 P6) — re-embeds
     # vetted fixes that cleared the D1 gate but whose after-commit embed never
     # landed (admitted-but-unretrievable) or whose rating changed. Idempotent.
