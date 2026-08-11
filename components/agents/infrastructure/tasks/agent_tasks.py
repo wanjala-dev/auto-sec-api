@@ -592,6 +592,80 @@ def run_deep_run_plan(
     return {"success": True, "plan_id": run_thread}
 
 
+# ── Automatic: the fix a specialist just produced becomes its draft PR ────
+
+
+@shared_task(
+    name="infrastructure.ai.agents.tasks.auto_draft_pr_for_finding",
+    soft_time_limit=AGENT_SOFT_TIME_LIMIT,
+    time_limit=AGENT_TIME_LIMIT,
+)
+def auto_draft_pr_for_finding(
+    workspace_id: str,
+    task_id: str,
+    performed_by: str,
+    acting_agent: str = "",
+) -> dict[str, Any]:
+    """Open the draft PR for a finding a specialist has just triaged.
+
+    The missing HAND-OFF. Triage stamped "suggested a code fix" and stopped; the
+    PR only ever opened when an operator pressed DRAFT FIX PR
+    (:func:`draft_fix_for_finding`). So a finding in a connected repository sat
+    on the board reading FIX READY with no artifact behind it — the exact
+    "detected, then nothing" gap the product exists to close.
+
+    This is dispatched by ``process_pending_finding`` after its triage write
+    commits, so it runs for EVERY specialist that produces a repo-target fix, not
+    just the one a human happened to click.
+
+    Deliberately thin: it re-reads the card and delegates to
+    :func:`_open_draft_pr_for_finding` — the ONE draft-PR engine, with every
+    guardrail (patch scope, ``validate_patch``, the per-repo open-PR throttle,
+    the connection + repo allowlist, the agent's ``open_draft_pr`` capability)
+    and every refusal still recorded on the card. Nothing here re-runs the
+    specialist: a suggestion already exists, and re-advising would burn an LLM
+    call to reach the same place.
+
+    Idempotent: a card that already carries a ``draft_pr.url`` is a no-op, so a
+    duplicate dispatch (retry, overlapping cycle) can never open a second PR.
+    """
+    from infrastructure.persistence.project.models import Task
+
+    card = Task.objects.filter(id=task_id, workspace_id=workspace_id).first()
+    if card is None:  # deleted between the triage write and this task
+        logger.info("auto_draft_pr_for_finding card_gone workspace_id=%s task_id=%s", workspace_id, task_id)
+        return {"success": False, "error": "finding_not_found"}
+
+    meta = card.metadata or {}
+    if (meta.get("payload") or {}).get("draft_pr", {}).get("url"):
+        logger.info("auto_draft_pr_for_finding already_open workspace_id=%s task_id=%s", workspace_id, task_id)
+        return {"success": True, "reason": "already_open"}
+
+    # Attribution is the product: the board must show that the AGENT opened this
+    # PR off its own triage, not that a human asked for it.
+    _append_finding_provenance(
+        task_id,
+        actor=f"agent:{acting_agent or 'specialist'}",
+        action="requested its own fix draft (automatic — a repo finding always gets a PR)",
+    )
+
+    outcome = _open_draft_pr_for_finding(
+        workspace_id=workspace_id,
+        task_id=task_id,
+        performed_by=performed_by,
+        metadata=meta,
+        source_type=card.source_type or "",
+    )
+    logger.info(
+        "auto_draft_pr_for_finding completed workspace_id=%s task_id=%s agent=%s outcome=%s",
+        workspace_id,
+        task_id,
+        acting_agent,
+        outcome.get("reason") or ("opened" if outcome.get("pr_url") else "no_pr"),
+    )
+    return {"success": True, "acting_agent": acting_agent, **outcome}
+
+
 # ── On-demand: "draft a fix PR for THIS finding" ─────────────────────────
 
 

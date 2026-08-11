@@ -64,6 +64,13 @@ class OrmRecordFindingDraftPrRepository(RecordFindingDraftPrPort):
                 "change_summary": command.change_summary,
             },
         )
+        # A card can never read "blocked" AND "opened" at once. An earlier refusal
+        # (throttled, or a guardrail that has since been relaxed — e.g. the old
+        # low-confidence gate that became the [UNVERIFIED] label) leaves a
+        # ``draft_pr_blocked`` stamp the HUD keeps showing; the success that
+        # supersedes it clears it here, in the same locked write, so the operator
+        # is never told a PR was refused while looking at the PR.
+        meta.pop("draft_pr_blocked", None)
 
         # Same growable provenance shape the detector/triage pipeline appends to.
         provenance = meta.get("provenance") or {"events": []}

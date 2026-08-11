@@ -319,6 +319,32 @@ def process_pending_finding(
             update_fields.append("column")
         locked.save(update_fields=update_fields)
 
+        # THE HAND-OFF. A suggested fix is not an artifact — the artifact is the
+        # draft PR. Before this, triage stopped at "suggested a code fix" and the
+        # PR only ever opened when an operator asked for one, so a finding in a
+        # connected repo sat on the board reading FIX READY with nothing behind
+        # it (13 of 15 repo findings in the demo workspace). Henry's standing
+        # rule: a finding in a connected repository ALWAYS carries its draft PR;
+        # a grounding failure downgrades the LABEL, never withholds the artifact.
+        #
+        # Dispatched AFTER COMMIT (celery invariant): the worker re-reads this
+        # card, so enqueuing inside the transaction races its own write. IDs
+        # only, never objects. Every guardrail still lives in the ONE PR engine
+        # (patch scope, validate_patch, the per-repo throttle, the connection +
+        # repo allowlist, the agent capability) and each refusal is still
+        # recorded on the card — this only removes the missing trigger, it does
+        # not weaken a single check.
+        if suggestion is not None:
+            _dispatch_draft_pr_after_commit(
+                transaction,
+                workspace_id=str(agent.workspace_id),
+                task_id=str(task_id),
+                source_type=source_type,
+                metadata=lmeta,
+                acting_agent=acting_agent,
+                performed_by=str(getattr(creator, "id", "") or ""),
+            )
+
     logger.info(
         "process_finding source_type=%s task_id=%s agent=%s advised=%s moved=%s",
         source_type,
@@ -328,6 +354,58 @@ def process_pending_finding(
         moved,
     )
     return f"Handled {task.title[:70]}: {', '.join(actions)}."
+
+
+def _dispatch_draft_pr_after_commit(
+    transaction,
+    *,
+    workspace_id: str,
+    task_id: str,
+    source_type: str,
+    metadata: dict,
+    acting_agent: str,
+    performed_by: str,
+) -> None:
+    """Queue the finding's draft PR once the triage write is durable.
+
+    Skips (silently, by design) when the finding has no repository to open a PR
+    against — an image/cloud/service finding's artifact is its fix snippet or
+    guidance, and stamping "PR blocked" on a finding that never had a PR path is
+    the misleading noise the target distinction exists to remove. Also skips a
+    finding that already carries a draft PR, so a re-triage never opens a second.
+
+    Never raises: a dispatch failure must not roll back or fail the triage that
+    already succeeded — the fix is on the card either way, and the cadence /
+    on-demand triggers remain as the retry path.
+    """
+    from components.shared_kernel.domain.triage import TARGET_REPO, remediation_target
+
+    payload = (metadata or {}).get("payload") or {}
+    if remediation_target(source_type, payload) != TARGET_REPO:
+        return
+    if (payload.get("draft_pr") or {}).get("url"):
+        return
+    if not performed_by:
+        # The open step needs an acting identity for commit attribution + audit.
+        # Without one we would open a PR nobody can be held to — refuse loudly in
+        # the log rather than attribute it to no one.
+        logger.warning(
+            "auto draft-PR skipped (no acting user) workspace_id=%s task_id=%s agent=%s",
+            workspace_id,
+            task_id,
+            acting_agent,
+        )
+        return
+
+    def _enqueue():
+        from components.agents.infrastructure.tasks.agent_tasks import auto_draft_pr_for_finding
+
+        auto_draft_pr_for_finding.delay(
+            workspace_id=workspace_id, task_id=task_id, performed_by=performed_by, acting_agent=acting_agent
+        )
+        logger.info("auto draft-PR dispatched workspace_id=%s task_id=%s agent=%s", workspace_id, task_id, acting_agent)
+
+    transaction.on_commit(_enqueue)
 
 
 def _telemetry_entry_for(per_task_map, finding_id: str):
