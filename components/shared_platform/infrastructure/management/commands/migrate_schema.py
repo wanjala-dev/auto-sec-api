@@ -9,6 +9,6 @@ class Command(MigrationCommand):
         with connection.cursor() as cursor:
             schemas = get_tenants_map().values()
             for schema in schemas:
-                cursor.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
-                cursor.execute(f"SET search_path to {schema}")
+                cursor.execute("CREATE SCHEMA IF NOT EXISTS %s", [schema])
+                cursor.execute("SET search_path to %s", [schema])
                 super(Command, self).handle(*args, **options)
