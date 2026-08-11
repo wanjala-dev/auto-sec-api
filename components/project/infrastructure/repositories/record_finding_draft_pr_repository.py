@@ -23,6 +23,8 @@ from datetime import UTC, datetime
 from components.project.application.ports.record_finding_draft_pr_port import (
     AttachDraftPrPatchCommand,
     AttachDraftPrPatchResult,
+    MarkDraftPrRejectedCommand,
+    MarkDraftPrRejectedResult,
     RecordFindingDraftPrCommand,
     RecordFindingDraftPrPort,
     RecordFindingDraftPrResult,
@@ -108,6 +110,54 @@ class OrmRecordFindingDraftPrRepository(RecordFindingDraftPrPort):
             TaskComment.objects.create(task=task, author=author, comment=comment)
 
         return RecordFindingDraftPrResult(recorded=True)
+
+    def mark_draft_pr_rejected(self, *, command: MarkDraftPrRejectedCommand) -> MarkDraftPrRejectedResult:
+        """Stamp an existing ``draft_pr`` record as closed-without-merge.
+
+        Lifecycle only — the identity facts and the patch stay verbatim, so the
+        rejected attempt remains inspectable. The provenance event is what makes
+        the rejection visible on the board: "the operator closed this without
+        merging" is a real outcome of an AI action and belongs in the trail.
+        """
+        from infrastructure.persistence.project.models import Task
+
+        task = Task.objects.filter(id=command.task_id, workspace_id=command.workspace_id).first()
+        if task is None:
+            return MarkDraftPrRejectedResult(marked=False, reason="task_not_found")
+
+        meta = task.metadata or {}
+        record = get_draft_pr(meta)
+        if not record.get("url"):
+            return MarkDraftPrRejectedResult(marked=False, reason="no_draft_pr_record")
+        if record.get("merged"):
+            # A merged PR is never "rejected" — the reconciler owns that outcome.
+            return MarkDraftPrRejectedResult(marked=False, reason="already_merged")
+        if str(record.get("pr_state") or "").lower() == "closed":
+            return MarkDraftPrRejectedResult(marked=False, reason="already_rejected")
+
+        rejected_at = datetime.now(UTC).isoformat()
+        patched = dict(record)
+        patched["pr_state"] = command.pr_state or "closed"
+        patched["merged"] = False
+        patched["rejected_at"] = rejected_at
+        set_draft_pr(meta, patched)
+
+        provenance = meta.get("provenance") or {"events": []}
+        provenance.setdefault("events", [])
+        provenance["events"].append(
+            {
+                "actor": "system:autosec",
+                "action": (
+                    f"draft PR {record.get('url')} was closed without merging ({command.reason}) — "
+                    "the finding stays open and is eligible for a fresh fix attempt"
+                ),
+                "at": rejected_at,
+            }
+        )
+        meta["provenance"] = provenance
+        task.metadata = meta
+        task.save(update_fields=["metadata", "updated_at"])
+        return MarkDraftPrRejectedResult(marked=True, reason="rejected")
 
     def attach_draft_pr_patch(self, *, command: AttachDraftPrPatchCommand) -> AttachDraftPrPatchResult:
         """Fill the patch into an existing ``draft_pr`` record (legacy repair path).

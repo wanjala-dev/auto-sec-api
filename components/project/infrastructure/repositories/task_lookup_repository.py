@@ -64,6 +64,8 @@ class OrmTaskLookupRepository(TaskLookupPort):
                     branch=str(draft_pr.get("branch") or ""),
                     opened_by=draft_pr.get("opened_by"),
                     opened_at=draft_pr.get("opened_at"),
+                    pr_state=str(draft_pr.get("pr_state") or ""),
+                    merged=bool(draft_pr.get("merged")),
                 )
             )
         return findings

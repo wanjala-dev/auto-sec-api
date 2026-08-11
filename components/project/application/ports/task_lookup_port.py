@@ -48,6 +48,12 @@ class DraftPrFinding:
     branch: str
     opened_by: str | None
     opened_at: str | None
+    #: The PR's last-known lifecycle token (``""`` until a sweep reads it back,
+    #: then ``"open"`` / ``"closed"``) and whether it merged. Carried so the
+    #: rejected-PR sweep can skip records it has already settled instead of
+    #: re-asking the code host about every PR it has ever opened.
+    pr_state: str = ""
+    merged: bool = False
 
 
 class TaskLookupPort(ABC):
