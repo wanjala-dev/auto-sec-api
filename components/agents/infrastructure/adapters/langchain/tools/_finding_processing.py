@@ -22,6 +22,9 @@ import logging
 from django.db.models import Q
 from django.utils import timezone
 
+from components.shared_kernel.domain.patch_attestation import is_graded
+from components.shared_kernel.domain.triage import SOURCE_CODE_SECURITY
+
 logger = logging.getLogger(__name__)
 
 
@@ -115,20 +118,31 @@ def pending_findings_qs(workspace_id, source_type, limit=50):
     )
 
 
-def _handled_with_suggestion(metadata: dict) -> bool:
-    """True when this finding was already triaged AND a suggestion was recorded.
+def _handled_with_suggestion(metadata: dict, *, source_type: str = "") -> bool:
+    """True when this finding was already triaged AND carries what its source needs.
 
     The idempotency guard for ``process_pending_finding``. A triaged card whose
     outcome was NO FIX (``suggested`` falsy and nothing in ``payload.suggested_fix``)
     deliberately does NOT count as handled: the no-fix state is re-attemptable —
     the operator's retry re-runs the advisor with fresh context instead of
     bouncing off "already handled".
+
+    For SAST, "what its source needs" is a GRADED patch, not prose — the same
+    question ``draft_fix_for_finding``'s re-run gate asks, deliberately answered by
+    the same predicate (ADR 0025 P2c). Two definitions of "handled" is what broke:
+    the gate decided a card needed re-grading, dispatched a real deep run, and this
+    guard then returned "already handled" because month-old advice text was
+    present. The run burned tokens, changed nothing, and the engine fell through to
+    the ungraded advisor anyway — the gate was inert for exactly the cards it
+    existed for. Measured live on card 9975, which came back byte-identical.
     """
     meta = metadata or {}
     triage = meta.get("triage") or {}
     if triage.get("status") != "triaged":
         return False
     payload = meta.get("payload") or {}
+    if (source_type or "") == SOURCE_CODE_SECURITY:
+        return is_graded(payload)
     return bool(triage.get("suggested")) or bool(str(payload.get("suggested_fix") or "").strip())
 
 
@@ -214,7 +228,7 @@ def process_pending_finding(
     # triaged card that ended in NO FIX stays re-attemptable: the operator's
     # retry (the on-demand draft-fix action) must be able to re-run the advisor
     # rather than dead-ending on "already handled".
-    if _handled_with_suggestion(meta):
+    if _handled_with_suggestion(meta, source_type=source_type):
         return f"Finding {task_id} was already handled."
 
     payload = meta.get("payload") or {}
@@ -292,7 +306,7 @@ def process_pending_finding(
         if locked is None:
             return f"No {source_type} finding {task_id} on this workspace's board."
         lmeta = locked.metadata or {}
-        if _handled_with_suggestion(lmeta):
+        if _handled_with_suggestion(lmeta, source_type=source_type):
             return f"Finding {task_id} was already handled (concurrent run)."
 
         lpayload = lmeta.get("payload") or {}
