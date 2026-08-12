@@ -23,6 +23,11 @@ from unittest import mock
 
 import pytest
 
+from components.shared_kernel.domain.patch_attestation import (
+    PATCH_ATTESTATION_KEY,
+    RESULT_PASSED,
+    build_attestation,
+)
 from components.shared_kernel.domain.triage import SOURCE_CODE_SECURITY, SOURCE_LOG_WATCH
 from infrastructure.persistence.project.models import Column, Task
 
@@ -49,6 +54,24 @@ def _card(
             "payload": payload or {},
         },
     )
+
+
+def _attested_payload(**over):
+    """A card as the specialist leaves it post-grading: snippet + bound proof."""
+    payload = {
+        "suggested_fix": "Parameterise the table identifier.",
+        "fix_before": 'cursor.execute("DROP TABLE %s" % table)',
+        "fix_after": 'cursor.execute(sql.SQL("DROP TABLE {}").format(sql.Identifier(table)))',
+    }
+    payload.update(over)
+    payload[PATCH_ATTESTATION_KEY] = build_attestation(
+        verifier="code_security_agent",
+        fix_before=str(payload["fix_before"]),
+        fix_after=str(payload["fix_after"]),
+        result=RESULT_PASSED,
+        verified_at="2026-08-12T00:00:00+00:00",
+    )
+    return payload
 
 
 def _board(workspace_factory, team_factory):
@@ -96,25 +119,42 @@ class TestSastGateRequiresAGradedPatch:
 
         assert delegate.call_count == 1
 
-    def test_a_graded_snippet_is_accepted_without_re_running(self, workspace_factory, team_factory):
-        """The other half: a card that already carries the graded patch must NOT
-        pay for a second deep run. A gate that always re-runs is just as wrong."""
+    def test_an_attested_snippet_is_accepted_without_re_running(self, workspace_factory, team_factory):
+        """The other half: a card carrying a graded patch AND the proof of grading
+        must NOT pay for a second deep run. A gate that always re-runs is just as
+        wrong as one that never does."""
         workspace, owner, team, column = _board(workspace_factory, team_factory)
-        card = _card(
-            workspace,
-            owner,
-            team,
-            column,
-            payload={
-                "suggested_fix": "Parameterise the table identifier.",
-                "fix_before": 'cursor.execute("DROP TABLE %s" % table)',
-                "fix_after": 'cursor.execute(sql.SQL("DROP TABLE {}").format(sql.Identifier(table)))',
-            },
-        )
+        card = _card(workspace, owner, team, column, payload=_attested_payload())
 
         _result, delegate = _run(card)
 
         delegate.assert_not_called()
+
+    def test_a_snippet_without_proof_of_grading_re_runs(self, workspace_factory, team_factory):
+        """THE PHASE-2C REGRESSION. Same snippet as above, no attestation — the
+        shape of every card triaged before the grading existed. Presence of a
+        snippet was never evidence a grader saw it, and treating it as evidence
+        sent known-wrong patches to the PR engine labeled verified."""
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        payload = _attested_payload()
+        payload.pop(PATCH_ATTESTATION_KEY)
+        card = _card(workspace, owner, team, column, payload=payload)
+
+        _result, delegate = _run(card)
+
+        assert delegate.call_count == 1
+
+    def test_an_edited_snippet_re_runs(self, workspace_factory, team_factory):
+        """Findings are operator-editable in the HUD. An edit after grading must
+        cost the card its verdict, or the digest binding buys nothing."""
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        payload = _attested_payload()
+        payload["fix_after"] = 'cursor.execute("DROP TABLE %s" % table)  # reverted by hand'
+        card = _card(workspace, owner, team, column, payload=payload)
+
+        _result, delegate = _run(card)
+
+        assert delegate.call_count == 1
 
     def test_half_a_snippet_is_not_a_patch(self, workspace_factory, team_factory):
         """``fix_after`` with no ``fix_before`` names no location to replace, so the

@@ -26,6 +26,11 @@ from components.integrations.application.use_cases.open_draft_pr_use_case import
     DraftPrPreconditionError,
     OpenDraftPrUseCase,
 )
+from components.shared_kernel.domain.patch_attestation import (
+    PATCH_ATTESTATION_KEY,
+    RESULT_PASSED,
+    build_attestation,
+)
 from infrastructure.persistence.integrations.models import VcsConnection
 from infrastructure.persistence.project.models import Column, Task
 
@@ -104,6 +109,18 @@ def _sast_finding(workspace, owner, team, column, *, confidence="high", extra=No
         "fix_after": 'cursor.execute(sql.SQL("DROP TABLE {}").format(sql.Identifier(table)))',
     }
     payload.update(extra or {})
+    # Stamp the grading proof LAST, over whatever the override left behind, so the
+    # digest always binds to this card's actual snippet (ADR 0025 P2c). A card with
+    # no snippet (``_NO_GRADED_FIX``) gets no stamp and is therefore ungraded —
+    # which is exactly the state that must route to the fallback advisor.
+    if str(payload.get("fix_before") or "").strip() and str(payload.get("fix_after") or "").strip():
+        payload[PATCH_ATTESTATION_KEY] = build_attestation(
+            verifier="code_security_agent",
+            fix_before=str(payload["fix_before"]),
+            fix_after=str(payload["fix_after"]),
+            result=RESULT_PASSED,
+            verified_at="2026-08-12T00:00:00+00:00",
+        )
     if draft_pr is not None:
         payload["draft_pr"] = draft_pr
     return Task.objects.create(

@@ -18,6 +18,7 @@ from components.knowledge.application.providers.openai_breaker_provider import (
     record_openai_failure,
     record_openai_success,
 )
+from components.shared_kernel.domain.patch_attestation import is_graded
 from components.shared_kernel.domain.triage import SOURCE_CODE_SECURITY
 from infrastructure.persistence.ai.agents.models import AgentExecution
 from infrastructure.persistence.ai.models import AITeammateProfile
@@ -764,9 +765,12 @@ def draft_fix_for_finding(
         bool(triage_stamp.get("suggested")) or bool(str(payload_stamp.get("suggested_fix") or "").strip())
     )
     if has_suggestion and source_type == SOURCE_CODE_SECURITY:
-        has_suggestion = bool(str(payload_stamp.get("fix_before") or "").strip()) and bool(
-            str(payload_stamp.get("fix_after") or "").strip()
-        )
+        # Not "is there a snippet?" but "is there a snippet a grader actually
+        # passed?" (ADR 0025 P2c). Presence was the wrong test: every card triaged
+        # before the grading existed carries a snippet no oracle ever saw, and
+        # treating those as handled sent known-wrong patches to the PR engine
+        # wearing a verified label. Absence of proof is not proof — it re-runs.
+        has_suggestion = is_graded(payload_stamp)
     run_id = ""
     if not has_suggestion:
         # Full deep run so the operator gets the DeepRun record, the per-step
