@@ -24,6 +24,11 @@ from components.agents.infrastructure.adapters.langchain.tools import (
 )
 from components.agents.infrastructure.adapters.langchain.tools.finding_verifier import verify_suggestion
 from components.code_security.application.sast_fix_advisor_service import SastFixSuggestion
+from components.shared_kernel.domain.patch_attestation import (
+    PATCH_ATTESTATION_KEY,
+    RESULT_PASSED,
+    build_attestation,
+)
 from infrastructure.persistence.project.models import Column, Task, TaskComment
 
 _SOURCE = "ai.code_security"
@@ -199,11 +204,24 @@ class TestCodeSecurityTriagePipeline:
         # no longer clobbered to "low"; the verification label carries the doubt.
         assert meta["payload"]["suggested_fix"] == _GENERIC.suggested_fix
 
-    def test_already_triaged_with_a_suggestion_is_a_noop(self, workspace_factory, team_factory):
+    def test_already_triaged_with_an_ATTESTED_patch_is_a_noop(self, workspace_factory, team_factory):
+        """Idempotency still holds — but for SAST it now turns on the GRADED patch,
+        not on the presence of advice text (ADR 0025 P2c)."""
         workspace, owner, team, intake = _board(workspace_factory, team_factory)
         task = _sast_task(workspace, owner, team, intake)
         meta = task.metadata
         meta["triage"] = {"status": "triaged", "agent": "code_security_agent", "suggested": True}
+        payload = meta.get("payload") or {}
+        payload["fix_before"] = "jwt.decode(tok, verify=False)"
+        payload["fix_after"] = 'jwt.decode(tok, key, algorithms=["RS256"])'
+        payload[PATCH_ATTESTATION_KEY] = build_attestation(
+            verifier="code_security_agent",
+            fix_before=payload["fix_before"],
+            fix_after=payload["fix_after"],
+            result=RESULT_PASSED,
+            verified_at="2026-08-12T00:00:00+00:00",
+        )
+        meta["payload"] = payload
         task.metadata = meta
         task.save(update_fields=["metadata"])
         agent = _agent(workspace, owner)
@@ -213,6 +231,36 @@ class TestCodeSecurityTriagePipeline:
 
         assert "already handled" in result
         suggest.assert_not_called()
+
+    def test_a_triaged_card_with_UNATTESTED_advice_re_advises(self, workspace_factory, team_factory):
+        """THE REGRESSION this fix exists for, measured live on card 9975.
+
+        The card looks handled — triaged, suggested, advice text — but carries no
+        proof any grader saw its patch. ``draft_fix_for_finding``'s re-run gate
+        correctly dispatched a deep run for exactly this card; this guard then
+        answered "already handled" on month-old prose, so the run burned tokens,
+        changed nothing, and the draft-PR engine fell through to its ungraded
+        advisor. Two definitions of "handled" disagreeing made the gate inert for
+        the only cards it existed to serve.
+        """
+        workspace, owner, team, intake = _board(workspace_factory, team_factory)
+        task = _sast_task(workspace, owner, team, intake)
+        meta = task.metadata
+        meta["triage"] = {"status": "triaged", "agent": "code_security_agent", "suggested": True}
+        payload = meta.get("payload") or {}
+        payload["suggested_fix"] = "Parameterise the identifier."
+        payload["fix_before"] = "jwt.decode(tok, verify=False)"
+        payload["fix_after"] = "jwt.decode(tok, verify=True)"  # ungraded, and wrong
+        meta["payload"] = payload
+        task.metadata = meta
+        task.save(update_fields=["metadata"])
+        agent = _agent(workspace, owner)
+
+        with mock.patch(_SUGGEST_PATH, return_value=_GROUNDED) as suggest:
+            result = code_security_tools.triage_code_finding(agent, str(task.id))
+
+        assert "already handled" not in result
+        assert suggest.call_count == 1
 
     def test_triaged_no_fix_outcome_is_reattemptable(self, workspace_factory, team_factory):
         """A NO FIX outcome is never a dead end: the operator's retry (the
