@@ -62,8 +62,24 @@ dist/
 # QA agent artifacts (screenshots, traces, videos) + state.json is a LIVE demo JWT — never commit
 .playwright-mcp/
 **/state.json
-# Playwright MCP screenshots belong in ~/Desktop/claude-smoke (the MCP's --output-dir), never the repo
+# Browser-automation artifacts belong in the MCP's --output-dir (~/Desktop/claude-smoke)
+# or a scratchpad — NEVER the repo root. See .claude/rules/repo-hygiene.md §4.
+#
+# This block used to be `/*.png` alone. Playwright MCP writes **.jpeg** by default and
+# dumps accessibility snapshots as .yml, so the guard silently missed both and 59 files
+# accumulated at the root over weeks. Match the artifact SHAPE, not one guessed extension.
 /*.png
+/*.jpeg
+/*.jpg
+/*.webp
+/*.gif
+/*.pdf
+# Playwright MCP accessibility snapshots (browser_snapshot) — `- generic [ref=...]` YAML
+/*-snap*.yml
+/*-snap*.yaml
+/hud-snap*.yml
+/*.har
+/trace.zip
 geoip/
 .claude/worktrees/
 # Playwright harness artifacts (tests/qa)
