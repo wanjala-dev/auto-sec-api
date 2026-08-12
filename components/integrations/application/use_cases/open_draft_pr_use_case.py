@@ -28,12 +28,22 @@ surface. The fail-closed gates that remain are the SAFETY ones:
 out-of-scope patch never reaches a commit), the throttle, the allowlist, and
 the capability switch.
 
-Patch strategy per source (ADR 0017 D4 — one advisor seam, two strategies):
-``ai.log_watch`` derives its file from traceback evidence and patches through
-``LogPatchAdvisor``; ``ai.code_security`` arrives with its authoritative
-location (the SAST pass-through resolver — the scanner IS the resolver) and
-patches through ``SastPatchAdvisor``. Both feed the SAME ``validate_patch``
-fail-closed gate, preview contract, and PR path.
+Where the patch comes from (ADR 0025 Phase 2 — reuse before you regenerate):
+the engine FIRST replays the fix the specialist's deep run already produced and
+the grading pass already validated (``payload.fix_before`` → ``fix_after``,
+applied mechanically by ``build_verified_proposal``). Only when no graded
+snippet applies — an honest empty fix, or a file that moved on since triage —
+does it fall back to GENERATING one. That order is the point: the code we commit
+is the code the rubric grader and the deterministic oracles passed, rather than
+a second, ungraded rewrite from a different prompt.
+
+Patch strategy per source for that fallback (ADR 0017 D4 — one advisor seam,
+two strategies): ``ai.log_watch`` derives its file from traceback evidence and
+patches through ``LogPatchAdvisor``; ``ai.code_security`` arrives with its
+authoritative location (the SAST pass-through resolver — the scanner IS the
+resolver) and patches through ``SastPatchAdvisor``. Every path — replayed or
+generated — feeds the SAME ``validate_patch`` fail-closed gate, preview
+contract, and PR path. Upstream grading authorises nothing.
 
 Idempotent: a finding that already carries ``payload.draft_pr`` returns the
 existing PR without touching the GitHub API. Failures raise
@@ -70,12 +80,23 @@ from components.integrations.application.ports.finding_pr_recorder_port import (
     FindingPrRecorderPort,
 )
 from components.integrations.application.ports.vcs_port import VcsApiError, VcsPort
+from components.integrations.application.verified_patch_service import build_verified_proposal
 from components.project.application.ports.record_finding_draft_pr_port import bound_diff
 
 logger = logging.getLogger(__name__)
 
 _LOG_WATCH_SOURCE = "ai.log_watch"
 _CODE_SECURITY_SOURCE = "ai.code_security"
+#: How the committed patch was authored, said plainly in the PR body. A reviewer
+#: should be able to tell — without reading our code — whether the diff in front
+#: of them is the fix the rubric grader and the oracles actually passed, or one
+#: written afterwards because no graded snippet applied (ADR 0025 Phase 2).
+_PATCH_ORIGIN_NOTE = {
+    "verified": "the patch below is the fix the code-security agent's run produced and the "
+    "grading pass validated, applied verbatim; ",
+    "generated": "no validated fix snippet applied cleanly to the current file, so this patch "
+    "was written from the finding's evidence; review it with extra care; ",
+}
 #: Fallback attribution for a card that names no specialist. The real actor is
 #: read off the card (``metadata.agent_type``) — see :func:`_acting_agent_for`.
 _ACTING_AGENT = "triage_agent"
@@ -143,6 +164,11 @@ class _PreparedPatch:
     repo_file: object  # has .content, .sha
     proposal: PatchProposal
     payload: dict
+    #: Which strategy authored the patch — ``"verified"`` when it is the
+    #: rubric-graded snippet from the deep run replayed onto the file,
+    #: ``"generated"`` when the fallback advisor wrote it. Provenance, not a
+    #: gate: both feed the same ``validate_patch`` chain (ADR 0025 Phase 2).
+    patch_origin: str = "generated"
 
 
 @dataclass(frozen=True)
@@ -357,6 +383,7 @@ class OpenDraftPrUseCase:
                 proposal,
                 verification=verification,
                 verification_gap=verification_gap,
+                patch_origin=prepared.patch_origin,
             ),
         )
 
@@ -541,15 +568,31 @@ class OpenDraftPrUseCase:
             explicit_prefix=(getattr(connection, "repo_root", "") or "").strip(),
         )
 
-        # ADR 0012 P4: ground the patch in the team's vetted prior fixes BEFORE the
-        # advisor proposes. Grounding never authorizes — validate_patch below still runs.
-        proposal = self._advisor_for(source_type).propose(
+        # ADR 0025 Phase 2: PREFER the patch the deep run already graded. The
+        # specialist's rubric-checked, oracle-validated fix_before → fix_after is
+        # stamped on the card; replaying it here mechanically means the code we
+        # commit IS the code the grader passed. Re-asking an advisor for a fresh
+        # full-file rewrite produced a different artifact from a different prompt,
+        # which no rubric verdict had ever seen.
+        proposal = build_verified_proposal(
             payload=payload,
             path=resolved_path,
             current_content=repo_file.content,
-            workspace_id=str(workspace_id),
-            source_type=source_type,
         )
+        patch_origin = "verified" if proposal is not None else "generated"
+        if proposal is None:
+            # No usable graded snippet (an honest empty fix, or the file moved on
+            # since triage). Fall back to generating one — a finding in a connected
+            # repo always carries its artifact. ADR 0012 P4: ground the patch in the
+            # team's vetted prior fixes BEFORE the advisor proposes. Grounding never
+            # authorizes — validate_patch below still runs.
+            proposal = self._advisor_for(source_type).propose(
+                payload=payload,
+                path=resolved_path,
+                current_content=repo_file.content,
+                workspace_id=str(workspace_id),
+                source_type=source_type,
+            )
         if proposal is None:
             raise DraftPrPreconditionError(
                 "no_grounded_patch",
@@ -593,6 +636,7 @@ class OpenDraftPrUseCase:
             repo_file=repo_file,
             proposal=proposal,
             payload=payload,
+            patch_origin=patch_origin,
         )
 
     @staticmethod
@@ -968,7 +1012,15 @@ class OpenDraftPrUseCase:
     # ── Output ────────────────────────────────────────────────────────
 
     @staticmethod
-    def _build_pr_body(task, payload: dict, proposal, *, verification: str = "", verification_gap: str = "") -> str:
+    def _build_pr_body(
+        task,
+        payload: dict,
+        proposal,
+        *,
+        verification: str = "",
+        verification_gap: str = "",
+        patch_origin: str = "generated",
+    ) -> str:
         warning = ""
         if verification == "unverified":
             warning = (
@@ -994,7 +1046,8 @@ class OpenDraftPrUseCase:
                 f"## Why it matters\n{payload.get('probable_cause') or '(not determined)'}\n\n"
                 f"## Suggested fix\n{payload.get('suggested_fix') or '(see change)'}\n\n"
                 f"## Change\n{proposal.change_summary or 'Minimal fix for the finding above.'}\n\n"
-                f"---\nProvenance: Auto-Sec finding `{task.id}` — patch approved by a workspace operator. "
+                f"---\nProvenance: Auto-Sec finding `{task.id}` — {_PATCH_ORIGIN_NOTE.get(patch_origin, '')}"
+                f"patch approved by a workspace operator. "
                 f"This is a DRAFT; review and merge remain human decisions.\n"
             )
         evidence_lines = []
