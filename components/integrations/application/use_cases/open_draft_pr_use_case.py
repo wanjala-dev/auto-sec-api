@@ -82,11 +82,11 @@ from components.integrations.application.ports.finding_pr_recorder_port import (
 from components.integrations.application.ports.vcs_port import VcsApiError, VcsPort
 from components.integrations.application.verified_patch_service import build_verified_proposal
 from components.project.application.ports.record_finding_draft_pr_port import bound_diff
+from components.shared_kernel.domain.triage import SOURCE_CODE_SECURITY as _CODE_SECURITY_SOURCE
+from components.shared_kernel.domain.triage import SOURCE_LOG_WATCH as _LOG_WATCH_SOURCE
 
 logger = logging.getLogger(__name__)
 
-_LOG_WATCH_SOURCE = "ai.log_watch"
-_CODE_SECURITY_SOURCE = "ai.code_security"
 #: How the committed patch was authored, said plainly in the PR body. A reviewer
 #: should be able to tell — without reading our code — whether the diff in front
 #: of them is the fix the rubric grader and the oracles actually passed, or one
@@ -353,6 +353,11 @@ class OpenDraftPrUseCase:
         default_branch = prepared.default_branch
         repo_file = prepared.repo_file
         proposal = prepared.proposal
+        # The label describes the COMMITTED PATCH, so it is settled only once we know
+        # which strategy authored it (ADR 0025 Phase 2).
+        verification, verification_gap = self._downgrade_if_ungraded(
+            verification, verification_gap, prepared.patch_origin
+        )
 
         branch = f"autosec/finding-{task_id}"
         # The confidence label lives ON the artifact: an unverified fix is
@@ -481,6 +486,11 @@ class OpenDraftPrUseCase:
             connection=connection, target_repo=target_repo, task=task, task_id=task_id, workspace_id=workspace_id
         )
         proposal = prepared.proposal
+        # Same downgrade as ``execute`` — the operator reviewing a preview must see the
+        # label the PR would carry, not a rosier one (D2: preview and open agree).
+        verification, verification_gap = self._downgrade_if_ungraded(
+            verification, verification_gap, prepared.patch_origin
+        )
         diff = self._unified_diff(prepared.repo_file.content, proposal.updated_content, proposal.path)
         grounding = self._preview_grounding_sources(
             workspace_id, prepared.payload, source_type=getattr(task, "source_type", "") or _LOG_WATCH_SOURCE
@@ -947,6 +957,25 @@ class OpenDraftPrUseCase:
         if str(payload.get("confidence") or "").strip().lower() == "low":
             return "unverified", gap or "The advisor's own confidence in this fix is low."
         return "verified", ""
+
+    @staticmethod
+    def _downgrade_if_ungraded(verification: str, gap: str, patch_origin: str) -> tuple[str, str]:
+        """A patch nothing graded is UNVERIFIED, whatever the finding's label said.
+
+        ADR 0025 Phase 2: the label describes the CODE WE COMMIT, not the finding
+        that prompted it. When no rubric-graded snippet applied and the fallback
+        advisor authored the diff, the artifact never faced the grader or the
+        deterministic oracles — calling that "verified" because the finding's own
+        triage was well-grounded would be the label describing the wrong object.
+        Only downgrades; a finding already flagged unverified keeps its own, more
+        specific gap.
+        """
+        if patch_origin == "verified" or verification == "unverified":
+            return verification, gap
+        return "unverified", (
+            "No rubric-graded fix applied to the current file, so this patch was generated "
+            "separately and has not been through the grading pass or the fix oracles."
+        )
 
     def _advisor_for(self, source_type: str):
         """The patch STRATEGY for this finding source (ADR 0017 D4) — one engine,

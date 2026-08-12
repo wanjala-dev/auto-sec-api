@@ -281,6 +281,49 @@ class TestSastGates:
         assert fake.pr_bodies[0]["title"].startswith("[Auto-Sec][UNVERIFIED]")
         assert "Review carefully — UNVERIFIED" in fake.pr_bodies[0]["body"]
 
+    def test_an_ungraded_generated_patch_is_labeled_unverified(self, workspace_factory, team_factory):
+        """ADR 0025 Phase 2 — the label describes the CODE WE COMMIT.
+
+        This card's own triage is clean: high confidence, grounded, nothing that
+        would trip the finding-level checks. But no graded snippet applied, so the
+        fallback advisor authored the diff — code that never faced the rubric grader
+        or the fix oracles. Calling that "verified" because the FINDING was
+        well-grounded would be the label describing the wrong object entirely.
+        """
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _sast_finding(workspace, owner, team, column, extra=_NO_GRADED_FIX)
+        _connection(workspace, owner)
+        _capability(workspace, owner)
+        fake = _PrCapture()
+
+        with mock.patch(_REQUESTS_PATH, new=fake), mock.patch(_SAST_PROPOSE, return_value=_PATCH):
+            result = _use_case().execute(
+                workspace_id=str(workspace.id), task_id=str(task.id), performed_by=str(owner.id)
+            )
+
+        assert result.created is True
+        assert result.verification == "unverified"
+        assert "grading pass" in result.verification_gap
+        assert fake.pr_bodies[0]["title"].startswith("[Auto-Sec][UNVERIFIED]")
+
+    def test_a_replayed_graded_patch_keeps_its_verified_label(self, workspace_factory, team_factory):
+        """The mirror of the above: the replay path ships the graded artifact, so a
+        clean finding keeps a clean label. Without this, the downgrade could quietly
+        mark everything unverified and the label would stop meaning anything."""
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _sast_finding(workspace, owner, team, column)
+        _connection(workspace, owner)
+        _capability(workspace, owner)
+        fake = _PrCapture()
+
+        with mock.patch(_REQUESTS_PATH, new=fake), mock.patch(_SAST_PROPOSE, return_value=_PATCH):
+            result = _use_case().execute(
+                workspace_id=str(workspace.id), task_id=str(task.id), performed_by=str(owner.id)
+            )
+
+        assert result.verification == "verified"
+        assert fake.pr_bodies[0]["title"].startswith("[Auto-Sec] ")
+
     def test_866_plausible_but_unverifiable_fix_opens_an_unverified_pr(self, workspace_factory, team_factory):
         """Named regression — dogfood finding #866: a plausible but semantically
         wrong parameterization fix for raw-SQL %-formatting. The grounded

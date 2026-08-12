@@ -18,6 +18,7 @@ from components.knowledge.application.providers.openai_breaker_provider import (
     record_openai_failure,
     record_openai_success,
 )
+from components.shared_kernel.domain.triage import SOURCE_CODE_SECURITY
 from infrastructure.persistence.ai.agents.models import AgentExecution
 from infrastructure.persistence.ai.models import AITeammateProfile
 
@@ -745,14 +746,27 @@ def draft_fix_for_finding(
     # that started it, so the card records WHO requested the fix and when.
     _append_finding_provenance(task_id, actor=f"user:{performed_by}", action=f"requested a fix draft from {specialist}")
 
-    # Re-run the specialist unless a suggestion already exists: a triaged card
-    # whose outcome was NO FIX stays re-attemptable (the operator's retry runs a
-    # fresh pass with fresh context instead of bouncing off "already handled").
+    # Re-run the specialist unless the card already carries what the PR step needs:
+    # a triaged card whose outcome was NO FIX stays re-attemptable (the operator's
+    # retry runs a fresh pass with fresh context instead of bouncing off "already
+    # handled").
+    #
+    # For SAST, "what the PR step needs" is the graded PATCH, not prose (ADR 0025
+    # Phase 2). The engine ships ``fix_before`` -> ``fix_after`` — the snippet this
+    # run's rubric pass and the deterministic oracles actually validated. A card
+    # carrying advice but no snippet used to satisfy this gate, skip the re-run, and
+    # land in the PR engine's ungraded fallback advisor: the one remaining path where
+    # code reaches a customer's repository without ever facing the grader. Another
+    # graded pass costs a deep run; NOT asking for one costs the guarantee.
     triage_stamp = meta.get("triage") or {}
     payload_stamp = meta.get("payload") or {}
     has_suggestion = triage_stamp.get("status") == "triaged" and (
         bool(triage_stamp.get("suggested")) or bool(str(payload_stamp.get("suggested_fix") or "").strip())
     )
+    if has_suggestion and source_type == SOURCE_CODE_SECURITY:
+        has_suggestion = bool(str(payload_stamp.get("fix_before") or "").strip()) and bool(
+            str(payload_stamp.get("fix_after") or "").strip()
+        )
     run_id = ""
     if not has_suggestion:
         # Full deep run so the operator gets the DeepRun record, the per-step

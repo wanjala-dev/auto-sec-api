@@ -52,6 +52,15 @@ class TriageState(str, Enum):
     NOT_ROUTED = "not_routed"
 
 
+#: The two finding sources named often enough elsewhere to be worth naming ONCE.
+#: Four modules across three contexts had grown their own private
+#: ``_CODE_SECURITY_SOURCE = "ai.code_security"`` — the shape where one copy
+#: eventually gets a value the others don't, and the mismatch is a silent no-op
+#: rather than an error. This module already owns the source-type vocabulary
+#: below, so it owns the literals too.
+SOURCE_LOG_WATCH = "ai.log_watch"
+SOURCE_CODE_SECURITY = "ai.code_security"
+
 # Finding ``source_type``s whose cards are routed to a specialist. Growing this is
 # the ENTIRE routing change needed for a new finding kind (plus the specialist's
 # triage tool — "routable without a tool is a silent no-op").
@@ -79,7 +88,7 @@ ROUTABLE_SOURCE_TYPES: tuple[str, ...] = (
 #: offer the PR affordance both derive from this, so they can never disagree
 #: (the pre-fix bug: the triage state offered ``can_draft_fix`` for container
 #: findings the engine then refused as ``finding_not_found``).
-PR_REMEDIABLE_SOURCE_TYPES: tuple[str, ...] = ("ai.log_watch", "ai.code_security")
+PR_REMEDIABLE_SOURCE_TYPES: tuple[str, ...] = (SOURCE_LOG_WATCH, SOURCE_CODE_SECURITY)
 
 #: Remediation-target values.
 TARGET_REPO = "repo"  # connected+allowlisted repository → draft-PR path

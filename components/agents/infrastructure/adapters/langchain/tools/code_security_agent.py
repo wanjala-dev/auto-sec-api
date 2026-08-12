@@ -20,10 +20,10 @@ import json
 import logging
 
 from components.agents.infrastructure.adapters.langchain.tools import _finding_processing as fp
+from components.shared_kernel.domain.triage import SOURCE_CODE_SECURITY as _CODE_SECURITY_SOURCE
 
 logger = logging.getLogger(__name__)
 
-_CODE_SECURITY_SOURCE = "ai.code_security"
 _SSOT_SOURCE = "code_security.opengrep"
 TRIAGE_COLUMN_TITLE = "Triage"
 
