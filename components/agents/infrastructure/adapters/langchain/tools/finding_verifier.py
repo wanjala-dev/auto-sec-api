@@ -33,13 +33,12 @@ from components.code_security.domain.remediation_guidance import (
     patch_is_attempted,
     patch_parses,
 )
+from components.shared_kernel.domain.triage import SOURCE_CODE_SECURITY as _CODE_SECURITY_SOURCE
 from components.shared_kernel.utils.salient_tokens import salient_tokens
 
-_LOG_WATCH_SOURCE = "ai.log_watch"
 _LOG_OPTIMIZATION_SOURCE = "ai.log_optimization"
 _CLOUD_EXPOSURE_SOURCE = "ai.cloud_exposure"
 _CONTAINER_SECURITY_SOURCE = "ai.container_security"
-_CODE_SECURITY_SOURCE = "ai.code_security"
 
 # Language keywords carry no finding-specific signal — a fix saying "return" or
 # "table" proves nothing about THIS finding.
