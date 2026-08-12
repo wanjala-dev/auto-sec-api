@@ -41,6 +41,11 @@ _PATCH = PatchProposal(
     ),
     change_summary="Parameterize the table identifier instead of %-formatting.",
 )
+#: Blanks the graded ``fix_before``/``fix_after`` the specialist normally stamps on a
+#: card, so the engine falls through to GENERATING a patch (ADR 0025 Phase 2). Tests
+#: that are about the advisor — not about replay — opt in explicitly, because the
+#: default card now carries a validated snippet and never reaches the advisor.
+_NO_GRADED_FIX = {"fix_before": "", "fix_after": ""}
 
 
 class _FakeGitHub:
@@ -152,9 +157,49 @@ _LOG_PROPOSE = "components.integrations.application.log_patch_advisor_service.Lo
 
 @pytest.mark.django_db
 class TestSastDraftPrHappyPath:
-    def test_opens_pr_using_the_sast_strategy_and_location_passthrough(self, workspace_factory, team_factory):
+    def test_ships_the_graded_fix_without_re_asking_an_advisor(self, workspace_factory, team_factory):
+        """ADR 0025 Phase 2 — the committed patch IS the one the run already graded.
+
+        The card carries a ``fix_before``/``fix_after`` that the specialist's deep
+        run produced and the grading pass validated. The engine must replay it, not
+        commission a second, ungraded rewrite: if the advisor is called here, the
+        rubric verdict is once again deciding nothing about the shipped code.
+        """
         workspace, owner, team, column = _board(workspace_factory, team_factory)
         task = _sast_finding(workspace, owner, team, column)
+        _connection(workspace, owner)
+        _capability(workspace, owner)
+        committed = []
+
+        class _Capture(_FakeGitHub):
+            def __call__(self, method, url, headers=None, json=None, params=None, timeout=None):
+                if method == "PUT" and "/contents/" in url:
+                    committed.append(base64.b64decode(json["content"]).decode())
+                return super().__call__(method, url, headers=headers, json=json, params=params, timeout=timeout)
+
+        fake = _Capture()
+        with (
+            mock.patch(_REQUESTS_PATH, new=fake),
+            mock.patch(_SAST_PROPOSE, return_value=_PATCH) as sast,
+            mock.patch(_LOG_PROPOSE) as log_advisor,
+        ):
+            result = _use_case().execute(
+                workspace_id=str(workspace.id), task_id=str(task.id), performed_by=str(owner.id)
+            )
+
+        assert result.created is True
+        assert result.url == f"https://github.com/{_REPO}/pull/11"
+        # Neither advisor authored anything — the graded snippet did.
+        sast.assert_not_called()
+        log_advisor.assert_not_called()
+        assert committed and "sql.Identifier(table)" in committed[0]
+        assert "%" not in committed[0]
+
+    def test_falls_back_to_the_advisor_when_no_graded_fix_applies(self, workspace_factory, team_factory):
+        """A card with no usable snippet still gets its artifact — the finding-carries-
+        a-draft-PR rule holds. The advisor is the fallback, not the default author."""
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _sast_finding(workspace, owner, team, column, extra=_NO_GRADED_FIX)
         _connection(workspace, owner)
         _capability(workspace, owner)
         fake = _FakeGitHub()
@@ -169,7 +214,6 @@ class TestSastDraftPrHappyPath:
             )
 
         assert result.created is True
-        assert result.url == f"https://github.com/{_REPO}/pull/11"
         # The SAST strategy ran; the log strategy never did (one engine, per-source strategy).
         assert sast.call_count == 1
         log_advisor.assert_not_called()
@@ -355,7 +399,7 @@ class TestSastGates:
         """The untrusted-repo-content guard: a patch reaching beyond the finding's
         window is refused mechanically, no matter how it was justified."""
         workspace, owner, team, column = _board(workspace_factory, team_factory)
-        task = _sast_finding(workspace, owner, team, column)
+        task = _sast_finding(workspace, owner, team, column, extra=_NO_GRADED_FIX)
         _connection(workspace, owner)
         _capability(workspace, owner)
         wide = PatchProposal(
@@ -374,6 +418,38 @@ class TestSastGates:
 
         assert exc.value.reason == "patch_out_of_scope"
         # It got as far as reading the file, but never created a branch or a PR.
+        assert not any(m in ("POST", "PUT") for m, _ in fake.calls)
+
+    def test_a_graded_fix_still_faces_the_safety_gates(self, workspace_factory, team_factory):
+        """Being rubric-graded upstream authorises NOTHING (ADR 0025 Phase 2).
+
+        The replay path is a shortcut around a second LLM call, not around the
+        fail-closed chain. A graded snippet that would gut the file it claims to
+        fix must die at ``validate_patch`` exactly like a generated one — otherwise
+        "the grader approved it" becomes a way to bypass the guardrails.
+        """
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _sast_finding(
+            workspace,
+            owner,
+            team,
+            column,
+            extra={"fix_before": _OLD_FILE.strip(), "fix_after": "pass"},
+        )
+        _connection(workspace, owner)
+        _capability(workspace, owner)
+        fake = _FakeGitHub()
+
+        with (
+            mock.patch(_REQUESTS_PATH, new=fake),
+            mock.patch(_SAST_PROPOSE) as sast,
+            pytest.raises(DraftPrPreconditionError) as exc,
+        ):
+            _use_case().execute(workspace_id=str(workspace.id), task_id=str(task.id), performed_by=str(owner.id))
+
+        assert exc.value.reason.startswith("patch_")
+        # The replay produced it — no advisor involved — and it was still refused.
+        sast.assert_not_called()
         assert not any(m in ("POST", "PUT") for m, _ in fake.calls)
 
     def test_traversal_path_on_the_finding_is_refused(self, workspace_factory, team_factory):
@@ -411,7 +487,7 @@ class TestSastPreview:
 
     def test_preview_applies_the_same_scope_guard_as_open(self, workspace_factory, team_factory):
         workspace, owner, team, column = _board(workspace_factory, team_factory)
-        task = _sast_finding(workspace, owner, team, column)
+        task = _sast_finding(workspace, owner, team, column, extra=_NO_GRADED_FIX)
         _connection(workspace, owner)
         _capability(workspace, owner)
         wide = PatchProposal(
@@ -514,7 +590,7 @@ class TestOpenedPrStoresThePatchInline:
         """The callout renders the code change INLINE for an already-opened PR —
         the patch must survive the open (it used to exist only in the preview)."""
         workspace, owner, team, column = _board(workspace_factory, team_factory)
-        task = _sast_finding(workspace, owner, team, column)
+        task = _sast_finding(workspace, owner, team, column, extra=_NO_GRADED_FIX)
         _connection(workspace, owner)
         _capability(workspace, owner)
         fake = _FakeGitHub()
