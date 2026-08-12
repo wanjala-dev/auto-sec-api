@@ -128,6 +128,49 @@ class CodeSecurityAgent(WorkspaceContextMixin, BaseAgent):
         return code_security_tools.list_pending_code_findings(self, input_str)
 
     @tool(
+        name="search_repo",
+        description=(
+            "Search the code of a connected repository. Use this to FIND where "
+            "this project does something before proposing a fix that depends on "
+            "it — where it loads a signing key, builds a query, reads config. "
+            'Input: JSON {"repo": "owner/name", "query": "<code or symbol>", '
+            '"limit"?: 20}. Returns JSON {hits: [{path, line_number, line}]}. '
+            "Zero hits is a real answer: this project has no such symbol, so do "
+            "not assume a helper exists. Read-only."
+        ),
+        risk=ToolRisk.READ,
+    )
+    def search_repo(self, input_str: str) -> str:
+        return code_security_tools.search_repo(self, input_str)
+
+    @tool(
+        name="read_repo_file",
+        description=(
+            "Read one file from a connected repository at a given ref. Use after "
+            "search_repo or list_repo_tree to see the real code you are fixing — "
+            "the imports, the surrounding function, how the value reaches the "
+            'sink. Input: JSON {"repo": "owner/name", "path": "path/to/file.py", '
+            '"ref"?: "<sha or branch>"}. Long files are truncated. Read-only.'
+        ),
+        risk=ToolRisk.READ,
+    )
+    def read_repo_file(self, input_str: str) -> str:
+        return code_security_tools.read_repo_file(self, input_str)
+
+    @tool(
+        name="list_repo_tree",
+        description=(
+            "List file paths in a connected repository, to learn the project's "
+            'layout. Input: JSON {"repo": "owner/name", "ref"?: "<sha>", '
+            '"prefix"?: "components/identity"}. Prefer search_repo when you know '
+            "what you are looking for; use this to orient. Read-only."
+        ),
+        risk=ToolRisk.READ,
+    )
+    def list_repo_tree(self, input_str: str) -> str:
+        return code_security_tools.list_repo_tree(self, input_str)
+
+    @tool(
         name="triage_code_finding",
         description=(
             "Triage one pending code-security finding: ground a minimal fix "

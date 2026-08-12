@@ -54,3 +54,22 @@ def read_repo_file(*, workspace_id, repo: str, path: str, ref: str = "") -> str 
     )
 
     return _read(workspace_id=workspace_id, repo=repo, path=path, ref=ref)
+
+
+def list_repo_tree(*, workspace_id, repo: str, ref: str = "", limit: int = 400) -> list[str]:
+    """Every file path in an allowlisted repo (fail closed), capped at ``limit``."""
+    from components.integrations.infrastructure.adapters.vcs_scan_access import (
+        list_repo_tree as _tree,
+    )
+
+    return _tree(workspace_id=workspace_id, repo=repo, ref=ref, limit=limit)
+
+
+def search_repo(*, workspace_id, repo: str, query: str, limit: int = 20) -> list[dict]:
+    """Search an allowlisted repo's code (fail closed) — how the specialist finds
+    the file a fix depends on instead of inventing one."""
+    from components.integrations.infrastructure.adapters.vcs_scan_access import (
+        search_repo as _search,
+    )
+
+    return _search(workspace_id=workspace_id, repo=repo, query=query, limit=limit)

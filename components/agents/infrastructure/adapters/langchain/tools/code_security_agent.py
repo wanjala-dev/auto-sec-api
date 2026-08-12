@@ -277,3 +277,75 @@ def triage_code_finding(agent, input_str: str) -> str:
         # remediation anti-patterns run against — ADR 0019 D5.
         patch_text=lambda suggestion: suggestion.fix_after,
     )
+
+
+# --- Repository reads (ADR 0025 Phase 2) -----------------------------------
+#
+# The specialist could triage a finding but not READ the project it was fixing.
+# Its seven tools ranked repos, listed findings and opened PRs; not one of them
+# could answer "where does this codebase get its signing key?". Asked to verify a
+# JWT signature it therefore invented `fetch_jwks_key` (PR #326) — a tool-inventory
+# failure that two rounds of prompt work could not fix, because no wording makes a
+# model know a file it cannot open.
+#
+# All three are READ-ONLY and pass through the same consent boundary as the scan:
+# a repo off the connection's `repo_allowlist` never reaches the VCS API, and every
+# failure degrades to an empty result rather than ending the run.
+
+
+def read_repo_file(agent, input_str: str) -> str:
+    """Read one file from an allowlisted repo. Input: {"repo","path","ref"?}."""
+    from components.integrations.application.providers.vcs_scan_access_provider import (
+        read_repo_file as _read,
+    )
+
+    data = _parse(input_str)
+    repo, path = (data.get("repo") or "").strip(), (data.get("path") or "").strip()
+    if not repo or not path:
+        return json.dumps({"ok": False, "error": "repo and path are required"})
+    content = _read(workspace_id=agent.workspace_id, repo=repo, path=path, ref=(data.get("ref") or "").strip())
+    if content is None:
+        return json.dumps({"ok": False, "error": f"could not read {path} (not allowlisted, missing, or unreadable)"})
+    # Cap the body: a large file would evict the finding's own evidence from the
+    # agent's context, which is the opposite of grounding it.
+    truncated = len(content) > 20000
+    return json.dumps(
+        {"ok": True, "repo": repo, "path": path, "truncated": truncated, "content": content[:20000]}
+    )
+
+
+def list_repo_tree(agent, input_str: str) -> str:
+    """List file paths in an allowlisted repo. Input: {"repo","ref"?,"prefix"?}."""
+    from components.integrations.application.providers.vcs_scan_access_provider import (
+        list_repo_tree as _tree,
+    )
+
+    data = _parse(input_str)
+    repo = (data.get("repo") or "").strip()
+    if not repo:
+        return json.dumps({"ok": False, "error": "repo is required"})
+    paths = _tree(workspace_id=agent.workspace_id, repo=repo, ref=(data.get("ref") or "").strip())
+    prefix = (data.get("prefix") or "").strip().lstrip("/")
+    if prefix:
+        paths = [p for p in paths if p.startswith(prefix)]
+    return json.dumps({"ok": True, "repo": repo, "count": len(paths), "paths": paths})
+
+
+def search_repo(agent, input_str: str) -> str:
+    """Search an allowlisted repo's code. Input: {"repo","query","limit"?}."""
+    from components.integrations.application.providers.vcs_scan_access_provider import (
+        search_repo as _search,
+    )
+
+    data = _parse(input_str)
+    repo, query = (data.get("repo") or "").strip(), (data.get("query") or "").strip()
+    if not repo or not query:
+        return json.dumps({"ok": False, "error": "repo and query are required"})
+    try:
+        limit = max(1, min(int(data.get("limit") or 20), 50))
+    except (TypeError, ValueError):
+        limit = 20
+    hits = _search(workspace_id=agent.workspace_id, repo=repo, query=query, limit=limit)
+    # An empty result is a real answer ("this project has no such symbol"), not an
+    # error — that distinction is what stops the model inventing one.
+    return json.dumps({"ok": True, "repo": repo, "query": query, "count": len(hits), "hits": hits})
