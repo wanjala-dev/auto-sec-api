@@ -12,6 +12,12 @@ and costs nothing; guessing costs trust.
 import pytest
 
 from components.integrations.application.verified_patch_service import build_verified_proposal
+from components.shared_kernel.domain.patch_attestation import (
+    PATCH_ATTESTATION_KEY,
+    RESULT_FAILED,
+    RESULT_PASSED,
+    build_attestation,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -26,6 +32,10 @@ def verify(token):
 
 
 def _payload(**over):
+    """A card as the specialist leaves it: snippet PLUS the attestation proving a
+    grader passed that exact snippet. Fixtures mint the stamp last, over whatever
+    overrides were applied, so the digest always binds to the snippet under test —
+    tests that want an UNBACKED snippet must strip it explicitly (below)."""
     base = {
         "fix_before": '    payload = jwt.decode(token, options={"verify_signature": False})',
         "fix_after": '    payload = jwt.decode(token, key, algorithms=["RS256"])',
@@ -33,6 +43,13 @@ def _payload(**over):
         "suggested_fix": "Verify the signature.",
     }
     base.update(over)
+    base[PATCH_ATTESTATION_KEY] = build_attestation(
+        verifier="code_security_agent",
+        fix_before=str(base.get("fix_before") or ""),
+        fix_after=str(base.get("fix_after") or ""),
+        result=RESULT_PASSED,
+        verified_at="2026-08-12T00:00:00+00:00",
+    )
     return base
 
 
@@ -151,3 +168,71 @@ class TestRefusesRatherThanGuesses:
         crlf = _FILE.replace("\n", "\r\n")
 
         assert build_verified_proposal(payload=_payload(), path="a.py", current_content=crlf) is not None
+
+
+class TestReplayRequiresProofThatAGraderPassedIt:
+    """The defect this class exists for, found by measuring against real cards.
+
+    Phase 2a treated "the card has a snippet" as "the snippet was graded". Every
+    card triaged before the grading existed carries a snippet no oracle ever saw —
+    including, live on our own board, the exact
+    ``cursor.execute("CREATE SCHEMA IF NOT EXISTS %s", (schema,))`` that ADR 0025
+    records as semantically wrong. Replaying one shipped known-wrong code to a
+    customer's repository under a PR body asserting it had been validated.
+
+    Absence of proof must never resolve to "verified" (fail-closed; SLSA VSA binds
+    a verdict to a subject digest for exactly this reason).
+    """
+
+    def test_a_snippet_with_no_attestation_is_not_replayed(self):
+        payload = _payload()
+        payload.pop(PATCH_ATTESTATION_KEY)
+
+        assert build_verified_proposal(payload=payload, path="a.py", current_content=_FILE) is None
+
+    def test_the_real_stale_card_shape_is_refused(self):
+        """Modelled on live card 9976: a pre-grading snippet, high confidence, no
+        attestation. Before this fix it replayed and shipped as verified."""
+        stale = {
+            "fix_before": '    payload = jwt.decode(token, options={"verify_signature": False})',
+            "fix_after": '    payload = jwt.decode(token, key, algorithms=["RS256"])',
+            "start_line": 5,
+            "confidence": "high",
+        }
+
+        assert build_verified_proposal(payload=stale, path="a.py", current_content=_FILE) is None
+
+    def test_an_edited_snippet_loses_its_attestation(self):
+        """The digest binding, which is what makes this more than a staleness check.
+        Finding payloads are operator-editable in the HUD: without binding the
+        verdict to the bytes, someone could change ``fix_after`` after grading and
+        the engine would still commit it wearing the original's verdict."""
+        payload = _payload()
+        payload["fix_after"] = "    payload = jwt.decode(token, verify=False)  # tampered"
+
+        assert build_verified_proposal(payload=payload, path="a.py", current_content=_FILE) is None
+
+    def test_a_failed_verdict_is_not_a_licence_to_ship(self):
+        payload = _payload()
+        payload[PATCH_ATTESTATION_KEY] = build_attestation(
+            verifier="code_security_agent",
+            fix_before=str(payload["fix_before"]),
+            fix_after=str(payload["fix_after"]),
+            result=RESULT_FAILED,
+            verified_at="2026-08-12T00:00:00+00:00",
+        )
+
+        assert build_verified_proposal(payload=payload, path="a.py", current_content=_FILE) is None
+
+    def test_a_verdict_from_a_superseded_policy_is_not_a_verdict(self):
+        payload = _payload()
+        payload[PATCH_ATTESTATION_KEY] = {**payload[PATCH_ATTESTATION_KEY], "policy_version": "2020-01-01.ancient"}
+
+        assert build_verified_proposal(payload=payload, path="a.py", current_content=_FILE) is None
+
+    def test_a_malformed_attestation_is_no_attestation(self):
+        for junk in ("passed", {"result": "passed"}, {}, None, 42):
+            payload = _payload()
+            payload[PATCH_ATTESTATION_KEY] = junk
+
+            assert build_verified_proposal(payload=payload, path="a.py", current_content=_FILE) is None, junk

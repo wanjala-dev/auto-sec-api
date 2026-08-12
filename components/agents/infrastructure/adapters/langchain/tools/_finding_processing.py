@@ -25,6 +25,34 @@ from django.utils import timezone
 logger = logging.getLogger(__name__)
 
 
+def _stamp_patch_attestation(payload: dict, *, acting_agent: str, graded: bool) -> None:
+    """Record — or explicitly clear — the proof that this patch was graded.
+
+    Clearing matters as much as stamping. A card re-triaged to a NEW snippet must
+    not keep the previous snippet's attestation: the digest binding would catch
+    the mismatch, but leaving a stale stamp behind invites reasoning about a claim
+    that no longer applies. One pass, one verdict, or none.
+    """
+    from components.shared_kernel.domain.patch_attestation import (
+        PATCH_ATTESTATION_KEY,
+        RESULT_PASSED,
+        build_attestation,
+    )
+
+    before = str(payload.get("fix_before") or "")
+    after = str(payload.get("fix_after") or "")
+    if not graded or not before.strip() or not after.strip():
+        payload.pop(PATCH_ATTESTATION_KEY, None)
+        return
+    payload[PATCH_ATTESTATION_KEY] = build_attestation(
+        verifier=acting_agent,
+        fix_before=before,
+        fix_after=after,
+        result=RESULT_PASSED,
+        verified_at=timezone.now().isoformat(),
+    )
+
+
 def not_triaged_filter() -> Q:
     """A NULL-safe "finding not yet handled" filter.
 
@@ -282,6 +310,19 @@ def process_pending_finding(
         final_verification = str(lpayload.get("verification") or verification)
         final_gap = str(lpayload.get("verification_gap") or verify_reason)
         unverified = final_verification == "unverified"
+        # Attest to the patch we just graded, bound to its content (ADR 0025 P2c).
+        # This is the ONLY place a passing attestation is minted, and it is minted
+        # here because this is where the oracles actually ran. Downstream, the
+        # draft-PR engine replays a snippet only against a matching attestation —
+        # so a snippet that never faced the grader (every card triaged before it
+        # existed) can no longer inherit a "verified" label from the mere fact
+        # that a snippet is present.
+        if patch_text is not None:
+            _stamp_patch_attestation(
+                lpayload,
+                acting_agent=acting_agent,
+                graded=bool(verification) and not unverified,
+            )
         if unverified:
             # Kept for the posture/run-quality consumers that count the
             # "needs a careful human" backlog — same fact, richer label above.

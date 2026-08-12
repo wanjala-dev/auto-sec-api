@@ -33,6 +33,7 @@ from __future__ import annotations
 import logging
 
 from components.integrations.application.log_patch_advisor_service import PatchProposal
+from components.shared_kernel.domain.patch_attestation import is_graded
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +104,15 @@ def build_verified_proposal(*, payload: dict, path: str, current_content: str) -
     Returns ``None`` — never raises — when the card carries no usable snippet or
     the file has drifted, so the caller falls through to the generating advisor.
     """
+    if not is_graded(payload):
+        # No attestation, a failed one, one minted under a superseded policy, or
+        # one describing different bytes than the card now holds. Any of those and
+        # this snippet is not "the patch the grader passed" — which is the ONLY
+        # thing this path is entitled to replay. Fall through to generation, which
+        # is labeled honestly, rather than committing an unbacked claim.
+        logger.info("verified_patch_miss path=%s reason=not_attested", path)
+        return None
+
     before = _norm_newlines(str(payload.get("fix_before") or "")).strip("\n")
     after = _norm_newlines(str(payload.get("fix_after") or "")).strip("\n")
     if not before.strip() or not after.strip():
