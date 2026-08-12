@@ -185,24 +185,55 @@ these inline in a request. "The optimization IS the architecture; retrofitting a
 
 ---
 
-## 7. Known architecture debt — the existing issues, the fix, the phase
+## 7. The migration this skill was written to drive — DONE (verified 2026-08-12)
 
-These are real and must not be extended. Each maps to a fix and an ADR-0004 migration phase. **Do not add a
-new pillar until Phases 1–4 land.**
+This section used to list six live architecture debts and tell you not to add a pillar until they landed.
+**All six are resolved, and the enforcement gap that hid one of them is closed.** Verified against the code,
+not against the plan:
 
-| # | Issue (file) | Rule broken | Fix | Phase |
-|---|---|---|---|---|
-| 1 | **Finding fragmentation** — 5 reps converge only at `project.Task` | C6 | One `findings` SSOT + `NormalizedFinding` | 1–3 |
-| 2 | **No canonical asset** — `provenance.ProvenanceResource` not linked to `CloudPostureFinding.resource_uid` | C4 | `Asset` node keyed by `AssetUrn`; findings carry the URN | 2 |
-| 3 | **Cross-context infra import** — `agents/.../detectors/cloud_posture.py:60` imports `infrastructure.persistence.cloud_posture.models`; `.../detectors/provenance.py:145-151` import `components.provenance.infrastructure.services.*` | Rule 3 / C3 | Detectors consume `FindingRaised` or a read-port; never import another context's infra | 3 |
-| 4 | **`Task` is the finding** (fact + work-item fused) | C7 | `Task` = local copy referencing a Finding, synced via events | 3 |
-| 5 | **No `ScannerPort`** — Prowler pipeline bespoke | C5 | Extract `ScannerPort` + shared scan use case; Prowler = first adapter | 4 |
-| 6 | **No finding events** — scanners→detectors coupled by ORM polling | C1/C2 | `FindingObserved`/`FindingRaised` in shared kernel | 1 |
+| # | The old debt | Where it lives now |
+|---|---|---|
+| 1 | Finding fragmentation — 5 reps converging only at `project.Task` | **`components/findings` is the SSOT** (`infrastructure/persistence/findings/models.py`), the sole writer |
+| 2 | No canonical asset | `AssetUrn` in `shared_kernel/domain/security.py`; findings correlate by URN, not FK (C4) |
+| 3 | Cross-context infra imports in `agents/.../detectors/` | Gone — grep is clean |
+| 4 | `Task` is the finding | `handle_finding_raised_board` builds the card **from `FindingRaised`**; `Task` is a local copy (C7) |
+| 5 | No `ScannerPort` | `shared_kernel/application/ports/scanner_port.py` |
+| 6 | No finding events | `FindingObserved` / `FindingRaised` / `FindingResolved` in `shared_kernel/domain/events.py` |
 
-Enforcement gap that let #3 through: `tests/architecture/test_cross_context_infrastructure_boundary.py`
-**only checks the `application/` layer** ("infra-to-infra … tracked but not blocked"). The detector breaks
-live in `agents/infrastructure/…`, so they're invisible to the current fitness function. Close this gap in
-Phase 3 (see §9), do not silently allow-list the real violations.
+**The enforcement gap is closed too.** `test_cross_context_infrastructure_boundary.py` no longer checks only
+the application layer: `test_non_application_layers_...` covers **every other layer** — infrastructure
+included — with **zero allowlist**. That is the fitness function §9 asked for, and it is why debt #3 cannot
+silently return.
+
+### What the live pipeline actually does now
+
+```
+Scanner (driven adapter, ephemeral k8s Job)
+  → FindingObserved                       (shared kernel)
+  → components/findings                   ← SSOT: dedup on fingerprint, lifecycle, risk
+  → FindingRaised
+      ├─→ agents/finding_raised_board_handler   → board Task (local copy)
+      ├─→ findings/finding_risk_recompute       → contextual-risk rescoring
+      └─→ notifications/finding_raised_alert    → Slack / alerts
+```
+
+All deterministic. **No LLM anywhere in ingest** — the deep agent and `RubricMiddleware` enter only at
+TRIAGE, once a finding exists, and only for the agents in `CRITIC_ENABLED_AGENTS`. Grading ingest would be
+meaningless: it is schema mapping, not judgment. Do not "improve" this by routing ingest through an agent.
+
+`_SOURCE_BOARD` in the board handler maps each scanner source onto its card builder. All four mapped sources
+(`cloud_posture.prowler`, `cloud_graph.attack_path`, `container_security.trivy`, `code_security.opengrep`)
+carry `flag: None` — **graduated**, no dual-write, no cutover flag left to flip. A source absent from that
+map is simply not board-surfaced via the SSOT path; check before assuming it is.
+
+### What this means for you
+
+The old instruction — *"do not add a pillar until Phases 1–4 land"* — **no longer applies**. The spine
+exists. Adding a pillar is now the thing it was built for: a `ScannerPort` driven adapter that normalizes to
+`NormalizedFinding` and emits `FindingObserved`. §2, §3 and §4 are the live contract; §7 is now history.
+
+**If you find a NEW violation, add it here with a date and a file reference** — do not let this section drift
+back into describing solved problems, which is exactly what it had done by 2026-08-12.
 
 ---
 
@@ -247,19 +278,23 @@ Keep the suite green: fix the fixture or the code, never weaken a real assertion
 
 ---
 
-## 10. Migration roadmap (strangler — do before pillar #2)
+## 10. Migration roadmap — COMPLETE (verified 2026-08-12)
 
-Per `docs/adr/0004`, each step ships on its own:
+The ADR-0004 strangler is done. Kept as a record of what shipped, because the shape it produced is the
+contract every new pillar plugs into:
 
-1. shared_kernel value objects + finding events (additive, non-breaking).
-2. `Asset` node (promote `ProvenanceResource`) keyed by `AssetUrn`; backfill.
-3. `findings` context (SSOT + dedup + lifecycle); `Task` → local copy; migrate the CloudPosture detector off
-   the ORM import (closes debt #3, #4).
-4. Extract `ScannerPort` + shared scan use case; Prowler = first adapter.
-5. Add Trivy as the second adapter — proves the seam.
-6. Attack-path + contextual-risk background job → materialized table → HUD.
+1. ✅ shared_kernel value objects + finding events (`FindingObserved` / `FindingRaised` / `FindingResolved`).
+2. ✅ `Asset` keyed by `AssetUrn`; findings correlate by URN, never by cross-context FK.
+3. ✅ `findings` context (SSOT + dedup + lifecycle); `Task` demoted to a local copy built from `FindingRaised`;
+   detectors off the ORM import.
+4. ✅ `ScannerPort` + shared scan use case; Prowler the first adapter.
+5. ✅ Trivy as the second adapter — the seam is proven, not theoretical.
+6. ✅ Attack-path + contextual-risk background job → materialized table → HUD (ADR 0013).
 
-Steps 1–4 are "unify before you multiply." Adding a pillar first is the mistake this skill exists to prevent.
+Four pillars now ride the spine: `cloud_posture.prowler`, `container_security.trivy`,
+`cloud_graph.attack_path`, `code_security.opengrep`. **"Unify before you multiply" is satisfied — multiply
+freely, along the seam.** A fifth pillar is a `ScannerPort` adapter plus one `_SOURCE_BOARD` entry, and it
+should require no change to the spine. If it does, that is the signal the spine is wrong, not the pillar.
 
 ---
 
