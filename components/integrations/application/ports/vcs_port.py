@@ -49,6 +49,20 @@ class RepoFile:
 
 
 @dataclass(frozen=True)
+class RepoCodeHit:
+    """One code-search match: where it is and the line that matched.
+
+    ``line_number`` is 0 when the provider reports a file-level match without a
+    position — the path is still useful, so a positionless hit is degraded, not
+    dropped.
+    """
+
+    path: str
+    line_number: int
+    line: str
+
+
+@dataclass(frozen=True)
 class CommittedFile:
     """The result of committing one file to a branch."""
 
@@ -141,6 +155,20 @@ class VcsPort(ABC):
         Used by monorepo path resolution to locate a runtime-relative source file
         that lives under a repo subdirectory. Directory/submodule entries are
         excluded — only ``type == 'blob'`` paths are returned."""
+
+    @abstractmethod
+    def search_code(self, repo: str, query: str, *, limit: int = 20) -> list[RepoCodeHit]:
+        """Search ``repo``'s code for ``query``; newest-relevance order, capped.
+
+        The capability the SAST specialist lacked: asked to verify a JWT
+        signature it could not go and find where THAT project keeps its issuer
+        key, so it invented a helper instead (PR #326). Reading a file requires
+        already knowing the path; this is how the path gets found.
+
+        Read-only and repo-scoped by construction — the adapter pins the search
+        to the one repo, so this cannot become a cross-repo or org-wide read.
+        Providers without a code-search API raise ``VcsApiError``; callers treat
+        that as "cannot search here", never as a hard failure."""
 
     @abstractmethod
     def create_branch(self, repo: str, branch: str, from_sha: str) -> None:

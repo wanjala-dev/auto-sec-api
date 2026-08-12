@@ -93,6 +93,77 @@ def read_repo_file(*, workspace_id, repo: str, path: str, ref: str = "") -> str 
         return None
 
 
+def _consented_adapter(workspace_id, repo: str):
+    """The (adapter, connection) pair for an allowlisted repo, or ``(None, None)``.
+
+    The shared front half of every read below: resolve the consent row, refuse a
+    repo that is not on the allowlist, decrypt the token. Extracted so a new read
+    capability cannot accidentally ship without the allowlist check — the check is
+    not something each function remembers to do, it is the only way to get an
+    adapter at all.
+    """
+    from components.integrations.application.providers.secret_envelope_provider import decrypt_secret
+    from components.integrations.application.providers.vcs_provider import get_vcs_adapter
+
+    connection = resolve_scan_connection(workspace_id, repo)
+    if connection is None:
+        logger.warning("vcs_read_denied workspace_id=%s repo=%s (not allowlisted)", workspace_id, repo)
+        return None, None
+    token = decrypt_secret(connection.token_ciphertext)
+    if not token:
+        return None, None
+    return get_vcs_adapter(connection.provider, token), connection
+
+
+def list_repo_tree(*, workspace_id, repo: str, ref: str = "", limit: int = 400) -> list[str]:
+    """Every file path in an allowlisted repo, or ``[]`` (fail closed).
+
+    Lets the specialist see the project's shape before guessing at paths. Capped
+    because the whole tree of a large repo would blow the agent's context window
+    for no benefit — a truncated listing is logged so a caller can tell "not
+    there" from "not shown".
+    """
+    from components.integrations.application.ports.vcs_port import VcsApiError
+
+    adapter, _ = _consented_adapter(workspace_id, repo)
+    if adapter is None:
+        return []
+    try:
+        resolved_ref = ref or adapter.get_default_branch(repo).name
+        paths = adapter.list_tree(repo, resolved_ref)
+    except VcsApiError:
+        logger.warning("vcs_tree_read_failed workspace_id=%s repo=%s", workspace_id, repo)
+        return []
+    if len(paths) > limit:
+        logger.info("vcs_tree_truncated workspace_id=%s repo=%s shown=%s of=%s", workspace_id, repo, limit, len(paths))
+    return paths[:limit]
+
+
+def search_repo(*, workspace_id, repo: str, query: str, limit: int = 20) -> list[dict]:
+    """Search an allowlisted repo's code, or ``[]`` (fail closed).
+
+    The capability whose absence produced PR #326's invented ``fetch_jwks_key``:
+    asked to verify a JWT signature, the advisor had no way to find where that
+    project keeps its issuer key, so it made one up. Returns plain dicts because
+    the consumer is an LLM tool that serialises to JSON.
+    """
+    from components.integrations.application.ports.vcs_port import VcsApiError
+
+    if not (query or "").strip():
+        return []
+    adapter, _ = _consented_adapter(workspace_id, repo)
+    if adapter is None:
+        return []
+    try:
+        hits = adapter.search_code(repo, query.strip(), limit=limit)
+    except VcsApiError:
+        # Includes providers with no code-search API — "cannot search here" is a
+        # capability gap the agent should route around, not a run-ending error.
+        logger.warning("vcs_code_search_failed workspace_id=%s repo=%s", workspace_id, repo)
+        return []
+    return [{"path": h.path, "line_number": h.line_number, "line": h.line} for h in hits]
+
+
 @sensitive_variables("token")
 def vend_repo_read_access(*, workspace_id, repo: str, connection_id: str | None = None) -> dict | None:
     """Vend the scan-Job credential envelope for ``repo``, or ``None`` (fail closed).

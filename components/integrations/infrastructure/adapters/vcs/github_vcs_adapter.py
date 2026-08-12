@@ -21,6 +21,7 @@ from components.integrations.application.ports.vcs_port import (
     DraftPullRequest,
     PullRequestPatch,
     PullRequestState,
+    RepoCodeHit,
     RepoFile,
     VcsApiError,
     VcsHealth,
@@ -48,7 +49,13 @@ class GitHubVcsAdapter(VcsPort):
 
     @sensitive_variables("headers")
     def _request(
-        self, method: str, path: str, *, json_body: dict | None = None, params: dict | None = None
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: dict | None = None,
+        params: dict | None = None,
+        extra_headers: dict | None = None,
     ) -> dict | list:
         """Issue one authenticated GitHub API call and return its decoded JSON.
 
@@ -63,6 +70,8 @@ class GitHubVcsAdapter(VcsPort):
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": _API_VERSION,
         }
+        if extra_headers:
+            headers.update(extra_headers)
         try:
             response = requests.request(
                 method, url, headers=headers, json=json_body, params=params, timeout=_TIMEOUT_SECONDS
@@ -161,6 +170,37 @@ class GitHubVcsAdapter(VcsPort):
             for entry in (tree_data.get("tree") or [])
             if isinstance(entry, dict) and entry.get("type") == "blob" and entry.get("path")
         ]
+
+    def search_code(self, repo: str, query: str, *, limit: int = 20) -> list[RepoCodeHit]:
+        """GitHub code search, pinned to one repo.
+
+        The ``repo:`` qualifier is prepended by us, not by the caller — a caller
+        cannot widen the search to another repo or the whole org by crafting the
+        query, which keeps this inside the same consent boundary as every other
+        read here.
+
+        Requires the ``text-match`` media type to get matching fragments back;
+        without it GitHub returns paths only. Positionless matches keep the path
+        with ``line_number=0`` rather than being dropped — knowing the file is
+        most of the value.
+        """
+        data = self._request(
+            "GET",
+            "/search/code",
+            params={"q": f"repo:{repo} {query}".strip(), "per_page": str(max(1, min(int(limit), 50)))},
+            extra_headers={"Accept": "application/vnd.github.text-match+json"},
+        )
+        hits: list[RepoCodeHit] = []
+        for item in (data.get("items") or [])[:limit]:
+            if not isinstance(item, dict) or not item.get("path"):
+                continue
+            fragment = ""
+            for match in item.get("text_matches") or []:
+                if isinstance(match, dict) and match.get("fragment"):
+                    fragment = str(match["fragment"]).strip().splitlines()[0][:300]
+                    break
+            hits.append(RepoCodeHit(path=str(item["path"]), line_number=0, line=fragment))
+        return hits
 
     def create_branch(self, repo: str, branch: str, from_sha: str) -> None:
         self._request(

@@ -194,6 +194,14 @@ CANONICAL_TOOLS: dict[str, set[str]] = {
         "list_pending_code_findings",
         "triage_code_finding",
         "open_draft_pr",
+        # Repo reads (ADR 0025 Phase 2). The specialist could triage a finding
+        # but not READ the project it was fixing, so a fix depending on a
+        # project-specific value had nowhere to come from and the model invented
+        # one (PR #326's `fetch_jwks_key`). Read-only, and consent-scoped by the
+        # same repo_allowlist the scan uses.
+        "search_repo",
+        "read_repo_file",
+        "list_repo_tree",
     },
     "log_watch_agent": {
         # Log anomaly specialist. Aliases: ``log_watch``, ``logwatch``,
