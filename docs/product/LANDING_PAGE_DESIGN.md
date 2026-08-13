@@ -17,7 +17,7 @@
 | 3 | No-scroll on mobile | `min-height: 100svh`, **never** `overflow:hidden` on body. Below a height threshold the page becomes a taller, scrollable mobile layout. Locking the viewport would break WCAG reflow. |
 | 4 | Tech | **New repo `auto-sec-landing`**, Vite + React, vendoring a ~10-file `hud/` kit copied from V2. Not a route in the HUD app, not hand-rolled HTML. |
 | 5 | Hosting | `workloads/marketing` in auto-sec-infra — `modules/s3-bucket` + `modules/cloudfront-s3-private`, own state, data-sourcing the existing apex+wildcard ACM cert. |
-| 6 | Email capture | A new ~10-file `waitlist` surface in `components/shared_platform`, POSTed cross-origin to `api.auto-sec.ai`. **Not** the inherited newsletter machinery (it's unrouted, workspace-coupled and untested), not a third-party form service, not a Lambda. |
+| 6 | Email capture | ⚠️ **SUPERSEDED by ADR 0027 (2026-08-12)** — capture is standalone CloudFront → Lambda Function URL → DynamoDB, NOT a `shared_platform` surface behind `api.auto-sec.ai`. The API dependency made a pre-launch page depend on launching (see §12). ~~Original:~~  A new ~10-file `waitlist` surface in `components/shared_platform`, POSTed cross-origin to `api.auto-sec.ai`. **Not** the inherited newsletter machinery (it's unrouted, workspace-coupled and untested), not a third-party form service, not a Lambda. |
 | 7 | Out of scope v1 | Pricing, docs, blog, logos/social proof, demo video, analytics beyond CloudFront logs, i18n, light mode. |
 
 ---
@@ -554,9 +554,25 @@ and adding a second hosting provider for one static page would fragment the subs
 
 ## 7. Email capture
 
-**Decision: a new, tiny `waitlist` surface in `components/shared_platform`, POSTed to cross-origin at
-`api.auto-sec.ai`. Do not re-mount the inherited newsletter machinery. Do not add a third-party form
-service. Do not add the stack's first Lambda.**
+> ⚠️ **THIS SECTION IS SUPERSEDED — see `docs/adr/0027-waitlist-capture-standalone-not-through-the-api.md`.**
+>
+> The decision below (a `waitlist` surface in `components/shared_platform`, POSTed to
+> `api.auto-sec.ai`) is no longer the plan. It made a PRE-launch page depend on LAUNCHING:
+> §12 of this very document notes the page "cannot go live before the api + frontend
+> workloads do". Capture is now CloudFront → Lambda Function URL (OAC) → DynamoDB, with no
+> product dependency at all.
+>
+> Read on only for the abuse-control thinking (§7.6 honeypot) and the user-experience
+> states (§7.7), which ADR 0027 keeps. Everything about WHERE the endpoint lives is stale.
+
+
+**Decision (REVISED 2026-08-12, ADR 0027): CloudFront → Lambda Function URL (OAC) → DynamoDB,
+PK = email. Standalone — no dependency on the API, the cluster, or `api.auto-sec.ai`. Do not
+re-mount the inherited newsletter machinery. Do not add a third-party form service.**
+
+~~*Superseded decision:* a new, tiny `waitlist` surface in `components/shared_platform`, POSTed
+cross-origin to `api.auto-sec.ai`. Do not add the stack's first Lambda.~~ — the API dependency made
+a pre-launch page wait on launching (§12). See §7.2 for why the anti-Lambda reasoning failed.
 
 ### 7.1 Why not the inherited newsletter machinery
 
@@ -584,17 +600,43 @@ Reusing the `Subscriber` table with `workspace=NULL` is the tempting middle path
 rejected: it puts prospect PII in a table that workspace-admin surfaces read, and inherits the
 `BigAutoField` PK, the weak token, and an M2M to `Newsletter`.
 
-### 7.2 Why not a third-party form service or a Lambda
+### 7.2 Why not a third-party form service — and why a Lambda IS the answer
+
+> **REVISED 2026-08-12 (ADR 0027).** The original version of this section argued against a
+> Lambda. That argument is kept below, struck through, because the reasoning was reasonable
+> and the conclusion was still wrong — it is worth seeing why.
 
 - **Third-party (Loops / Buttondown / ConvertKit / Formspree):** it would be the only third-party
   dependency on the page, it hands prospect PII to a processor we haven't diligenced, and it conflicts
   with §9's no-third-party-scripts rule (and its cookie-banner consequence). We are a security product;
   our prospect list living in someone else's tenant is an avoidable story.
-- **Serverless handler:** there is **no Lambda, no API Gateway, no CloudFront Function and no WAF
-  anywhere in auto-sec-infra** — the stack is 100% k3s-on-EC2 + S3/CloudFront. A form Lambda would be the
-  first of all of those, introducing a new compute model, a new packaging/deploy path, and a new
-  persistence store at once, and it would blur the "Terraform provisions the substrate, Kustomize deploys
-  the workloads" split the infra CLAUDE.md says never to blur.
+- **Serverless handler — THIS IS NOW THE DECISION (ADR 0027).** CloudFront → Lambda Function URL
+  (OAC) → DynamoDB, PK = email.
+
+  ~~*Original argument:* there is no Lambda, no API Gateway, no CloudFront Function and no WAF anywhere
+  in auto-sec-infra — the stack is 100% k3s-on-EC2 + S3/CloudFront. A form Lambda would be the first of
+  all of those, introducing a new compute model, a new packaging/deploy path, and a new persistence store
+  at once, and it would blur the "Terraform provisions the substrate, Kustomize deploys the workloads"
+  split.~~
+
+  **Why that was wrong.** It weighed the cost of a *new pattern* and never weighed the cost of the
+  *coupling it chose instead*. Routing capture through `api.auto-sec.ai` makes a PRE-launch page depend
+  on LAUNCHING — §12 of this document states exactly that: the page "cannot go live before the api +
+  frontend workloads do". To collect one email we would first stand up k3s, deploy the API, delegate DNS
+  from GoDaddy, and expose an API subdomain. A new-pattern objection cannot outweigh a dependency that
+  blocks the artifact entirely.
+
+  Three of the four premises were also weaker than they read:
+  - *"API Gateway too"* — not needed. A **Lambda Function URL is a CloudFront origin** with OAC. That
+    was historically true and no longer is.
+  - *"a new persistence store"* — DynamoDB with PK = email is not incidental, it is the RIGHT shape: a
+    conditional write gives idempotent dedupe with no code.
+  - *"blurs the substrate/workload split"* — it does not. The landing page is not a workload on the
+    cluster; it is a static site plus one function, provisioned entirely by Terraform. Nothing about it
+    touches Kustomize.
+
+  The one premise that held — *"no WAF"* — survives as a deliberate deferral (ADR 0027 D4), not as an
+  argument against the design.
 
 ### 7.3 Where it lives — `shared_platform`
 
