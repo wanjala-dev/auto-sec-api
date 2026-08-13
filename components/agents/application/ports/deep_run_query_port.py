@@ -129,6 +129,38 @@ class DeepRunSummaryView:
     started_at: datetime
     updated_at: datetime
 
+    # ── Eval fields: what the run COST and whether it was any good ──────────
+    #
+    # Tom's gap #5 (2026-07-31): "eval the whole agent trace". A progress
+    # projection answers "how far along"; these answer "was it worth it, and did
+    # the grader agree" — which is the question an AI-eval person actually asks.
+    #
+    # All SCALARS, deliberately. They are safe for a non-owner teammate for the
+    # same reason the fields above are: they carry no prompt text and no tool
+    # input/output. The rubric verdicts in ``state.run_metadata`` are NOT exposed
+    # verbatim — a verdict is the grader's prose ABOUT the agent's output and can
+    # quote a finding's code snippet, so only the pass/fail COUNTS cross this
+    # boundary. The owner-only ``retrieve``/``events`` reads keep the full text.
+    # Do not "enrich" these into strings later; that silently re-widens the
+    # contract this projection exists to enforce.
+    #: Latency. Every trace platform leads with this; it was the conspicuous
+    #: omission in the first cut of these fields.
+    duration_ms: int
+    input_tokens: int
+    output_tokens: int
+    llm_calls: int
+    models: tuple[str, ...]
+    #: None when unpriceable — NEVER 0.0. A zero reads as a measurement; the
+    #: telemetry wrote cost_usd=null on all 416 historical runs and the surfaced
+    #: $0.00 was a blank wearing a number's clothes.
+    cost_usd: float | None
+    priced: bool
+    price_table_version: str
+    goal_met: bool | None
+    iteration_count: int
+    rubric_pass_count: int
+    rubric_fail_count: int
+
 
 class DeepRunQueryPort(ABC):
     """Contract for reading deep-run observability data."""

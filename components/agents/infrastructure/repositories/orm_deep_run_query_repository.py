@@ -157,7 +157,86 @@ def _summary_view(run, logs=()) -> DeepRunSummaryView:
         completed_task_count=_completed_count(state),
         started_at=run.created_at,
         updated_at=run.updated_at,
+        **_eval_fields(state, run),
     )
+
+
+def _eval_fields(state: dict, run) -> dict:
+    """Scalar eval signals — latency, tokens, priced cost, outcome, grading.
+
+    Every field degrades to a neutral value when its key is absent or malformed.
+    1,884 runs predate these keys, and a KeyError here would break the ENTIRE run
+    list rather than one row: an observability surface that dies on old data is
+    worse than one showing zeroes.
+
+    Shapes are taken from what the telemetry ACTUALLY writes, verified against
+    live rows on 2026-08-13 — ``cost_usd_records`` is a DICT keyed by an opaque
+    id, not a list, and an earlier assumption that it was a list would have
+    silently returned zeros for every run.
+
+    ``rubric_verdicts`` is reduced to two COUNTS on purpose: a verdict is the
+    grader's prose about the agent's output and can quote a finding's code, so it
+    stays behind the owner-only reads.
+    """
+    from components.agents.domain.services.llm_pricing import price_run
+
+    meta = state.get("run_metadata") if isinstance(state, dict) else None
+    meta = meta if isinstance(meta, dict) else {}
+
+    cost = price_run(meta.get("cost_usd_records"))
+
+    goal_met = meta.get("goal_met")
+    if not isinstance(goal_met, bool):
+        goal_met = None  # unknown is NOT failed — never imply a verdict we lack
+
+    try:
+        iterations = int(meta.get("iteration_count") or 0)
+    except (TypeError, ValueError):
+        iterations = 0
+
+    # Verdicts appear as a list on some runs and are absent on most (the rubric
+    # only grades CRITIC_ENABLED_AGENTS, and only since it was switched on). A
+    # dict-of-verdicts is tolerated too rather than assumed away.
+    raw = meta.get("rubric_verdicts")
+    if isinstance(raw, dict):
+        verdicts = list(raw.values())
+    elif isinstance(raw, (list, tuple)):
+        verdicts = list(raw)
+    else:
+        verdicts = []
+    passed = failed = 0
+    for v in verdicts:
+        if not isinstance(v, dict):
+            continue
+        ok = v.get("satisfied")
+        if ok is None:
+            ok = v.get("passed")
+        # Anything not EXPLICITLY satisfied counts as a fail, so a future shape
+        # change under-reports quality rather than overstating it.
+        if ok is True:
+            passed += 1
+        else:
+            failed += 1
+
+    try:
+        duration_ms = max(0, int((run.updated_at - run.created_at).total_seconds() * 1000))
+    except (TypeError, AttributeError):
+        duration_ms = 0
+
+    return {
+        "duration_ms": duration_ms,
+        "input_tokens": cost.input_tokens,
+        "output_tokens": cost.output_tokens,
+        "llm_calls": cost.llm_calls,
+        "models": cost.models,
+        "cost_usd": cost.cost_usd,
+        "priced": cost.priced,
+        "price_table_version": cost.price_table_version,
+        "goal_met": goal_met,
+        "iteration_count": iterations,
+        "rubric_pass_count": passed,
+        "rubric_fail_count": failed,
+    }
 
 
 def _event_view(log_row) -> DeepRunEventView:

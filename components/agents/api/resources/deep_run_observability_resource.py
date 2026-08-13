@@ -167,6 +167,21 @@ class DeepRunSummaryResource:
     completed_task_count: int
     started_at: str
     updated_at: str
+    # Eval fields (Tom gap #5). Scalars only — no prompt text, no tool IO, so the
+    # team-safe contract above is unchanged. `cost_usd` is None (not 0.0) when
+    # unpriceable, and `priced` says which it is.
+    duration_ms: int
+    input_tokens: int
+    output_tokens: int
+    llm_calls: int
+    models: list
+    cost_usd: float | None
+    priced: bool
+    price_table_version: str
+    goal_met: bool | None
+    iteration_count: int
+    rubric_pass_count: int
+    rubric_fail_count: int
 
     @classmethod
     def from_view(cls, view: DeepRunSummaryView) -> DeepRunSummaryResource:
@@ -185,6 +200,18 @@ class DeepRunSummaryResource:
             completed_task_count=view.completed_task_count,
             started_at=_iso(view.started_at) or "",
             updated_at=_iso(view.updated_at) or "",
+            duration_ms=view.duration_ms,
+            input_tokens=view.input_tokens,
+            output_tokens=view.output_tokens,
+            llm_calls=view.llm_calls,
+            models=list(view.models),
+            cost_usd=view.cost_usd,
+            priced=view.priced,
+            price_table_version=view.price_table_version,
+            goal_met=view.goal_met,
+            iteration_count=view.iteration_count,
+            rubric_pass_count=view.rubric_pass_count,
+            rubric_fail_count=view.rubric_fail_count,
         )
 
     def to_dict(self) -> dict:
