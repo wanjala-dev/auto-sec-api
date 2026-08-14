@@ -14,7 +14,7 @@ class SocialRepository:
         from infrastructure.persistence.social.models import Post
 
         return Post.objects.select_related("author", "shared_user").prefetch_related(
-            "likes", "dislikes", "tags", "image"
+            "likes", "dislikes", "image"
         )
 
     def get_post_by_id(self, post_id):
@@ -32,7 +32,7 @@ class SocialRepository:
     def get_comment_queryset(self) -> QuerySet:
         from infrastructure.persistence.social.models import Comment
 
-        return Comment.objects.select_related("author", "post", "parent").prefetch_related("likes", "dislikes", "tags")
+        return Comment.objects.select_related("author", "post", "parent").prefetch_related("likes", "dislikes")
 
     def get_comment_by_id(self, comment_id):
         from infrastructure.persistence.social.models import Comment
@@ -91,13 +91,6 @@ class SocialRepository:
             name = f"{user.first_name or ''} {user.last_name or ''}".strip()
             resolved[str(user.id)] = name or user.username or user.email
         return resolved
-
-    # ── Tags ─────────────────────────────────────────────────────────────
-
-    def get_tag_queryset(self) -> QuerySet:
-        from infrastructure.persistence.social.models import Tag
-
-        return Tag.objects.all()
 
     # ── Followers ────────────────────────────────────────────────────────
 

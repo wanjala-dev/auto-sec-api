@@ -14,8 +14,6 @@ from components.social.api.controller import (
     CommentList,
     PostDetail,
     PostList,
-    SocialTagList,
-    TagDetail,
     WorkspaceFeedPostCommentsView,
     WorkspaceFeedPostDetail,
     WorkspaceFeedPostLikeView,
@@ -27,8 +25,6 @@ urlpatterns = [
     path("<int:pk>/", PostDetail.as_view(), name=PostDetail.name),
     path("comment", CommentList.as_view(), name=CommentList.name),
     path("comment/<int:pk>/", CommentDetail.as_view(), name=CommentDetail.name),
-    path("tag", SocialTagList.as_view(), name=SocialTagList.name),
-    path("tag/<int:pk>/", TagDetail.as_view(), name=TagDetail.name),
     # Workspace feed
     path(
         "workspaces/<uuid:workspace_id>/feed/",

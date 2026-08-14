@@ -65,7 +65,6 @@ from components.workspace.api.controller import (
     WorkspacePublicBrandView,
     WorkspacePublicProfileView,
     WorkspaceSetupStatusView,
-    WorkspaceTagList,
     WorkspaceThemeView,
 )
 
@@ -77,7 +76,6 @@ urlpatterns = [
     path("create/", WorkspaceCreateView.as_view(), name=WorkspaceCreateView.name),
     path("can-create/", WorkspaceCreateEligibilityView.as_view(), name="workspace-can-create"),
     path("category/<str:category>/", WorkspaceList.as_view(), name=WorkspaceList.name),
-    path("tags/", WorkspaceTagList.as_view(), name=WorkspaceTagList.name),
     path(
         "public/ai-privacy-brief/contract/",
         PublicAiPrivacyBriefContractView.as_view(),

@@ -7,7 +7,7 @@ to live within the owning bounded context.
 from rest_framework import serializers
 from drf_writable_nested.serializers import WritableNestedModelSerializer
 
-from infrastructure.persistence.social.models import Comment, Image, MessageModel, Post, Tag, ThreadModel
+from infrastructure.persistence.social.models import Comment, Image, MessageModel, Post, ThreadModel
 from infrastructure.persistence.users.models import CustomUser
 from infrastructure.persistence.workspaces.models import Workspace
 from components.identity.mappers.rest.identity_serializers import UserSerializer
@@ -59,23 +59,11 @@ class MessageSerializer(WritableNestedModelSerializer, serializers.ModelSerializ
         )
 
 
-class TagSerializer(serializers.HyperlinkedModelSerializer):
-    class Meta:
-        ref_name = "tags_social"
-        model = Tag
-        depth = 4
-        fields = (
-            'id',
-            'name',
-        )
-
-
 class PostSerializer(serializers.HyperlinkedModelSerializer):
     author = serializers.SlugRelatedField(queryset=CustomUser.objects.all(), slug_field='id')
     likes = UserSerializer(many=True, read_only=True)
     dislikes = UserSerializer(many=True, read_only=True)
     shared_user = serializers.SlugRelatedField(queryset=CustomUser.objects.all(), slug_field='id', required=False)
-    tags = TagSerializer(many=True, read_only=True)
 
     class Meta:
         model = Post
@@ -91,7 +79,6 @@ class PostSerializer(serializers.HyperlinkedModelSerializer):
             'shared_user',
             'likes',
             'dislikes',
-            'tags',
         )
 
 
@@ -99,7 +86,6 @@ class CommentSerializer(serializers.HyperlinkedModelSerializer):
     author = serializers.SlugRelatedField(queryset=CustomUser.objects.all(), slug_field='id')
     likes = UserSerializer(many=True, read_only=True)
     dislikes = UserSerializer(many=True, read_only=True)
-    tags = TagSerializer(many=True, read_only=True)
     post = serializers.SlugRelatedField(queryset=Post.objects.all(), slug_field='id')
     parent = serializers.SlugRelatedField(queryset=Comment.objects.all(), slug_field='id', required=False)
 
@@ -116,5 +102,4 @@ class CommentSerializer(serializers.HyperlinkedModelSerializer):
             'likes',
             'dislikes',
             'parent',
-            'tags',
         )

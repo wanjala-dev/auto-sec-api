@@ -21,7 +21,6 @@ from components.shared_platform.infrastructure.services.feature_flags import (
 )
 from infrastructure.persistence.core.models import FeatureFlag, FeatureFlagRule
 
-
 pytestmark = [pytest.mark.django_db, pytest.mark.real_feature_flags]
 
 
@@ -34,9 +33,7 @@ def _set_flag(enabled: bool) -> None:
         defaults={"default_enabled": True, "description": "test-seeded"},
     )
     if enabled:
-        FeatureFlagRule.objects.filter(
-            flag=flag, scope=FeatureFlagRule.Scope.GLOBAL
-        ).delete()
+        FeatureFlagRule.objects.filter(flag=flag, scope=FeatureFlagRule.Scope.GLOBAL).delete()
     else:
         FeatureFlagRule.objects.update_or_create(
             flag=flag,
@@ -59,8 +56,9 @@ def _set_flag(enabled: bool) -> None:
         ("get", "/social/1/"),
         ("get", "/social/comment"),
         ("get", "/social/comment/1/"),
-        ("get", "/social/tag"),
-        ("get", "/social/tag/1/"),
+        # /social/tag and /social/tag/<pk>/ are gone: they served social.Tag, an
+        # unscoped hashtag pool retired in favour of the one workspace-scoped
+        # vocabulary (ADR 0015). A route that does not exist cannot be gated.
     ],
 )
 def test_social_surface_blocked_when_flag_off(api_client, user_factory, method, url):
@@ -72,8 +70,7 @@ def test_social_surface_blocked_when_flag_off(api_client, user_factory, method, 
     response = getattr(api_client, method)(url, {}, format="json")
 
     assert response.status_code == 403, (
-        f"{method.upper()} {url} should 403 when feature.social_feed is off "
-        f"(got {response.status_code})"
+        f"{method.upper()} {url} should 403 when feature.social_feed is off (got {response.status_code})"
     )
 
 

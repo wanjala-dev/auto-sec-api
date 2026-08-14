@@ -43,7 +43,7 @@ class FeedPostRepository(PostStorePort):
         return (
             Post.objects.filter(is_deleted=False)
             .select_related("author", "author__profile", "workspace", "team")
-            .prefetch_related("image", "likes", "tags")
+            .prefetch_related("image", "likes")
             .annotate(
                 like_count=Count("likes", distinct=True),
                 comment_count=Count("comment", distinct=True),
@@ -61,7 +61,6 @@ class FeedPostRepository(PostStorePort):
         image_ids = list(post.image_ids)
         if image_ids:
             obj.image.add(*image_ids)
-        obj.create_tags()
         obj = self._base_queryset().get(pk=obj.pk)
         return to_post_entity(obj)
 

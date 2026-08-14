@@ -989,13 +989,11 @@ class TaskCommentMixin:
             .prefetch_related(
                 "likes",
                 "dislikes",
-                "tags",
                 "replies",
                 "replies__author",
                 "replies__author__profile",
                 "replies__likes",
                 "replies__dislikes",
-                "replies__tags",
             )
         )
 

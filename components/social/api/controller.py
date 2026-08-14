@@ -66,7 +66,6 @@ from components.social.application.use_cases.list_workspace_feed_use_case import
 from components.social.mappers.rest.social_serializers import (
     CommentSerializer,
     PostSerializer,
-    TagSerializer,
 )
 from components.workspace.api.workspace_permissions import (
     IsUnauthenticatedOrAdminOrStaff,
@@ -158,7 +157,6 @@ class PostList(generics.ListCreateAPIView):
         "shared_user",
         "likes",
         "dislikes",
-        "tags",
     )
     search_fields = ("^body",)
     ordering_fields = ("id", "created_on")
@@ -335,43 +333,6 @@ class AddCommentDislike(generics.ListCreateAPIView):
             }
         )
 
-
-# ── Tags ─────────────────────────────────────────────────────────────────
-
-
-class SocialTagList(generics.ListCreateAPIView):
-    serializer_class = TagSerializer
-    name = "tag-list"
-    permission_classes = (
-        permissions.IsAuthenticatedOrReadOnly,
-        IsOwnerOrReadOnly,
-        RequiresFeatureFlag,
-    )
-    feature_flag_key = _SOCIAL_FEED_FLAG_KEY
-    filter_fields = ("id", "name")
-    search_fields = ("^name",)
-    ordering_fields = ("id",)
-
-    def get_queryset(self):
-        return _social_service.get_tag_queryset()
-
-
-class TagDetail(generics.RetrieveUpdateDestroyAPIView):
-    serializer_class = TagSerializer
-    name = "tag-detail"
-    permission_classes = (
-        permissions.IsAuthenticatedOrReadOnly,
-        IsOwnerOrReadOnly,
-        RequiresFeatureFlag,
-    )
-    feature_flag_key = _SOCIAL_FEED_FLAG_KEY
-
-    def get_queryset(self):
-        return _social_service.get_tag_queryset()
-
-
-# NOTE: Thread/Message/Inbox endpoints have been extracted to
-# ``components.messaging``.  See ``/messaging/`` URL namespace.
 
 
 # ── Workspace feed (follow-filtered, per-workspace broadcast) ───────────

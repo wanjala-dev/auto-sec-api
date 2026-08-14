@@ -25,11 +25,6 @@ from components.social.api.resources.message_resources import (
 from components.social.api.resources.post_resources import (
     PostCollectionResource,
     PostResource,
-    TagResource,
-)
-from components.social.api.resources.tag_resources import (
-    TagCollectionResource,
-    TagResource as TagDetailResource,
 )
 from components.social.api.resources.thread_resources import (
     ThreadActionResource,
@@ -41,7 +36,6 @@ __all__ = [
     # Post resources
     "PostResource",
     "PostCollectionResource",
-    "TagResource",
     # Comment resources
     "CommentResource",
     "CommentCollectionResource",
@@ -51,8 +45,6 @@ __all__ = [
     "CommentLikeActionResource",
     "CommentDislikeActionResource",
     # Tag resources
-    "TagDetailResource",
-    "TagCollectionResource",
     # Thread resources
     "ThreadResource",
     "ThreadCollectionResource",

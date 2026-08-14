@@ -153,10 +153,6 @@ class WorkspaceService:
         """Fetch all subcategories."""
         return self.query_repository.get_all_subcategories()
 
-    def get_all_tags(self):
-        """Fetch all tags."""
-        return self.query_repository.get_all_tags()
-
     def get_all_workspace_comments(self):
         """Fetch all workspace comments."""
         return self.query_repository.get_all_workspace_comments()

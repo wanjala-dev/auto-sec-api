@@ -63,7 +63,6 @@ from components.workspace.mappers.rest.workspace_serializers import (
     ActionSerializer,
     FiltersSerializers,
     SubCategorySerializer,
-    TagSerializer,
     WorkspaceCardSerializer,
     WorkspaceCategorySerializer,
     WorkspaceCommentGetSerializer,
@@ -428,17 +427,6 @@ class FiltersView(APIView):
         filters = workspace_service.get_filters_map()
         serializer = FiltersSerializers(filters)
         return Response(serializer.data, status=HTTP_200_OK)
-
-
-class WorkspaceTagList(generics.ListAPIView):
-    """List all tags."""
-
-    permission_classes = (IsUnauthenticatedOrAdminOrStaff,)
-    serializer_class = TagSerializer
-    name = "tag-list"
-
-    def get_queryset(self):
-        return workspace_service.get_all_tags()
 
 
 # ============================================================================
