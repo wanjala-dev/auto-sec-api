@@ -83,6 +83,40 @@ Stripe POSTs to a fixed URL with no subdomain. `resolve_db_alias_for_stripe_acco
 owning alias. This is load-bearing under dedicated mode and only *looks* redundant while a single
 alias is configured — it was nearly deleted as dead code on 2026-08-14.
 
+### D8 — Self-hosted / BYOC is a real third tier, deliberately deferred (added 2026-08-14)
+
+Scott asked, in the 2026-08-13 meeting, what happens if a customer wants to host their own
+database. That is **BYOC**, and it is a different cost structure from D1's dedicated tier rather
+than a larger version of it. Research on the current state of BYOC is consistent about where the
+cost lands:
+
+- the hard part is not the first deploy, it is the N customer environments that all look different;
+- debugging crosses a trust boundary we do not control — an outage can require a call with the
+  customer to make a change;
+- version drift becomes per-customer policy rather than a technical problem;
+- rollout windows and remote observability are day-one requirements, not later additions.
+
+**Decision: answer that ask with the dedicated tier (D1/T2) and build BYOC only when a signed
+contract requires it, priced for the support model it imposes.** Nothing about D1–D7 forecloses it.
+
+Two things to state before anyone puts "BYOC" on a slide: the honesty test is *can the vendor see
+the payload of a request?* — if our control plane terminates traffic and forwards it, that is SaaS
+with a private connection, not BYOC. And D9 must hold.
+
+### D9 — `default` is a control plane and holds no customer data
+
+BYOC's defining structure is control-plane / data-plane separation: the vendor runs UI, API,
+orchestration and observability and holds no customer data; the customer's environment holds the
+data.
+
+The dedicated tier already has that shape — registry in `default`, tenant data in the tenant
+database. **BYOC therefore remains reachable as a connection-string source plus an operating model,
+rather than a rewrite, for exactly as long as `default` stays free of customer data.**
+
+Any proposal to put tenant-owned data in `default` for convenience — a cross-tenant search index, a
+shared audit table, a reporting rollup — is a decision to abandon the BYOC tier, and must be taken
+as that decision explicitly. This is a standing invariant, not a phase.
+
 ## Sequence
 
 - **Phase 0** — registry, subdomain middleware, `ContextVar`, fail-closed router. Both tiers
