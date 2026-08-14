@@ -125,6 +125,7 @@ INSTALLED_APPS = [
     "infrastructure.persistence.code_security",
     "infrastructure.persistence.findings",
     "infrastructure.persistence.tagging",
+    "infrastructure.persistence.tenancy",
     "infrastructure.persistence.cloud_graph",
     "infrastructure.persistence.response",
     "infrastructure.persistence.remediation",
