@@ -41,21 +41,92 @@ interact badly in one specific way; §7 covers it.
 Industry terms (AWS SaaS lens uses pool/bridge/silo); most Django articles say "shared schema /
 separate schemas / separate databases".
 
-## 2. What autosec ships: two tiers, one abstraction
+## 2. What autosec ships: three tiers, one abstraction (two built)
 
-**Bridge is deliberately NOT offered.** It costs migrations-per-schema and satisfies neither real
-customer ask: someone evaluating the product does not care about schema boundaries, and someone
-who says "my data must be physically separate" is not satisfied by a schema inside a shared
-database. Do not add it without a named customer requiring exactly it.
+| tier | who | shape | status |
+|---|---|---|---|
+| **T1 Pooled** (default) | everyone — trials, SMB, "just want to try it" | shared DB on `app.auto-sec.ai`, scoped by `workspace_id`, RLS backstop | build |
+| **T2 Dedicated** | named compliance requirement, or pays for it | own database on our infra, routed by subdomain | build |
+| **T3 BYOC / self-host** | customer runs the database (or the stack) in their own cloud | control plane ours, data plane theirs | **deferred — see §2c** |
 
-| tier | who | shape |
-|---|---|---|
-| **Pooled** (default) | trials, SMB, "just want to try it" | shared DB, scoped by `workspace_id`, RLS as the backstop |
-| **Dedicated** | pays for it, or self-hosts | own database, routed by subdomain |
+Both built tiers run on **one codebase**. The registry row says which mode; the abstraction hides
+the difference from application code: *the interface stays the same, only the implementation
+changes.*
 
-Both run on **one codebase**. The tenant registry row says which mode; the abstraction hides the
-difference from application code. This is the whole design goal — quoting the pattern that makes
-it work: *the interface stays the same, only the implementation changes.*
+### 2a. Pooled is the permanent home of almost everyone — not a compromise
+
+Industry data (2026): pooled + Postgres RLS **handles the first 500–1,000 tenants with no
+architectural change**, and selective migration to a dedicated database happens for only **1–5% of
+tenants** — a typical hybrid runs 5–15 dedicated instances against a pooled majority. Signing up,
+creating a workspace and poking around must never trigger provisioning.
+
+Name the shared console **`app.`**, not `development.` — an environment word in a tier position
+reads as staging and invites "is my data real?".
+
+### 2b. The sales trigger for T2 is a compliance name, not a vibe
+
+Pool satisfies **SOC 2 and GDPR**. Silo is what's required for **HIPAA BAA, PCI Level 1, and
+sovereign data residency**. When a prospect says "we want isolation", ask which of those they are
+being audited against. If the answer is none, pooled + RLS is the honest sell and the cheaper one.
+
+### 2c. T3 (BYOC) is deferred deliberately — the cost is the support model, not the code
+
+Scott (2026-08-13) asked what happens if a customer wants to host their own database. That is BYOC,
+and it is a different cost structure from T2, not a bigger version of it:
+
+- *"The hard part of BYOC isn't the first deploy. It's the N environments that all look different."*
+- Debugging happens across a trust boundary you do not control — operational changes can require a
+  call with the customer to make a change or diagnose an outage.
+- Version drift stops being technical and becomes per-customer policy.
+- Every change needs rollout windows and remote observability **from day one**.
+
+For a small team that is the expensive tier. **Sell T2 first; build T3 when a signed contract
+requires it, priced for the support model.**
+
+**The honesty test for T3**, worth knowing before anyone puts "BYOC" on a slide: *can the vendor
+see the payload of a request?* If our control plane terminates traffic and forwards it, that is not
+BYOC — it is SaaS with a private connection. Do not call it BYOC in that case.
+
+### 2d. HARD INVARIANT — `default` is a control plane and holds NO customer data
+
+BYOC's defining structure is control-plane / data-plane separation: the vendor runs UI, API,
+orchestration and observability and **holds no customer data**; the customer's environment holds
+the data.
+
+The T2 design already has that shape — registry in `default`, tenant data in the tenant database.
+Which means **T3 stays reachable as a connection-string source plus an ops model rather than a
+rewrite, for exactly as long as we keep `default` free of customer data.** The moment something
+tenant-owned is put in `default` "for convenience" (a cross-tenant search index, a shared audit
+table, a reporting rollup), T3 is foreclosed and the only way back is a data migration out of the
+control plane.
+
+Treat any proposal to put customer data in `default` as a decision to abandon T3, and say so.
+
+**"No customer data" ≠ "no data".** The opposite misreading is just as costly. `default` is the
+right home for **global reference data** — public facts owned by nobody:
+
+| goes in `default` (shared reference) | goes in the tenant DB (customer-owned) |
+|---|---|
+| `vuln_intel` — EPSS scores, CISA KEV catalog (~280k rows, identical for everyone) | findings, scans, assets, workspaces, users, tasks, audit |
+| subscription tier / plan definitions | a tenant's subscription state |
+| feature-flag definitions | a tenant's flag overrides |
+| the tenant registry itself | — |
+
+Replicating the EPSS feed into every tenant database because "no data in `default`" would be
+absurd: it is public, identical, and 280k rows per tenant.
+
+**The pattern that makes this work is joining reference data BY VALUE, not by FK.** Verified
+2026-08-14: nothing workspace-scoped has a `ForeignKey` into `vuln_intel`; the read path is
+`EpssScoreModel.objects.filter(snapshot_id=…, cve=cve)` — a lookup on the CVE string. That survives
+a database split unchanged. **A `ForeignKey` from tenant data into shared reference data would not**
+— Django cannot span databases, so it would either pin that table into every tenant DB or block the
+split entirely. Keep reference joins on natural keys.
+
+### 2e. Bridge (schema-per-tenant) is still not offered
+
+It costs a migration run per schema per deploy and satisfies neither ask: an evaluator does not care
+about schema boundaries, and a customer demanding physical separation is not satisfied by a schema
+inside a shared database. Add it only when a named customer requires exactly that middle ground.
 
 ## 3. The traps — these have already bitten this codebase
 
@@ -139,6 +210,8 @@ before that claim would have been made to a prospective customer.
 6. Reserved subdomains (`app`, `www`, `api`, `admin`, `auth`, `static`, …) can never be claimed.
 7. Celery tasks carry the tenant explicitly in headers and bind it before the body runs.
 8. Every workspace-scoped read seam ships an isolation test (§6).
+9. **`default` holds no customer data** (§2d). Adding customer-owned rows to the control plane is
+   a decision to abandon the BYOC tier; it must be made deliberately, not incidentally.
 
 ## 5. Where things live
 
@@ -219,3 +292,18 @@ different data — a passing unit test is not proof the host actually routed.
 - [testdriven.io — Django multi-tenant](https://testdriven.io/blog/django-multi-tenant/),
   [django-tenants](https://django-tenants.readthedocs.io/) (for the bridge model we chose not to
   ship), PostgreSQL RLS docs.
+
+**Tier research (2026-08-14)** — the numbers and the BYOC cost picture in §2:
+
+- [Multi-Tenant SaaS Architecture Patterns 2026](https://zanisssoftwares.com/blog/multi-tenant-saas-architecture-patterns-2026)
+  — hybrid pooled+silo is the default pattern for SaaS selling to both SMB and enterprise; the
+  compliance split (SOC 2/GDPR vs HIPAA/PCI/residency).
+- [A Practical Guide for SaaS Founders in 2026](https://www.adeptdev.io/blogs/multi-tenant-architecture-a-practical-guide-for-saas-founders-in-2026)
+  — pooled + RLS to 500–1,000 tenants; 1–5% selective migration to silo.
+- [Estuary — BYOC redefining enterprise](https://estuary.dev/blog/byoc-redefining-enterprise) —
+  control-plane / data-plane separation, the structure §2d protects.
+- [Tensor9 — BYOC isn't "SaaS Anywhere"](https://www.tensor9.com/resources/byoc-playbook/) — the
+  "can the vendor see the payload?" test.
+- [Nuon — chaos in customer environments](https://nuon.co/blog/chaos-in-customer-envs) and
+  [how to build a BYOC offering](https://nuon.co/blog/how-to-build-a-byoc-offering/) — N-environment
+  drift, debugging across a trust boundary, why the cost is operational.
