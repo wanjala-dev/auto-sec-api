@@ -20,12 +20,6 @@ class ProjectModelsProvider:
     """Lazy accessor for project-context ORM model classes."""
 
     @property
-    def Tag(self) -> Any:
-        from infrastructure.persistence.project.models import Tag
-
-        return Tag
-
-    @property
     def ProjectMilestone(self) -> Any:
         from infrastructure.persistence.project.models import ProjectMilestone
 

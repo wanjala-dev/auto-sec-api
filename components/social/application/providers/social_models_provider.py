@@ -43,12 +43,6 @@ class SocialModelsProvider:
         from infrastructure.persistence.social.models import Image
         return Image
 
-    @property
-    def Tag(self) -> Any:
-        from infrastructure.persistence.social.models import Tag
-        return Tag
-
-
 _default = SocialModelsProvider()
 
 

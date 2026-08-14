@@ -17,18 +17,34 @@ from infrastructure.persistence.notifications.userpreferences.models import (
     WORKSPACE_NOTIFICATION_DEFAULTS,
     WorkspacePreference,
 )
+from infrastructure.persistence.tagging.models import Tag
 from infrastructure.persistence.users.models import CustomUser
 from infrastructure.persistence.workspaces.models import (
     Action,
     ContributionMeans,
     SubCategory,
-    Tag,
     Workspace,
     WorkspaceCard,
     WorkspaceCategory,
     WorkspaceComment,
     WorkspaceOperations,
 )
+
+
+class WorkspaceTagSerializer(serializers.ModelSerializer):
+    """Read projection of the canonical ``tagging.Tag`` vocabulary (ADR 0015).
+
+    READ-ONLY on purpose. The predecessor was a writable nested serializer over
+    the unscoped ``workspaces.Tag``, so a workspace PUT could mint tag rows with
+    no owner. A tag now belongs to a workspace by (workspace, slug), and minting
+    one goes through the tagging context's own endpoint, which enforces that.
+    """
+
+    class Meta:
+        ref_name = "tags_workspaces"
+        model = Tag
+        fields = ["id", "name", "slug"]
+        read_only_fields = fields
 
 
 class SubCategorySerializer(serializers.ModelSerializer):
@@ -54,18 +70,10 @@ class WorkspaceCategorySerializer(serializers.ModelSerializer):
         return []
 
 
-class TagSerializer(WritableNestedModelSerializer, serializers.ModelSerializer):
-    class Meta:
-        ref_name = "tags_workspaces"
-        model = Tag
-        fields = ["name"]
-
-
 class WorkspaceCommentSerializer(WritableNestedModelSerializer, serializers.ModelSerializer):
     author = serializers.SlugRelatedField(read_only=True, slug_field="id")
     likes = LeanUserSerializer(many=True, read_only=True)
     dislikes = LeanUserSerializer(many=True, read_only=True)
-    tags = TagSerializer(many=True, read_only=True)
     workspace = serializers.SlugRelatedField(queryset=Workspace.objects.all(), slug_field="id")
     parent = serializers.SlugRelatedField(
         queryset=WorkspaceComment.objects.all(), slug_field="id", required=False, allow_null=True
@@ -84,16 +92,13 @@ class WorkspaceCommentSerializer(WritableNestedModelSerializer, serializers.Mode
             "likes",
             "dislikes",
             "parent",
-            "tags",
         ]
-        read_only_fields = ["tags"]
 
 
 class WorkspaceCommentGetSerializer(WritableNestedModelSerializer, serializers.ModelSerializer):
     author = LeanUserSerializer()
     likes = LeanUserSerializer(many=True, read_only=True)
     dislikes = LeanUserSerializer(many=True, read_only=True)
-    tags = TagSerializer(many=True, read_only=True)
     workspace = serializers.SlugRelatedField(queryset=Workspace.objects.all(), slug_field="id")
     parent = serializers.SlugRelatedField(
         queryset=WorkspaceComment.objects.all(), slug_field="id", required=False, allow_null=True
@@ -112,9 +117,7 @@ class WorkspaceCommentGetSerializer(WritableNestedModelSerializer, serializers.M
             "likes",
             "dislikes",
             "parent",
-            "tags",
         ]
-        read_only_fields = ["tags"]
 
 
 class WorkspaceOperationsSerializer(WritableNestedModelSerializer, serializers.ModelSerializer):
@@ -135,6 +138,11 @@ class WorkspaceSerializer(WritableNestedModelSerializer):
     workspace_categories = serializers.PrimaryKeyRelatedField(
         queryset=WorkspaceCategory.objects.all(), many=True, required=False
     )
+
+    # Read-only, like the Get/Put serializers: with no explicit declaration DRF
+    # generates a WRITABLE relation, which would accept any tag id — including
+    # one belonging to a different tenant's vocabulary.
+    tags = WorkspaceTagSerializer(many=True, read_only=True)
 
     class Meta:
         model = Workspace
@@ -265,7 +273,7 @@ class WorkspaceGetSerializer(WritableNestedModelSerializer, serializers.ModelSer
     workspace_owner = LeanUserSerializer()
     operations = WorkspaceOperationsSerializer(many=True, required=False)
     workspace_categories = WorkspaceCategorySerializer(many=True, read_only=True)
-    tags = TagSerializer(many=True, required=False)
+    tags = WorkspaceTagSerializer(many=True, read_only=True)
     associated_users = LeanUserSerializer(many=True, read_only=True)
     contribution_means = SimpleContributionMeansSerializer(many=True, read_only=True)
     ai_teammate_display_name = serializers.SerializerMethodField()
@@ -487,7 +495,7 @@ class WorkspaceSetupStatusSerializer(serializers.Serializer):
 
 class WorkspacePutSerializer(WritableNestedModelSerializer, serializers.ModelSerializer):
     followers = LeanUserSerializer(many=True, required=False)
-    tags = TagSerializer(many=True, required=False)
+    tags = WorkspaceTagSerializer(many=True, read_only=True)
     workspace_owner = serializers.ReadOnlyField(source="workspace_owner.id")
     operations = WorkspaceOperationsSerializer(many=True, required=False)
     workspace_categories = serializers.PrimaryKeyRelatedField(

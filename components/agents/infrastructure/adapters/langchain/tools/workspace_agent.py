@@ -62,7 +62,8 @@ def _coerce_payload(payload: Any) -> Dict[str, Any]:
 
 def create_organization(agent, organization_data: Any) -> str:
     """Create a new organization/workspace."""
-    from infrastructure.persistence.workspaces.models import Workspace, WorkspaceCategory, SubCategory, Tag
+    from components.agents.application.providers.agent_tagging_provider import AgentTaggingProvider
+    from infrastructure.persistence.workspaces.models import Workspace, WorkspaceCategory, SubCategory
 
     try:
         data = _coerce_payload(organization_data)
@@ -89,9 +90,9 @@ def create_organization(agent, organization_data: Any) -> str:
             )
             workspace.workspace_subcategories.add(subcategory)
 
+        tag_store = AgentTaggingProvider.build_tag_vocabulary_port()
         for tag_name in data.get('tags', []):
-            tag, _ = Tag.objects.get_or_create(name=tag_name)
-            workspace.tags.add(tag)
+            workspace.tags.add(tag_store.get_or_create(workspace.id, tag_name).id)
 
         workspace.save()
     except Exception as exc:  # pylint: disable=broad-except
@@ -382,7 +383,7 @@ def manage_organization_categories(agent, category_data: Any) -> str:
 
 def manage_organization_tags(agent, tag_data: Any) -> str:
     """Manage organization tags."""
-    from infrastructure.persistence.workspaces.models import Tag
+    from components.agents.application.providers.agent_tagging_provider import AgentTaggingProvider
 
     try:
         data = _coerce_payload(tag_data)
@@ -397,12 +398,15 @@ def manage_organization_tags(agent, tag_data: Any) -> str:
         if not tags:
             return "tags is required (a list of tag names)."
 
+        tag_store = AgentTaggingProvider.build_tag_vocabulary_port()
         for tag_name in tags:
-            tag, _ = Tag.objects.get_or_create(name=tag_name)
+            # Scoped to THIS workspace: creating a tag here can no longer put a
+            # row in another tenant's vocabulary.
+            tag = tag_store.get_or_create(org.id, tag_name)
             if action == 'add':
-                org.tags.add(tag)
+                org.tags.add(tag.id)
             elif action == 'remove':
-                org.tags.remove(tag)
+                org.tags.remove(tag.id)
 
         org.save()
         current_tags = ', '.join(tag.name for tag in org.tags.all()) or 'None'

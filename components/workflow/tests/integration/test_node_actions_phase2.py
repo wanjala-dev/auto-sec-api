@@ -21,7 +21,8 @@ from components.workflow.infrastructure.adapters import node_actions
 from components.workflow.infrastructure.adapters.node_actions import execute_node_action
 from infrastructure.persistence.notifications.models import Notification
 from infrastructure.persistence.users.models import UserProfile
-from infrastructure.persistence.workspaces.models import Tag, WorkspaceMembership
+from infrastructure.persistence.tagging.models import Tag
+from infrastructure.persistence.workspaces.models import WorkspaceMembership
 from infrastructure.persistence.workspaces.workflows.models import Workflow, WorkflowRun
 
 pytestmark = pytest.mark.django_db
@@ -76,7 +77,7 @@ class TestTagActions:
         ws = workspace_factory()
         contact = user_factory()
         membership = _membership(ws, contact)
-        tag = Tag.objects.create(name="Lapsed Donor")
+        tag = Tag.objects.create(workspace=ws, name="Lapsed Donor", slug="lapsed-donor")
         membership.tags.add(tag)
         run = _run(_workflow(ws), contact)
 

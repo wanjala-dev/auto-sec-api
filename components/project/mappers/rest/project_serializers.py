@@ -11,7 +11,6 @@ from infrastructure.persistence.project.models import (
     ProjectEntry,
     ProjectMilestone,
     ProjectUpdate,
-    Tag,
     Task,
     TaskComment,
 )
@@ -20,17 +19,10 @@ from infrastructure.persistence.users.models import CustomUser
 from infrastructure.persistence.workspaces.models import ContributionMeans, Grant, Workspace
 
 
-class TagSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Tag
-        fields = ["id", "name"]
-
-
 class TaskCommentSerializer(serializers.ModelSerializer):
     author = LeanUserSerializer(read_only=True)
     likes = LeanUserSerializer(many=True, read_only=True)
     dislikes = LeanUserSerializer(many=True, read_only=True)
-    tags = TagSerializer(many=True, read_only=True)
     parent = serializers.PrimaryKeyRelatedField(queryset=TaskComment.objects.all(), allow_null=True, required=False)
     recipients = serializers.SerializerMethodField()
     task_id = serializers.IntegerField(source="task.id", read_only=True)
@@ -48,7 +40,6 @@ class TaskCommentSerializer(serializers.ModelSerializer):
             "recipients",
             "likes",
             "dislikes",
-            "tags",
             "is_parent",
         ]
         read_only_fields = [
@@ -59,7 +50,6 @@ class TaskCommentSerializer(serializers.ModelSerializer):
             "recipients",
             "likes",
             "dislikes",
-            "tags",
             "is_parent",
         ]
 
@@ -180,7 +170,6 @@ class ProjectSerializer(serializers.ModelSerializer):
 
 class ProjectUpdateSerializer(serializers.ModelSerializer):
     author = serializers.SlugRelatedField(queryset=CustomUser.objects.all(), slug_field="id")
-    tags = serializers.PrimaryKeyRelatedField(many=True, queryset=Tag.objects.all(), required=False)
 
     class Meta:
         model = ProjectUpdate
@@ -195,7 +184,6 @@ class ProjectUpdateSerializer(serializers.ModelSerializer):
             "privacy",
             "dislikes",
             "parent",
-            "tags",
         ]
         read_only_fields = ["created_on", "author", "likes", "dislikes", "workspace"]
 

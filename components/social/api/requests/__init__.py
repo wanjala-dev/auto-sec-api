@@ -26,10 +26,6 @@ from components.social.api.requests.post_requests import (
     CreatePostRequest,
     UpdatePostRequest,
 )
-from components.social.api.requests.tag_requests import (
-    CreateTagRequest,
-    UpdateTagRequest,
-)
 from components.social.api.requests.thread_requests import (
     CreateThreadRequest,
     ThreadArchiveRequest,
@@ -51,9 +47,6 @@ __all__ = [
     "AddDislikeRequest",
     "AddCommentLikeRequest",
     "AddCommentDislikeRequest",
-    # Tag requests
-    "CreateTagRequest",
-    "UpdateTagRequest",
     # Thread requests
     "CreateThreadRequest",
     "ThreadArchiveRequest",

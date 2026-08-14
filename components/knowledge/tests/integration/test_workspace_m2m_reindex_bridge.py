@@ -75,10 +75,10 @@ class TestWorkspaceCategoryM2mTriggersReindex:
 @pytest.mark.django_db
 class TestWorkspaceTagM2mTriggersReindex:
     def test_adding_a_tag_acquires_debounce_lock(self, workspace_factory):
-        from infrastructure.persistence.workspaces.models import Tag
+        from infrastructure.persistence.tagging.models import Tag
 
         workspace = workspace_factory()
-        tag = Tag.objects.create(name="urgent")
+        tag = Tag.objects.create(workspace=workspace, name="urgent", slug="urgent")
         cache.clear()
         with patch(REINDEX_DELAY):
             workspace.tags.add(tag)
@@ -91,15 +91,19 @@ class TestM2mBridgeIsolation:
     def test_two_workspaces_get_independent_debounce_after_m2m_edit(
         self, workspace_factory
     ):
-        from infrastructure.persistence.workspaces.models import Tag
+        from infrastructure.persistence.tagging.models import Tag
 
         workspace_a = workspace_factory()
         workspace_b = workspace_factory()
         cache.clear()
-        tag = Tag.objects.create(name="shared-tag")
+        # One tag row PER workspace. The old version created a single row and
+        # added it to both — which only worked because the vocabulary was
+        # global. The debounce isolation being asserted here is unaffected.
+        tag_a = Tag.objects.create(workspace=workspace_a, name="shared-tag", slug="shared-tag")
+        tag_b = Tag.objects.create(workspace=workspace_b, name="shared-tag", slug="shared-tag")
         with patch(REINDEX_DELAY):
-            workspace_a.tags.add(tag)
-            workspace_b.tags.add(tag)
+            workspace_a.tags.add(tag_a)
+            workspace_b.tags.add(tag_b)
 
         assert cache.get(_cache_key(workspace_a.id)) == "1"
         assert cache.get(_cache_key(workspace_b.id)) == "1"
@@ -107,10 +111,10 @@ class TestM2mBridgeIsolation:
     def test_celery_broker_down_does_not_abort_m2m_add(
         self, workspace_factory
     ):
-        from infrastructure.persistence.workspaces.models import Tag
+        from infrastructure.persistence.tagging.models import Tag
 
         workspace = workspace_factory()
-        tag = Tag.objects.create(name="some-tag")
+        tag = Tag.objects.create(workspace=workspace, name="some-tag", slug="some-tag")
         cache.clear()
         with patch(REINDEX_DELAY, side_effect=RuntimeError("broker down")):
             # Must not raise.

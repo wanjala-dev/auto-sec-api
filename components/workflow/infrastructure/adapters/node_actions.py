@@ -574,12 +574,18 @@ def _execute_assign(run: Any, node: dict[str, Any], config: dict[str, Any]) -> d
     return result
 
 
-def _get_or_create_tag(name: str):
-    """Get or create a workspaces ``Tag`` by name (the M2M target)."""
-    from infrastructure.persistence.workspaces.models import Tag
+def _get_or_create_tag(workspace_id, name: str):
+    """Get or create the workspace's ``tagging.Tag`` by display name.
 
-    tag, _ = Tag.objects.get_or_create(name=name)
-    return tag
+    Goes through the tagging context's port (ADR 0015), so the tag is created
+    in THIS workspace's vocabulary. The predecessor did a global
+    ``Tag.objects.get_or_create(name=...)`` against the unscoped
+    ``workspaces.Tag`` table, which meant two tenants automating the same tag
+    name shared one row — and that row was listed by an anonymous endpoint.
+    """
+    from components.tagging.application.providers.tagging_provider import TaggingProvider
+
+    return TaggingProvider.build_tag_store().get_or_create(workspace_id, name)
 
 
 def _execute_add_tag(run: Any, node: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
@@ -599,8 +605,8 @@ def _execute_add_tag(run: Any, node: dict[str, Any], config: dict[str, Any]) -> 
         return {"status": "skipped", "reason": "no membership contact for target"}
 
     try:
-        tag = _get_or_create_tag(tag_name)
-        membership.tags.add(tag)
+        tag = _get_or_create_tag(membership.workspace_id, tag_name)
+        membership.tags.add(tag.id)
     except Exception as exc:
         logger.exception(
             "workflow_add_tag_failed run_id=%s target_id=%s tag=%s",
@@ -624,12 +630,16 @@ def _execute_remove_tag(run: Any, node: dict[str, Any], config: dict[str, Any]) 
         return {"status": "skipped", "reason": "no membership contact for target"}
 
     try:
-        from infrastructure.persistence.workspaces.models import Tag
+        from components.tagging.domain.value_objects.tag_slug import parse
 
-        # Remove every matching tag row (tag names aren't unique-constrained).
-        tags = list(Tag.objects.filter(name=tag_name))
-        if tags:
-            membership.tags.remove(*tags)
+        # Scoped to the membership's workspace: a tag of the same name in
+        # ANOTHER tenant is a different row and must not be touched. Matched on
+        # slug, the tagging context's identity key, not the display label.
+        tag_ids = membership.tags.filter(
+            workspace_id=membership.workspace_id, slug=parse(tag_name).slug, is_deleted=False
+        ).values_list("id", flat=True)
+        if tag_ids:
+            membership.tags.remove(*tag_ids)
     except Exception as exc:
         logger.exception(
             "workflow_remove_tag_failed run_id=%s target_id=%s tag=%s",

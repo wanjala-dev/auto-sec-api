@@ -190,16 +190,11 @@ class WorkspaceQueryRepository:
         return SubCategory.objects.only("id", "name", "category")
 
     # ========================================================================
-    # Tag Queries
+    # (Tag queries removed with workspaces.Tag — the vocabulary lives in the
+    # tagging context and is served workspace-scoped by its own controller.)
     # ========================================================================
 
     @staticmethod
-    def get_all_tags():
-        """Fetch all tags."""
-        from infrastructure.persistence.workspaces.models import Tag
-
-        return Tag.objects.all()
-
     # ========================================================================
     # WorkspaceComment Queries
     # ========================================================================

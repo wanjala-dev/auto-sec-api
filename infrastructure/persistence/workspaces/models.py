@@ -48,16 +48,6 @@ class ObjectTracking(models.Model):
         ordering = ("-created_at",)
 
 
-class Tag(ObjectTracking):
-    name = models.CharField(max_length=50)
-
-    def __str__(self):
-        return self.name
-
-    class Meta:
-        ordering = []
-
-
 class WorkspaceManager(models.Manager):
     def get_queryset(self):
         return super().get_queryset().filter(status="active")
@@ -209,7 +199,11 @@ class Workspace(models.Model):
     shared_user = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, null=True, blank=True, related_name="+"
     )
-    tags = models.ManyToManyField("Tag", blank=True)
+    # Workspace-level tags — read by the RAG snapshot's classification section
+    # (knowledge context) and written by the workspace agent's tools. Points at
+    # the canonical ``tagging.Tag`` vocabulary (ADR 0015), whose identity is
+    # (workspace, slug), so a tag row belongs to exactly one tenant.
+    tags = models.ManyToManyField("tagging.Tag", blank=True, related_name="tagged_workspaces")
     start_date = models.DateTimeField(null=True, blank=True)
     end_date = models.DateTimeField(null=True, blank=True)
     status = models.CharField(default="inactive", max_length=10)
@@ -240,30 +234,6 @@ class Workspace(models.Model):
     @property
     def is_teamspace(self):
         return self.workspace_type == self.TEAMSPACE
-
-    def create_tags(self):
-        for word in self.workspace_story.split():
-            if word[0] == "#":
-                tag = Tag.objects.filter(name=word[1:]).first()
-                if tag:
-                    self.tags.add(tag.pk)
-                else:
-                    tag = Tag(name=word[1:])
-                    tag.save()
-                    self.tags.add(tag.pk)
-                self.save()
-
-        if self.shared_body:
-            for word in self.shared_body.split():
-                if word[0] == "#":
-                    tag = Tag.objects.filter(name=word[1:]).first()
-                    if tag:
-                        self.tags.add(tag.pk)
-                    else:
-                        tag = Tag(name=word[1:])
-                        tag.save()
-                        self.tags.add(tag.pk)
-                    self.save()
 
     objects = WorkspaceManager()
 
@@ -357,10 +327,13 @@ class WorkspaceMembership(models.Model):
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.ACTIVE)
     # Workspace-scoped CRM tags for the directory contact (the member). Workflow
     # automations (Keela-style "Add Tag" / "Remove Tag" action nodes) add and
-    # remove these; tagging is scoped to the membership — NOT the global user —
-    # so a tag applied in one workspace never leaks into another. See
-    # components/workflow/infrastructure/adapters/node_actions.py.
-    tags = models.ManyToManyField("Tag", blank=True, related_name="workspace_memberships")
+    # remove these. Points at the canonical ``tagging.Tag`` vocabulary (ADR
+    # 0015), whose identity is (workspace, slug) — so the ROW itself is
+    # tenant-owned, not just the association. It previously targeted a local
+    # unscoped ``workspaces.Tag`` whose rows were global; the comment here
+    # claimed "a tag applied in one workspace never leaks into another", which
+    # was true of the membership edge and false of the vocabulary behind it.
+    tags = models.ManyToManyField("tagging.Tag", blank=True, related_name="workspace_memberships")
     invited_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -513,20 +486,6 @@ class WorkspaceComment(models.Model):
     )
     dislikes = models.ManyToManyField(settings.AUTH_USER_MODEL, blank=True, related_name="workspace_comment_dislikes")
     parent = models.ForeignKey("self", on_delete=models.CASCADE, blank=True, null=True, related_name="+")
-    tags = models.ManyToManyField("Tag", blank=True)
-
-    def create_tags(self):
-        for word in self.comment.split():
-            if word[0] == "#":
-                tag = Tag.objects.get(name=word[1:])
-                if tag:
-                    self.tags.add(tag.pk)
-                else:
-                    tag = Tag(name=word[1:])
-                    tag.save()
-                    self.tags.add(tag.pk)
-                self.save()
-
     @property
     def recipients(self):
         return WorkspaceComment.objects.filter(parent=self).order_by("-created_on").all()

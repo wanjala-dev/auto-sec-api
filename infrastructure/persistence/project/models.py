@@ -31,13 +31,6 @@ class Status(models.TextChoices):
     CANCELED = "CA", "Canceled"
 
 
-class Tag(models.Model):
-    name = models.CharField(max_length=1000, unique=True)
-
-    def __str__(self):
-        return self.name
-
-
 class ProjectMilestone(models.Model):
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True, null=True)
@@ -78,19 +71,6 @@ class ProjectUpdate(models.Model):
     )
     dislikes = models.ManyToManyField(settings.AUTH_USER_MODEL, blank=True, related_name="project_update_dislikes")
     parent = models.ForeignKey("self", on_delete=models.CASCADE, blank=True, null=True, related_name="+")
-    tags = models.ManyToManyField("Tag", blank=True)
-
-    def create_tags(self):
-        for word in self.Update.split():
-            if word[0] == "#":
-                tag = Tag.objects.get(name=word[1:])
-                if tag:
-                    self.tags.add(tag.pk)
-                else:
-                    tag = Tag(name=word[1:])
-                    tag.save()
-                    self.tags.add(tag.pk)
-            self.save()
 
     @property
     def recipients(self):
@@ -277,26 +257,12 @@ class TaskComment(models.Model):
     likes = models.ManyToManyField(CustomUser, blank=True, related_name="task_comment_likes")
     dislikes = models.ManyToManyField(CustomUser, blank=True, related_name="task_comment_dislikes")
     parent = models.ForeignKey("self", on_delete=models.CASCADE, blank=True, null=True, related_name="replies")
-    tags = models.ManyToManyField("Tag", blank=True)
-
     class Meta:
         ordering = ["-created_on"]
 
     def __str__(self):
         preview = self.comment[:30].strip()
         return preview or f"Comment {self.pk}"
-
-    def save(self, *args, **kwargs):
-        super().save(*args, **kwargs)
-        self.create_tags()
-
-    def create_tags(self):
-        """Attach hashtag-derived Tag objects to the comment."""
-        for word in self.comment.split():
-            if word.startswith("#") and len(word) > 1:
-                tag_name = word[1:]
-                tag, _ = Tag.objects.get_or_create(name=tag_name)
-                self.tags.add(tag.pk)
 
     @property
     def recipients(self):
