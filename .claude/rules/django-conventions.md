@@ -238,9 +238,25 @@ class Transaction(StandardMetadata):
 | Linting | ruff | (Black-compatible, line-length 120) |
 | Testing | pytest, pytest-django | |
 
-## Multi-Database Routing
+## Tenancy — single database, application-enforced isolation
 
-4 PostgreSQL databases routed by `tenants.router.TenantRouter`. Always be aware of which database a model lives on. Never assume `default`.
+**autosec is SINGLE-DATABASE.** `DATABASE_ROUTERS = []` (`api/settings/base.py`), one `DATABASES`
+alias (`default`). There is no tenant router, no per-tenant database, no schema switching.
+
+Tenant isolation is enforced **in application code** by filtering on `workspace_id`. That means a
+missing filter IS a cross-tenant data leak — there is no database boundary behind it to catch you.
+Every queryset that touches workspace-scoped data must be scoped, and every new read seam needs an
+isolation test (see `components/*/tests/**/test_*isolation*`).
+
+See ADR 0028 for the tenancy model, the RLS hardening plan, and why the enterprise "run my own
+tenant" answer is a dedicated deployment rather than database routing.
+
+> **This section previously claimed "4 PostgreSQL databases routed by `tenants.router.TenantRouter`."**
+> That was fork-drift copied from the wanjala nonprofit codebase — the router was stripped when this
+> fork was created, and CLAUDE.md has always said single-DB. The stale text survived in an
+> authoritative-looking rules file for months and on 2026-08-13 it caused a genuine false belief that
+> autosec had database-level tenant isolation, moments before that claim would have been made to a
+> prospective customer. Do not restate an architecture here without checking `settings`.
 
 ## Naming Conventions
 
