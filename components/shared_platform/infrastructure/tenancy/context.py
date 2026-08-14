@@ -48,6 +48,10 @@ class TenantContext:
     tenant_id: str | None = None
     subdomain: str = ""
     db_alias: str | None = None
+    #: The workspace this subdomain is pinned to, when it is pinned to one.
+    #: Stored BY VALUE, never as an FK: a dedicated tenant's Workspace row lives
+    #: in that tenant's database, and Django cannot span databases.
+    workspace_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.kind not in (KIND_POOLED, KIND_DEDICATED):

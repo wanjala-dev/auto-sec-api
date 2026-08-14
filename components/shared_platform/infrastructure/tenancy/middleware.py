@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 
-from django.http import HttpResponseNotFound
+from django.http import HttpResponseForbidden, HttpResponseNotFound
 
 from components.shared_platform.infrastructure.tenancy.context import (
     KIND_DEDICATED,
@@ -23,6 +23,10 @@ from components.shared_platform.infrastructure.tenancy.context import (
     TenantContext,
     bind_tenant,
     reset_tenant,
+)
+from components.shared_platform.infrastructure.tenancy.workspace_context import (
+    bind_workspace,
+    reset_workspace,
 )
 
 logger = logging.getLogger(__name__)
@@ -46,10 +50,47 @@ def _subdomain_of(host: str) -> str:
 
 
 class TenantHostMiddleware:
-    """Bind the tenant for the duration of the request, always unbinding after."""
+    """Bind the tenant for the duration of the request, always unbinding after.
+
+    Also binds the **workspace** in ``process_view``, which is the earliest
+    point Django has resolved the URL and can hand us ``workspace_id`` — 72 URL
+    patterns carry ``workspaces/<uuid:workspace_id>/``, so that one hook covers
+    the workspace-scoped surface.
+    """
 
     def __init__(self, get_response):
         self.get_response = get_response
+
+    def process_view(self, request, view_func, view_args, view_kwargs):
+        """Bind the workspace from the resolved URL, and enforce host agreement.
+
+        The enforcement is the security value the host binding actually buys.
+        Without it a subdomain is decoration: a token for workspace A used
+        against ``senso.auto-sec.ai`` would be served happily. With it the host
+        becomes a second, independent check on which customer's data a request
+        may touch — one a stolen or mis-scoped token does not satisfy.
+
+        The token goes on the REQUEST, never on ``self``: a middleware instance
+        is shared by every request in the process, so per-request state stored
+        on it leaks across requests — the exact bug this subsystem exists to
+        prevent.
+        """
+        workspace_id = view_kwargs.get("workspace_id")
+        if workspace_id is None:
+            return None
+
+        pinned = getattr(request, "tenant", None)
+        if pinned is not None and pinned.workspace_id and str(pinned.workspace_id) != str(workspace_id):
+            logger.warning(
+                "tenant_host_workspace_mismatch host_workspace=%s requested_workspace=%s subdomain=%s",
+                pinned.workspace_id,
+                workspace_id,
+                pinned.subdomain,
+            )
+            return HttpResponseForbidden("This workspace is not available on this host.")
+
+        request._workspace_token = bind_workspace(workspace_id)
+        return None
 
     def __call__(self, request):
         context = self._resolve(request)
@@ -65,8 +106,13 @@ class TenantHostMiddleware:
         try:
             return self.get_response(request)
         finally:
-            # Must run even when the view raises: a leaked binding would hand
-            # the next unit of work on this task the wrong customer.
+            # Both bindings must be released even when the view raises; a leaked
+            # binding hands the next unit of work on this task the wrong tenant
+            # or the wrong workspace.
+            workspace_token = getattr(request, "_workspace_token", None)
+            if workspace_token is not None:
+                reset_workspace(workspace_token)
+                request._workspace_token = None
             reset_tenant(token)
 
     @staticmethod
@@ -94,5 +140,11 @@ class TenantHostMiddleware:
                 tenant_id=str(row.id),
                 subdomain=row.subdomain,
                 db_alias=row.db_alias,
+                workspace_id=str(row.workspace_id) if row.workspace_id else None,
             )
-        return TenantContext(kind=POOLED_CONTEXT.kind, tenant_id=str(row.id), subdomain=row.subdomain)
+        return TenantContext(
+            kind=POOLED_CONTEXT.kind,
+            tenant_id=str(row.id),
+            subdomain=row.subdomain,
+            workspace_id=str(row.workspace_id) if row.workspace_id else None,
+        )
