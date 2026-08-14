@@ -43,6 +43,14 @@ class Tenant(models.Model):
     isolation_mode = models.CharField(max_length=16, choices=ISOLATION_CHOICES, default=KIND_POOLED)
     #: Required iff dedicated; must match a key in ``settings.DATABASES``.
     db_alias = models.CharField(max_length=100, blank=True, default="")
+    #: The workspace this subdomain serves, when it serves exactly one. Set for
+    #: a pooled tenant that has its own subdomain, so a request arriving on that
+    #: host can be refused if it asks for a different workspace. A plain UUID
+    #: rather than a ForeignKey: for a dedicated tenant the Workspace row is in
+    #: another database, and an FK cannot span databases (ADR 0029 D3). Also
+    #: keeps the control plane free of customer data — this is a pointer, not a
+    #: copy of anything the customer owns (D9).
+    workspace_id = models.UUIDField(null=True, blank=True)
     #: Deactivation 404s at the middleware, before a connection is chosen — an
     #: access control rather than a flag some queryset has to remember to filter.
     is_active = models.BooleanField(default=True)
