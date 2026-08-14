@@ -176,7 +176,9 @@ plugin**, enabled in `.claude/settings.json`. autosec deliberately does **not** 
 fork stripped.
 
 `.claude/skills/` holds autosec-only skills (`architecture` = the CNAPP hub-and-spoke
-target, `integrations`, `personas`, `templates`, `backup-recovery`, `gtm-qa-sweep`).
+target, `tenancy` = the two-tier pooled/dedicated model plus the traps that have already
+bitten this codebase, `integrations`, `personas`, `templates`, `backup-recovery`,
+`gtm-qa-sweep`).
 **Never copy a kit skill in here** — on 2026-08-11 a five-week-stale copy of the `agents`
 skill (found by grepping the filesystem, because the plugin wasn't enabled) drove an
 architecture decision from a document predating `RubricMiddleware` entirely. If you ever
