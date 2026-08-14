@@ -223,7 +223,7 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "django.contrib.flatpages.middleware.FlatpageFallbackMiddleware",
-    "components.shared_platform.infrastructure.middleware.tenant_middlewares.TenantMiddleware",
+    "components.shared_platform.infrastructure.tenancy.middleware.TenantHostMiddleware",
     # Stamps RFC 9745/8594 deprecation headers on deprecated API versions.
     # Dormant until API_DEPRECATED_VERSIONS (below) is populated. See the
     # `api-versioning` skill §8 + ADR 0006.
@@ -238,7 +238,12 @@ MIDDLEWARE = [
 
 # Single-DB fork — the multi-tenant DB router was dropped. All models route to
 # `default`. (Row-level workspace scoping stays in the ORM queries.)
-DATABASE_ROUTERS = []
+# Tenancy routing (ADR 0029). The router RAISES for tenant-scoped models when
+# no tenant is bound — absence of a tenant must never resolve to a database.
+# Every entry point therefore binds: the request path in TenantHostMiddleware,
+# the queue in infrastructure/celery/tenancy_signals.py, management commands in
+# manage.py, and the test suite in conftest.py.
+DATABASE_ROUTERS = ["components.shared_platform.infrastructure.tenancy.router.TenantRouter"]
 
 HAYSTACK_CONNECTIONS = {
     "default": {

@@ -491,3 +491,29 @@ def django_db_use_migrations():
     and brittle; tests should exercise the current model state.
     """
     return False
+
+
+# ── Tenancy binding for the test suite (ADR 0029) ───────────────────────
+#
+# The router raises for tenant-scoped models when no tenant is bound, and a
+# test does not go through middleware, a worker, or manage.py — the three
+# places that bind in production. Without this every DB test would fail on an
+# unbound tenant, which is the router working correctly and the suite being
+# wrong about its own setup.
+#
+# The TENANT is bound (pooled) so queries resolve to `default`. The WORKSPACE
+# is deliberately left unbound, so a test that exercises a workspace-scoped
+# manager still sees the fail-closed behaviour and has to bind one itself.
+# Tests that exercise the binding machinery itself must start from a genuinely
+# unbound state — asserting "nothing bound" is meaningless if a fixture bound
+# something. Mark them `@pytest.mark.unbound_tenancy`.
+@pytest.fixture(autouse=True)
+def _bind_pooled_tenant(request):
+    if request.node.get_closest_marker("unbound_tenancy"):
+        yield
+        return
+
+    from components.shared_platform.infrastructure.tenancy.context import pooled_context
+
+    with pooled_context():
+        yield

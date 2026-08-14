@@ -28,7 +28,7 @@ from components.shared_platform.infrastructure.tenancy.context import (
 from components.shared_platform.infrastructure.tenancy.middleware import TenantHostMiddleware, _subdomain_of
 from components.shared_platform.infrastructure.tenancy.router import TenantRouter
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.unbound_tenancy]
 
 DEDICATED = TenantContext(kind=KIND_DEDICATED, tenant_id="t-1", subdomain="senso", db_alias="tenant_senso")
 
