@@ -102,6 +102,26 @@ control plane.
 
 Treat any proposal to put customer data in `default` as a decision to abandon T3, and say so.
 
+**"No customer data" ≠ "no data".** The opposite misreading is just as costly. `default` is the
+right home for **global reference data** — public facts owned by nobody:
+
+| goes in `default` (shared reference) | goes in the tenant DB (customer-owned) |
+|---|---|
+| `vuln_intel` — EPSS scores, CISA KEV catalog (~280k rows, identical for everyone) | findings, scans, assets, workspaces, users, tasks, audit |
+| subscription tier / plan definitions | a tenant's subscription state |
+| feature-flag definitions | a tenant's flag overrides |
+| the tenant registry itself | — |
+
+Replicating the EPSS feed into every tenant database because "no data in `default`" would be
+absurd: it is public, identical, and 280k rows per tenant.
+
+**The pattern that makes this work is joining reference data BY VALUE, not by FK.** Verified
+2026-08-14: nothing workspace-scoped has a `ForeignKey` into `vuln_intel`; the read path is
+`EpssScoreModel.objects.filter(snapshot_id=…, cve=cve)` — a lookup on the CVE string. That survives
+a database split unchanged. **A `ForeignKey` from tenant data into shared reference data would not**
+— Django cannot span databases, so it would either pin that table into every tenant DB or block the
+split entirely. Keep reference joins on natural keys.
+
 ### 2e. Bridge (schema-per-tenant) is still not offered
 
 It costs a migration run per schema per deploy and satisfies neither ask: an evaluator does not care

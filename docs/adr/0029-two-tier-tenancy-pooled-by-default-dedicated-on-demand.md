@@ -117,6 +117,19 @@ Any proposal to put tenant-owned data in `default` for convenience — a cross-t
 shared audit table, a reporting rollup — is a decision to abandon the BYOC tier, and must be taken
 as that decision explicitly. This is a standing invariant, not a phase.
 
+**"No customer data" is not "no data".** `default` is the correct home for global reference data —
+public facts owned by no tenant: `vuln_intel` (EPSS scores, the CISA KEV catalog — ~280k rows,
+identical for every customer), subscription tier definitions, feature-flag definitions, and the
+registry itself. Replicating the EPSS feed into every tenant database because "nothing goes in
+`default`" would be the opposite mistake.
+
+The mechanism that keeps both halves true is **joining reference data by value, not by foreign
+key.** Verified 2026-08-14: no workspace-scoped model has a `ForeignKey` into `vuln_intel`, and the
+read path is a lookup on the CVE string (`filter(snapshot_id=…, cve=cve)`). That survives a
+database split unchanged. A `ForeignKey` from tenant data into shared reference data would not —
+Django cannot span databases, so such an FK would either force the reference table into every
+tenant database or block the split outright. Reference joins stay on natural keys.
+
 ## Sequence
 
 - **Phase 0** — registry, subdomain middleware, `ContextVar`, fail-closed router. Both tiers
