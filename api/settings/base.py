@@ -213,6 +213,18 @@ DEFAULT_CURRENCY = _MONEY_DEFAULT_CURRENCY
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    # Tenancy binding must wrap EVERYTHING that touches the database, which
+    # means it goes near the top — not where the inherited TenantMiddleware sat.
+    #
+    # Middleware runs top→bottom on the request and bottom→top on the response.
+    # Placed low, this middleware's `finally` unbinds the tenant BEFORE the
+    # middleware above it run their response phase — and FlatpageFallbackMiddleware
+    # queries FlatPage there. That is not theoretical: it 500'd every request
+    # including /api/health/, so the pod never went ready (2026-08-14).
+    #
+    # Above it may sit only middleware that touches no ORM. Below it must sit
+    # everything that does: sessions, auth, flatpages, and the app itself.
+    "components.shared_platform.infrastructure.tenancy.middleware.TenantHostMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -223,7 +235,6 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "django.contrib.flatpages.middleware.FlatpageFallbackMiddleware",
-    "components.shared_platform.infrastructure.tenancy.middleware.TenantHostMiddleware",
     # Stamps RFC 9745/8594 deprecation headers on deprecated API versions.
     # Dormant until API_DEPRECATED_VERSIONS (below) is populated. See the
     # `api-versioning` skill §8 + ADR 0006.
