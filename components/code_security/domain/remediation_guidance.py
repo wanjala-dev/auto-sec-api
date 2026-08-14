@@ -306,10 +306,26 @@ def patch_is_attempted(guidance: RemediationGuidance | None) -> bool:
 
 @dataclass(frozen=True)
 class SyntaxVerdict:
-    """Result of the L1 syntactic oracle."""
+    """Result of the L1 syntactic oracle.
+
+    ``ok`` and ``checked`` are DIFFERENT questions, and conflating them is what
+    this class was corrected for (2026-08-13). "The patch parses" and "we have no
+    parser for this language, so nobody looked" both used to return ``ok=True``,
+    which made an unexamined patch indistinguishable from a validated one.
+
+    Everything else shipped this session distinguishes the two — ``priced=False``
+    for an unpriceable run, ``verification="unverified"`` for an ungrounded fix,
+    a missing attestation for an ungraded patch. This oracle was the one place
+    still answering "fine" when it meant "unknown".
+    """
 
     ok: bool
     reason: str = ""
+    #: False when no parser was available for the language, i.e. the verdict is
+    #: an ABSTENTION rather than a pass. Callers must not treat this as
+    #: validation; surface it the way an unpriced cost or an unverified fix is
+    #: surfaced. Defaults True so existing constructions keep meaning "checked".
+    checked: bool = True
 
 
 def patch_parses(*, patch_code: str, before_code: str, language: str) -> SyntaxVerdict:
@@ -329,8 +345,18 @@ def patch_parses(*, patch_code: str, before_code: str, language: str) -> SyntaxV
     Python only for now, deliberately: it is the only language whose parser ships
     in this image. Claiming coverage we do not have would be worse than the gap.
     """
-    if str(language or "").strip().lower() not in {"python", "py"}:
-        return SyntaxVerdict(ok=True)
+    lang = str(language or "").strip().lower()
+    if lang not in {"python", "py"}:
+        # ABSTAIN, do not pass. No parser for this language ships in the image,
+        # so we have not examined this patch — say so rather than returning a
+        # verdict that reads identically to a real pass. The patch still flows
+        # (withholding the artifact was never the policy); it simply must not
+        # claim a syntax check it never had.
+        return SyntaxVerdict(
+            ok=True,
+            checked=False,
+            reason=f"no {lang or 'unknown-language'} parser available — patch syntax NOT checked",
+        )
     after = textwrap.dedent(str(patch_code or ""))
     before = textwrap.dedent(str(before_code or ""))
     if not after.strip():

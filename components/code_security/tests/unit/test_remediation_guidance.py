@@ -34,6 +34,7 @@ from components.code_security.domain.remediation_guidance import (
     remediation_classes,
     rule_bindings,
     unmapped_rules,
+    patch_parses,
 )
 from components.code_security.infrastructure.services.ruleset import _RULES_DIR
 
@@ -310,3 +311,50 @@ class TestPromptCarriesTheGeneralConstraints:
     def test_block_omits_the_placeholder_line_when_there_are_none(self):
         block = prompt_block(guidance_for("autosec.python.tempfile-mktemp"))
         assert "PLACEHOLDERS" not in block
+
+
+class TestTheSyntaxOracleAbstainsRatherThanPassing:
+    """A patch nobody could parse must not look like one that parsed clean.
+
+    `patch_parses` returned `ok=True` for EVERY non-Python language — not "fail",
+    not "unknown", but pass. So a Terraform, JavaScript, Go or YAML patch came out
+    of the L1 oracle indistinguishable from a Python patch that genuinely parsed.
+
+    The original decision was sound and honestly documented ("it is the only
+    language whose parser ships in this image; claiming coverage we do not have
+    would be worse than the gap"). What was missing is that the RESULT never said
+    so — which left this the last place in the pipeline answering "fine" when it
+    meant "unknown", after `priced=False`, `verification="unverified"` and the
+    patch attestation all learned to distinguish the two.
+    """
+
+    def test_python_patch_is_actually_checked(self):
+        v = patch_parses(patch_code="x = 1", before_code="x = 2", language="python")
+
+        assert v.ok is True
+        assert v.checked is True
+
+    def test_non_python_abstains_and_says_so(self):
+        v = patch_parses(patch_code='resource "aws_s3_bucket" "b" {}', before_code="", language="terraform")
+
+        assert v.ok is True  # still flows — withholding the artifact was never the policy
+        assert v.checked is False
+        assert "not checked" in v.reason.lower()
+
+    def test_the_abstention_names_the_language(self):
+        """An operator reading 'no parser available' must know for WHAT."""
+        assert "javascript" in patch_parses(patch_code="a", before_code="b", language="JavaScript").reason.lower()
+
+    def test_unknown_language_abstains_too(self):
+        v = patch_parses(patch_code="a", before_code="b", language="")
+
+        assert v.checked is False
+        assert "unknown-language" in v.reason
+
+    def test_a_genuinely_broken_python_patch_still_fails(self):
+        """The abstention must not weaken the case the oracle exists for: the
+        before-fragment parses, the after-fragment does not."""
+        v = patch_parses(patch_code="def broken(:", before_code="def fine():\n    pass", language="python")
+
+        assert v.ok is False
+        assert v.checked is True
