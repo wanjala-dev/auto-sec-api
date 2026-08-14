@@ -198,6 +198,24 @@ before that claim would have been made to a prospective customer.
 
 **Never restate the tenancy architecture from memory or from a doc. Check `api/settings/`.**
 
+### 3f. `infrastructure/<name>/` is unusable when `infrastructure/persistence/<name>/` exists
+
+`infrastructure/__init__.py` installs an `_AliasFinder` at `sys.meta_path[0]`
+(fork-inherited backward compatibility) that rewrites `infrastructure.<ctx>.*` →
+`infrastructure.persistence.<ctx>.*` whenever the file exists under
+`persistence/`. It wins over the real filesystem package.
+
+So creating BOTH `infrastructure/tenancy/` (runtime) and
+`infrastructure/persistence/tenancy/` (models) makes the first one permanently
+unimportable — `import infrastructure.tenancy.context` resolves into the
+persistence package and raises `ModuleNotFoundError`. The files are there; the
+import system routes past them.
+
+Hit on 2026-08-14 while building Phase 0. The runtime therefore lives in
+`components/shared_platform/infrastructure/tenancy/`, which is also where the
+inherited middleware and router lived — same concern, established home, and out
+of the shim's reach.
+
 ## 4. Invariants (do not regress)
 
 1. Tenant context is a `ContextVar`, set by middleware, cleared in a `finally`.
@@ -218,9 +236,9 @@ before that claim would have been made to a prospective customer.
 | concern | location |
 |---|---|
 | Tenant registry (control plane) | `infrastructure/persistence/tenancy/` — the ONLY tenant table in `default` |
-| Context var / bind helpers | `infrastructure/tenancy/context.py` |
-| Router | `infrastructure/tenancy/router.py` |
-| Subdomain middleware | `infrastructure/tenancy/middleware.py` |
+| Context var / bind helpers | `components/shared_platform/infrastructure/tenancy/context.py` |
+| Router | `components/shared_platform/infrastructure/tenancy/router.py` |
+| Subdomain middleware | `components/shared_platform/infrastructure/tenancy/middleware.py` |
 | Alias resolution for a model | `components/shared_kernel/infrastructure/adapters/django_db_routing.py` (`db_alias_for_write` — Django's own router API; returns `default` when no routers are registered) |
 | Transaction + lock alias agreement | `components/shared_kernel/application/transactional.py` |
 | Stripe account → alias | `components/payments/infrastructure/adapters/payment_utils.py` |
