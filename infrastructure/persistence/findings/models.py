@@ -17,6 +17,8 @@ import uuid
 
 from django.db import models
 
+from components.shared_platform.infrastructure.tenancy.managers import WorkspaceScopedManager
+
 from infrastructure.persistence.workspaces.models import Workspace
 
 
@@ -59,7 +61,29 @@ class Finding(models.Model):
     last_seen_at = models.DateTimeField()
     resolved_at = models.DateTimeField(null=True, blank=True)
 
+    # ── Tenancy (ADR 0029) — HALF-FLIPPED, deliberately ─────────────────
+    #
+    # ``unscoped`` exists and the cross-workspace call sites already say so, but
+    # ``objects`` is still a plain manager. Swapping this one line to
+    # ``WorkspaceScopedManager()`` turns on fail-closed workspace scoping for
+    # findings — and measured on 2026-08-14 that breaks 69 tests across 23 files
+    # which query ``Finding.objects`` without binding a workspace. Every one is
+    # a test that has to say which workspace it means; none is a product bug.
+    #
+    # Landing the flip and its ~43 test conversions in the same change as the
+    # router would have made a green run impossible to attribute. So the
+    # boundary is drawn here: the router is live, the vocabulary exists, and the
+    # per-model flip is its own reviewable change.
+    objects = models.Manager()
+    unscoped = models.Manager()
+
     class Meta:
+        # Related-object traversal (finding.tag_links, workspace.findings) goes
+        # through the BASE manager. Pointing it at ``unscoped`` keeps FK
+        # descriptors working when no workspace is bound — a related lookup is
+        # already reached via a row the caller legitimately holds, so scoping it
+        # again would break traversal without adding isolation.
+        base_manager_name = "unscoped"
         constraints = [
             models.UniqueConstraint(
                 fields=["workspace", "source", "fingerprint"],

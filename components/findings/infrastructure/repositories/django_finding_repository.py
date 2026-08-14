@@ -203,7 +203,10 @@ class DjangoFindingRepository(FindingStorePort):
         # a resolved/suppressed-only workspace has nothing whose rank a feed move could change,
         # so rescoring it every day is wasted work.
         return list(
-            Finding.objects.exclude(status__in=["resolved", "suppressed"])
+            # Cross-workspace BY DESIGN: this feeds the daily fan-out and must
+            # see every workspace. Stated with .unscoped so the crossing is
+            # visible here rather than implied by an absent filter.
+            Finding.unscoped.exclude(status__in=["resolved", "suppressed"])
             .values_list("workspace_id", flat=True)
             .distinct()
         )
@@ -251,7 +254,10 @@ class DjangoFindingRepository(FindingStorePort):
     def upsert(self, finding: FindingEntity) -> None:
         from infrastructure.persistence.findings.models import Finding
 
-        Finding.objects.update_or_create(
+        # Scoped explicitly by workspace_id on the lookup, and written from a
+        # context that may not have one bound (ingest runs per scan, not per
+        # request), so it uses the unscoped manager with an explicit filter.
+        Finding.unscoped.update_or_create(
             workspace_id=finding.workspace_id,
             source=finding.source,
             fingerprint=finding.fingerprint,

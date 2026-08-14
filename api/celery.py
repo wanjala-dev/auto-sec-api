@@ -3,6 +3,7 @@ import os
 from celery import Celery
 
 import infrastructure.celery.signals
+import infrastructure.celery.tenancy_signals  # noqa: F401  (registers the tenancy binding signals)
 from infrastructure.celery.database_safe_task import DatabaseSafeTask
 
 # set the default Django settings module for the 'celery' program.

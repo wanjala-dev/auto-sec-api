@@ -77,6 +77,18 @@ def bind_tenant(context: TenantContext) -> Token:
     return _current.set(context)
 
 
+def set_tenant(context: TenantContext | None) -> Token:
+    """Bind *context*, or explicitly bind NOTHING.
+
+    Binding to ``None`` is a real operation, not a no-op: at a boundary that
+    reuses a process — a Celery prefork child running up to 50 tasks — "leave
+    it alone" means "inherit whatever the last unit of work left", which is a
+    cross-tenant read waiting to happen. Setting unconditionally makes each
+    unit start from a known state.
+    """
+    return _current.set(context)
+
+
 def reset_tenant(token: Token) -> None:
     _current.reset(token)
 

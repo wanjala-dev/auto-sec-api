@@ -69,7 +69,9 @@ class Command(BaseCommand):
         dry_run = bool(options.get("dry_run"))
         pause_seconds = max(0.0, float(options.get("pause_ms") or 0.0)) / 1000.0
 
-        findings = Finding.objects.filter(status="suppressed")
+        # A management command binds no workspace (see tenancy/management.py);
+        # this one sweeps every workspace unless --workspace narrows it.
+        findings = Finding.unscoped.filter(status="suppressed")
         if workspace_id:
             findings = findings.filter(workspace_id=workspace_id)
         total = findings.count()

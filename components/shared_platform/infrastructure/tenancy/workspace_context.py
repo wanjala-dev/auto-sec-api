@@ -42,6 +42,11 @@ def bind_workspace(workspace_id: str | UUID) -> Token:
     return _current.set(str(workspace_id))
 
 
+def set_workspace(workspace_id: str | UUID | None) -> Token:
+    """Bind a workspace, or explicitly bind NOTHING. See ``set_tenant``."""
+    return _current.set(str(workspace_id) if workspace_id is not None else None)
+
+
 def reset_workspace(token: Token) -> None:
     _current.reset(token)
 

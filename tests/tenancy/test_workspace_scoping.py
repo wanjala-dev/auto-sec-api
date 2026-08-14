@@ -29,7 +29,7 @@ from components.shared_platform.infrastructure.tenancy.workspace_context import 
     workspace_context,
 )
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.unbound_tenancy]
 
 WS_A = "11111111-1111-1111-1111-111111111111"
 WS_B = "22222222-2222-2222-2222-222222222222"
