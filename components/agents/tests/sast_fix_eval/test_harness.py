@@ -107,16 +107,30 @@ class TestClassAOutcomes:
         assert result.verification == "verified"
         assert result.outcome == "machine_pass"
 
-    def test_a_fix_for_the_neighboring_statement_fails_the_span_gate(self):
+    def test_the_advisor_itself_refuses_a_fix_for_the_neighboring_statement(self):
         """Observed live (candidate-contrastive run): the model fixed the
-        CREATE SCHEMA line for a finding flagging the SET line below it —
-        grounded in the window, shape-clean, and not a remediation of the
-        flagged statement. The span gate makes that a recorded failure."""
+        CREATE SCHEMA line for a finding flagging the SET line below it.
+        With the flagged region known, the advisor's grounding gate now
+        refuses the suggestion outright — the neighboring statement never
+        becomes an artifact."""
         fixture = _fixture("sql-set-search-path-fstring")
         llm = _ScriptedLlm(
             _suggestion(CREATE_SCHEMA_LINE, CORRECT_IDENTIFIER_FIX, fixture=fixture),
         )
         result = run_fixture(fixture, _advisor(llm, fixture))
+        assert result.outcome == "no_artifact"
+
+    def test_the_span_gate_backstops_when_the_flagged_region_is_unknown(self):
+        """A failed file read degrades the advisor to snippet-only grounding
+        (which the neighboring line satisfies — it sits inside the ±3
+        context); the harness span gate is the layer that still records the
+        mismatch."""
+        fixture = _fixture("sql-set-search-path-fstring")
+        llm = _ScriptedLlm(
+            _suggestion(CREATE_SCHEMA_LINE, CORRECT_IDENTIFIER_FIX, fixture=fixture),
+        )
+        advisor = SastFixAdvisor(llm_port=llm, file_reader=lambda ws, repo, path, ref: None)
+        result = run_fixture(fixture, advisor)
         assert result.gates["targets_flagged_span"].startswith("fail")
         assert result.outcome == "gated"
 
