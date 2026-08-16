@@ -134,34 +134,44 @@ class TenantHostMiddleware:
 
     @staticmethod
     def _resolve(request) -> TenantContext | None:
-        from infrastructure.persistence.tenancy.models import RESERVED_SUBDOMAINS, Tenant
+        return resolve_tenant_context(request.get_host())
 
-        label = _subdomain_of(request.get_host())
-        if not label or label in RESERVED_SUBDOMAINS:
-            return POOLED_CONTEXT
 
-        # Reading the registry needs no bound tenant — `tenancy` is a shared app
-        # in the router, which is what stops this being circular.
-        row = (
-            Tenant.objects.filter(subdomain=label, is_active=True)
-            .only("id", "subdomain", "isolation_mode", "db_alias")
-            .first()
-        )
-        if row is None:
-            logger.warning("tenant_host_unresolved subdomain=%s", label)
-            return None
+def resolve_tenant_context(host: str) -> TenantContext | None:
+    """Host → context, or None for an unknown/inactive subdomain.
 
-        if row.isolation_mode == KIND_DEDICATED:
-            return TenantContext(
-                kind=KIND_DEDICATED,
-                tenant_id=str(row.id),
-                subdomain=row.subdomain,
-                db_alias=row.db_alias,
-                workspace_id=str(row.workspace_id) if row.workspace_id else None,
-            )
+    The ONE resolution path, shared by this HTTP middleware and the
+    websocket stack (`tenancy/websocket.py`) so fail-closed behaviour can
+    never fork between the two transports.
+    """
+    from infrastructure.persistence.tenancy.models import RESERVED_SUBDOMAINS, Tenant
+
+    label = _subdomain_of(host)
+    if not label or label in RESERVED_SUBDOMAINS:
+        return POOLED_CONTEXT
+
+    # Reading the registry needs no bound tenant — `tenancy` is a shared app
+    # in the router, which is what stops this being circular.
+    row = (
+        Tenant.objects.filter(subdomain=label, is_active=True)
+        .only("id", "subdomain", "isolation_mode", "db_alias")
+        .first()
+    )
+    if row is None:
+        logger.warning("tenant_host_unresolved subdomain=%s", label)
+        return None
+
+    if row.isolation_mode == KIND_DEDICATED:
         return TenantContext(
-            kind=POOLED_CONTEXT.kind,
+            kind=KIND_DEDICATED,
             tenant_id=str(row.id),
             subdomain=row.subdomain,
+            db_alias=row.db_alias,
             workspace_id=str(row.workspace_id) if row.workspace_id else None,
         )
+    return TenantContext(
+        kind=POOLED_CONTEXT.kind,
+        tenant_id=str(row.id),
+        subdomain=row.subdomain,
+        workspace_id=str(row.workspace_id) if row.workspace_id else None,
+    )

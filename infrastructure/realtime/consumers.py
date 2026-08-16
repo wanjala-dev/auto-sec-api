@@ -35,6 +35,62 @@ from infrastructure.realtime.groups import (
 logger = logging.getLogger(__name__)
 
 
+@database_sync_to_async
+def _is_workspace_member(user_id, workspace_id) -> bool:
+    """Owner or ACTIVE member — shared by every workspace-scoped consumer."""
+    from infrastructure.persistence.workspaces.models import (
+        Workspace,
+        WorkspaceMembership,
+    )
+
+    ws = Workspace.objects.filter(id=workspace_id).only("id", "workspace_owner_id").first()
+    if ws is None:
+        return False
+    if str(ws.workspace_owner_id) == str(user_id):
+        return True
+    return WorkspaceMembership.objects.filter(
+        workspace_id=workspace_id,
+        user_id=user_id,
+        status=WorkspaceMembership.Status.ACTIVE,
+    ).exists()
+
+
+async def _guard_workspace_connection(consumer, user, workspace_id) -> bool:
+    """The two gates every workspace-scoped consumer passes before accept.
+
+    Host↔workspace agreement first (the WS twin of the HTTP 403 — a token
+    for workspace A used against senso.auto-sec.ai must be refused), then
+    membership. On success the workspace is bound to the connection's
+    context so scoped managers resolve for the rest of its lifetime; the
+    tenancy middleware clears it when the connection ends.
+    """
+    from components.shared_platform.infrastructure.tenancy.websocket import (
+        CLOSE_WORKSPACE_MISMATCH,
+        tenant_allows_workspace,
+    )
+    from components.shared_platform.infrastructure.tenancy.workspace_context import (
+        set_workspace,
+    )
+
+    if not tenant_allows_workspace(consumer.scope, workspace_id):
+        pinned = consumer.scope.get("tenant")
+        logger.warning(
+            "ws_tenant_host_workspace_mismatch host_workspace=%s requested_workspace=%s subdomain=%s",
+            pinned.workspace_id if pinned else None,
+            workspace_id,
+            pinned.subdomain if pinned else None,
+        )
+        await consumer.close(code=CLOSE_WORKSPACE_MISMATCH)
+        return False
+
+    if not await _is_workspace_member(user.id, workspace_id):
+        await consumer.close(code=4403)
+        return False
+
+    set_workspace(workspace_id)
+    return True
+
+
 class PingConsumer(AsyncJsonWebsocketConsumer):
     """Smoke-test consumer at ``/ws/ping/`` — echoes whatever payload
     is sent. Used to verify the JWT handshake + nginx routing before
@@ -79,8 +135,7 @@ class ResourceStreamConsumer(AsyncJsonWebsocketConsumer):
         self.resource_id = self.scope["url_route"]["kwargs"]["resource_id"]
         self.group_name = _resource_group(self.resource_type, self.resource_id)
 
-        if not await self._is_workspace_member(user.id, self.workspace_id):
-            await self.close(code=4403)
+        if not await _guard_workspace_connection(self, user, self.workspace_id):
             return
 
         await self.channel_layer.group_add(self.group_name, self.channel_name)
@@ -108,24 +163,6 @@ class ResourceStreamConsumer(AsyncJsonWebsocketConsumer):
         messages and forwards them to the connected client."""
         await self.send_json(event.get("envelope") or {})
 
-    @database_sync_to_async
-    def _is_workspace_member(self, user_id, workspace_id) -> bool:
-        from infrastructure.persistence.workspaces.models import (
-            Workspace,
-            WorkspaceMembership,
-        )
-
-        ws = Workspace.objects.filter(id=workspace_id).only("id", "workspace_owner_id").first()
-        if ws is None:
-            return False
-        if str(ws.workspace_owner_id) == str(user_id):
-            return True
-        return WorkspaceMembership.objects.filter(
-            workspace_id=workspace_id,
-            user_id=user_id,
-            status=WorkspaceMembership.Status.ACTIVE,
-        ).exists()
-
 
 class WorkspaceActivityConsumer(AsyncJsonWebsocketConsumer):
     """Per-workspace activity feed.
@@ -146,8 +183,7 @@ class WorkspaceActivityConsumer(AsyncJsonWebsocketConsumer):
         self.workspace_id = self.scope["url_route"]["kwargs"]["workspace_id"]
         self.group_name = _workspace_group(self.workspace_id)
 
-        if not await self._is_workspace_member(user.id, self.workspace_id):
-            await self.close(code=4403)
+        if not await _guard_workspace_connection(self, user, self.workspace_id):
             return
 
         await self.channel_layer.group_add(self.group_name, self.channel_name)
@@ -171,24 +207,6 @@ class WorkspaceActivityConsumer(AsyncJsonWebsocketConsumer):
 
     async def resource_event(self, event):
         await self.send_json(event.get("envelope") or {})
-
-    @database_sync_to_async
-    def _is_workspace_member(self, user_id, workspace_id) -> bool:
-        from infrastructure.persistence.workspaces.models import (
-            Workspace,
-            WorkspaceMembership,
-        )
-
-        ws = Workspace.objects.filter(id=workspace_id).only("id", "workspace_owner_id").first()
-        if ws is None:
-            return False
-        if str(ws.workspace_owner_id) == str(user_id):
-            return True
-        return WorkspaceMembership.objects.filter(
-            workspace_id=workspace_id,
-            user_id=user_id,
-            status=WorkspaceMembership.Status.ACTIVE,
-        ).exists()
 
 
 class NotificationConsumer(AsyncJsonWebsocketConsumer):

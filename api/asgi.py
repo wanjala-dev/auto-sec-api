@@ -4,7 +4,11 @@ Daphne is the ASGI server for the demo (parallel service to the
 gunicorn HTTP server, see docker-compose). nginx routes ``/ws/*``
 to daphne and everything else to gunicorn.
 
-The WebSocket protocol stack:
+The WebSocket protocol stack (outermost first):
+    - ``TenantBindWebsocketMiddleware`` resolves the tenant from the
+      Host header and binds it for the connection — it MUST wrap the
+      auth stack, because the JWT user lookup is itself a database
+      query the tenant router refuses to route unbound.
     - ``JWTAuthMiddlewareStack`` decodes the ``token`` query string
       param, attaches ``scope["user"]``, rejects on invalid.
     - ``URLRouter`` dispatches to the consumer registered for the
@@ -27,13 +31,15 @@ django_asgi_app = get_asgi_application()
 
 from channels.routing import ProtocolTypeRouter, URLRouter  # noqa: E402
 
+from components.shared_platform.infrastructure.tenancy.websocket import (  # noqa: E402
+    TenantBindWebsocketMiddleware,
+)
 from infrastructure.realtime.middleware import JWTAuthMiddlewareStack  # noqa: E402
 from infrastructure.realtime.routing import websocket_urlpatterns  # noqa: E402
-
 
 application = ProtocolTypeRouter(
     {
         "http": django_asgi_app,
-        "websocket": JWTAuthMiddlewareStack(URLRouter(websocket_urlpatterns)),
+        "websocket": TenantBindWebsocketMiddleware(JWTAuthMiddlewareStack(URLRouter(websocket_urlpatterns))),
     }
 )

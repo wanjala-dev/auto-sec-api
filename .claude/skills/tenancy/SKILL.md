@@ -253,6 +253,29 @@ managers and the Celery prerun/postrun pair (prefork runs signal handlers
 and task body in one context). Hit live on 2026-08-16; unit tests never
 caught it because pytest drives the middleware synchronously in one context.
 
+### 3i. Every transport is an unbound entry point until something binds it
+
+The router failing closed turns "forgot to bind" into a loud error — but each
+transport needs its own binding, and a transport nobody thought of is a
+transport that is down. Found the hard way on 2026-08-16: channels never runs
+Django's `MIDDLEWARE`, so WebSockets had no binding and every connection died
+in the JWT handshake (the user lookup is itself a query — `users` is not a
+shared app). The complete map:
+
+| entry point | bound by |
+|---|---|
+| HTTP | `TenantHostMiddleware` (`MIDDLEWARE` position 3) |
+| WebSocket | `TenantBindWebsocketMiddleware` — wraps the OUTSIDE of the WS stack in `api/asgi.py`, because auth inside it already needs the DB |
+| Celery tasks | `infrastructure/celery/tenancy_signals.py` (headers + prerun/postrun) |
+| Management commands | `run_management_command()` in `manage.py` |
+| Inbound webhooks | resolved from the payload (§3d), bound by the handler |
+
+Adding a new transport (gRPC, SSE endpoint, a second ASGI app, a cron that
+isn't Celery)? It starts unbound. Both transports share ONE host resolution —
+`resolve_tenant_context()` in `middleware.py` — so fail-closed behaviour can
+never fork; WS mirrors the HTTP statuses as close codes (4404 unknown
+subdomain, 4403 host↔workspace mismatch).
+
 ## 4. Invariants (do not regress)
 
 1. Tenant context is a `ContextVar`, set by middleware, cleared in a `finally`.
@@ -275,7 +298,8 @@ caught it because pytest drives the middleware synchronously in one context.
 | Tenant registry (control plane) | `infrastructure/persistence/tenancy/` — the ONLY tenant table in `default` |
 | Context var / bind helpers | `components/shared_platform/infrastructure/tenancy/context.py` |
 | Router | `components/shared_platform/infrastructure/tenancy/router.py` |
-| Subdomain middleware | `components/shared_platform/infrastructure/tenancy/middleware.py` |
+| Subdomain middleware (HTTP) | `components/shared_platform/infrastructure/tenancy/middleware.py` |
+| WebSocket binding + host↔workspace guard | `components/shared_platform/infrastructure/tenancy/websocket.py` |
 | Alias resolution for a model | `components/shared_kernel/infrastructure/adapters/django_db_routing.py` (`db_alias_for_write` — Django's own router API; returns `default` when no routers are registered) |
 | Transaction + lock alias agreement | `components/shared_kernel/application/transactional.py` |
 | Stripe account → alias | `components/payments/infrastructure/adapters/payment_utils.py` |
