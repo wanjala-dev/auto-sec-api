@@ -99,3 +99,44 @@ class TestTheRouterCannotQuietlyFailOpen:
             "TenantRouter._alias_for no longer raises on an unbound tenant. "
             "Absence of a tenant must never resolve to a database (ADR 0029 D4)."
         )
+
+
+class TestTheTenancyMiddlewareWrapsEverythingThatTouchesTheDatabase:
+    """Ordering bug, found by deploying (2026-08-14).
+
+    Middleware runs top→bottom on the request and bottom→top on the response.
+    The tenancy middleware unbinds in a `finally`, so anything ABOVE it in the
+    list runs its response phase AFTER the tenant is already gone — and
+    ``FlatpageFallbackMiddleware`` queries ``FlatPage`` exactly there.
+
+    Placed low, it 500'd every request including ``/api/health/``, so the pod
+    never became ready. The router was right; the ordering was wrong. Nothing in
+    a diff makes that visible, which is why it is asserted here.
+    """
+
+    #: Middleware known to hit the ORM in either phase.
+    _DB_TOUCHING = (
+        "django.contrib.sessions.middleware.SessionMiddleware",
+        "django.contrib.auth.middleware.AuthenticationMiddleware",
+        "django.contrib.flatpages.middleware.FlatpageFallbackMiddleware",
+        "django.contrib.messages.middleware.MessageMiddleware",
+    )
+
+    def test_it_is_listed_before_every_db_touching_middleware(self):
+        from django.conf import settings
+
+        chain = list(settings.MIDDLEWARE)
+        tenancy = (
+            "components.shared_platform.infrastructure.tenancy.middleware.TenantHostMiddleware"
+        )
+        assert tenancy in chain, "TenantHostMiddleware is not installed."
+
+        position = chain.index(tenancy)
+        too_early = [m for m in self._DB_TOUCHING if m in chain and chain.index(m) < position]
+
+        assert not too_early, (
+            f"These middleware run outside the tenant binding: {too_early}. "
+            "Anything that touches the ORM must sit BELOW TenantHostMiddleware, "
+            "or its response phase executes after the tenant is unbound and the "
+            "router raises — which is what took the pod down on 2026-08-14."
+        )
