@@ -21,13 +21,14 @@ from components.shared_platform.infrastructure.tenancy.managers import (
     WorkspaceScopedModel,
 )
 from components.shared_platform.infrastructure.tenancy.middleware import TenantHostMiddleware
-from infrastructure.persistence.tenancy.models import Tenant
 from components.shared_platform.infrastructure.tenancy.workspace_context import (
     UnboundWorkspaceError,
     get_current_workspace,
+    set_workspace,
     without_workspace_scope,
     workspace_context,
 )
+from infrastructure.persistence.tenancy.models import Tenant
 
 pytestmark = [pytest.mark.unit, pytest.mark.unbound_tenancy]
 
@@ -137,6 +138,12 @@ class TestHostWorkspaceAgreement:
     happily and the host means nothing.
     """
 
+    @pytest.fixture(autouse=True)
+    def _clear_workspace_binding(self):
+        """process_view binds the var; outside a real request nothing unbinds it."""
+        yield
+        set_workspace(None)
+
     @staticmethod
     def _run(tenant: TenantContext | None, url_workspace: str | None):
         mw = TenantHostMiddleware(lambda r: "OK")
@@ -157,9 +164,9 @@ class TestHostWorkspaceAgreement:
 
     def test_the_matching_workspace_is_allowed_and_bound(self):
         pinned = TenantContext(kind=KIND_POOLED, tenant_id="t", subdomain="senso", workspace_id=WS_A)
-        response, request = self._run(pinned, WS_A)
+        response, _ = self._run(pinned, WS_A)
         assert response is None
-        assert request._workspace_token is not None
+        assert get_current_workspace() == str(WS_A)
 
     def test_an_unpinned_host_allows_any_workspace(self):
         """The shared console serves many customers; the workspace decides."""
@@ -168,9 +175,9 @@ class TestHostWorkspaceAgreement:
         assert response is None
 
     def test_a_url_without_a_workspace_binds_nothing(self):
-        response, request = self._run(TenantContext(kind=KIND_POOLED), None)
+        response, _ = self._run(TenantContext(kind=KIND_POOLED), None)
         assert response is None
-        assert not hasattr(request, "_workspace_token")
+        assert get_current_workspace() is None
 
     def test_dedicated_host_also_enforces_when_pinned(self):
         pinned = TenantContext(
@@ -184,24 +191,28 @@ class TestHostWorkspaceAgreement:
         assert response is not None and response.status_code == 403
 
 
-class TestTheTokenIsNotStoredOnTheMiddleware:
-    """A middleware instance is shared by every request in the process.
-
-    Per-request state on `self` leaks between concurrent requests — the exact
-    class of bug this subsystem exists to prevent, and one it would be
-    embarrassing to introduce while preventing it.
+class TestTheBindingLivesInTheContextVarNotOnObjects:
+    """A middleware instance is shared by every request in the process, so
+    per-request state on `self` leaks between concurrent requests. And under
+    ASGI, `process_view` and `__call__` run in different copied Contexts, so a
+    reset Token minted in one raises "created in a different Context" when
+    redeemed in the other — which took the first deploy down. The binding is
+    therefore a plain contextvar set, carried nowhere else.
     """
 
-    def test_two_requests_through_one_instance_do_not_share_a_token(self):
+    def test_process_view_stores_no_state_on_the_middleware_or_the_request(self):
         mw = TenantHostMiddleware(lambda r: "OK")
 
         class _Req:
             pass
 
-        a, b = _Req(), _Req()
-        a.tenant = b.tenant = TenantContext(kind=KIND_POOLED)
-        mw.process_view(a, None, (), {"workspace_id": WS_A})
-        mw.process_view(b, None, (), {"workspace_id": WS_B})
-
-        assert a._workspace_token is not b._workspace_token
-        assert not hasattr(mw, "_workspace_token") or mw.__dict__.get("_workspace_token") is None
+        request = _Req()
+        request.tenant = TenantContext(kind=KIND_POOLED)
+        middleware_state_before = dict(mw.__dict__)
+        try:
+            mw.process_view(request, None, (), {"workspace_id": WS_A})
+            assert get_current_workspace() == str(WS_A)
+            assert mw.__dict__ == middleware_state_before
+            assert not hasattr(request, "_workspace_token")
+        finally:
+            set_workspace(None)
