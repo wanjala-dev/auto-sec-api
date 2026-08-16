@@ -125,8 +125,7 @@ def _load() -> tuple[dict[str, RemediationGuidance], dict[str, str], dict[str, s
     for name, body in raw_classes.items():
         body = body or {}
         missing = [
-            k for k in ("strategy", "recommendation", "correct", "wrong", "why")
-            if not str(body.get(k) or "").strip()
+            k for k in ("strategy", "recommendation", "correct", "wrong", "why") if not str(body.get(k) or "").strip()
         ]
         if missing:
             raise RemediationGuidanceError(f"Remediation class {name!r} is missing: {', '.join(missing)}")
@@ -137,9 +136,7 @@ def _load() -> tuple[dict[str, RemediationGuidance], dict[str, str], dict[str, s
             correct=str(body["correct"]).strip(),
             wrong=str(body["wrong"]).strip(),
             why=str(body["why"]).strip(),
-            placeholders=tuple(
-                str(ph) for ph in (body.get("placeholders") or []) if str(ph).strip()
-            ),
+            placeholders=tuple(str(ph) for ph in (body.get("placeholders") or []) if str(ph).strip()),
             anti_patterns=tuple(
                 AntiPattern(regex=str(ap.get("regex") or ""), why=str(ap.get("why") or ""))
                 for ap in (body.get("anti_patterns") or [])
@@ -221,10 +218,17 @@ def _iter_cwes(cwes: object):
 def prompt_block(guidance: RemediationGuidance | None) -> str:
     """The advisor-facing guidance block, or ``""`` when the rule is unmapped.
 
-    Leads with the recommendation, shows the correct shape, then names the
-    near-miss explicitly. The anti-example is the load-bearing part: the failures
-    this exists to stop were all *plausible*, so telling the model what right looks
-    like is not enough — it has to be told which wrong answer it is drawn to.
+    Ordering is load-bearing and measured, not stylistic. The 2026-08-16
+    baseline caught the model returning the block's wrong example BYTE-FOR-BYTE
+    as its fix — the anchoring failure the repair literature quantifies (~44%
+    of model errors reproduce shown wrong code verbatim). Two rules follow:
+
+    - The wrong example appears only as a LABELED CONTRASTIVE PAIR — the
+      near-miss with its why attached, immediately followed by the correct
+      shape — never as a free-standing "don't do this" (that is the
+      pink-elephant form our own prompt-hygiene rules ban).
+    - The CORRECT shape is the LAST code the model reads. Recency wins;
+      putting the wrong example last is what the baseline measured.
     """
     if guidance is None:
         return ""
@@ -232,11 +236,11 @@ def prompt_block(guidance: RemediationGuidance | None) -> str:
         "remediation guidance for this rule class "
         f"({guidance.remediation_class}) — follow it unless the code contradicts it:",
         f"  how to fix: {guidance.recommendation}",
-        "  correct SHAPE (an illustration, NOT code to copy):",
-        *[f"    {ln}" for ln in guidance.correct.splitlines()],
-        "  a WRONG fix that looks right (do not produce this):",
+        "  the near-miss this rule's fixes are drawn to:",
         *[f"    {ln}" for ln in guidance.wrong.splitlines()],
-        f"  why the difference matters: {guidance.why}",
+        f"  why it fails: {guidance.why}",
+        "  the correct SHAPE to produce instead (an illustration, NOT code to copy):",
+        *[f"    {ln}" for ln in guidance.correct.splitlines()],
     ]
     if guidance.placeholders:
         lines.append(
