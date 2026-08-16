@@ -307,6 +307,11 @@ DATABASES = {
     "default": dj_database_url.config(default=env("DATABASE_URL")),
 }
 
+# Dedicated-tier tenant databases (ADR 0029 D2). Added BEFORE the pool /
+# PgBouncer blocks below so every tenant alias gets the same connection
+# treatment as `default`. Empty unless TENANT_DATABASE_URLS is set.
+DATABASES.update(tenant_databases_from_env(env("TENANT_DATABASE_URLS", default="")))  # noqa: F405
+
 DB_POOL_ENABLED = env.bool("DB_POOL_ENABLED", default=False)
 if DB_POOL_ENABLED:
     pool_max_size = env.int("DB_POOL_MAX_SIZE", default=0)

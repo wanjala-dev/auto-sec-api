@@ -50,6 +50,53 @@ def apply_pgbouncer_settings(databases):
     return databases
 
 
+def tenant_databases_from_env(raw_json):
+    """Parse ``TENANT_DATABASE_URLS`` into extra ``DATABASES`` aliases.
+
+    The dedicated tier (ADR 0029 D2, tenancy skill §8): each dedicated tenant
+    gets its own database, and provisioning one is an operational action —
+    create the database, add its connection string HERE, insert the registry
+    row, run ``migrate --database=<alias>``. The env value is a JSON object
+    mapping alias → URL:
+
+        TENANT_DATABASE_URLS={"tenant_acme": "postgres://user:pw@host:5432/tenant_acme"}
+
+    The alias must match the registry row's ``db_alias`` exactly — the router
+    returns it verbatim. ``default`` can never be redefined this way: it is
+    the control plane (ADR 0029 D9), and silently replacing it with a tenant
+    connection would be the quietest possible way to cross the streams.
+    """
+    import json
+
+    import dj_database_url
+    from django.core.exceptions import ImproperlyConfigured
+
+    if not raw_json or not raw_json.strip():
+        return {}
+    try:
+        mapping = json.loads(raw_json)
+    except ValueError as exc:
+        raise ImproperlyConfigured(f"TENANT_DATABASE_URLS is not valid JSON: {exc}") from exc
+    if not isinstance(mapping, dict):
+        raise ImproperlyConfigured("TENANT_DATABASE_URLS must be a JSON object of alias -> URL")
+
+    databases = {}
+    for alias, url in mapping.items():
+        if alias == "default":
+            raise ImproperlyConfigured(
+                "TENANT_DATABASE_URLS must not define 'default' — the control plane "
+                "connection comes from DATABASE_URL (ADR 0029 D9)."
+            )
+        config = dj_database_url.parse(url)
+        if config.get("ENGINE") == "django.db.backends.postgresql_psycopg2":
+            # The pinned dj-database-url still emits the pre-1.9 alias; the
+            # pool/PgBouncer helpers above match only the modern name, so the
+            # legacy spelling would silently opt tenant aliases out of pooling.
+            config["ENGINE"] = "django.db.backends.postgresql"
+        databases[alias] = config
+    return databases
+
+
 TEMPLATE_DIRS = list(
     dict.fromkeys(
         [
