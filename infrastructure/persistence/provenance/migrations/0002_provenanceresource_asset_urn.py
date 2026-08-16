@@ -22,8 +22,9 @@ def _canonical_urn(source_system: str, external_ref: str) -> str:
 
 
 def backfill_asset_urn(apps, schema_editor):
+    db_alias = schema_editor.connection.alias
     ProvenanceResource = apps.get_model("provenance", "ProvenanceResource")
-    rows = ProvenanceResource.objects.all().only("id", "source_system", "external_ref", "asset_urn")
+    rows = ProvenanceResource.objects.using(db_alias).all().only("id", "source_system", "external_ref", "asset_urn")
     for resource in rows.iterator(chunk_size=500):
         if resource.asset_urn:
             continue

@@ -23,12 +23,13 @@ _SOURCE = "cloud_posture.prowler"
 
 
 def copy_scans_to_scanruns(apps, schema_editor):
+    db_alias = schema_editor.connection.alias
     CloudPostureScan = apps.get_model("cloud_posture", "CloudPostureScan")
     ScanRun = apps.get_model("scanning", "ScanRun")
 
-    for scan in CloudPostureScan.objects.all().iterator(chunk_size=500):
+    for scan in CloudPostureScan.objects.using(db_alias).all().iterator(chunk_size=500):
         status = scan.status if scan.status in ("completed", "failed") else "completed"
-        run = ScanRun.objects.create(
+        run = ScanRun.objects.using(db_alias).create(
             workspace_id=scan.workspace_id,
             source=_SOURCE,
             target_ref=(scan.account_id or "")[:512],
@@ -46,7 +47,7 @@ def copy_scans_to_scanruns(apps, schema_editor):
             completed_at=scan.completed_at,
         )
         # auto_now_add stamped "now" on insert; restore the honest history order.
-        ScanRun.objects.filter(id=run.id).update(created_at=scan.created_at)
+        ScanRun.objects.using(db_alias).filter(id=run.id).update(created_at=scan.created_at)
 
 
 class Migration(migrations.Migration):

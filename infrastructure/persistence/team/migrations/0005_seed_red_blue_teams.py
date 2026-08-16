@@ -16,26 +16,27 @@ from django.db import migrations
 
 
 def seed_red_blue(apps, schema_editor):
+    db_alias = schema_editor.connection.alias
     Team = apps.get_model("team", "Team")
     TeamMembership = apps.get_model("team", "TeamMembership")
     Workspace = apps.get_model("workspaces", "Workspace")
 
-    for workspace in Workspace.objects.all().iterator(chunk_size=500):
+    for workspace in Workspace.objects.using(db_alias).all().iterator(chunk_size=500):
         # Promote the default/home team to Blue (defensive-by-default).
-        default_team = Team.objects.filter(workspace=workspace, is_default=True).first()
+        default_team = Team.objects.using(db_alias).filter(workspace=workspace, is_default=True).first()
         if default_team and default_team.kind in ("department", "project_team"):
             default_team.kind = "blue_team"
             default_team.save(update_fields=["kind"])
 
         # Seed the Red team if the workspace has none.
-        if Team.objects.filter(workspace=workspace, kind="red_team").exists():
+        if Team.objects.using(db_alias).filter(workspace=workspace, kind="red_team").exists():
             continue
         owner = default_team.created_by if default_team else None
         if owner is None:
             # No home team to inherit an owner from — skip; bootstrap will seed it
             # on next workspace access.
             continue
-        red = Team.objects.create(
+        red = Team.objects.using(db_alias).create(
             workspace=workspace,
             title="Red Team",
             created_by=owner,
@@ -45,7 +46,9 @@ def seed_red_blue(apps, schema_editor):
             kind="red_team",
         )
         red.members.add(owner)
-        TeamMembership.objects.get_or_create(team=red, user=owner, defaults={"role": "lead", "status": "active"})
+        TeamMembership.objects.using(db_alias).get_or_create(
+            team=red, user=owner, defaults={"role": "lead", "status": "active"}
+        )
 
 
 def noop_reverse(apps, schema_editor):

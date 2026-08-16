@@ -12,11 +12,12 @@ from django.db import migrations
 
 
 def copy_github_connections(apps, schema_editor):
+    db_alias = schema_editor.connection.alias
     GitHubConnection = apps.get_model("integrations", "GitHubConnection")
     VcsConnection = apps.get_model("integrations", "VcsConnection")
 
-    for gh in GitHubConnection.objects.all().iterator():
-        _, created = VcsConnection.objects.get_or_create(
+    for gh in GitHubConnection.objects.using(db_alias).all().iterator():
+        _, created = VcsConnection.objects.using(db_alias).get_or_create(
             id=gh.id,  # preserve identity → idempotent on re-run
             defaults={
                 "workspace_id": gh.workspace_id,
@@ -33,7 +34,7 @@ def copy_github_connections(apps, schema_editor):
         )
         if created:
             # created_at is auto_now_add; .update() bypasses it to preserve the original.
-            VcsConnection.objects.filter(id=gh.id).update(created_at=gh.created_at)
+            VcsConnection.objects.using(db_alias).filter(id=gh.id).update(created_at=gh.created_at)
 
 
 def noop_reverse(apps, schema_editor):
