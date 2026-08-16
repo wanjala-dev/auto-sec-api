@@ -80,6 +80,42 @@ class TestTheControlPlaneHoldsNoCustomerData:
             )
 
 
+class TestTheSharedSetIsFkClosed:
+    """No tenant-routed model may FK/M2M into a shared app — the FK cannot
+    span databases.
+
+    Proven the hard way on the first `migrate --database=tenant_acme`
+    (2026-08-16): `auth` was in SHARED_APP_LABELS, so `auth_group` existed
+    only in `default`, and creating `users_customuser_groups` in the tenant
+    database failed on the dangling FK. Django's contrib apps FK each other
+    (users → auth → contenttypes; flatpages/socialaccount → sites; admin →
+    users), which is why the shared set is just the registry and by-value
+    reference data. Shared apps stay reachable from tenant data only BY VALUE
+    (the CVE string into vuln_intel, the bare-UUID workspace pointer on
+    tenancy.Tenant) — never by ForeignKey.
+    """
+
+    def test_no_tenant_routed_model_fks_into_a_shared_app(self):
+        offenders = []
+        for model in apps.get_models(include_auto_created=True):
+            if model._meta.app_label in SHARED_APP_LABELS:
+                continue
+            for field in model._meta.get_fields():
+                if not getattr(field, "is_relation", False) or field.related_model is None:
+                    continue
+                if field.auto_created and not field.concrete:
+                    continue  # reverse accessor — counted from the owning side
+                if field.related_model._meta.app_label in SHARED_APP_LABELS:
+                    offenders.append(f"{model._meta.label}.{field.name} -> {field.related_model._meta.label}")
+
+        assert not offenders, (
+            "These tenant-routed relations point into a shared (default-only) "
+            f"app and cannot span databases: {offenders}. Either the target app "
+            "is not really shared (remove it from SHARED_APP_LABELS) or the "
+            "relation must become a by-value join (store the natural key, no FK)."
+        )
+
+
 class TestTheRouterCannotQuietlyFailOpen:
     """The fallback that makes every unbound path a silent cross-tenant access.
 
@@ -126,9 +162,7 @@ class TestTheTenancyMiddlewareWrapsEverythingThatTouchesTheDatabase:
         from django.conf import settings
 
         chain = list(settings.MIDDLEWARE)
-        tenancy = (
-            "components.shared_platform.infrastructure.tenancy.middleware.TenantHostMiddleware"
-        )
+        tenancy = "components.shared_platform.infrastructure.tenancy.middleware.TenantHostMiddleware"
         assert tenancy in chain, "TenantHostMiddleware is not installed."
 
         position = chain.index(tenancy)
