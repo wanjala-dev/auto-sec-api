@@ -216,6 +216,43 @@ Hit on 2026-08-14 while building Phase 0. The runtime therefore lives in
 inherited middleware and router lived — same concern, established home, and out
 of the shim's reach.
 
+### 3g. An IP-literal host is not a tenant claim
+
+The kubelet probes `/api/health/` with the pod IP as the Host header. Parsing
+`10.1.2.128` as `subdomain.domain` yields tenant `"10"`, the registry has no
+such tenant, and fail-closed does exactly its job — every readiness probe
+404s and the rollout can never go healthy. Hit on the very first deploy
+(2026-08-16); it also wore a second costume the deploy before: the probe's
+404 sent the response into `FlatpageFallbackMiddleware`, whose `FlatPage`
+query then crashed on the unbound tenant (the middleware-ordering bug,
+PR #352).
+
+`_subdomain_of()` classifies any IPv4/IPv6 literal (bare or bracketed) as a
+bare host → pooled. An IP says where the request went, not who it is for.
+Direct-IP traffic is infrastructure (probes, pod-to-pod); external traffic
+reaches a tenant only through a hostname the gateway routes.
+
+### 3h. ContextVar Tokens cannot cross asgiref hops — bind with set, clean with clear
+
+Under daphne every sync layer (middleware `__call__`, `process_view`, the
+view) runs through asgiref's `sync_to_async` in its own COPIED
+`contextvars.Context`. asgiref restores modified **values** to the caller
+after each hop — which is why a `set()` in `process_view` is visible to the
+view and to `__call__`'s `finally` — but a **Token** is redeemable only in
+the context that minted it. Resetting a `process_view` token in `__call__`
+raises `ValueError: ... was created in a different Context` and 500s every
+workspace-scoped request. The tenant token in the same middleware survived
+only because both its calls share one hop — luck, not design.
+
+Rule: at a REQUEST boundary the middleware is the outermost scope, so
+"restore previous" and "clear" are the same operation — bind with
+`set_tenant(...)`/`set_workspace(...)`, clear with `set_*(None)` in the
+`finally`, and carry no token anywhere. Tokens stay correct for
+single-context nesting: the `tenant_context()`/`workspace_context()` context
+managers and the Celery prerun/postrun pair (prefork runs signal handlers
+and task body in one context). Hit live on 2026-08-16; unit tests never
+caught it because pytest drives the middleware synchronously in one context.
+
 ## 4. Invariants (do not regress)
 
 1. Tenant context is a `ContextVar`, set by middleware, cleared in a `finally`.

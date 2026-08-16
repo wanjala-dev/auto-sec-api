@@ -14,7 +14,6 @@ import pytest
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 
-from infrastructure.persistence.tenancy.models import RESERVED_SUBDOMAINS, Tenant
 from components.shared_platform.infrastructure.tenancy.context import (
     KIND_DEDICATED,
     KIND_POOLED,
@@ -27,6 +26,7 @@ from components.shared_platform.infrastructure.tenancy.context import (
 )
 from components.shared_platform.infrastructure.tenancy.middleware import TenantHostMiddleware, _subdomain_of
 from components.shared_platform.infrastructure.tenancy.router import TenantRouter
+from infrastructure.persistence.tenancy.models import RESERVED_SUBDOMAINS, Tenant
 
 pytestmark = [pytest.mark.unit, pytest.mark.unbound_tenancy]
 
@@ -158,6 +158,14 @@ class TestSubdomainParsing:
             ("localhost:8000", ""),
             ("testserver", ""),
             ("", ""),
+            # IP literals carry no tenant claim. The kubelet probes
+            # /api/health/ with the pod IP as the Host header; parsing
+            # "10.1.2.128" as tenant "10" failed every readiness probe closed.
+            ("10.1.2.128:8000", ""),
+            ("10.1.2.128", ""),
+            ("192.168.65.3", ""),
+            ("[::1]:8000", ""),
+            ("[2001:db8::1]", ""),
         ],
     )
     def test_label_extraction(self, host, expected):
@@ -214,6 +222,10 @@ class TestHostResolution:
 
     def test_bare_local_host_binds_pooled(self):
         assert self._resolve("autosec.local") == POOLED_CONTEXT
+
+    def test_ip_literal_host_binds_pooled_so_probes_pass(self):
+        """The kubelet addresses the pod by IP — that must never 404."""
+        assert self._resolve("10.1.2.128:8000") == POOLED_CONTEXT
 
     def test_unknown_subdomain_is_refused_not_defaulted(self):
         """Falling through to the console would make a typo act as a tenant."""

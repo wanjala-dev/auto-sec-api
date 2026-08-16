@@ -13,6 +13,7 @@ rather than leaving the context empty: "nothing bound" has to keep meaning
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 
 from django.http import HttpResponseForbidden, HttpResponseNotFound
@@ -21,13 +22,9 @@ from components.shared_platform.infrastructure.tenancy.context import (
     KIND_DEDICATED,
     POOLED_CONTEXT,
     TenantContext,
-    bind_tenant,
-    reset_tenant,
+    set_tenant,
 )
-from components.shared_platform.infrastructure.tenancy.workspace_context import (
-    bind_workspace,
-    reset_workspace,
-)
+from components.shared_platform.infrastructure.tenancy.workspace_context import set_workspace
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +35,22 @@ _BARE_HOSTS = frozenset({"localhost", "127.0.0.1", "autosec.local", "testserver"
 
 def _subdomain_of(host: str) -> str:
     """Return the tenant label, or "" when the host carries none."""
-    host = host.split(":")[0].strip().lower().rstrip(".")
+    host = host.strip().lower().rstrip(".")
+    if host.startswith("["):
+        # Bracketed IPv6 literal ("[::1]:8000") — an address, never a tenant.
+        return ""
+    host = host.split(":")[0]
     if not host or host in _BARE_HOSTS:
+        return ""
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        # An IP literal says where the request went, not who it is for — it
+        # carries no tenant claim. Kubelet probes and pod-to-pod traffic
+        # address the pod by IP; parsing "10.1.2.128" as tenant "10" made
+        # every readiness probe fail closed and took the rollout down.
         return ""
     labels = host.split(".")
     # "auto-sec.ai" (2 labels) has no tenant label; "senso.auto-sec.ai" does.
@@ -70,10 +81,12 @@ class TenantHostMiddleware:
         becomes a second, independent check on which customer's data a request
         may touch — one a stolen or mis-scoped token does not satisfy.
 
-        The token goes on the REQUEST, never on ``self``: a middleware instance
-        is shared by every request in the process, so per-request state stored
-        on it leaks across requests — the exact bug this subsystem exists to
-        prevent.
+        The binding is a plain ``set`` on the contextvar — no token, no state
+        on ``self`` or the request. A middleware instance is shared by every
+        request in the process, so state on it leaks across requests; and
+        under ASGI this hook runs in a different copied Context than
+        ``__call__``, so a reset token minted here could never be redeemed
+        there anyway. ``__call__``'s finally clears the var instead.
         """
         workspace_id = view_kwargs.get("workspace_id")
         if workspace_id is None:
@@ -89,7 +102,7 @@ class TenantHostMiddleware:
             )
             return HttpResponseForbidden("This workspace is not available on this host.")
 
-        request._workspace_token = bind_workspace(workspace_id)
+        set_workspace(workspace_id)
         return None
 
     def __call__(self, request):
@@ -102,18 +115,22 @@ class TenantHostMiddleware:
             return HttpResponseNotFound("Organization not found.")
 
         request.tenant = context
-        token = bind_tenant(context)
+        set_tenant(context)
         try:
             return self.get_response(request)
         finally:
-            # Both bindings must be released even when the view raises; a leaked
-            # binding hands the next unit of work on this task the wrong tenant
-            # or the wrong workspace.
-            workspace_token = getattr(request, "_workspace_token", None)
-            if workspace_token is not None:
-                reset_workspace(workspace_token)
-                request._workspace_token = None
-            reset_tenant(token)
+            # Clear, never token-reset. Under ASGI each sync layer runs in its
+            # own copied contextvars.Context (asgiref's sync_to_async bridge):
+            # modified VALUES are restored across those hops, but a Token is
+            # bound to the context it was minted in — a token from
+            # process_view raises "created in a different Context" when reset
+            # here. The middleware is the outermost scope of a request, so
+            # "restore previous" and "clear" mean the same thing, and both
+            # bindings must be released even when the view raises; a leaked
+            # binding hands the next unit of work the wrong tenant or
+            # workspace.
+            set_workspace(None)
+            set_tenant(None)
 
     @staticmethod
     def _resolve(request) -> TenantContext | None:
