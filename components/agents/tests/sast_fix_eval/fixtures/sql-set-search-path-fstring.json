@@ -1,0 +1,15 @@
+{
+  "id": "sql-set-search-path-fstring",
+  "rule_id": "autosec.python.sql-execute-format",
+  "fix_class": "A",
+  "kind": "sql-guc",
+  "path": "app/management/commands/migrate_schema.py",
+  "start_line": 14,
+  "end_line": 14,
+  "language": "python",
+  "message": "SQL query built with an f-string; dynamic content reaches cursor.execute unparameterized (CWE-89).",
+  "source_file": "sql_migrate_schema.py",
+  "expected": "patch",
+  "notes": "Provenance: dogfood finding 9977 — the PERSISTENT failure. SET is a utility statement: under server-side binding 'SET ... %s' fails outright; the universally-valid fix is SELECT set_config('search_path', %s, false) with a no-comma identifier guard, or sql.Identifier composition. Plain %s binding is the recorded wrong shape.",
+  "awkward": false
+}

@@ -1,0 +1,15 @@
+{
+  "id": "sql-select-fstring-value",
+  "rule_id": "autosec.python.sql-execute-format",
+  "fix_class": "A",
+  "kind": "sql-value",
+  "path": "app/reports/sql_report_filter.py",
+  "start_line": 8,
+  "end_line": 8,
+  "language": "python",
+  "message": "SQL query built with an f-string; dynamic content reaches cursor.execute unparameterized (CWE-89).",
+  "source_file": "sql_report_filter.py",
+  "expected": "patch",
+  "notes": "POSITIVE CONTROL for the identifier work: the dynamic parts here are VALUES, so plain %s parameterization is the correct fix. Guards against over-correcting the class into composing sql.Identifier around everything.",
+  "awkward": false
+}
