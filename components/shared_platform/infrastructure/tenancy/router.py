@@ -44,14 +44,21 @@ from components.shared_platform.infrastructure.tenancy.context import (
 #: absurd. Reference data is joined BY VALUE (on the CVE string), never by a
 #: ForeignKey — an FK from tenant data into a shared table cannot span databases
 #: and would block the split outright.
+#: THE MEMBERSHIP RULE — the shared set must be FK-CLOSED: no tenant-routed
+#: model may hold a ForeignKey/M2M into a shared app, because that FK cannot
+#: span databases. The first `migrate --database=tenant_acme` proved the point
+#: (2026-08-16): `auth` was listed here, so `auth_group` existed only in
+#: `default`, and creating `users_customuser_groups` in the tenant database
+#: failed on the dangling FK. Django's contrib apps all FK each other (users →
+#: auth → contenttypes; flatpages/socialaccount → sites; admin → users), so
+#: they are tenant-routed: present in `default` for the pool AND in every
+#: dedicated database — each dedicated tenant gets its own groups,
+#: permissions, content types and sessions, which is exactly what "your own
+#: database" means. Enforced by
+#: tests/architecture/test_tenancy_boundaries.py::TestTheSharedSetIsFkClosed.
 SHARED_APP_LABELS = frozenset(
     {
         "tenancy",
-        "contenttypes",
-        "sessions",
-        "sites",
-        "admin",
-        "auth",
         "vuln_intel",
     }
 )
