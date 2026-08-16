@@ -13,6 +13,7 @@ rather than leaving the context empty: "nothing bound" has to keep meaning
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 
 from django.http import HttpResponseForbidden, HttpResponseNotFound
@@ -38,8 +39,22 @@ _BARE_HOSTS = frozenset({"localhost", "127.0.0.1", "autosec.local", "testserver"
 
 def _subdomain_of(host: str) -> str:
     """Return the tenant label, or "" when the host carries none."""
-    host = host.split(":")[0].strip().lower().rstrip(".")
+    host = host.strip().lower().rstrip(".")
+    if host.startswith("["):
+        # Bracketed IPv6 literal ("[::1]:8000") — an address, never a tenant.
+        return ""
+    host = host.split(":")[0]
     if not host or host in _BARE_HOSTS:
+        return ""
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        # An IP literal says where the request went, not who it is for — it
+        # carries no tenant claim. Kubelet probes and pod-to-pod traffic
+        # address the pod by IP; parsing "10.1.2.128" as tenant "10" made
+        # every readiness probe fail closed and took the rollout down.
         return ""
     labels = host.split(".")
     # "auto-sec.ai" (2 labels) has no tenant label; "senso.auto-sec.ai" does.
