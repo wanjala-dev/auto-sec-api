@@ -1,0 +1,15 @@
+{
+  "id": "subprocess-shell-true-simple",
+  "rule_id": "autosec.python.subprocess-shell-true",
+  "fix_class": "A",
+  "kind": "argv-list",
+  "path": "ops/deploy_helper.py",
+  "start_line": 7,
+  "end_line": 7,
+  "language": "python",
+  "message": "subprocess called with shell=True and dynamic input; command injection via the interpolated value (CWE-78).",
+  "source_file": "subprocess_deploy_helper.py",
+  "expected": "patch",
+  "notes": "Straightforward member of argv-list-not-shell: the fix is an argv list without shell=True.",
+  "awkward": false
+}

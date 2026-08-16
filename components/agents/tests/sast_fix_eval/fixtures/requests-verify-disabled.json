@@ -1,0 +1,15 @@
+{
+  "id": "requests-verify-disabled",
+  "rule_id": "autosec.python.requests-verify-disabled",
+  "fix_class": "A",
+  "kind": "trust-store",
+  "path": "integrations/requests_webhook_probe.py",
+  "start_line": 7,
+  "end_line": 7,
+  "language": "python",
+  "message": "requests call with verify=False disables TLS certificate verification (CWE-295).",
+  "source_file": "requests_webhook_probe.py",
+  "expected": "patch",
+  "notes": "verify-with-trust-store class: remove verify=False (default verifies) or point verify at a CA bundle — never verify=True with a suppressed warning.",
+  "awkward": false
+}

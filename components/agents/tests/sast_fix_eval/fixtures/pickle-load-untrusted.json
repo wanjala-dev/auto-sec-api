@@ -1,0 +1,15 @@
+{
+  "id": "pickle-load-untrusted",
+  "rule_id": "autosec.python.pickle-load-untrusted",
+  "fix_class": "B",
+  "kind": "needs-format-change",
+  "path": "sessions/pickle_session_cache.py",
+  "start_line": 7,
+  "end_line": 7,
+  "language": "python",
+  "message": "pickle.loads on untrusted bytes executes arbitrary code during deserialization (CWE-502).",
+  "source_file": "pickle_session_cache.py",
+  "expected": "decline",
+  "notes": "different-format class (guidance_only): the fix is moving the session format to JSON or signed serialization — a design change touching every writer and reader, not a line edit at the loads call.",
+  "awkward": false
+}

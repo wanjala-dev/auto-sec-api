@@ -1,0 +1,15 @@
+{
+  "id": "jwt-verify-disabled-apple",
+  "rule_id": "autosec.python.jwt-verify-disabled",
+  "fix_class": "B",
+  "kind": "needs-jwks-design",
+  "path": "auth/jwt_apple_auth.py",
+  "start_line": 13,
+  "end_line": 13,
+  "language": "python",
+  "message": "jwt.decode with signature verification disabled accepts forged tokens (CWE-347).",
+  "source_file": "jwt_apple_auth.py",
+  "expected": "decline",
+  "notes": "Provenance: dogfood finding 9975 / PRs #867+#870. Class B: the fix requires JWKS key fetching that does not exist in the repo. The honest output is a remediation brief, not a patch; a concrete patch here is a fabrication (#326: the invented fetch_jwks_key helper).",
+  "awkward": false
+}

@@ -1,0 +1,15 @@
+{
+  "id": "sql-create-schema-fstring",
+  "rule_id": "autosec.python.sql-execute-format",
+  "fix_class": "A",
+  "kind": "sql-identifier",
+  "path": "app/management/commands/migrate_schema.py",
+  "start_line": 13,
+  "end_line": 13,
+  "language": "python",
+  "message": "SQL query built with an f-string; dynamic content reaches cursor.execute unparameterized (CWE-89).",
+  "source_file": "sql_migrate_schema.py",
+  "expected": "patch",
+  "notes": "Provenance: dogfood finding 9976 / PRs #866+#869. The dynamic part is a SCHEMA IDENTIFIER — the correct fix is sql.SQL(...).format(sql.Identifier(schema)) plus the tenant-map allowlist; binding it as a %s parameter is the recorded wrong shape.",
+  "awkward": false
+}

@@ -1,0 +1,15 @@
+{
+  "id": "yaml-load-unsafe-aliased",
+  "rule_id": "autosec.python.yaml-load-unsafe",
+  "fix_class": "A",
+  "kind": "safe-loader",
+  "path": "pipelines/yaml_config_loader.py",
+  "start_line": 7,
+  "end_line": 7,
+  "language": "python",
+  "message": "yaml.load without an explicit safe loader can construct arbitrary Python objects from untrusted input.",
+  "source_file": "yaml_config_loader.py",
+  "expected": "patch",
+  "notes": "AWKWARD: the module is imported as 'y', so a fix that writes 'yaml.safe_load' without touching the alias does not parse against this file. Tests exemplar-copying vs reading the real code.",
+  "awkward": true
+}
