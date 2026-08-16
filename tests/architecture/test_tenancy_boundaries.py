@@ -174,3 +174,26 @@ class TestTheTenancyMiddlewareWrapsEverythingThatTouchesTheDatabase:
             "or its response phase executes after the tenant is unbound and the "
             "router raises — which is what took the pod down on 2026-08-14."
         )
+
+
+class TestBootTimeSeedsBindExplicitly:
+    """``AppConfig.ready()`` runs with no tenant bound, so any ready()-time
+    query must say which database it means. The agents catalog seed raised
+    ``UnboundTenantError`` at every boot of every process until it did
+    (2026-08-16) — its own except-guard swallowed the failure, so only the
+    logs knew, and the lazy request-time path quietly carried the load.
+    """
+
+    def test_the_agent_type_boot_seed_runs_in_pooled_context(self):
+        import inspect
+
+        from components.agents.cli import apps as agents_cli_apps
+
+        source = inspect.getsource(agents_cli_apps.AgentsCLIConfig.ready)
+        sync_call = source.index("sync_agent_types_from_registry(overrides")
+        binding = source.index("with pooled_scope():")
+        assert binding < sync_call, (
+            "The boot-time AgentType seed no longer binds pooled_scope() before "
+            "querying. Boot has no tenant bound; the fail-closed router will raise "
+            "on every process start and the seed silently degrades to lazy-only."
+        )
