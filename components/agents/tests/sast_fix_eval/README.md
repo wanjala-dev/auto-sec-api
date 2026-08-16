@@ -65,3 +65,8 @@ Provenance of v1: the three ADR 0025 corpus findings (9976 CREATE SCHEMA, 9977
 SET search_path, 9975 Apple JWT) plus hand-authored strata — a value-kind
 positive control, an aliased-import awkward case, and one fixture each for the
 argv-list / safe-loader / trust-store / different-format classes.
+
+7. **Reports are written inside the pod and die with it** — `kubectl cp` (or
+   `kubectl exec ... cat`) the JSON out immediately after a run; two
+   intermediate candidate reports were lost to a rollout before this line
+   existed.

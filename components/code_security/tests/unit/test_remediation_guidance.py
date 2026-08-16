@@ -30,11 +30,11 @@ import yaml
 from components.code_security.domain.remediation_guidance import (
     check_patch,
     guidance_for,
+    patch_parses,
     prompt_block,
     remediation_classes,
     rule_bindings,
     unmapped_rules,
-    patch_parses,
 )
 from components.code_security.infrastructure.services.ruleset import _RULES_DIR
 
@@ -188,8 +188,28 @@ class TestPromptBlock:
     def test_block_carries_recommendation_correct_and_anti_example(self):
         block = prompt_block(guidance_for("autosec.python.sql-execute-format"))
         assert "sql.Identifier" in block, "the correct shape must be shown"
-        assert "CREATE SCHEMA IF NOT EXISTS %s" in block, "the anti-example must be shown"
-        assert "do not produce this" in block
+        assert "CREATE SCHEMA IF NOT EXISTS %s" in block, "the contrastive near-miss must be shown"
+
+    def test_the_correct_shape_is_the_last_code_the_model_reads(self):
+        """Contrastive ordering, measured not stylistic: the 2026-08-16 baseline
+        caught the model returning the block's wrong example byte-for-byte as
+        its fix when the wrong example appeared after the correct one. The
+        near-miss is a labeled pair (wrong + why, immediately followed by the
+        correct shape); the correct shape comes last because recency wins."""
+        block = prompt_block(guidance_for("autosec.python.sql-execute-format"))
+        wrong_at = block.index("CREATE SCHEMA IF NOT EXISTS %s")
+        why_at = block.index("why it fails:")
+        # Anchor on the section marker, not a code token — "sql.Identifier"
+        # also appears in the recommendation line above the pair.
+        correct_at = block.index("the correct SHAPE to produce instead")
+        assert wrong_at < why_at < correct_at
+
+    def test_no_pink_elephant_phrasing(self):
+        """Free-standing negative instructions are the fixation form our own
+        prompt-hygiene rules ban (§12.2); the near-miss is labeled, not
+        forbidden."""
+        block = prompt_block(guidance_for("autosec.python.sql-execute-format"))
+        assert "do not produce this" not in block.lower()
 
 
 class TestExemplarsCannotBePasted:
@@ -218,6 +238,7 @@ class TestExemplarsCannotBePasted:
         "sql.SQL",
         "sql.Identifier",
         "format",  # psycopg Composed.format — the identifier composer, genuinely real
+        "set_config",  # PostgreSQL built-in (pg_catalog.set_config) — SQL inside the string, not a Python helper
         "format_html",
         "tempfile.NamedTemporaryFile",
         "requests.get",

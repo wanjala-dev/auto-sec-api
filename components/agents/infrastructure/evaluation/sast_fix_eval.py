@@ -234,6 +234,13 @@ def run_fixture(fixture: FixEvalFixture, advisor) -> FixtureResult:
         result.gates["artifact"] = "pass"
 
     if patch.strip():
+        # The advisor's grounding check accepts a fix_before anywhere in the
+        # ±40-line window; a fix can therefore be "grounded" while replacing a
+        # NEIGHBORING statement and leaving the flagged one untouched — the
+        # candidate-contrastive run produced exactly that (a CREATE SCHEMA
+        # composition for a finding flagging the SET line below it).
+        result.gates["targets_flagged_span"] = _targets_flagged_span(suggestion.fix_before, fixture)
+
         syntax = patch_parses(patch_code=patch, before_code=fixture.snippet, language=fixture.language)
         if not syntax.checked:
             result.gates["parse"] = "abstained"
@@ -249,6 +256,24 @@ def run_fixture(fixture: FixEvalFixture, advisor) -> FixtureResult:
 
     result.outcome = _classify(result, patch=patch)
     return result
+
+
+def _targets_flagged_span(fix_before: str, fixture: FixEvalFixture) -> str:
+    """The replaced code must intersect the MATCHED REGION, not just the window."""
+
+    def _norm(text: str) -> str:
+        return " ".join((text or "").split())
+
+    before = _norm(fix_before)
+    region = _norm(fixture.matched_region)
+    if not before:
+        return "pass"  # empty fix_before is the honest-decline shape, judged elsewhere
+    if before in region or region in before:
+        return "pass"
+    return (
+        "fail: fix_before does not intersect the matched region — the patch "
+        "replaces a neighboring statement and leaves the flagged one untouched"
+    )
 
 
 def _anti_gaming_gate(patch: str, fixture: FixEvalFixture) -> str:
@@ -281,7 +306,7 @@ def _classify(result: FixtureResult, *, patch: str) -> str:
             return "fabricated_patch"
         return "honest_decline" if result.suggestion else "no_artifact"
 
-    hard_gates = [g for g in ("artifact", "parse", "shape", "anti_gaming") if g in result.gates]
+    hard_gates = [g for g in ("artifact", "targets_flagged_span", "parse", "shape", "anti_gaming") if g in result.gates]
     failed = [g for g in hard_gates if str(result.gates[g]).startswith("fail")]
     if failed or result.verification != "verified":
         return "gated"

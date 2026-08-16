@@ -114,15 +114,24 @@ classes:
   parameterise-values-quote-identifiers:
     strategy: llm_plus_oracles
     recommendation: >-
-      Decide FIRST whether the interpolated part is a VALUE or an IDENTIFIER. Bind
-      values as query parameters; quote identifiers with the driver's identifier
-      composer (psycopg sql.Identifier) or resolve them from a validated allowlist.
+      Decide FIRST what kind of thing the interpolated part is, then fix THAT
+      statement — never a neighboring one. A VALUE in a query binds as a
+      parameter. An IDENTIFIER (schema/table/column) composes with the driver's
+      identifier composer (psycopg sql.Identifier) plus a validated allowlist —
+      quoting is correctness, the allowlist is authorization. A SESSION SETTING
+      (SET search_path and friends) is a utility statement whose parameter
+      support varies by binding mode: the universally-valid form is
+      set_config() with a bound value, or identifier composition.
     correct: |-
-      # value → bind it
+      # value in a query → bind it
       cursor.execute("SELECT * FROM t WHERE id = %s", [user_id])
-      # identifier → compose it
+      # identifier → compose it (and check it against the known-good set)
       from psycopg import sql
       cursor.execute(sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(schema)))
+      # session setting (SET search_path ...) → set_config binds the value
+      cursor.execute("SELECT set_config('search_path', %s, false)", [schema])
+      # ... or compose the identifier form of the SET itself
+      cursor.execute(sql.SQL("SET search_path TO {}").format(sql.Identifier(schema)))
     wrong: |-
       cursor.execute("CREATE SCHEMA IF NOT EXISTS %s", (schema,))
     why: >-
