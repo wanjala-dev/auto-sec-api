@@ -36,8 +36,18 @@ class AgentsCLIConfig(AppConfig):
             from components.agents.infrastructure.services.agent_type_sync import (
                 sync_agent_types_from_registry,
             )
+            from components.shared_platform.application.providers.tenancy_scopes_provider import (
+                pooled_scope,
+            )
 
-            sync_agent_types_from_registry(overrides={d["slug"]: d for d in DEFAULT_AGENT_TYPES})
+            # Boot runs with NO tenant bound, and the fail-closed router
+            # refuses unbound queries — so this seed must say which catalog it
+            # is seeding: the POOL's, on `default`. Dedicated databases get
+            # their AgentType rows from the lazy request-time sync and the
+            # provisioning runbook (tenancy skill §8), each under their own
+            # tenant context.
+            with pooled_scope():
+                sync_agent_types_from_registry(overrides={d["slug"]: d for d in DEFAULT_AGENT_TYPES})
         except Exception:
             import logging
 
