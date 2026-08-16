@@ -36,11 +36,12 @@ SEED_PROD_DISABLE_NOTE = "Disabled in production by seed_feature_flags."
 
 
 def scanner_capabilities_default_on(apps, schema_editor):
+    db_alias = schema_editor.connection.alias
     FeatureFlag = apps.get_model("core", "FeatureFlag")
     FeatureFlagRule = apps.get_model("core", "FeatureFlagRule")
 
-    FeatureFlag.objects.filter(key__in=SCANNER_CAPABILITY_FLAGS).update(default_enabled=True)
-    FeatureFlagRule.objects.filter(
+    FeatureFlag.objects.using(db_alias).filter(key__in=SCANNER_CAPABILITY_FLAGS).update(default_enabled=True)
+    FeatureFlagRule.objects.using(db_alias).filter(
         flag__key__in=SCANNER_CAPABILITY_FLAGS,
         scope="global",
         note=SEED_PROD_DISABLE_NOTE,
@@ -51,8 +52,9 @@ def scanner_capabilities_default_off(apps, schema_editor):
     """Reverse: restore default-off. Deleted seed rules are not resurrected —
     re-running seed_feature_flags in prod recreates them for keys still in
     PROD_DISABLED_FLAGS."""
+    db_alias = schema_editor.connection.alias
     FeatureFlag = apps.get_model("core", "FeatureFlag")
-    FeatureFlag.objects.filter(key__in=SCANNER_CAPABILITY_FLAGS).update(default_enabled=False)
+    FeatureFlag.objects.using(db_alias).filter(key__in=SCANNER_CAPABILITY_FLAGS).update(default_enabled=False)
 
 
 class Migration(migrations.Migration):

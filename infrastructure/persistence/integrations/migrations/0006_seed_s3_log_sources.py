@@ -13,16 +13,17 @@ from django.db import migrations
 
 
 def seed_s3_log_sources(apps, schema_editor):
+    db_alias = schema_editor.connection.alias
     Conn = apps.get_model("integrations", "AwsOrganizationConnection")
     LogSource = apps.get_model("integrations", "WorkspaceLogSource")
 
-    for conn in Conn.objects.exclude(trail_s3_bucket="").iterator(chunk_size=500):
+    for conn in Conn.objects.using(db_alias).exclude(trail_s3_bucket="").iterator(chunk_size=500):
         config = {
             "aws_connection_id": str(conn.id),
             "bucket": conn.trail_s3_bucket,
             "prefix": conn.trail_s3_prefix or "logs/",
         }
-        existing = LogSource.objects.filter(
+        existing = LogSource.objects.using(db_alias).filter(
             workspace_id=conn.workspace_id,
             kind="s3",
             config__aws_connection_id=str(conn.id),
@@ -35,7 +36,7 @@ def seed_s3_log_sources(apps, schema_editor):
                 existing.status = "active"
             existing.save(update_fields=["config", "status", "updated_at"])
             continue
-        LogSource.objects.create(
+        LogSource.objects.using(db_alias).create(
             workspace_id=conn.workspace_id,
             kind="s3",
             name="AWS S3 trail",
@@ -45,9 +46,10 @@ def seed_s3_log_sources(apps, schema_editor):
 
 
 def unseed(apps, schema_editor):
+    db_alias = schema_editor.connection.alias
     # Reverse: drop only the rows this migration would have created.
     LogSource = apps.get_model("integrations", "WorkspaceLogSource")
-    LogSource.objects.filter(kind="s3", name="AWS S3 trail").delete()
+    LogSource.objects.using(db_alias).filter(kind="s3", name="AWS S3 trail").delete()
 
 
 class Migration(migrations.Migration):

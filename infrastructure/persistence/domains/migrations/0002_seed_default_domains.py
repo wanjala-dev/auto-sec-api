@@ -14,9 +14,10 @@ DEFAULT_DOMAINS = [
 
 
 def seed(apps, schema_editor):
+    db_alias = schema_editor.connection.alias
     Domain = apps.get_model("domains", "Domain")
     for slug, name, description, icon, sort_order in DEFAULT_DOMAINS:
-        Domain.objects.update_or_create(
+        Domain.objects.using(db_alias).update_or_create(
             slug=slug,
             defaults={
                 "name": name,
@@ -28,8 +29,9 @@ def seed(apps, schema_editor):
 
 
 def unseed(apps, schema_editor):
+    db_alias = schema_editor.connection.alias
     Domain = apps.get_model("domains", "Domain")
-    Domain.objects.filter(slug__in=[d[0] for d in DEFAULT_DOMAINS]).delete()
+    Domain.objects.using(db_alias).filter(slug__in=[d[0] for d in DEFAULT_DOMAINS]).delete()
 
 
 class Migration(migrations.Migration):

@@ -26,8 +26,9 @@ def forwards_backfill_existing_rows(apps, schema_editor):
       all of them — left uncorrected, the first delivery after deploy would try to
       POST a bot token as if it were a URL and fail permanently.
     """
+    db_alias = schema_editor.connection.alias
     DeliveryConnection = apps.get_model("integrations", "DeliveryConnection")
-    for row in DeliveryConnection.objects.all().iterator(chunk_size=500):
+    for row in DeliveryConnection.objects.using(db_alias).all().iterator(chunk_size=500):
         config = dict(row.config or {})
         stored = str(config.pop("min_severity", "") or "").strip().lower()
         if stored:
@@ -39,8 +40,9 @@ def forwards_backfill_existing_rows(apps, schema_editor):
 
 def backwards_demote_min_severity(apps, schema_editor):
     """Put the floor back into config so a rollback keeps delivering correctly."""
+    db_alias = schema_editor.connection.alias
     DeliveryConnection = apps.get_model("integrations", "DeliveryConnection")
-    for row in DeliveryConnection.objects.all().iterator(chunk_size=500):
+    for row in DeliveryConnection.objects.using(db_alias).all().iterator(chunk_size=500):
         config = dict(row.config or {})
         config["min_severity"] = row.min_severity
         row.config = config

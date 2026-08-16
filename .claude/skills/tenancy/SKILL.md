@@ -338,14 +338,46 @@ Before any RLS policy can be trusted:
 
 ## 8. Operating the dedicated tier
 
-- Provisioning: create the database, add the connection string, insert the registry row, run
-  `migrate --database=<alias>`. It is an operational action, not self-serve signup.
-- Migrations run **once per alias, every deploy**. This is the standing cost and it is linear in
+**PROVEN LIVE 2026-08-16** with tenant `acme` on the local cluster (251 tables in
+`tenant_acme`, zero registry/EPSS tables; login served entirely from the tenant
+database; the acme user invisible to the pool and the pool user invisible to acme).
+The exact runbook, in order:
+
+1. `CREATE DATABASE tenant_<name> OWNER <app_user>;` on the Postgres (or a separate
+   instance — the URL decides where).
+2. Add the connection string to `TENANT_DATABASE_URLS` (JSON alias → URL, parsed by
+   `api/settings/base.py::tenant_databases_from_env`) and restart the deployments.
+3. `python manage.py migrate --database=tenant_<name>` — must run with the FINAL
+   router configuration (see below).
+4. Insert the registry row: `Tenant(subdomain=..., isolation_mode="dedicated",
+   db_alias="tenant_<name>")`.
+5. Seed the tenant's first admin user + workspace inside
+   `tenant_context(TenantContext(kind=KIND_DEDICATED, ...))` — dedicated users live
+   in the tenant's database (§3c), then pin `row.workspace_id` to the workspace.
+6. Seed reference rows the app expects per database (subscription tiers, feature
+   flags) the same way.
+
+Standing facts:
+
+- It is an operational action, not self-serve signup. ~10 minutes per tenant.
+- Migrations run **once per alias, every deploy** — the standing cost, linear in
   tenant count.
-- `allow_migrate` must send the registry app to `default` and tenant apps to tenant aliases only,
-  or you get the registry duplicated into every tenant database.
-- Connection pools multiply per alias. Revisit `CONN_MAX_AGE` and pool sizing before N is large.
-- Cross-tenant reporting requires explicit fan-out; there is no single query across tenants.
+- `allow_migrate` must send the registry app to `default` and tenant apps to tenant
+  aliases only, or you get the registry duplicated into every tenant database.
+- **A migrate run under a WRONG router poisons `django_migrations`**: migrations
+  skipped by `allow_migrate` are still RECORDED as applied on that database, so
+  fixing the router and re-running skips them forever. A tenant DB that migrated
+  under a since-changed shared set must be dropped and re-migrated (safe while
+  empty; a data fix once it is not).
+- **RunPython data migrations must pin `schema_editor.connection.alias`**
+  (`Model.objects.using(db_alias)`); an unpinned manager routes by the BOUND
+  context, not by the database being migrated. Invisible on `default` (alias and
+  router agree) — the first tenant migrate crashed on exactly this
+  (`cloud_posture.0002` querying a table `default` no longer has).
+- Connection pools multiply per alias. Revisit `CONN_MAX_AGE` and pool sizing
+  before N is large.
+- Cross-tenant reporting requires explicit fan-out; there is no single query
+  across tenants.
 
 ## 9. Local testing with subdomains
 
