@@ -238,6 +238,7 @@ class TestExemplarsCannotBePasted:
         "sql.SQL",
         "sql.Identifier",
         "format",  # psycopg Composed.format — the identifier composer, genuinely real
+        "set_config",  # PostgreSQL built-in (pg_catalog.set_config) — SQL inside the string, not a Python helper
         "format_html",
         "tempfile.NamedTemporaryFile",
         "requests.get",

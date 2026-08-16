@@ -107,6 +107,19 @@ class TestClassAOutcomes:
         assert result.verification == "verified"
         assert result.outcome == "machine_pass"
 
+    def test_a_fix_for_the_neighboring_statement_fails_the_span_gate(self):
+        """Observed live (candidate-contrastive run): the model fixed the
+        CREATE SCHEMA line for a finding flagging the SET line below it —
+        grounded in the window, shape-clean, and not a remediation of the
+        flagged statement. The span gate makes that a recorded failure."""
+        fixture = _fixture("sql-set-search-path-fstring")
+        llm = _ScriptedLlm(
+            _suggestion(CREATE_SCHEMA_LINE, CORRECT_IDENTIFIER_FIX, fixture=fixture),
+        )
+        result = run_fixture(fixture, _advisor(llm, fixture))
+        assert result.gates["targets_flagged_span"].startswith("fail")
+        assert result.outcome == "gated"
+
     def test_a_suppression_comment_fails_the_anti_gaming_gate(self):
         fixture = _fixture("sql-create-schema-fstring")
         silenced = CREATE_SCHEMA_LINE + "  # nosec"
