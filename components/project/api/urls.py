@@ -30,6 +30,9 @@ from components.project.api.controller import (
     TaskDetailView,
     TasksForEntityView,
     TaskUpdateView,
+    TeamBoardViewsView,
+    ViewBoardView,
+    ViewLaneTasksView,
 )
 
 # from .api import api_start_timer, api_stop_timer, api_discard_timer, api_get_tasks
@@ -65,6 +68,14 @@ urlpatterns = [
     ),
     path("columns/team/<int:team_id>/", ColumnsView.as_view(), name="columns-by-team"),
     path("columns/workspaces/<uuid:workspace_id>/", ColumnsView.as_view(), name="columns-by-workspace"),
+    # Boards-as-views read API (ADR 0030 P2a) — flag `feature.boards_as_views`.
+    path("teams/<int:team_id>/views/", TeamBoardViewsView.as_view(), name="team-board-views"),
+    path("views/<int:view_id>/board/", ViewBoardView.as_view(), name="view-board"),
+    path(
+        "views/<int:view_id>/lanes/<int:status_id>/tasks/",
+        ViewLaneTasksView.as_view(),
+        name="view-lane-tasks",
+    ),
     path("tasks/batch-move/", BatchMoveTasksView.as_view(), name="batch-move-tasks"),
     path("tasks/timer/start_timer/", StartTimerView.as_view(), name="api_start_timer"),
     path("tasks/timer/stop_timer/", StopTimerView.as_view(), name="api_stop_timer"),

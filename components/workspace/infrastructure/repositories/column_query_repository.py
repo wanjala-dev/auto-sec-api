@@ -20,6 +20,58 @@ from components.workspace.domain.errors import (
 )
 
 
+def board_ordered_tasks(tasks_queryset):
+    """Canonical board-ordered, eager-loaded live-task queryset for a lane.
+
+    THE single source of truth for lane windows across BOTH board reads — the
+    column board (``OrmColumnQueryRepository``) and the boards-as-views board
+    (``OrmBoardViewQueryRepository``, ADR 0030 P2a) — and their per-lane
+    "load more" pages. Ordering and eager-loading must never diverge between
+    a board's windows and its pager, or pages would skip/duplicate cards; nor
+    between the two boards, or the P2 flag flip would reorder every lane.
+
+    Eager-loads everything ``TaskSerializer`` touches per row: ``team`` /
+    ``column`` / ``grant`` (SlugRelatedFields read ``obj.<fk>.id``),
+    ``project`` (serialized inline once per distinct project), ``created_by``
+    (LeanUserSerializer), ``assigned_to`` (M2M), and ``entries`` (tracked-time
+    roll-up computed in Python from the prefetch instead of two queries per
+    task). Excludes ``ARCHIVED`` (the task soft-delete state — a trashed card
+    must not reappear on any board read).
+    """
+    return (
+        tasks_queryset.select_related("team", "column", "grant", "project", "created_by")
+        .prefetch_related("assigned_to", "entries")
+        .exclude(status=tasks_queryset.model.ARCHIVED)
+        .order_by("order", "created_at")
+    )
+
+
+def check_team_membership(user, team) -> None:
+    """Raise unless ``user`` may read the team's boards.
+
+    Workspace admins/owners bypass team-membership for every team in their
+    workspace (including the Agents team — AI-only members but admins must be
+    able to see AI findings). Per ADR 0002 this reads
+    ``WorkspaceMembership.role``, never persona. Shared by both board reads.
+    """
+    from components.workspace.application.facades.workspace_facade import (
+        user_is_workspace_admin_or_owner,
+    )
+
+    if user_is_workspace_admin_or_owner(user, team.workspace):
+        return
+    if not team.members.filter(id=user.id).exists():
+        raise TeamMembershipRequiredError("You must be a member of this team.")
+
+
+def check_workspace_membership(user, workspace) -> None:
+    """Raise unless ``user`` belongs to the workspace. Shared by both board reads."""
+    from components.workspace.application.facades.workspace_facade import user_is_workspace_member
+
+    if not user_is_workspace_member(user, workspace):
+        raise WorkspaceMembershipRequiredError("You must belong to the organization to perform this action.")
+
+
 class OrmColumnQueryRepository(ColumnQueryPort):
     def fetch_columns(self, *, request: ColumnFilterRequest) -> list[Any]:
         from infrastructure.persistence.project.models import Column
@@ -173,25 +225,8 @@ class OrmColumnQueryRepository(ColumnQueryPort):
 
     @staticmethod
     def _board_tasks_queryset(column):
-        """Canonical board-ordered, eager-loaded live-task queryset for a lane.
-
-        Single source of truth for BOTH the board read's per-column windows and
-        the lane's "load more" pages — ordering and eager-loading must never
-        diverge between the two or pages would skip/duplicate cards.
-
-        Eager-loads everything ``TaskSerializer`` touches per row: ``team`` /
-        ``column`` / ``grant`` (SlugRelatedFields read ``obj.<fk>.id``),
-        ``project`` (serialized inline once per distinct project),
-        ``created_by`` (LeanUserSerializer), ``assigned_to`` (M2M),
-        and ``entries`` (tracked-time roll-up computed in Python from the
-        prefetch instead of two queries per task).
-        """
-        return (
-            column.tasks.select_related("team", "column", "grant", "project", "created_by")
-            .prefetch_related("assigned_to", "entries")
-            .exclude(status=column.tasks.model.ARCHIVED)
-            .order_by("order", "created_at")
-        )
+        """One lane's tasks through the shared board contract (see module fn)."""
+        return board_ordered_tasks(column.tasks)
 
     @staticmethod
     def _get_team(team_id: Any) -> Any:
@@ -241,22 +276,8 @@ class OrmColumnQueryRepository(ColumnQueryPort):
 
     @staticmethod
     def _check_team_membership(user: Any, team: Any) -> None:
-        # Workspace admins/owners bypass team-membership for every team in
-        # their workspace (including the Agents team — AI-only members but
-        # admins must be able to see AI findings). Per ADR 0002 this reads
-        # ``WorkspaceMembership.role``, never persona.
-        from components.workspace.application.facades.workspace_facade import (
-            user_is_workspace_admin_or_owner,
-        )
-
-        if user_is_workspace_admin_or_owner(user, team.workspace):
-            return
-        if not team.members.filter(id=user.id).exists():
-            raise TeamMembershipRequiredError("You must be a member of this team.")
+        check_team_membership(user, team)
 
     @staticmethod
     def _check_workspace_membership(user: Any, workspace: Any) -> None:
-        from components.workspace.application.facades.workspace_facade import user_is_workspace_member
-
-        if not user_is_workspace_member(user, workspace):
-            raise WorkspaceMembershipRequiredError("You must belong to the organization to perform this action.")
+        check_workspace_membership(user, workspace)
