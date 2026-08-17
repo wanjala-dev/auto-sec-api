@@ -125,8 +125,9 @@ class WorkspaceBootstrapRepository(WorkspaceBootstrapPort):
         workspace: Workspace,
         owner: CustomUser,
         team_title: str,
+        include_red_team: bool = True,
     ) -> tuple[Team, Any]:
-        return ensure_workspace_scaffolding(workspace, owner, team_title=team_title)
+        return ensure_workspace_scaffolding(workspace, owner, team_title=team_title, include_red_team=include_red_team)
 
     def ensure_workspace_follower(self, *, workspace: Workspace, user: CustomUser) -> None:
         from components.workspace.application.facades.workspace_facade import ensure_workspace_follower

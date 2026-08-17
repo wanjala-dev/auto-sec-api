@@ -14,12 +14,27 @@ from dataclasses import dataclass
 from typing import Any
 
 from components.agents.application.facades.ai_teammate_facade import ensure_agents_board
+from components.shared_platform.application.facades.feature_flags_facade import is_feature_enabled
 from components.workflow.application.facades.ai_findings_workflow_facade import (
     ensure_ai_findings_workflow_binding,
 )
 from components.workspace.application.ports.workspace_bootstrap_port import WorkspaceBootstrapPort
 
 logger = logging.getLogger(__name__)
+
+# Per-user gate for the onboarding team-choice flow (teams/boards QA
+# 2026-08-16 §c). OFF (default) → today's behavior exactly; ON → the caller's
+# team_name / include_red_team inputs are honored.
+ONBOARDING_TEAM_CHOICE_FLAG = "feature.onboarding_team_choice"
+
+
+def _as_opt_in(value: Any) -> bool:
+    """True only for an EXPLICIT boolean opt-in (JSON true, or its common
+    string spellings). Anything else — None, absent, "false", 0 — is False:
+    an opt-in must never be inferred."""
+    if value is True:
+        return True
+    return str(value).strip().lower() in {"true", "1", "yes"}
 
 
 @dataclass(frozen=True)
@@ -41,6 +56,8 @@ class CreateWorkspaceUseCase:
         workspace: Any,
         owner: Any,
         seed_starter_pack: bool = False,
+        team_name: str | None = None,
+        include_red_team: Any = None,
     ) -> CreateWorkspaceResult:
         """Run post-creation setup on *workspace* owned by *owner*.
 
@@ -66,10 +83,23 @@ class CreateWorkspaceUseCase:
         # with the Contributor persona/role — nav rework). Personal workspaces
         # keep the warmer "Family".
         default_team_title = "Family" if getattr(workspace, "sector_id", None) == "personal" else "General"
+
+        # feature.onboarding_team_choice (per-user, default OFF): flag ON lets
+        # the operator NAME the single home team and makes the Red Team an
+        # explicit opt-in; flag OFF ignores both inputs — today's behavior
+        # exactly (silent default title + auto Red Team, ADR 0007).
+        team_title = default_team_title
+        include_red = True
+        if is_feature_enabled(ONBOARDING_TEAM_CHOICE_FLAG, user=owner):
+            chosen = (team_name or "").strip()[:255]
+            team_title = chosen or default_team_title
+            include_red = _as_opt_in(include_red_team)
+
         default_team, budget = self._bootstrap.ensure_workspace_scaffolding(
             workspace=workspace,
             owner=owner,
-            team_title=default_team_title,
+            team_title=team_title,
+            include_red_team=include_red,
         )
 
         # A new workspace is created 'inactive' (the model default) — activate it

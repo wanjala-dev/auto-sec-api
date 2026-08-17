@@ -42,6 +42,7 @@ class WorkspaceBootstrapPort(Protocol):
         workspace: Any,
         owner: Any,
         team_title: str,
+        include_red_team: bool = True,
     ) -> tuple[Any, Any]: ...
 
     def ensure_staff_team(
