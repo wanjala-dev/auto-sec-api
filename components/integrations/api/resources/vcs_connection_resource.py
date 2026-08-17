@@ -51,12 +51,9 @@ class VcsConnectionResource:
             status=connection.status,
             # "Has a usable credential": a stored PAT, or (app mode) a bound
             # installation that mints tokens on demand. Key name kept for the
-            # existing FE contract.
-            has_token=bool(connection.token_ciphertext)
-            or (
-                (getattr(connection, "auth_mode", "") or "") == "github_app"
-                and bool(getattr(connection, "installation_id", None))
-            ),
+            # existing FE contract; the definition lives ONCE on the model so
+            # this resource and the governance inventory can never drift.
+            has_token=connection.has_usable_credential,
             last_verified_at=(connection.last_verified_at.isoformat() if connection.last_verified_at else None),
             last_used_at=(connection.last_used_at.isoformat() if connection.last_used_at else None),
             last_error=connection.last_error,

@@ -223,10 +223,15 @@ class TestComputeCredentialInventory:
         rows = [
             {
                 "id": "conn-1",
+                "provider": "github",
                 "name": "GitHub",
                 "status": "connected",
+                "auth_mode": "pat",
+                "installation_id": None,
+                "credential": "fine-grained PAT (encrypted)",
                 "repo_allowlist": ["o/r", "o/other"],
                 "has_token": True,
+                "last_error": "",
                 # Naive + aware mixed — both normalize.
                 "created_at": datetime(2026, 7, 1, 9, 0),
                 "updated_at": datetime(2026, 7, 19, 9, 0, tzinfo=UTC),
@@ -235,8 +240,12 @@ class TestComputeCredentialInventory:
         ]
         out = compute_credential_inventory(rows, now=NOW)
 
-        conn = out["github_connections"]["items"][0]
+        conn = out["vcs_connections"]["items"][0]
         assert conn["has_token"] is True
+        assert conn["provider"] == "github"
+        assert conn["auth_mode"] == "pat"
+        assert conn["installation_id"] is None
+        assert conn["credential"] == "fine-grained PAT (encrypted)"
         assert conn["repo_allowlist_count"] == 2
         assert conn["created_at"].startswith("2026-07-01")
         assert conn["last_used_at"] is None
@@ -244,10 +253,62 @@ class TestComputeCredentialInventory:
         assert "token_ciphertext" not in str(out)
         assert "secrets_note" in out
 
+    def test_app_mode_row_reports_installation_never_a_token(self):
+        rows = [
+            {
+                "id": "conn-2",
+                "provider": "github",
+                "name": "GitHub App",
+                "status": "connected",
+                "auth_mode": "github_app",
+                "installation_id": 4242,
+                "credential": "GitHub App installation 4242",
+                "repo_allowlist": ["o/r"],
+                # An app installation IS a usable credential (mints tokens on demand).
+                "has_token": True,
+                "last_error": "",
+                "created_at": datetime(2026, 8, 1, 9, 0, tzinfo=UTC),
+                "updated_at": datetime(2026, 8, 1, 9, 0, tzinfo=UTC),
+                "last_used_at": None,
+            }
+        ]
+        out = compute_credential_inventory(rows, now=NOW)
+
+        conn = out["vcs_connections"]["items"][0]
+        assert conn["auth_mode"] == "github_app"
+        assert conn["installation_id"] == 4242
+        assert conn["has_token"] is True
+        assert conn["credential"] == "GitHub App installation 4242"
+        assert "token_ciphertext" not in str(out)
+
+    def test_disabled_row_carries_the_revocation_note(self):
+        rows = [
+            {
+                "id": "conn-3",
+                "provider": "github",
+                "name": "GitHub App",
+                "status": "disabled",
+                "auth_mode": "github_app",
+                "installation_id": 4242,
+                "credential": "GitHub App installation 4242",
+                "repo_allowlist": [],
+                "has_token": True,
+                "last_error": "GitHub App installation 4242 was deleted on GitHub — connection deactivated.",
+                "created_at": None,
+                "updated_at": None,
+                "last_used_at": None,
+            }
+        ]
+        out = compute_credential_inventory(rows, now=NOW)
+
+        conn = out["vcs_connections"]["items"][0]
+        assert conn["status"] == "disabled"
+        assert "deleted on GitHub" in conn["last_error"]
+
     def test_empty_is_no_data(self):
         out = compute_credential_inventory([], now=NOW)
         assert out["no_data"] is True
-        assert out["github_connections"]["count"] == 0
+        assert out["vcs_connections"]["count"] == 0
 
 
 class TestComputeKillSwitchStatus:

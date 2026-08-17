@@ -5,7 +5,7 @@ The Phase-2 governance specialist from
 governance — which agent used which tool at which risk tier, who granted
 which capability (and whether the grant left an audit trail), the HITL
 approval ledger (draft PRs a human explicitly approved), the credential
-surface the AI can reach (GitHubConnection scopes — NEVER token material),
+surface the AI can reach (VcsConnection scopes — NEVER token material),
 and the kill-switch state.
 
 Every tool wraps a deterministic function in
@@ -167,10 +167,11 @@ class AiGovernanceAgent(WorkspaceContextMixin, BaseAgent):
     @tool(
         name="get_credential_inventory",
         description=(
-            "Credential surface the AI can reach: GitHub connections with "
-            "status, repo allowlist (the consent boundary), token PRESENCE "
-            "as a boolean, and created/updated/last-used dates. Secret "
-            "material is never included. No input. Returns JSON."
+            "Credential surface the AI can reach: VCS connections (PAT and "
+            "GitHub App modes) with status, auth mode, repo allowlist (the "
+            "consent boundary), credential PRESENCE as a boolean, and "
+            "created/updated/last-used dates. Secret material is never "
+            "included. No input. Returns JSON."
         ),
         risk=ToolRisk.READ,
     )

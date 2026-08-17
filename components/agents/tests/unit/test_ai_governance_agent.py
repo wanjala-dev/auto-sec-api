@@ -89,9 +89,20 @@ def _fake_ledger():
 def _fake_credentials():
     return {
         "computed_at": "2026-07-20T12:00:00+00:00",
-        "github_connections": {
+        "vcs_connections": {
             "count": 1,
-            "items": [{"id": "conn-1", "has_token": True, "repo_allowlist": ["o/r"], "repo_allowlist_count": 1}],
+            "items": [
+                {
+                    "id": "conn-1",
+                    "provider": "github",
+                    "auth_mode": "pat",
+                    "installation_id": None,
+                    "credential": "fine-grained PAT (encrypted)",
+                    "has_token": True,
+                    "repo_allowlist": ["o/r"],
+                    "repo_allowlist_count": 1,
+                }
+            ],
             "no_data": False,
         },
         "secrets_note": "Token material is never read into this report.",
@@ -191,7 +202,7 @@ class AiGovernanceAgentToolTests(AgentTestCase):
 
         fn.assert_called_once_with(agent.workspace_id)
         payload = json.loads(result["output"])
-        self.assertTrue(payload["github_connections"]["items"][0]["has_token"])
+        self.assertTrue(payload["vcs_connections"]["items"][0]["has_token"])
         self.assertNotIn("token_ciphertext", result["output"])
 
     def test_get_kill_switch_status_returns_service_data(self):
