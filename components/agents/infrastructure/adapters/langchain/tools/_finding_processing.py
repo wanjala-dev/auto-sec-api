@@ -84,21 +84,32 @@ def _resolve_user(agent):
 def ensure_board_column(team, workspace, creator, title):
     """Return the board's column with ``title``, creating it once.
 
+    A NEW column lands AFTER every existing lane: ``max(order) + 1`` over the
+    team's project-less columns. (The previous ``first().order + 1`` took the
+    MINIMUM, so any auto-created column collided with an existing lane's order
+    — Triage landing on Todo's slot on a default board; QA report 2026-08-16,
+    F8.) The max is computed under ``select_for_update`` on the sibling rows,
+    in the same transaction as the create, so two concurrent creates of
+    DIFFERENT titles can't mint the same slot. For the SAME title,
     ``get_or_create`` + the DB partial-unique constraint on
-    ``(team, workspace, title) where project is null`` make this safe under
-    concurrent runs — the loser hits the constraint and re-reads.
+    ``(team, workspace, title) where project is null`` stay the guard — the
+    loser hits the constraint and re-reads.
     """
+    from django.db import transaction
+    from django.db.models import Max
+
     from infrastructure.persistence.project.models import Column
 
-    intake = Column.objects.filter(team=team, workspace=workspace, project__isnull=True).order_by("order").first()
-    order = (intake.order + 1) if intake is not None else 1
-    column, _ = Column.objects.get_or_create(
-        team=team,
-        workspace=workspace,
-        project=None,
-        title=title,
-        defaults={"order": order, "created_by": creator},
-    )
+    with transaction.atomic():
+        siblings = Column.objects.select_for_update().filter(team=team, workspace=workspace, project__isnull=True)
+        max_order = siblings.aggregate(max_order=Max("order"))["max_order"]
+        column, _ = Column.objects.get_or_create(
+            team=team,
+            workspace=workspace,
+            project=None,
+            title=title,
+            defaults={"order": (max_order or 0) + 1, "created_by": creator},
+        )
     return column
 
 

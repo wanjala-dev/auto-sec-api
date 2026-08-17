@@ -25,9 +25,8 @@ def _create_workspace(owner: CustomUser) -> Workspace:
     )
 
 
-
 @pytest.mark.django_db
-def test_team_create_endpoint_bootstraps_membership_and_columns():
+def test_team_create_endpoint_bootstraps_membership_and_columns(plan):
     owner = _create_user("owner-create@example.com", "owner-create")
     workspace = _create_workspace(owner)
 
@@ -62,11 +61,14 @@ def test_team_create_endpoint_bootstraps_membership_and_columns():
     assert profile.active_team_id == team.id
     assert profile.active_workspace_id == workspace.id
     assert Column.objects.filter(team=team, workspace=workspace, title="Backlog", order=1).exists()
-    assert Column.objects.filter(team=team, workspace=workspace, title="Done", order=7).exists()
+    # ONE canonical vocabulary (F7): user-created teams get the same six lanes
+    # as seeded teams — no redundant "Done" on top of "Complete".
+    titles = set(Column.objects.filter(team=team, workspace=workspace).values_list("title", flat=True))
+    assert titles == {"Backlog", "Todo", "In Progress", "Testing", "Complete", "Canceled"}
 
 
 @pytest.mark.django_db
-def test_team_create_endpoint_rejects_duplicate_title_for_creator():
+def test_team_create_endpoint_rejects_duplicate_title_for_creator(plan):
     owner = _create_user("owner-duplicate@example.com", "owner-duplicate")
     workspace = _create_workspace(owner)
     Team.objects.create(title="Alpha", created_by=owner, workspace=workspace)

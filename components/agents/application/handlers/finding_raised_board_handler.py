@@ -401,8 +401,11 @@ def _build_planted_instructions_card(finding, event, mapping) -> dict:
 
 # Per finding-source board config: the legacy labels + card builder, plus the cutover
 # flag (None = graduated, always surfaces). Extend as more pillars surface findings.
-# ``min_severity`` (optional) is the board floor (ADR 0019 D4 layer 2): findings
-# below it stay SSOT-only (HUD findings panel) and never become cards.
+# ``min_severity`` (optional) is the source's DEFAULT board floor (ADR 0019 D4
+# layer 2): findings below it stay SSOT-only (HUD findings panel) and never
+# become cards. ``settings.AI_BOARD_MIN_SEVERITY`` can override it per source,
+# or floor every unlisted source at once via its "default" key — see
+# ``components.agents.infrastructure.services.board_floor``.
 _SOURCE_BOARD = {
     "cloud_posture.prowler": {
         "source_type": "ai.cloud_posture",
@@ -511,7 +514,14 @@ def handle_finding_raised_board(event: FindingRaised) -> None:
         )
         return
 
-    floor = mapping.get("min_severity")
+    # Board floor for EVERY source (ADR 0019 D4 layer 2): the source's baked-in
+    # ``min_severity`` above is the default; ``settings.AI_BOARD_MIN_SEVERITY``
+    # can override it per source or floor all remaining sources at once (the
+    # "default" key) to cap the low-severity flood into Triage. Late import —
+    # the resolver reads Django settings, which the application layer must not.
+    from components.agents.infrastructure.services.board_floor import resolve_board_floor
+
+    floor = resolve_board_floor(event.source, mapping.get("min_severity"))
     if floor and _IMPACT.get(finding.severity.value, 0) < _IMPACT.get(floor, 0):
         logger.info(
             "finding_raised_board_below_floor workspace_id=%s finding_id=%s source=%s severity=%s floor=%s",

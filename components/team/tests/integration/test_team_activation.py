@@ -53,7 +53,7 @@ def test_team_activate_updates_active_context():
 
 
 @pytest.mark.django_db
-def test_workspace_activate_picks_first_accessible_team():
+def test_workspace_activate_picks_first_accessible_team(plan):
     """POST /team/workspace/activate/ resolves a team server-side and
     persists active_team_id + active_workspace_id in one round-trip.
 
@@ -90,7 +90,7 @@ def test_workspace_activate_picks_first_accessible_team():
 
 
 @pytest.mark.django_db
-def test_workspace_activate_returns_fresh_summary_for_new_workspace():
+def test_workspace_activate_returns_fresh_summary_for_new_workspace(plan):
     """The activate response carries the post-switch me/summary payload so
     the frontend can apply role/persona/visible_sections atomically — no
     second GET /me/summary, no race window where the sidebar shows the
@@ -145,7 +145,7 @@ def test_workspace_activate_returns_fresh_summary_for_new_workspace():
 
 
 @pytest.mark.django_db
-def test_team_activate_returns_fresh_summary_for_new_workspace():
+def test_team_activate_returns_fresh_summary_for_new_workspace(plan):
     """Symmetric guarantee for the single-team activate endpoint — both
     paths must emit the same fresh-summary contract so the frontend
     handles them identically.
@@ -182,7 +182,7 @@ def test_team_activate_returns_fresh_summary_for_new_workspace():
 
 
 @pytest.mark.django_db
-def test_workspace_activate_rejects_a_non_member():
+def test_workspace_activate_rejects_a_non_member(plan):
     """A stranger with NO workspace membership (not owner, not a team
     member, no WorkspaceMembership row) is refused cleanly and their active
     context is left untouched — they can't activate a workspace they have
@@ -219,7 +219,7 @@ def test_workspace_activate_rejects_a_non_member():
 
 
 @pytest.mark.django_db
-def test_workspace_activate_persists_pointer_for_teamless_member():
+def test_workspace_activate_persists_pointer_for_teamless_member(plan):
     """A workspace MEMBER who belongs to no internal team — e.g. a sponsor /
     viewer (ADR 0002) — can still activate the workspace. The endpoint
     persists active_workspace_id WITHOUT a team and clears active_team_id, so
