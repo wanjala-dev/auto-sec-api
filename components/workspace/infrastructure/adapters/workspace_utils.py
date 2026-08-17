@@ -10,11 +10,20 @@ from infrastructure.persistence.users.models import CustomUser
 from infrastructure.persistence.workspaces.models import Workspace, WorkspaceMembership
 
 
-def ensure_workspace_scaffolding(workspace, owner, *, team_title: str = "General") -> tuple[Team, None]:
+def ensure_workspace_scaffolding(
+    workspace, owner, *, team_title: str = "General", include_red_team: bool = True
+) -> tuple[Team, None]:
     """Ensure a workspace has the baseline structures required by the app.
 
     Creates/updates the workspace's default team, assigns the owner, and wires
     up owner membership + the default kanban board columns.
+
+    ``include_red_team`` is pure MECHANISM (default True — today's ADR 0007
+    behavior). The ``feature.onboarding_team_choice`` POLICY — when the Red
+    Team becomes an explicit opt-in — lives with the callers that carry user
+    intent (``CreateWorkspaceUseCase`` / the identity bootstrap), never here:
+    direct callers (``seed_security_teams``, backfills, tests) keep seeding
+    Red unconditionally.
 
     Returns ``(team, None)`` — the second slot historically carried a default
     Budget, which is no longer provisioned here. Callers that unpack
@@ -64,7 +73,10 @@ def ensure_workspace_scaffolding(workspace, owner, *, team_title: str = "General
 
     # Seed the Red team alongside Blue — a necessary system team, present from
     # bootstrap but opt-in (not the default). Owner leads both (ADR 0007).
-    ensure_red_team(workspace, owner)
+    # Skipped only when a flag-gated caller carries an explicit operator
+    # opt-out (feature.onboarding_team_choice).
+    if include_red_team:
+        ensure_red_team(workspace, owner)
 
     return team, None
 
