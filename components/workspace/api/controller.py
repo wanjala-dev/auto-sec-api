@@ -446,7 +446,14 @@ class WorkspaceCreateView(generics.CreateAPIView):
 
     def perform_create(self, serializer):
         workspace = serializer.save(workspace_owner=self.request.user)
-        workspace_service.create_workspace(workspace=workspace, owner=self.request.user)
+        workspace_service.create_workspace(
+            workspace=workspace,
+            owner=self.request.user,
+            # Onboarding team choice (feature.onboarding_team_choice): the use
+            # case ignores both unless the flag is ON for this user.
+            team_name=self.request.data.get("team_name"),
+            include_red_team=self.request.data.get("include_red_team"),
+        )
         # Creating a workspace completes the user's onboarding — mirrors the
         # invite-accept path (accept_workspace_invite_use_case / join_controller)
         # which already sets this. The onboarding gate keys off the profile flag,

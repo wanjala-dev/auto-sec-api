@@ -283,6 +283,12 @@ class UserPatchSerializer(serializers.HyperlinkedModelSerializer):
     # Optional name the user chose during onboarding. Used only when a workspace
     # is bootstrapped on this request; ignored for an already-onboarded user.
     workspace_name = serializers.CharField(required=False, allow_blank=True, write_only=True, max_length=255)
+    # Onboarding team choice (feature.onboarding_team_choice, per-user, default
+    # OFF): optional home-team name + Red-Team opt-in, honored only when a
+    # workspace is bootstrapped on this request AND the flag is on for the
+    # user; ignored otherwise (the bootstrap adapter owns the gating).
+    team_name = serializers.CharField(required=False, allow_blank=True, write_only=True, max_length=255)
+    include_red_team = serializers.BooleanField(required=False, write_only=True, allow_null=True)
 
     class Meta:
         ref_name = "users.serializers.UserSerializer"
@@ -300,6 +306,8 @@ class UserPatchSerializer(serializers.HyperlinkedModelSerializer):
             "profile",
             "contributor_profile",
             "workspace_name",
+            "team_name",
+            "include_red_team",
         )
         read_only_fields = ("url",)  # Make url read-only as we are patching
 
@@ -317,6 +325,8 @@ class UserPatchSerializer(serializers.HyperlinkedModelSerializer):
         profile_data = validated_data.pop("profile", {})
         contributor_profile_data = validated_data.pop("contributor_profile", None)
         workspace_name = validated_data.pop("workspace_name", None)
+        team_name = validated_data.pop("team_name", None)
+        include_red_team = validated_data.pop("include_red_team", None)
 
         # Update CustomUser fields
         instance.email = validated_data.get("email", instance.email)
@@ -349,7 +359,13 @@ class UserPatchSerializer(serializers.HyperlinkedModelSerializer):
                 contributor_profile_serializer.save()
 
         if instance.is_onboard_complete and should_bootstrap_workspace(instance):
-            ensure_user_workspace_context(instance, create_if_missing=True, workspace_name=workspace_name)
+            ensure_user_workspace_context(
+                instance,
+                create_if_missing=True,
+                workspace_name=workspace_name,
+                team_name=team_name,
+                include_red_team=include_red_team,
+            )
 
         return instance
 

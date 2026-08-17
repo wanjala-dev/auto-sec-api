@@ -81,6 +81,19 @@ DEFAULT_FLAGS = [
         "disable rule still wins. See docs/plans/SECURITY_POSTURE_VISION_2026-07-20.md §3.3.",
     ),
     (
+        "feature.onboarding_team_choice",
+        False,
+        "Onboarding team choice (teams/boards QA 2026-08-16 §c): when ON for a "
+        "user, the workspace-create + bootstrap paths accept an optional "
+        "team_name for the single home team (instead of the silent 'General') "
+        "and an include_red_team opt-in — the Red Team is only seeded when "
+        "explicitly requested. OFF (default) preserves today's behavior "
+        "exactly: silent 'General' + auto Red Team, inputs ignored. The Agents "
+        "team + AI Findings board stay UNCONDITIONAL in both modes (the "
+        "finding pipeline depends on them). Enable per-user for dogfood "
+        "first; graduate by flipping the seed default to ON.",
+    ),
+    (
         "feature.logwatch_board_from_findings",
         False,
         "Reversible board cutover for logwatch (ADR 0004): when ON per-workspace, the "

@@ -31,13 +31,21 @@ def should_bootstrap_workspace(user) -> bool:
 
 
 def ensure_user_workspace_context(
-    user, *, create_if_missing: bool = False, workspace_name: str | None = None
+    user,
+    *,
+    create_if_missing: bool = False,
+    workspace_name: str | None = None,
+    team_name: str | None = None,
+    include_red_team: bool | None = None,
 ) -> Workspace | None:
     """Ensure a user has a resolvable workspace and active profile context.
 
-    ``workspace_name`` is the optional name the user chose during onboarding.
-    It is only used when a workspace is actually created here; for an existing
-    workspace it is ignored (renaming is a settings concern, not bootstrap).
+    ``workspace_name`` / ``team_name`` / ``include_red_team`` are the optional
+    choices the user made during onboarding. They are only used when a
+    workspace is actually created here; for an existing workspace they are
+    ignored (renaming is a settings concern, not bootstrap). ``team_name`` and
+    ``include_red_team`` are additionally gated behind
+    ``feature.onboarding_team_choice`` (per-user, default OFF).
     """
     if not user:
         return None
@@ -46,7 +54,12 @@ def ensure_user_workspace_context(
     created = False
 
     if workspace is None and create_if_missing:
-        workspace = _create_bootstrap_workspace(user, workspace_name=workspace_name)
+        workspace = _create_bootstrap_workspace(
+            user,
+            workspace_name=workspace_name,
+            team_name=team_name,
+            include_red_team=include_red_team,
+        )
         created = workspace is not None
 
     if workspace is None:
@@ -99,7 +112,12 @@ def _build_workspace_name(user, is_personal: bool) -> str:
     return "Personal Workspace" if is_personal else "Workspace"
 
 
-def _create_bootstrap_workspace(user, workspace_name: str | None = None) -> Workspace | None:
+def _create_bootstrap_workspace(
+    user,
+    workspace_name: str | None = None,
+    team_name: str | None = None,
+    include_red_team: bool | None = None,
+) -> Workspace | None:
     # Never mint a bootstrap workspace if the user already owns/belongs to ANY
     # workspace (including an inactive/just-created one). Onboarding creates the
     # user's workspace as "inactive" (its own setup is a separate in-app step)
@@ -118,6 +136,18 @@ def _create_bootstrap_workspace(user, workspace_name: str | None = None) -> Work
     # Contributor persona/role); "Family" for personal workspaces.
     team_title = "Family" if is_personal else "General"
 
+    # feature.onboarding_team_choice (per-user, default OFF): flag ON lets the
+    # onboarding flow NAME the home team and makes the Red Team an explicit
+    # opt-in; flag OFF ignores both inputs — today's behavior exactly. Personal
+    # workspaces keep "Family" (the personal-space pilot owns that semantic).
+    # The Agents team + AI Findings board stay UNCONDITIONAL either way — the
+    # finding pipeline depends on ensure_agents_board below.
+    include_red = True
+    if is_feature_enabled("feature.onboarding_team_choice", user=user):
+        if not is_personal:
+            team_title = (team_name or "").strip()[:255] or team_title
+        include_red = include_red_team is True or str(include_red_team).strip().lower() in {"true", "1", "yes"}
+
     chosen_name = (workspace_name or "").strip()[:250]
     resolved_name = chosen_name or _build_workspace_name(user, is_personal)
 
@@ -130,7 +160,7 @@ def _create_bootstrap_workspace(user, workspace_name: str | None = None) -> Work
             is_active=True,
             privacy=Workspace.PRIVATE if is_personal else Workspace.PUBLIC,
         )
-        team, _ = ensure_workspace_scaffolding(workspace, user, team_title=team_title)
+        team, _ = ensure_workspace_scaffolding(workspace, user, team_title=team_title, include_red_team=include_red)
         ensure_workspace_follower(workspace, user)
         _sync_profile_context(user, workspace, default_team=team, force_workspace=True)
         ensure_agents_board(workspace)
