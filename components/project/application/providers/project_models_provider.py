@@ -50,6 +50,18 @@ class ProjectModelsProvider:
         return Task
 
     @property
+    def WorkflowStatus(self) -> Any:
+        from infrastructure.persistence.project.models import WorkflowStatus
+
+        return WorkflowStatus
+
+    @property
+    def BoardView(self) -> Any:
+        from infrastructure.persistence.project.models import BoardView
+
+        return BoardView
+
+    @property
     def TaskComment(self) -> Any:
         from infrastructure.persistence.project.models import TaskComment
 

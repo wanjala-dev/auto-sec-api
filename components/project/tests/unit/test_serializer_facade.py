@@ -4,8 +4,6 @@ Tests facade module structure, exports, and interface compliance.
 Pure unit tests with no Django dependencies.
 """
 
-import sys
-from unittest.mock import Mock, patch
 from components.project.application.facades import serializer_facade
 
 
@@ -37,8 +35,9 @@ class TestSerializerFacadeModuleStructure:
         assert isinstance(serializer_facade.__all__, list)
 
     def test_facade_all_attribute_length(self):
-        """__all__ should contain 8 exports."""
-        assert len(serializer_facade.__all__) == 8
+        """__all__ should contain 10 exports (ADR 0030 P2a added the two
+        board-view serializers)."""
+        assert len(serializer_facade.__all__) == 10
 
 
 class TestSerializerFacadeExports:
@@ -75,6 +74,14 @@ class TestSerializerFacadeExports:
     def test_task_comment_serializer_exported(self):
         """TaskCommentSerializer should be exported from facade."""
         assert hasattr(serializer_facade, "TaskCommentSerializer")
+
+    def test_board_view_serializer_exported(self):
+        """BoardViewSerializer should be exported from facade (ADR 0030 P2a)."""
+        assert hasattr(serializer_facade, "BoardViewSerializer")
+
+    def test_workflow_status_lane_serializer_exported(self):
+        """WorkflowStatusLaneSerializer should be exported from facade (ADR 0030 P2a)."""
+        assert hasattr(serializer_facade, "WorkflowStatusLaneSerializer")
 
 
 class TestSerializerFacadeSourceImport:
@@ -116,10 +123,7 @@ class TestSerializerFacadeIsolation:
     def test_facade_is_single_import_point(self):
         """Facade should be the single import point for serializers."""
         # Other contexts should import from facade, not directly from mappers
-        assert (
-            "TaskSerializer"
-            in dir(serializer_facade)
-        )
+        assert "TaskSerializer" in dir(serializer_facade)
 
     def test_facade_provides_all_required_types(self):
         """Facade should provide all serializer types needed by other contexts."""
@@ -151,24 +155,18 @@ class TestSerializerFacadeConsistency:
     def test_all_exports_in_all_attribute(self):
         """Everything in __all__ should be actually exported."""
         for name in serializer_facade.__all__:
-            assert hasattr(serializer_facade, name), (
-                f"{name} is in __all__ but not exported"
-            )
+            assert hasattr(serializer_facade, name), f"{name} is in __all__ but not exported"
 
     def test_no_private_exports(self):
         """__all__ should not contain private names."""
         for name in serializer_facade.__all__:
-            assert not name.startswith("_"), (
-                f"Private name {name} should not be in __all__"
-            )
+            assert not name.startswith("_"), f"Private name {name} should not be in __all__"
 
     def test_all_are_capitalized(self):
         """All exports should be class names (capitalized)."""
         for name in serializer_facade.__all__:
             # Most should start with uppercase (class names)
-            assert name[0].isupper(), (
-                f"{name} should be a class name (capitalized)"
-            )
+            assert name[0].isupper(), f"{name} should be a class name (capitalized)"
 
 
 class TestSerializerFacadePublicInterface:
@@ -255,11 +253,7 @@ class TestSerializerFacadeComments:
         docstring = serializer_facade.__doc__
         docstring_lower = docstring.lower()
         # Should mention context boundaries or explicit architecture
-        assert (
-            "explicit" in docstring_lower
-            or "context" in docstring_lower
-            or "boundary" in docstring_lower
-        )
+        assert "explicit" in docstring_lower or "context" in docstring_lower or "boundary" in docstring_lower
 
 
 class TestSerializerFacadeModuleMetadata:
@@ -267,9 +261,7 @@ class TestSerializerFacadeModuleMetadata:
 
     def test_facade_module_name(self):
         """Facade module should have correct name."""
-        assert serializer_facade.__name__ == (
-            "components.project.application.facades.serializer_facade"
-        )
+        assert serializer_facade.__name__ == ("components.project.application.facades.serializer_facade")
 
     def test_facade_has_file_path(self):
         """Facade module should have __file__ attribute."""
@@ -304,9 +296,9 @@ class TestSerializerFacadeUsability:
         """Facade should support module-level imports."""
         # Should be able to do: from facade import *
         from components.project.application.facades.serializer_facade import (
-            TaskSerializer,
-            ProjectSerializer,
             ColumnSerializer,
+            ProjectSerializer,
+            TaskSerializer,
         )
 
         assert TaskSerializer is not None

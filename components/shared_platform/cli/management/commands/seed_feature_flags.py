@@ -159,6 +159,18 @@ DEFAULT_FLAGS = [
         "the same per-adapter flag pattern. See docs/adr/0008-multi-source-log-ingestion-port.md.",
     ),
     (
+        "feature.boards_as_views",
+        False,
+        "Boards-as-views read API (ADR 0030 P2): when ON for a workspace, the "
+        "HUD may read a team's saved BoardView rows and the status-lane board "
+        "(GET /project/teams/<id>/views/ + GET /project/views/<id>/board/) — "
+        "lanes from WorkflowStatus, membership from task.workflow_status "
+        "filtered by view.filter. OFF (default) keeps today's column board "
+        "authoritative: the new endpoints return 403 (RequiresFeatureFlag) and "
+        "nothing changes. Flip per-workspace for dogfood; the P4 cutover flips "
+        "the default ON.",
+    ),
+    (
         "feature.sample_data_mode",
         False,
         "Per-workspace demo/sample-data mode (ADR 0011): when ON for a workspace, the demo "

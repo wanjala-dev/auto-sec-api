@@ -25,6 +25,7 @@ from components.workspace.application.facades.workspace_facade import (
     user_is_workspace_admin_or_owner,
     user_is_workspace_member,
 )
+from components.workspace.application.providers.board_view_query_provider import BoardViewQueryProvider
 from components.workspace.application.providers.column_query_provider import ColumnQueryProvider
 from components.workspace.application.providers.time_tracking_provider import TimeTrackingProvider
 
@@ -33,6 +34,7 @@ _project_service = ProjectService()
 
 # Import Serializers
 from components.project.application.facades.serializer_facade import (
+    BoardViewSerializer,
     ColumnSerializer,
     ProjectGetSerializer,
     ProjectMilestoneSerializer,
@@ -40,6 +42,7 @@ from components.project.application.facades.serializer_facade import (
     ProjectUpdateSerializer,
     TaskCommentSerializer,
     TaskSerializer,
+    WorkflowStatusLaneSerializer,
 )
 
 
@@ -1564,6 +1567,180 @@ class ColumnTasksView(APIView):
             return Response({"success": False, "message": str(exc)}, status=status.HTTP_404_NOT_FOUND)
         except AuthorizationError as exc:
             return Response({"success": False, "message": str(exc)}, status=status.HTTP_403_FORBIDDEN)
+
+
+# Boards-as-views read API (ADR 0030 P2a). Additive + flag-gated: OFF (the
+# seeded default) keeps today's column board authoritative and these
+# endpoints answer 403 via RequiresFeatureFlag — the repo's established
+# flag-gate convention (same class gates the timer endpoints above).
+_BOARDS_AS_VIEWS_FLAG_KEY = "feature.boards_as_views"
+
+
+class TeamBoardViewsView(APIView):
+    """GET /project/teams/<team_id>/views/ — the team's saved board views.
+
+    The views bar's read (ADR 0030 Decision §2): every board is a saved
+    ``BoardView`` over the team's one status vocabulary. System views come
+    from the P1 backfill (the unfiltered team board + one per project board);
+    user-saved views (#74) become later non-system rows on the same read.
+    """
+
+    permission_classes = (permissions.IsAuthenticated, RequiresFeatureFlag)
+    feature_flag_key = _BOARDS_AS_VIEWS_FLAG_KEY
+    name = "team-board-views"
+
+    def get_feature_flag_workspace_id(self, request) -> str | None:
+        """Evaluate the flag against the TEAM's workspace, not the user's
+        active workspace (the resource-scoped resolver contract on
+        ``RequiresFeatureFlag`` — see the AI-writing draft precedent)."""
+        from components.team.application.providers.team_models_provider import get_team_models_provider
+
+        Team = get_team_models_provider().Team
+        ws_id = Team.objects.filter(pk=self.kwargs.get("team_id")).values_list("workspace_id", flat=True).first()
+        return str(ws_id) if ws_id else None
+
+    def get(self, request, team_id=None):
+        from components.project.domain.errors import (
+            AuthorizationError,
+            NotFoundError,
+        )
+
+        try:
+            views = BoardViewQueryProvider.build_team_views_query().execute(team_id=team_id, user=request.user)
+        except NotFoundError as exc:
+            # Unknown team OR a team outside the requester's workspaces — the
+            # same 404 either way, so ids never leak across the tenant boundary.
+            return Response({"success": False, "message": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+        except AuthorizationError as exc:
+            return Response({"success": False, "message": str(exc)}, status=status.HTTP_403_FORBIDDEN)
+
+        serializer = BoardViewSerializer(views, many=True, context={"request": request})
+        return Response(
+            {
+                "success": True,
+                "status_code": status.HTTP_200_OK,
+                "message": "Board views fetched successfully",
+                "data": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class ViewBoardView(APIView):
+    """GET /project/views/<view_id>/board/ — one view's board.
+
+    Lanes come from the team's ``WorkflowStatus`` rows (ordered, with
+    category); membership is ``task.workflow_status`` restricted by the
+    view's closed-vocabulary ``filter``. Windowing is identical to the
+    column board (``tasks_limit`` per lane + ``tasks_total`` /
+    ``tasks_has_more``; the remainder pages through the lane-tasks
+    endpoint) so the HUD swap is a lane-source change, not a re-plumb.
+    """
+
+    permission_classes = (permissions.IsAuthenticated, RequiresFeatureFlag)
+    feature_flag_key = _BOARDS_AS_VIEWS_FLAG_KEY
+    name = "view-board"
+
+    def get_feature_flag_workspace_id(self, request) -> str | None:
+        """Evaluate the flag against the VIEW's workspace (resource-scoped)."""
+        from components.project.application.providers.project_models_provider import get_project_models_provider
+
+        BoardView = get_project_models_provider().BoardView
+        ws_id = BoardView.objects.filter(pk=self.kwargs.get("view_id")).values_list("workspace_id", flat=True).first()
+        return str(ws_id) if ws_id else None
+
+    def get(self, request, view_id=None):
+        from components.project.domain.errors import (
+            AuthorizationError,
+            NotFoundError,
+        )
+
+        try:
+            board = BoardViewQueryProvider.build_view_board_query().execute(
+                view_id=view_id,
+                user=request.user,
+                # Per-lane task window (always applied; clamped server-side to
+                # the SAME bounds as the column board).
+                tasks_limit=request.query_params.get("tasks_limit", None),
+            )
+        except NotFoundError as exc:
+            # Unknown view OR another workspace's view — identical 404 (never
+            # 403): a cross-tenant probe must not learn the view exists.
+            return Response({"success": False, "message": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+        except AuthorizationError as exc:
+            return Response({"success": False, "message": str(exc)}, status=status.HTTP_403_FORBIDDEN)
+
+        context = {"request": request}
+        return Response(
+            {
+                "success": True,
+                "status_code": status.HTTP_200_OK,
+                "message": "View board fetched successfully",
+                "data": {
+                    "view": BoardViewSerializer(board.view, context=context).data,
+                    "lanes": WorkflowStatusLaneSerializer(board.statuses, many=True, context=context).data,
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class ViewLaneTasksView(APIView):
+    """GET /project/views/<view_id>/lanes/<status_id>/tasks/?offset=&limit=
+
+    One status lane's task window in board order, with the view's filter
+    applied — the view board's "load more" read, mirroring
+    ``ColumnTasksView`` (same ordering + eager-loading contract, same
+    ``meta`` shape) so consecutive windows never skip or duplicate cards.
+    """
+
+    permission_classes = (permissions.IsAuthenticated, RequiresFeatureFlag)
+    feature_flag_key = _BOARDS_AS_VIEWS_FLAG_KEY
+    name = "view-lane-tasks"
+
+    def get_feature_flag_workspace_id(self, request) -> str | None:
+        """Evaluate the flag against the VIEW's workspace (resource-scoped)."""
+        from components.project.application.providers.project_models_provider import get_project_models_provider
+
+        BoardView = get_project_models_provider().BoardView
+        ws_id = BoardView.objects.filter(pk=self.kwargs.get("view_id")).values_list("workspace_id", flat=True).first()
+        return str(ws_id) if ws_id else None
+
+    def get(self, request, view_id=None, status_id=None):
+        from components.project.domain.errors import (
+            AuthorizationError,
+            NotFoundError,
+        )
+
+        try:
+            page = BoardViewQueryProvider.build_view_lane_tasks_query().execute(
+                view_id=view_id,
+                status_id=status_id,
+                user=request.user,
+                offset=request.query_params.get("offset", 0),
+                limit=request.query_params.get("limit", None),
+            )
+        except NotFoundError as exc:
+            return Response({"success": False, "message": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+        except AuthorizationError as exc:
+            return Response({"success": False, "message": str(exc)}, status=status.HTTP_403_FORBIDDEN)
+
+        serializer = TaskSerializer(page.tasks, many=True, context={"request": request})
+        return Response(
+            {
+                "success": True,
+                "status_code": status.HTTP_200_OK,
+                "message": "View lane tasks fetched successfully",
+                "data": serializer.data,
+                "meta": {
+                    "total": page.total,
+                    "offset": page.offset,
+                    "limit": page.limit,
+                    "has_more": page.has_more,
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class ColumnReorderView(APIView):
