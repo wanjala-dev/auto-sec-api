@@ -229,11 +229,23 @@ def triage_code_finding(agent, input_str: str) -> str:
         return comment + f"Confidence: {suggestion.confidence}."
 
     def apply_payload(payload, suggestion):
+        from components.code_security.domain.fix_confidence import confidence_for
+
         payload["probable_cause"] = suggestion.likely_cause
         payload["suggested_fix"] = suggestion.suggested_fix
         payload["confidence"] = suggestion.confidence
         payload["fix_before"] = suggestion.fix_before
         payload["fix_after"] = suggestion.fix_after
+        # Measured per-RULE confidence (#117 step 3) — a different fact from the
+        # two labels already on this payload: ``confidence`` is the model
+        # grading itself, ``verification`` is this one patch grounded against
+        # this one finding. This tier says how the advisor has historically
+        # SCORED on this rule against the frozen corpus, which is the only one
+        # of the three that could have flagged the PR #866 failure (grounded,
+        # in-scope, parsed — and semantically wrong). A label, never a gate:
+        # the draft PR opens regardless (standing rule); only the unattended
+        # auto-fix tier reads ``tier == "proven"`` as permission.
+        payload["fix_confidence"] = confidence_for(str(payload.get("rule_id") or ""), model=suggestion.model).as_label()
         if suggestion.source_flagged:
             # Untrusted-content control, as a LABEL: repository content that trips
             # the injection heuristic downgrades the fix to UNVERIFIED with the
@@ -309,9 +321,7 @@ def read_repo_file(agent, input_str: str) -> str:
     # Cap the body: a large file would evict the finding's own evidence from the
     # agent's context, which is the opposite of grounding it.
     truncated = len(content) > 20000
-    return json.dumps(
-        {"ok": True, "repo": repo, "path": path, "truncated": truncated, "content": content[:20000]}
-    )
+    return json.dumps({"ok": True, "repo": repo, "path": path, "truncated": truncated, "content": content[:20000]})
 
 
 def list_repo_tree(agent, input_str: str) -> str:

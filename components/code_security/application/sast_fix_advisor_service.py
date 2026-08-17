@@ -92,6 +92,13 @@ class SastFixSuggestion:
     fix_before: str = ""
     fix_after: str = ""
     source_flagged: bool = False
+    #: The model that authored this suggestion, from ``LlmResponse.model`` —
+    #: NOT configuration. The per-rule fix-confidence evidence is bound to a
+    #: model id, and the binding only means something if the id records what
+    #: actually ran; a configured name drifts from reality the day the
+    #: provider aliases it. Empty when the adapter did not report one — which
+    #: resolves the rule UNPROVEN rather than borrowing another model's numbers.
+    model: str = ""
 
     def as_dict(self) -> dict:
         return {
@@ -101,6 +108,7 @@ class SastFixSuggestion:
             "fix_before": self.fix_before,
             "fix_after": self.fix_after,
             "source_flagged": self.source_flagged,
+            "model": self.model,
         }
 
 
@@ -264,6 +272,7 @@ class SastFixAdvisor:
         suggestion = self._parse(getattr(response, "content", "") or "")
         if suggestion is None:
             return None
+        suggestion = replace(suggestion, model=str(getattr(response, "model", "") or ""))
         if not self._is_grounded(suggestion, window=window, snippet=snippet, flagged=flagged_region):
             logger.info("sast_fix_advisor ungrounded fix discarded rule_id=%s path=%s", rule_id, path)
             return None

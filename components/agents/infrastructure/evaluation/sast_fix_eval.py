@@ -353,7 +353,7 @@ def summarize(results: list[FixtureResult]) -> dict:
     }
 
 
-def write_report(results: list[FixtureResult], *, label: str, out_dir: Path) -> Path:
+def write_report(results: list[FixtureResult], *, label: str, out_dir: Path, corpus_digest: str = "") -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     from datetime import datetime
 
@@ -361,9 +361,116 @@ def write_report(results: list[FixtureResult], *, label: str, out_dir: Path) -> 
     payload = {
         "label": label,
         "generated_at": stamp,
+        # The corpus this run measured, so evidence aggregation can refuse a
+        # report produced against fixtures that have since changed (#117 step 3).
+        "corpus_digest": corpus_digest,
         "summary": summarize(results),
         "results": [r.as_dict() for r in results],
     }
     path = out_dir / f"sast-fix-{label}-{stamp}.json"
     path.write_text(json.dumps(payload, indent=2))
     return path
+
+
+# ── evidence for the per-rule confidence gate (#117 step 3) ────────────────
+
+
+def corpus_digest_of(fixtures_dir: Path) -> str:
+    """Content digest of the frozen corpus — filenames and bytes, sorted.
+
+    This is the string that binds a measurement to the fixtures it ran
+    against. Any edit — a new fixture, a changed line, a rename — produces a
+    new digest and voids every prior measurement, which is the mechanism
+    behind the zero-overlap rule in the module docstring: you cannot tune
+    guidance against fixtures and keep the score they produced.
+    """
+    import hashlib
+
+    digest = hashlib.sha256()
+    for path in sorted(fixtures_dir.iterdir()):
+        if path.name.startswith(".") or not path.is_file():
+            continue
+        digest.update(path.name.encode())
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+class EvidenceAggregationError(RuntimeError):
+    """A report cannot honestly feed the confidence gate — says exactly why."""
+
+
+def evidence_from_reports(report_paths: list[Path], *, fixtures_digest: str) -> dict:
+    """Aggregate hand-labeled reports into the fix-confidence evidence shape.
+
+    The counts feed ``code_security.domain.fix_confidence``, so every number
+    must survive the same scrutiny the gate applies:
+
+    * Only Class A patch-expected results are trials — Class B's success is a
+      DECLINE, and folding declines into a patch-success rate is the exact
+      aggregate-laundering the corpus split exists to prevent.
+    * A pass requires ``machine_pass`` AND a human ``correct`` verdict. The
+      harness's own warning is the reason: machine gates catch wrong SHAPES,
+      not wrong MEANING — an unreviewed machine_pass counted as a pass would
+      launder the PR #866 failure class straight into the gate. A machine_pass
+      row with an empty ``human_verdict`` therefore REFUSES aggregation
+      (naming the fixture) rather than guessing in either direction.
+    * A report from a different corpus digest refuses: those fixtures no
+      longer exist, so the measurement describes nothing current.
+    * Mixed models refuse: evidence is per-model, and summing two models'
+      trials produces a number that is true of neither.
+    """
+    trials: dict[str, int] = {}
+    passes: dict[str, int] = {}
+    models: set[str] = set()
+    notes: dict[str, str] = {}
+
+    for path in report_paths:
+        doc = json.loads(Path(path).read_text())
+        report_digest = str(doc.get("corpus_digest") or "")
+        if report_digest != fixtures_digest:
+            raise EvidenceAggregationError(
+                f"{path}: measured against corpus {report_digest[:12] or '<unstamped>'}, "
+                f"current corpus is {fixtures_digest[:12]} — the fixtures changed, re-measure"
+            )
+        for row in doc.get("results") or []:
+            if row.get("fix_class") != "A" or row.get("expected") != "patch":
+                continue
+            rule = str(row.get("rule_id") or "")
+            outcome = str(row.get("outcome") or "")
+            verdict = str(row.get("human_verdict") or "").strip()
+            if outcome == "machine_pass" and not verdict:
+                raise EvidenceAggregationError(
+                    f"{path}: fixture {row.get('fixture')} is machine_pass but not hand-labeled — "
+                    "fill human_verdict (correct | plausible_but_wrong | wrong) before writing evidence"
+                )
+            model = str((row.get("suggestion") or {}).get("model") or "")
+            if model:
+                models.add(model)
+            trials[rule] = trials.get(rule, 0) + 1
+            if outcome == "machine_pass" and verdict == "correct":
+                passes[rule] = passes.get(rule, 0) + 1
+            notes[rule] = f"aggregated from {len(report_paths)} report(s)"
+
+    if len(models) > 1:
+        raise EvidenceAggregationError(
+            f"reports span multiple models {sorted(models)} — evidence is per-model; aggregate one model at a time"
+        )
+    if not trials:
+        raise EvidenceAggregationError("no Class A patch-expected results found in the given reports")
+
+    from datetime import datetime
+
+    today = datetime.now(UTC).date().isoformat()
+    return {
+        "corpus_digest": fixtures_digest,
+        "model": next(iter(models), ""),
+        "rules": {
+            rule: {
+                "trials": trials[rule],
+                "passes": passes.get(rule, 0),
+                "measured_at": today,
+                "note": notes[rule],
+            }
+            for rule in sorted(trials)
+        },
+    }
