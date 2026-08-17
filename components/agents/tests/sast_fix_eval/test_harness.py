@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from components.agents.infrastructure.evaluation.sast_fix_eval import (
     load_fixtures,
     run_fixture,
@@ -204,3 +206,102 @@ class TestSummarize:
         assert rule["gate_failures"].get("shape") == 1
         assert summary["class_a"] == {"machine_pass": 1, "total": 2}
         assert "never used for a ship decision" in summary["aggregate_secondary"]["note"]
+
+
+class TestEvidenceFromReports:
+    """Aggregation refuses anything that would launder an unmeasured claim (#117 step 3)."""
+
+    _DIGEST = "d" * 64
+
+    def _report(self, tmp_path, name="r1.json", *, digest=None, results=()):
+        import json as _json
+
+        path = tmp_path / name
+        path.write_text(_json.dumps({"corpus_digest": self._DIGEST if digest is None else digest, "results": list(results)}))
+        return path
+
+    def _row(self, *, rule="autosec.python.sql-execute-format", outcome="machine_pass", verdict="correct",
+             fix_class="A", expected="patch", model="claude-sonnet-4", fixture="fx-1"):
+        return {
+            "fixture": fixture, "rule_id": rule, "fix_class": fix_class, "expected": expected,
+            "outcome": outcome, "human_verdict": verdict, "suggestion": {"model": model},
+        }
+
+    def test_labeled_passes_and_gated_failures_aggregate_into_counts(self, tmp_path):
+        from components.agents.infrastructure.evaluation.sast_fix_eval import evidence_from_reports
+
+        report = self._report(tmp_path, results=[
+            self._row(fixture="fx-1"),
+            self._row(fixture="fx-2", outcome="gated", verdict=""),
+            self._row(fixture="fx-3", outcome="machine_pass", verdict="plausible_but_wrong"),
+        ])
+
+        evidence = evidence_from_reports([report], fixtures_digest=self._DIGEST)
+
+        counts = evidence["rules"]["autosec.python.sql-execute-format"]
+        assert counts["trials"] == 3
+        assert counts["passes"] == 1  # only the human-confirmed machine_pass
+        assert evidence["model"] == "claude-sonnet-4"
+
+    def test_unlabeled_machine_pass_refuses_naming_the_fixture(self, tmp_path):
+        from components.agents.infrastructure.evaluation.sast_fix_eval import (
+            EvidenceAggregationError,
+            evidence_from_reports,
+        )
+
+        report = self._report(tmp_path, results=[self._row(verdict="", fixture="fx-unlabeled")])
+
+        with pytest.raises(EvidenceAggregationError, match="fx-unlabeled"):
+            evidence_from_reports([report], fixtures_digest=self._DIGEST)
+
+    def test_stale_corpus_report_refuses(self, tmp_path):
+        from components.agents.infrastructure.evaluation.sast_fix_eval import (
+            EvidenceAggregationError,
+            evidence_from_reports,
+        )
+
+        report = self._report(tmp_path, digest="e" * 64, results=[self._row()])
+
+        with pytest.raises(EvidenceAggregationError, match="re-measure"):
+            evidence_from_reports([report], fixtures_digest=self._DIGEST)
+
+    def test_mixed_models_refuse(self, tmp_path):
+        from components.agents.infrastructure.evaluation.sast_fix_eval import (
+            EvidenceAggregationError,
+            evidence_from_reports,
+        )
+
+        report = self._report(tmp_path, results=[
+            self._row(fixture="fx-1", model="claude-sonnet-4"),
+            self._row(fixture="fx-2", model="gpt-4"),
+        ])
+
+        with pytest.raises(EvidenceAggregationError, match="per-model"):
+            evidence_from_reports([report], fixtures_digest=self._DIGEST)
+
+    def test_class_b_declines_never_count_as_patch_trials(self, tmp_path):
+        from components.agents.infrastructure.evaluation.sast_fix_eval import (
+            EvidenceAggregationError,
+            evidence_from_reports,
+        )
+
+        report = self._report(tmp_path, results=[
+            self._row(rule="autosec.python.jwt-verify-disabled", fix_class="B",
+                      expected="decline", outcome="honest_decline", verdict=""),
+        ])
+
+        # Only a Class B row → no trials at all → refuse rather than emit an
+        # empty evidence file that would look like a measurement happened.
+        with pytest.raises(EvidenceAggregationError, match="no Class A"):
+            evidence_from_reports([report], fixtures_digest=self._DIGEST)
+
+    def test_trials_accumulate_across_reports(self, tmp_path):
+        from components.agents.infrastructure.evaluation.sast_fix_eval import evidence_from_reports
+
+        r1 = self._report(tmp_path, "r1.json", results=[self._row(fixture="fx-1")])
+        r2 = self._report(tmp_path, "r2.json", results=[self._row(fixture="fx-1", outcome="gated", verdict="")])
+
+        evidence = evidence_from_reports([r1, r2], fixtures_digest=self._DIGEST)
+
+        counts = evidence["rules"]["autosec.python.sql-execute-format"]
+        assert (counts["trials"], counts["passes"]) == (2, 1)

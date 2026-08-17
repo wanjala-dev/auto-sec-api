@@ -85,3 +85,35 @@ class TestCorpusIntegrity:
         assert len(ids) == len(set(ids))
         on_disk = {p.stem for p in FIXTURES_DIR.glob("*.json")}
         assert set(ids) == on_disk
+
+
+class TestEvidenceCorpusBinding:
+    """Committed gate evidence must describe THIS corpus, or CI says so (#117 step 3).
+
+    The runtime gate cannot check this itself — the fixtures live in this
+    context and ``code_security.domain.fix_confidence`` computing their digest
+    would cross the boundary. So the binding is enforced here, beside the
+    corpus: edit a fixture and this test fails until the evidence is
+    re-measured, which is exactly the zero-overlap rule made executable.
+    """
+
+    def test_committed_evidence_matches_the_current_corpus_digest(self):
+        from components.agents.infrastructure.evaluation.sast_fix_eval import corpus_digest_of
+        from components.code_security.domain.fix_confidence import EVIDENCE_FILE, corpus_digest
+
+        if not EVIDENCE_FILE.is_file():
+            pytest.skip("no evidence committed yet — every rule resolves unproven, which is fail-closed")
+        assert corpus_digest() == corpus_digest_of(FIXTURES_DIR), (
+            "fix_confidence.yaml was measured against a corpus that no longer exists — "
+            "the fixtures changed since. Re-run `manage.py run_sast_fix_eval`, hand-label "
+            "the report, and re-write the evidence; do not edit the digest by hand."
+        )
+
+    def test_committed_evidence_rules_exist_in_the_corpus(self):
+        from components.code_security.domain.fix_confidence import EVIDENCE_FILE, measured_rules
+
+        if not EVIDENCE_FILE.is_file():
+            pytest.skip("no evidence committed yet")
+        corpus_rules = {f.rule_id for f in _fixtures()}
+        phantom = set(measured_rules()) - corpus_rules
+        assert not phantom, f"evidence claims measurements for rules with no fixtures: {sorted(phantom)}"
