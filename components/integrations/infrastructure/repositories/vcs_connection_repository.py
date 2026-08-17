@@ -95,6 +95,57 @@ class VcsConnectionRepository:
             connection.save(update_fields=[*changed, "updated_at"])
         return connection
 
+    def upsert_github_app_installation(
+        self,
+        *,
+        workspace_id,
+        installation_id: int,
+        created_by_id=None,
+    ) -> VcsConnection:
+        """Idempotent app-installation bind (ADR 0010 Phase B).
+
+        ONE app-mode GitHub row per workspace: the same installation re-binding
+        (GitHub replays the setup redirect; app updates re-fire it) reconnects
+        the existing row; a NEW installation id (uninstall → reinstall) re-points
+        it, so allowlist/repo_root config the operator already set survives the
+        reinstall. Only a workspace with no app-mode row gets a new one.
+        ``token_ciphertext`` stays empty — app mode stores no secret.
+        """
+        connection = (
+            VcsConnection.objects.filter(
+                workspace_id=workspace_id,
+                provider=VcsConnection.Provider.GITHUB,
+                auth_mode=VcsConnection.AuthMode.GITHUB_APP,
+            )
+            .order_by("-created_at")
+            .first()
+        )
+        if connection is not None:
+            changed: list[str] = []
+            if connection.installation_id != installation_id:
+                connection.installation_id = installation_id
+                changed.append("installation_id")
+            if connection.status != VcsConnection.Status.CONNECTED:
+                connection.status = VcsConnection.Status.CONNECTED
+                changed.append("status")
+            if connection.last_error:
+                connection.last_error = ""
+                changed.append("last_error")
+            if changed:
+                connection.save(update_fields=[*changed, "updated_at"])
+            return connection
+        return VcsConnection.objects.create(
+            workspace_id=workspace_id,
+            provider=VcsConnection.Provider.GITHUB,
+            auth_mode=VcsConnection.AuthMode.GITHUB_APP,
+            installation_id=installation_id,
+            name="GitHub App",
+            repo_allowlist=[],
+            token_ciphertext="",
+            status=VcsConnection.Status.CONNECTED,
+            created_by_id=created_by_id,
+        )
+
     def mark_verified(self, connection: VcsConnection) -> VcsConnection:
         connection.status = VcsConnection.Status.CONNECTED
         connection.last_verified_at = timezone.now()

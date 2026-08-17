@@ -14,6 +14,9 @@ from components.integrations.api.controller import (
     FindingDraftFixView,
     FindingOpenDraftPrView,
     FindingPreviewDraftPrView,
+    GitHubAppInstallView,
+    GitHubAppSetupView,
+    GitHubAppWebhookView,
     TriageCapabilityView,
     VcsConnectionDetailView,
     VcsConnectionListCreateView,
@@ -107,6 +110,28 @@ urlpatterns = [
         "workspaces/<uuid:workspace_id>/vcs-connections/<uuid:connection_id>/verify/",
         VcsConnectionVerifyView.as_view(),
         name=VcsConnectionVerifyView.name,
+    ),
+    # ── GitHub App install / setup / webhook (ADR 0010 D6 / Phase B) ──
+    path(
+        # Workspace-scoped (mirrors every other connection endpoint, so the
+        # existing manage_integrations permission resolves from the URL); the
+        # response is the GitHub install URL carrying the SIGNED state.
+        "workspaces/<uuid:workspace_id>/vcs/github-app/install/",
+        GitHubAppInstallView.as_view(),
+        name=GitHubAppInstallView.name,
+    ),
+    path(
+        # Global (GitHub's per-app Setup URL is one fixed address): the browser
+        # redirect target after install. The signed state IS the authorization.
+        "vcs/github-app/setup/",
+        GitHubAppSetupView.as_view(),
+        name=GitHubAppSetupView.name,
+    ),
+    path(
+        # Global webhook target. NOT flag-gated — the HMAC signature is its gate.
+        "vcs/github-app/webhook/",
+        GitHubAppWebhookView.as_view(),
+        name=GitHubAppWebhookView.name,
     ),
     # ── Vercel connections (ADR 0021 D2/D3) — Settings ▸ Integrations ▸ Vercel ──
     path(

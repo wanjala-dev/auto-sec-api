@@ -360,6 +360,15 @@ class VcsConnection(models.Model):
         DISABLED = "disabled", "Disabled"
         ERROR = "error", "Error"
 
+    class AuthMode(models.TextChoices):
+        # How the runtime token for this connection is obtained (ADR 0010 D6 /
+        # Phase B). ``pat`` (the default) is the shipped Phase-A behavior: the
+        # encrypted PAT in ``token_ciphertext``. ``github_app`` mints short-lived
+        # installation tokens from the app credentials (settings) + the
+        # ``installation_id`` below — no per-user secret is stored on the row.
+        PAT = "pat", "Personal access token (encrypted, stored)"
+        GITHUB_APP = "github_app", "GitHub App installation (short-lived tokens)"
+
     class CommitIdentity(models.TextChoices):
         # Who the draft-PR commit is attributed to on the code host.
         PAT_OWNER = "pat_owner", "PAT owner (default — no author/committer sent)"
@@ -370,6 +379,14 @@ class VcsConnection(models.Model):
     workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name="vcs_connections")
     provider = models.CharField(max_length=16, choices=Provider.choices, default=Provider.GITHUB)
     name = models.CharField(max_length=120, default="GitHub")
+    # Credential strategy discriminator — see AuthMode. Existing PAT rows keep
+    # working byte-for-byte (default ``pat``); app-mode rows leave
+    # ``token_ciphertext`` empty and carry ``installation_id`` instead.
+    auth_mode = models.CharField(max_length=16, choices=AuthMode.choices, default=AuthMode.PAT)
+    # The GitHub App installation this workspace bound via the signed-state
+    # setup flow. NOT a secret (it is an opaque numeric id, useless without the
+    # app's private key); populated only when ``auth_mode == github_app``.
+    installation_id = models.BigIntegerField(null=True, blank=True)
     # "owner/repo" (or project path) strings the agent may open draft PRs against —
     # the consent boundary. A repo not on this list is rejected before any API call.
     repo_allowlist = models.JSONField(default=list, blank=True)

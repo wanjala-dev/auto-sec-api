@@ -81,12 +81,16 @@ class BackfillDraftPrPatchesUseCase:
         resolve_connection: Callable[[str], object | None],
         decrypt: Callable[[str], str],
         resolve_adapter: Callable[[str, str], VcsPort],
+        resolve_token: Callable[[object], str] | None = None,
     ) -> None:
         self._finding_facts = finding_facts
         self._pr_recorder = pr_recorder
         self._resolve_connection = resolve_connection
         self._decrypt = decrypt
         self._resolve_adapter = resolve_adapter
+        # Per-connection auth strategy (Phase B) — preferred over the raw
+        # decrypt when wired, so app-mode connections mint installation tokens.
+        self._resolve_token = resolve_token
 
     def execute(self, *, workspace_id: str = "", limit: int = 500, dry_run: bool = False) -> BackfillReport:
         gaps = self._finding_facts.list_draft_pr_patch_gaps(workspace_id=workspace_id, limit=limit)
@@ -232,7 +236,16 @@ class BackfillDraftPrPatchesUseCase:
         if connection is None:
             logger.info("backfill_draft_pr_patches no_connection workspace_id=%s", workspace_id)
         else:
-            token = self._decrypt(getattr(connection, "token_ciphertext", "") or "")
+            try:
+                if self._resolve_token is not None:
+                    token = self._resolve_token(connection)
+                else:
+                    token = self._decrypt(getattr(connection, "token_ciphertext", "") or "")
+            except VcsApiError:
+                # A revoked app installation is a skip for this workspace — the
+                # backfill never invents what it cannot read.
+                logger.warning("backfill_draft_pr_patches token_unavailable workspace_id=%s", workspace_id)
+                token = ""
             if not token:
                 logger.info("backfill_draft_pr_patches no_token workspace_id=%s", workspace_id)
             else:

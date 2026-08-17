@@ -3,7 +3,7 @@ import os
 from celery import Celery
 
 import infrastructure.celery.signals
-import infrastructure.celery.tenancy_signals  # noqa: F401  (registers the tenancy binding signals)
+import infrastructure.celery.tenancy_signals
 from infrastructure.celery.database_safe_task import DatabaseSafeTask
 
 # set the default Django settings module for the 'celery' program.
@@ -33,6 +33,7 @@ app.autodiscover_tasks()
 # workflow tasks).
 import components.agents.infrastructure.tasks.ai_action_rollup_tasks
 import components.agents.infrastructure.tasks.ai_quality_rollup_tasks
+import components.agents.infrastructure.tasks.draft_pr_retry_tasks
 import components.agents.infrastructure.tasks.eval_tasks
 import components.cloud_posture.infrastructure.tasks.cloud_posture_tasks
 import components.cloud_posture.infrastructure.tasks.vercel_posture_tasks
@@ -41,9 +42,9 @@ import components.container_security.infrastructure.tasks.container_security_tas
 import components.findings.infrastructure.tasks.attck_coverage_tasks
 import components.findings.infrastructure.tasks.finding_risk_tasks
 import components.identity.workers.tasks
+import components.integrations.infrastructure.tasks.github_app_webhook_tasks
 import components.knowledge.infrastructure.tasks.index_freshness_tasks
 import components.knowledge.infrastructure.tasks.workspace_index_tasks
-import components.agents.infrastructure.tasks.draft_pr_retry_tasks
 import components.notifications.infrastructure.tasks.external_delivery_tasks
 import components.notifications.workers.tasks
 import components.payments.workers.tasks

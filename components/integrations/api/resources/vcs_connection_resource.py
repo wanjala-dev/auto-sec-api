@@ -14,6 +14,8 @@ class VcsConnectionResource:
     id: str
     provider: str
     name: str
+    auth_mode: str
+    installation_id: int | None
     repo_allowlist: list
     base_url: str
     repo_root: str
@@ -33,6 +35,12 @@ class VcsConnectionResource:
             id=str(connection.id),
             provider=connection.provider,
             name=connection.name,
+            # Credential strategy surface (ADR 0010 Phase B). The installation
+            # id is NOT a secret (an opaque numeric id, useless without the
+            # app's private key) — safe to return so the panel can show which
+            # installation is bound.
+            auth_mode=getattr(connection, "auth_mode", "pat") or "pat",
+            installation_id=getattr(connection, "installation_id", None),
             repo_allowlist=connection.repo_allowlist or [],
             base_url=connection.base_url or "",
             repo_root=connection.repo_root or "",
@@ -41,7 +49,14 @@ class VcsConnectionResource:
             commit_author_name=connection.commit_author_name or "",
             commit_author_email=connection.commit_author_email or "",
             status=connection.status,
-            has_token=bool(connection.token_ciphertext),
+            # "Has a usable credential": a stored PAT, or (app mode) a bound
+            # installation that mints tokens on demand. Key name kept for the
+            # existing FE contract.
+            has_token=bool(connection.token_ciphertext)
+            or (
+                (getattr(connection, "auth_mode", "") or "") == "github_app"
+                and bool(getattr(connection, "installation_id", None))
+            ),
             last_verified_at=(connection.last_verified_at.isoformat() if connection.last_verified_at else None),
             last_used_at=(connection.last_used_at.isoformat() if connection.last_used_at else None),
             last_error=connection.last_error,
@@ -53,6 +68,8 @@ class VcsConnectionResource:
             "id": self.id,
             "provider": self.provider,
             "name": self.name,
+            "auth_mode": self.auth_mode,
+            "installation_id": self.installation_id,
             "repo_allowlist": self.repo_allowlist,
             "base_url": self.base_url,
             "repo_root": self.repo_root,

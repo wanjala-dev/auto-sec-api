@@ -41,6 +41,23 @@ def get_vcs_adapter(provider: str, token: str) -> VcsPort:
     return factory(token)
 
 
+def resolve_vcs_connection_token(connection) -> str:
+    """The ONE per-connection credential strategy (ADR 0010 Phase B).
+
+    PAT rows decrypt the stored envelope ciphertext (the Phase-A behavior,
+    unchanged); ``auth_mode == github_app`` rows mint a short-lived installation
+    token from the app credentials — the stored PAT ciphertext is never read in
+    app mode. Every seam that turns a ``VcsConnection`` into a runtime token is
+    wired to THIS resolver so the strategy cannot fork per call site. Raises the
+    typed revoked/not-configured errors (``VcsApiError`` subclasses) for
+    app-mode failures the connection layer must act on."""
+    from components.integrations.infrastructure.adapters.connection_token_resolver import (
+        resolve_connection_token,
+    )
+
+    return resolve_connection_token(connection)
+
+
 def get_finding_facts_reader():
     """Composition root for the read-side board access (C3): the use case reads a
     finding's board Task through this port, never ``project``'s ORM."""
@@ -131,6 +148,10 @@ def get_open_draft_pr_use_case() -> OpenDraftPrUseCase:
         pr_recorder=get_finding_pr_recorder(),
         resolve_connection=resolve_vcs_connection,
         decrypt=decrypt_secret,
+        # Auth strategy (Phase B): the connection-aware resolver supersedes the
+        # raw decrypt above wherever a token is minted; `decrypt` stays wired as
+        # the injected fallback for tests that fake it.
+        resolve_token=resolve_vcs_connection_token,
         capability_port=AIProvider.build_agent_capability_port(),
         resolve_workspace_owner_id=resolve_workspace_owner_id,
         resolve_operator_identity=resolve_operator_identity,
@@ -165,6 +186,7 @@ def get_check_pr_merged_use_case():
         resolve_connection=_resolve_connection,
         decrypt=decrypt_secret,
         resolve_adapter=get_vcs_adapter,
+        resolve_token=resolve_vcs_connection_token,
     )
 
 
@@ -187,6 +209,7 @@ def get_backfill_draft_pr_patches_use_case():
         resolve_connection=resolve_vcs_connection,
         decrypt=decrypt_secret,
         resolve_adapter=get_vcs_adapter,
+        resolve_token=resolve_vcs_connection_token,
     )
 
 
@@ -208,4 +231,5 @@ def get_vcs_connection_service():
         _resolve_adapter=get_vcs_adapter,
         _encrypt=encrypt_secret,
         _decrypt=decrypt_secret,
+        _resolve_token=resolve_vcs_connection_token,
     )

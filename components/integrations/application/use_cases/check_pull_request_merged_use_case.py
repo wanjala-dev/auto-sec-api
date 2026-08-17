@@ -69,13 +69,18 @@ class CheckPullRequestMergedUseCase:
         resolve_connection: Callable[[str], object | None],
         decrypt: Callable[[str], str],
         resolve_adapter: Callable[[str, str], VcsPort],
+        resolve_token: Callable[[object], str] | None = None,
     ) -> None:
         # resolve_connection: (workspace_id) -> VcsConnection-like | None
         # decrypt: (ciphertext) -> plaintext token
         # resolve_adapter: (provider, token) -> VcsPort
+        # resolve_token: (connection) -> token — the per-connection auth strategy
+        #   (Phase B); preferred over the raw decrypt when wired, so app-mode
+        #   connections mint installation tokens instead of reading a PAT.
         self._resolve_connection = resolve_connection
         self._decrypt = decrypt
         self._resolve_adapter = resolve_adapter
+        self._resolve_token = resolve_token
 
     def execute(self, *, workspace_id: str, pr_url: str) -> PullRequestMergeStatus:
         parsed = parse_pr_url(pr_url)
@@ -97,7 +102,24 @@ class CheckPullRequestMergedUseCase:
                 merged=False, allowed=False, repo=repo, pr_number=number, reason="repo_not_allowlisted"
             )
 
-        token = self._decrypt(getattr(connection, "token_ciphertext", "") or "")
+        try:
+            if self._resolve_token is not None:
+                token = self._resolve_token(connection)
+            else:
+                token = self._decrypt(getattr(connection, "token_ciphertext", "") or "")
+        except VcsApiError as exc:
+            # A revoked app installation (or any typed auth failure) means we
+            # cannot confirm merged — fail closed, same as a host API error.
+            logger.info(
+                "check_pr_merged_token_unavailable workspace_id=%s repo=%s pr=%s status=%s",
+                workspace_id,
+                repo,
+                number,
+                exc.status_code,
+            )
+            return PullRequestMergeStatus(
+                merged=False, allowed=False, repo=repo, pr_number=number, reason="token_unavailable"
+            )
         if not token:
             return PullRequestMergeStatus(merged=False, allowed=False, repo=repo, pr_number=number, reason="no_token")
 
