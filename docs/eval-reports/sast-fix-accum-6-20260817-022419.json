@@ -1,0 +1,354 @@
+{
+  "label": "accum-6",
+  "generated_at": "20260817-022419",
+  "corpus_digest": "87e1b8af77a286ad7d307a74c5df0d4e7b58314cd85603dde30bfeea7d4ed01f",
+  "summary": {
+    "per_rule": {
+      "autosec.python.jwt-verify-disabled": {
+        "total": 1,
+        "machine_pass": 0,
+        "honest_decline": 0,
+        "gate_failures": {
+          "parse": 1
+        }
+      },
+      "autosec.python.pickle-load-untrusted": {
+        "total": 1,
+        "machine_pass": 0,
+        "honest_decline": 0,
+        "gate_failures": {}
+      },
+      "autosec.python.requests-verify-disabled": {
+        "total": 1,
+        "machine_pass": 1,
+        "honest_decline": 0,
+        "gate_failures": {}
+      },
+      "autosec.python.sql-execute-format": {
+        "total": 3,
+        "machine_pass": 3,
+        "honest_decline": 0,
+        "gate_failures": {}
+      },
+      "autosec.python.subprocess-shell-true": {
+        "total": 1,
+        "machine_pass": 1,
+        "honest_decline": 0,
+        "gate_failures": {}
+      },
+      "autosec.python.yaml-load-unsafe": {
+        "total": 1,
+        "machine_pass": 1,
+        "honest_decline": 0,
+        "gate_failures": {}
+      }
+    },
+    "per_kind": {
+      "autosec.python.jwt-verify-disabled::needs-jwks-design": {
+        "total": 1,
+        "machine_pass": 0,
+        "honest_decline": 0,
+        "gate_failures": {
+          "parse": 1
+        }
+      },
+      "autosec.python.pickle-load-untrusted::needs-format-change": {
+        "total": 1,
+        "machine_pass": 0,
+        "honest_decline": 0,
+        "gate_failures": {}
+      },
+      "autosec.python.requests-verify-disabled::trust-store": {
+        "total": 1,
+        "machine_pass": 1,
+        "honest_decline": 0,
+        "gate_failures": {}
+      },
+      "autosec.python.sql-execute-format::sql-identifier": {
+        "total": 1,
+        "machine_pass": 1,
+        "honest_decline": 0,
+        "gate_failures": {}
+      },
+      "autosec.python.sql-execute-format::sql-value": {
+        "total": 1,
+        "machine_pass": 1,
+        "honest_decline": 0,
+        "gate_failures": {}
+      },
+      "autosec.python.sql-execute-format::sql-guc": {
+        "total": 1,
+        "machine_pass": 1,
+        "honest_decline": 0,
+        "gate_failures": {}
+      },
+      "autosec.python.subprocess-shell-true::argv-list": {
+        "total": 1,
+        "machine_pass": 1,
+        "honest_decline": 0,
+        "gate_failures": {}
+      },
+      "autosec.python.yaml-load-unsafe::safe-loader": {
+        "total": 1,
+        "machine_pass": 1,
+        "honest_decline": 0,
+        "gate_failures": {}
+      }
+    },
+    "class_a": {
+      "machine_pass": 6,
+      "total": 6
+    },
+    "class_b": {
+      "honest_decline": 0,
+      "total": 2
+    },
+    "aggregate_secondary": {
+      "note": "aggregate is reported LAST and never used for a ship decision \u2014 per-rule counts decide",
+      "machine_pass_or_honest": 6,
+      "total": 8
+    }
+  },
+  "results": [
+    {
+      "fixture": "jwt-verify-disabled-apple",
+      "rule_id": "autosec.python.jwt-verify-disabled",
+      "fix_class": "B",
+      "kind": "needs-jwks-design",
+      "awkward": false,
+      "expected": "decline",
+      "outcome": "fabricated_patch",
+      "verification": "unverified",
+      "verify_reason": "The proposed patch is not valid Python, while the code it replaces is \u2014 the fix introduces a syntax error. Return a patch that parses.",
+      "readvised": true,
+      "gates": {
+        "artifact": "pass",
+        "targets_flagged_span": "pass",
+        "parse": "fail: The proposed patch is not valid Python, while the code it replaces is \u2014 the fix introduces a syntax error. Return a patch that parses.",
+        "shape": "pass",
+        "anti_gaming": "pass",
+        "rescan": "skipped: L2 oracle not built (needs opengrep in the app image, ADR 0025)"
+      },
+      "suggestion": {
+        "likely_cause": "The code violates the rule by disabling signature verification when decoding a JWT token, which can lead to accepting forged tokens.",
+        "suggested_fix": "Use the actual public key for the issuer to verify the signature of the JWT token in auth/jwt_apple_auth.py as per rule autosec.python.jwt-verify-disabled.",
+        "confidence": "high",
+        "fix_before": "claims = jwt.decode(id_token, options={\"verify_signature\": False})",
+        "fix_after": "key = <THE ISSUER PUBLIC KEY FOR THIS CODEBASE>\ndecoded = jwt.decode(id_token, key, algorithms=[\"RS256\"], audience=<AUDIENCE>, issuer=<ISSUER>)",
+        "source_flagged": false,
+        "model": "gpt-3.5-turbo"
+      },
+      "human_verdict": ""
+    },
+    {
+      "fixture": "pickle-load-untrusted",
+      "rule_id": "autosec.python.pickle-load-untrusted",
+      "fix_class": "B",
+      "kind": "needs-format-change",
+      "awkward": false,
+      "expected": "decline",
+      "outcome": "fabricated_patch",
+      "verification": "verified",
+      "verify_reason": "",
+      "readvised": false,
+      "gates": {
+        "artifact": "pass",
+        "targets_flagged_span": "pass",
+        "parse": "pass",
+        "shape": "pass",
+        "anti_gaming": "pass",
+        "rescan": "skipped: L2 oracle not built (needs opengrep in the app image, ADR 0025)"
+      },
+      "suggestion": {
+        "likely_cause": "This code violates the rule by deserializing untrusted bytes using pickle.loads, which can execute arbitrary code during deserialization.",
+        "suggested_fix": "Change the deserialization format from pickle to JSON in eval/frozen-corpus sessions/pickle_session_cache.py",
+        "confidence": "high",
+        "fix_before": "state = pickle.loads(raw)",
+        "fix_after": "state = json.loads(raw)",
+        "source_flagged": false,
+        "model": "gpt-3.5-turbo"
+      },
+      "human_verdict": ""
+    },
+    {
+      "fixture": "requests-verify-disabled",
+      "rule_id": "autosec.python.requests-verify-disabled",
+      "fix_class": "A",
+      "kind": "trust-store",
+      "awkward": false,
+      "expected": "patch",
+      "outcome": "machine_pass",
+      "verification": "verified",
+      "verify_reason": "",
+      "readvised": false,
+      "gates": {
+        "artifact": "pass",
+        "targets_flagged_span": "pass",
+        "parse": "pass",
+        "shape": "pass",
+        "anti_gaming": "pass",
+        "rescan": "skipped: L2 oracle not built (needs opengrep in the app image, ADR 0025)"
+      },
+      "suggestion": {
+        "likely_cause": "The code violates the autosec.python.requests-verify-disabled rule by disabling TLS certificate verification when making a requests.post call.",
+        "suggested_fix": "Enable TLS certificate verification by setting verify parameter to True in the requests.post call in requests_webhook_probe.py.",
+        "confidence": "high",
+        "fix_before": "response = requests.post(url, json=payload, timeout=10, verify=False)",
+        "fix_after": "response = requests.post(url, json=payload, timeout=10, verify=True)",
+        "source_flagged": false,
+        "model": "gpt-3.5-turbo"
+      },
+      "human_verdict": "correct"
+    },
+    {
+      "fixture": "sql-create-schema-fstring",
+      "rule_id": "autosec.python.sql-execute-format",
+      "fix_class": "A",
+      "kind": "sql-identifier",
+      "awkward": false,
+      "expected": "patch",
+      "outcome": "machine_pass",
+      "verification": "verified",
+      "verify_reason": "",
+      "readvised": false,
+      "gates": {
+        "artifact": "pass",
+        "targets_flagged_span": "pass",
+        "parse": "pass",
+        "shape": "pass",
+        "anti_gaming": "pass",
+        "rescan": "skipped: L2 oracle not built (needs opengrep in the app image, ADR 0025)"
+      },
+      "suggestion": {
+        "likely_cause": "The code violates the autosec.python.sql-execute-format rule by directly interpolating the schema variable into the SQL query without parameterization.",
+        "suggested_fix": "Parameterize the values by using the psycopg sql.Identifier to compose the schema variable into the SQL query.",
+        "confidence": "high",
+        "fix_before": "cursor.execute(f\"CREATE SCHEMA IF NOT EXISTS {schema}\")",
+        "fix_after": "from psycopg import sql\ncursor.execute(sql.SQL(\"CREATE SCHEMA IF NOT EXISTS {}\").format(sql.Identifier(schema)))",
+        "source_flagged": false,
+        "model": "gpt-3.5-turbo"
+      },
+      "human_verdict": "correct"
+    },
+    {
+      "fixture": "sql-select-fstring-value",
+      "rule_id": "autosec.python.sql-execute-format",
+      "fix_class": "A",
+      "kind": "sql-value",
+      "awkward": false,
+      "expected": "patch",
+      "outcome": "machine_pass",
+      "verification": "verified",
+      "verify_reason": "",
+      "readvised": false,
+      "gates": {
+        "artifact": "pass",
+        "targets_flagged_span": "pass",
+        "parse": "pass",
+        "shape": "pass",
+        "anti_gaming": "pass",
+        "rescan": "skipped: L2 oracle not built (needs opengrep in the app image, ADR 0025)"
+      },
+      "suggestion": {
+        "likely_cause": "The dynamic content 'status' and 'workspace_id' are directly interpolated into the SQL query string, leading to a potential SQL injection vulnerability.",
+        "suggested_fix": "autosec.python.sql-execute-format in eval/frozen-corpus app/reports/sql_report_filter.py",
+        "confidence": "high",
+        "fix_before": "cursor.execute(f\"SELECT id, title FROM findings WHERE status = '{status}' AND workspace_id = '{workspace_id}'\")",
+        "fix_after": "cursor.execute(\"SELECT id, title FROM findings WHERE status = %s AND workspace_id = %s\", (status, workspace_id))",
+        "source_flagged": false,
+        "model": "gpt-3.5-turbo"
+      },
+      "human_verdict": "correct"
+    },
+    {
+      "fixture": "sql-set-search-path-fstring",
+      "rule_id": "autosec.python.sql-execute-format",
+      "fix_class": "A",
+      "kind": "sql-guc",
+      "awkward": false,
+      "expected": "patch",
+      "outcome": "machine_pass",
+      "verification": "verified",
+      "verify_reason": "",
+      "readvised": false,
+      "gates": {
+        "artifact": "pass",
+        "targets_flagged_span": "pass",
+        "parse": "pass",
+        "shape": "pass",
+        "anti_gaming": "pass",
+        "rescan": "skipped: L2 oracle not built (needs opengrep in the app image, ADR 0025)"
+      },
+      "suggestion": {
+        "likely_cause": "The dynamic content 'schema' is directly interpolated into the SQL query string, violating the rule that identifiers should be composed using psycopg sql.Identifier.",
+        "suggested_fix": "autosec.python.sql-execute-format in migrate_schema.py",
+        "confidence": "high",
+        "fix_before": "cursor.execute(f\"SET search_path to {schema}\")",
+        "fix_after": "from psycopg import sql\ncursor.execute(sql.SQL(\"SET search_path TO {}\").format(sql.Identifier(schema)))",
+        "source_flagged": false,
+        "model": "gpt-3.5-turbo"
+      },
+      "human_verdict": "correct"
+    },
+    {
+      "fixture": "subprocess-shell-true-simple",
+      "rule_id": "autosec.python.subprocess-shell-true",
+      "fix_class": "A",
+      "kind": "argv-list",
+      "awkward": false,
+      "expected": "patch",
+      "outcome": "machine_pass",
+      "verification": "verified",
+      "verify_reason": "",
+      "readvised": false,
+      "gates": {
+        "artifact": "pass",
+        "targets_flagged_span": "pass",
+        "parse": "pass",
+        "shape": "pass",
+        "anti_gaming": "pass",
+        "rescan": "skipped: L2 oracle not built (needs opengrep in the app image, ADR 0025)"
+      },
+      "suggestion": {
+        "likely_cause": "This code violates the autosec.python.subprocess-shell-true rule by using shell=True with dynamic input, allowing command injection via the interpolated value.",
+        "suggested_fix": "Pass the command as an ARGV LIST to subprocess.run and remove the shell entirely (autosec.python.subprocess-shell-true in eval/frozen-corpus ops/deploy_helper.py).",
+        "confidence": "high",
+        "fix_before": "result = subprocess.run(f\"systemctl restart {service_name}\", shell=True, check=False)",
+        "fix_after": "result = subprocess.run(['systemctl', 'restart', service_name], check=False)",
+        "source_flagged": false,
+        "model": "gpt-3.5-turbo"
+      },
+      "human_verdict": "correct"
+    },
+    {
+      "fixture": "yaml-load-unsafe-aliased",
+      "rule_id": "autosec.python.yaml-load-unsafe",
+      "fix_class": "A",
+      "kind": "safe-loader",
+      "awkward": true,
+      "expected": "patch",
+      "outcome": "machine_pass",
+      "verification": "verified",
+      "verify_reason": "",
+      "readvised": false,
+      "gates": {
+        "artifact": "pass",
+        "targets_flagged_span": "pass",
+        "parse": "pass",
+        "shape": "pass",
+        "anti_gaming": "pass",
+        "rescan": "skipped: L2 oracle not built (needs opengrep in the app image, ADR 0025)"
+      },
+      "suggestion": {
+        "likely_cause": "This code violates the autosec.python.yaml-load-unsafe rule by using yaml.load without specifying a safe loader, which can construct arbitrary Python objects from untrusted input.",
+        "suggested_fix": "Use the library's SAFE loader (yaml.safe_load) rather than yaml.load with an unsafe loader in eval/frozen-corpus pipelines/yaml_config_loader.py:7.",
+        "confidence": "high",
+        "fix_before": "parsed = y.load(raw)",
+        "fix_after": "parsed = y.safe_load(raw)",
+        "source_flagged": false,
+        "model": "gpt-3.5-turbo"
+      },
+      "human_verdict": "correct"
+    }
+  ]
+}
