@@ -1,6 +1,15 @@
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
+
+from components.project.domain.workflow_status_vocabulary import (
+    CATEGORY_BACKLOG,
+    CATEGORY_CANCELED,
+    CATEGORY_COMPLETED,
+    CATEGORY_STARTED,
+    CATEGORY_UNSTARTED,
+)
 
 #
 # Import models
@@ -146,6 +155,123 @@ class Project(models.Model):
         return self.tasks.filter(status=Task.TODO).count()
 
 
+class WorkflowStatus(models.Model):
+    """One value of a team's shared status axis (ADR 0030, Model A).
+
+    Boards stop being N per-surface column vocabularies: every lane is a value
+    of ONE per-team status field, and ``category`` is the coarse Linear-style
+    axis that survives renames — rollups and reporting read *category*, lanes
+    read *status*. P1 only introduces the model + dual-write; ``Column``
+    remains authoritative for reads until the P4 cutover.
+    """
+
+    class Category(models.TextChoices):
+        # Values come from the domain vocabulary so the model, the backfill
+        # migration and the runtime bridge can never disagree on the axis.
+        BACKLOG = CATEGORY_BACKLOG, "Backlog"
+        UNSTARTED = CATEGORY_UNSTARTED, "Unstarted"
+        STARTED = CATEGORY_STARTED, "Started"
+        COMPLETED = CATEGORY_COMPLETED, "Completed"
+        CANCELED = CATEGORY_CANCELED, "Canceled"
+
+    # FK / relations
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE)
+    team = models.ForeignKey(Team, related_name="workflow_statuses", on_delete=models.CASCADE)
+    # Data fields
+    name = models.CharField(max_length=255)
+    order = models.IntegerField(default=0)
+    category = models.CharField(max_length=16, choices=Category.choices, default=CATEGORY_STARTED)
+    # Metadata
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        # ``id`` tiebreak keeps lane order deterministic when two statuses
+        # share an ``order`` value (same rationale as Column, QA F8).
+        ordering = ["order", "id"]
+        verbose_name_plural = "workflow statuses"
+        constraints = [
+            # One vocabulary per team: a status name exists at most once per
+            # (team, workspace) — ``get_or_create`` in the backfill and the
+            # lazy runtime seeding stay atomic under concurrency.
+            models.UniqueConstraint(
+                fields=["team", "workspace", "name"],
+                name="uniq_workflow_status_name_per_team",
+            )
+        ]
+
+    def __str__(self):
+        return self.name
+
+
+#: The closed ``BoardView.filter`` key vocabulary (ADR 0030: "a small, closed
+#: vocabulary — NOT a query language"). Extending it is a deliberate change,
+#: made here, never by writing a new key at a call site.
+BOARD_VIEW_FILTER_KEYS = frozenset({"project", "source_type", "min_severity", "assignee", "tag"})
+
+
+class BoardView(models.Model):
+    """A board is a saved view over a team's statuses (ADR 0030, Model A).
+
+    Every existing "board" becomes a system view at migration: the team board
+    is the unfiltered view; each project board is a ``{"project": "<id>"}``
+    view. This entity is deliberately the substrate for task #74 (Tom's
+    persisted saved views): a user-saved view is a later non-system row. P1
+    ships the model + backfill only — no API, no read path.
+    """
+
+    # FK / relations
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE)
+    team = models.ForeignKey(Team, related_name="board_views", on_delete=models.CASCADE)
+    # Data fields
+    name = models.CharField(max_length=255)
+    slug = models.SlugField(max_length=255)
+    filter = models.JSONField(default=dict, blank=True)
+    group_by = models.CharField(max_length=32, default="status")
+    order = models.IntegerField(default=0)
+    is_system = models.BooleanField(default=False)
+    # Metadata
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["order", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["team", "workspace", "slug"],
+                name="uniq_board_view_slug_per_team",
+            )
+        ]
+
+    def __str__(self):
+        return self.name
+
+    def clean(self):
+        self._validate_filter()
+
+    def save(self, *args, **kwargs):
+        # The closed vocabulary is a model invariant, not a form nicety —
+        # enforce it on every write path, not only ones that call full_clean.
+        self._validate_filter()
+        super().save(*args, **kwargs)
+
+    def _validate_filter(self):
+        if not isinstance(self.filter, dict):
+            raise ValidationError({"filter": "filter must be a JSON object of closed-vocabulary keys."})
+        unknown = set(self.filter) - BOARD_VIEW_FILTER_KEYS
+        if unknown:
+            raise ValidationError(
+                {
+                    "filter": (
+                        f"Unknown filter key(s): {sorted(unknown)}. "
+                        f"Allowed: {sorted(BOARD_VIEW_FILTER_KEYS)}. "
+                        "The vocabulary is closed by design (ADR 0030) — extend "
+                        "BOARD_VIEW_FILTER_KEYS deliberately, never ad hoc."
+                    )
+                }
+            )
+
+
 class Column(models.Model):
     project = models.ForeignKey(Project, related_name="columns", on_delete=models.CASCADE, null=True)
     title = models.CharField(max_length=255)
@@ -160,6 +286,18 @@ class Column(models.Model):
     is_deleted = models.BooleanField(default=False)
     workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE)
     team = models.ForeignKey(Team, related_name="columns", on_delete=models.CASCADE)
+    # The lane's value on the team's status axis (ADR 0030 P1). Carried on the
+    # Column so the dual-write is a local attribute read and the backfill's
+    # column->status decision is persisted, not re-derived. Resolved from the
+    # title vocabulary by the workflow-status sync bridge when a column is
+    # created; nullable because Column stays authoritative until P4.
+    workflow_status = models.ForeignKey(
+        WorkflowStatus,
+        related_name="columns",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
 
     class Meta:
         # ``id`` tiebreak keeps board layout deterministic when two columns
@@ -210,6 +348,17 @@ class Task(models.Model):
         blank=True,
     )
     column = models.ForeignKey(Column, related_name="tasks", on_delete=models.SET_NULL, null=True)
+    # Dual-write mirror of ``column.workflow_status`` (ADR 0030 P1), kept in
+    # sync by the workflow-status sync bridge on every save (plus the one
+    # signal-less bulk path, batch-move). Reads still come from ``column``
+    # until the P4 cutover; NULL whenever the task has no column.
+    workflow_status = models.ForeignKey(
+        WorkflowStatus,
+        related_name="tasks",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
     title = models.CharField(max_length=255)
     assigned_to = models.ManyToManyField(CustomUser, related_name="assigned_tasks", blank=True)
     created_by = models.ForeignKey(CustomUser, related_name="tasks", on_delete=models.CASCADE)

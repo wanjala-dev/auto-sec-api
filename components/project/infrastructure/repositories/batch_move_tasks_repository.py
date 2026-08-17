@@ -1,25 +1,28 @@
 """ORM adapter for batch task move operations."""
+
 from __future__ import annotations
 
-from components.project.domain.errors import (
-    TaskNotFoundError,
-    TeamMembershipRequiredError,
-    WorkspaceMembershipRequiredError,
-)
+from datetime import UTC
+
 from components.project.application.ports.batch_move_tasks_port import (
     BatchMoveTasksCommand,
     BatchMoveTasksPort,
     BatchMoveTasksResult,
 )
+from components.project.domain.errors import (
+    TaskNotFoundError,
+    TeamMembershipRequiredError,
+    WorkspaceMembershipRequiredError,
+)
 
 
 class OrmBatchMoveTasksRepository(BatchMoveTasksPort):
-
     def batch_move_tasks(self, *, command: BatchMoveTasksCommand) -> BatchMoveTasksResult:
         from django.db import transaction
+
+        from components.workspace.application.facades.workspace_facade import user_is_workspace_member
         from infrastructure.persistence.project.models import Column, Task
         from infrastructure.persistence.users.models import CustomUser
-        from components.workspace.application.facades.workspace_facade import user_is_workspace_member
 
         # ── Resolve user ────────────────────────────────────────────
         user = CustomUser.objects.filter(id=command.user_id).first()
@@ -31,7 +34,9 @@ class OrmBatchMoveTasksRepository(BatchMoveTasksPort):
         # ── Resolve all tasks in one query ──────────────────────────
         task_ids = [m.task_id for m in command.moves]
         tasks = Task.objects.select_related(
-            "team", "workspace", "column",
+            "team",
+            "workspace",
+            "column",
         ).filter(pk__in=task_ids)
         task_map = {str(t.pk): t for t in tasks}
 
@@ -65,11 +70,10 @@ class OrmBatchMoveTasksRepository(BatchMoveTasksPort):
                 from components.workspace.application.facades.workspace_facade import (
                     user_is_workspace_admin_or_owner,
                 )
+
                 if not user_is_workspace_admin_or_owner(user, task.workspace):
                     if not task.team.members.filter(id=user.id).exists():
-                        raise TeamMembershipRequiredError(
-                            "You must be a member of the task's team to update it."
-                        )
+                        raise TeamMembershipRequiredError("You must be a member of the task's team to update it.")
 
         # ── Apply moves ─────────────────────────────────────────────
         # Capture previous_column_id BEFORE we overwrite task.column;
@@ -77,7 +81,7 @@ class OrmBatchMoveTasksRepository(BatchMoveTasksPort):
         # endpoints. The previous Phase-0 emit branch relied on
         # ``task._previous_status`` which nothing ever set — that
         # branch never fired in production. Removed.
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         tasks_to_update = []
         previous_column_by_task: dict[str, str | None] = {}
@@ -86,25 +90,29 @@ class OrmBatchMoveTasksRepository(BatchMoveTasksPort):
             task = task_map[move.task_id]
             target_column = column_map[move.column_id]
 
-            previous_column_by_task[str(task.id)] = (
-                str(task.column_id) if task.column_id else None
-            )
+            previous_column_by_task[str(task.id)] = str(task.column_id) if task.column_id else None
             task.column = target_column
+            # ADR 0030 P1 dual-write: ``bulk_update`` fires NO signals, so the
+            # sync bridge cannot mirror this path — carry the column's status
+            # explicitly (a local attribute read; columns were fetched above).
+            task.workflow_status_id = target_column.workflow_status_id
             if move.order is not None:
                 task.order = move.order
 
             tasks_to_update.append(task)
 
-        moved_at_iso = datetime.now(timezone.utc).isoformat()
+        moved_at_iso = datetime.now(UTC).isoformat()
         with transaction.atomic():
-            Task.objects.bulk_update(tasks_to_update, ["column", "order"])
+            Task.objects.bulk_update(tasks_to_update, ["column", "order", "workflow_status"])
 
             # ── Emit workflow events for column moves ────────────────
             # Every task in this batch had its column changed by
             # definition. Idempotency key includes the new column +
             # batch timestamp so two distinct batches that both move
             # a task to the same column still produce two events.
-            from components.workflow.application.providers.workflow_dispatcher_provider import get_workflow_dispatcher_provider
+            from components.workflow.application.providers.workflow_dispatcher_provider import (
+                get_workflow_dispatcher_provider,
+            )
 
             for task in tasks_to_update:
                 previous_column_id = previous_column_by_task[str(task.id)]
@@ -130,9 +138,7 @@ class OrmBatchMoveTasksRepository(BatchMoveTasksPort):
                             "target_id": str(t.workspace_id),
                         },
                         source_id=str(t.id),
-                        idempotency_key=(
-                            f"task_moved_column:{t.id}:{t.column_id}:{moved_at_iso}"
-                        ),
+                        idempotency_key=(f"task_moved_column:{t.id}:{t.column_id}:{moved_at_iso}"),
                     )
                 )
 
