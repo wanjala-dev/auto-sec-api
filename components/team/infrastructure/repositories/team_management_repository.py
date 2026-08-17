@@ -17,7 +17,6 @@ from components.workspace.application.facades.workspace_facade import (
     ensure_workspace_membership,
     user_is_workspace_member,
 )
-from infrastructure.persistence.project.models import Column
 from infrastructure.persistence.team.models import Team
 from infrastructure.persistence.users.models import UserProfile
 from infrastructure.persistence.workspaces.models import Workspace
@@ -60,8 +59,12 @@ class OrmTeamManagementRepository:
         ensure_workspace_membership(workspace, actor)
         ensure_team_membership(team, actor)
         self._activate_default_context(actor=actor, team=team, workspace=workspace)
+        # ONE canonical column vocabulary for every team-creation path: the six
+        # seeded lanes (Backlog … Complete, Canceled). User-created teams used
+        # to also get a "Done"(7) — a second terminal lane synonymous with
+        # "Complete" (QA report 2026-08-16, F7). Existing boards were cleaned
+        # up by project migration 0006 (Done merged into Complete).
         ensure_team_board_columns(workspace, team, actor)
-        self._ensure_done_column(team=team, workspace=workspace, actor=actor)
 
         return team
 
@@ -105,28 +108,6 @@ class OrmTeamManagementRepository:
             updates.append("active_workspace_id")
         if updates:
             userprofile.save(update_fields=updates)
-
-    @staticmethod
-    def _ensure_done_column(*, team, workspace, actor) -> None:
-        done_column, _ = Column.objects.get_or_create(
-            project=None,
-            team=team,
-            workspace=workspace,
-            title="Done",
-            defaults={
-                "order": 7,
-                "created_by": actor,
-            },
-        )
-        updates = []
-        if done_column.order != 7:
-            done_column.order = 7
-            updates.append("order")
-        if done_column.created_by_id is None:
-            done_column.created_by = actor
-            updates.append("created_by")
-        if updates:
-            done_column.save(update_fields=updates)
 
     @staticmethod
     def _get_active_team_for_actor(*, actor, is_staff: bool = False, is_superuser: bool = False):

@@ -1,3 +1,4 @@
+import json
 import os
 
 # Keep filesystem paths absolute so template resolution never depends on process CWD.
@@ -455,6 +456,25 @@ SOC_RESPONSE_READ_ONLY = os.environ.get("SOC_RESPONSE_READ_ONLY", "true").lower(
 # path — grader, tool, evaluation telemetry — was unreachable outside tests while
 # reading, in code and in docs, as though it were live.
 DEEP_RUBRIC_MIDDLEWARE_ENABLED = os.environ.get("DEEP_RUBRIC_MIDDLEWARE_ENABLED", "false").lower() == "true"
+
+# Board floor for AI-finding cards (ADR 0019 D4 layer 2): findings below the
+# floor stay SSOT-only (visible in the HUD findings panel) and never become
+# board cards. JSON object mapping a finding SOURCE (the FindingRaised.source
+# key, e.g. "logwatch.error") to a minimum severity name
+# (informational|low|medium|high|critical). The special key "default" floors
+# every source that has neither a per-source entry here nor a baked-in floor
+# in the handler's _SOURCE_BOARD mapping (code_security + vercel_posture ship
+# with "high" there per their ADRs). Empty by default — current behavior is
+# unchanged until a deployment opts in, e.g.:
+#   AI_BOARD_MIN_SEVERITY='{"default": "medium"}'      # cap the Triage flood
+#   AI_BOARD_MIN_SEVERITY='{"logwatch.error": "high"}' # floor one source
+_ai_board_min_severity_raw = os.environ.get("AI_BOARD_MIN_SEVERITY", "") or "{}"
+try:
+    AI_BOARD_MIN_SEVERITY = json.loads(_ai_board_min_severity_raw)
+except ValueError:
+    AI_BOARD_MIN_SEVERITY = {}
+if not isinstance(AI_BOARD_MIN_SEVERITY, dict):
+    AI_BOARD_MIN_SEVERITY = {}
 
 AUTH_USER_MODEL = "users.CustomUser"
 

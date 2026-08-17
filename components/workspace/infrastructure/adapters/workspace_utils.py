@@ -270,11 +270,29 @@ DEFAULT_BOARD_COLUMNS = (
 
 
 def ensure_team_board_columns(workspace, team, owner):
-    """Make sure a workspace's primary team has the standard kanban columns."""
+    """Make sure a team's board has the standard kanban columns.
+
+    APPEND-ONLY on order: a missing seeded column is created after the board's
+    current max ``order``; an EXISTING column's order is never rewritten.
+    Operators reorder columns on the board (``ColumnReorderView``) and this
+    seeder re-runs from several paths (team create, ops backfills, the agents
+    kanban sync) — re-asserting the seed order here silently reverted every
+    operator reorder (QA report 2026-08-16, F3). The dedupe / ``project=NULL``
+    / ``created_by`` repairs are kept — they fix data integrity, not layout.
+    """
     if not team or not workspace:
         return
 
-    for title, order in DEFAULT_BOARD_COLUMNS:
+    from django.db.models import Max
+
+    max_order = Column.objects.filter(
+        workspace=workspace,
+        team=team,
+        project__isnull=True,
+    ).aggregate(max_order=Max("order"))["max_order"]
+    next_order = (max_order or 0) + 1
+
+    for title, _seed_order in DEFAULT_BOARD_COLUMNS:
         # Handle duplicates by keeping the first one and deleting others
         existing_columns = Column.objects.filter(
             workspace=workspace,
@@ -287,25 +305,20 @@ def ensure_team_board_columns(workspace, team, owner):
             first_column = existing_columns.first()
             existing_columns.exclude(id=first_column.id).delete()
             column = first_column
-            created = False
         elif existing_columns.exists():
             column = existing_columns.first()
-            created = False
         else:
             column = Column.objects.create(
                 workspace=workspace,
                 team=team,
                 title=title,
-                order=order,
+                order=next_order,
                 project=None,
                 created_by=owner,
             )
-            created = True
+            next_order += 1
 
         updates = []
-        if column.order != order:
-            column.order = order
-            updates.append("order")
         if column.project_id is not None:
             column.project = None
             updates.append("project")

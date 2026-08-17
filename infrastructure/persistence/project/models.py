@@ -162,7 +162,9 @@ class Column(models.Model):
     team = models.ForeignKey(Team, related_name="columns", on_delete=models.CASCADE)
 
     class Meta:
-        ordering = ["order"]
+        # ``id`` tiebreak keeps board layout deterministic when two columns
+        # share an ``order`` value (QA report 2026-08-16, F8).
+        ordering = ["order", "id"]
         constraints = [
             # A team's board (project-less columns) cannot have two columns with
             # the same title. Makes ``get_or_create`` for the Triage column
@@ -257,6 +259,7 @@ class TaskComment(models.Model):
     likes = models.ManyToManyField(CustomUser, blank=True, related_name="task_comment_likes")
     dislikes = models.ManyToManyField(CustomUser, blank=True, related_name="task_comment_dislikes")
     parent = models.ForeignKey("self", on_delete=models.CASCADE, blank=True, null=True, related_name="replies")
+
     class Meta:
         ordering = ["-created_on"]
 

@@ -10,39 +10,45 @@ Notes:
 - The Task model currently has no description field; descriptions are ignored for persistence.
 - Agent assignees are not persisted (the Task model only tracks human users).
 """
+
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import Optional
 
 from django.db import transaction
 from django.utils import timezone
 
 from components.agents.domain.services.deep.kanban_sync import normalize_task_for_kanban, status_from_column
-from components.agents.domain.value_objects.plan_schemas import TaskSpec, TaskStatus, Priority, AssigneeType
+from components.agents.domain.value_objects.plan_schemas import AssigneeType, Priority, TaskSpec, TaskStatus
 
 
 def _get_project_models():
-    from infrastructure.persistence.project.models import Task, Column, Project, TaskComment
+    from infrastructure.persistence.project.models import Column, Project, Task, TaskComment
+
     return Task, Column, Project, TaskComment
 
 
 def _get_workspace_models():
     from infrastructure.persistence.workspaces.models import Workspace
+
     return Workspace
 
 
 def _get_team_models():
     from infrastructure.persistence.team.models import Team
+
     return Team
 
 
 def _get_user_models():
     from infrastructure.persistence.users.models import CustomUser
+
     return CustomUser
 
 
 def _get_agent_models():
     from infrastructure.persistence.ai.agents.models import Agent
+
     return Agent
 
 
@@ -75,7 +81,7 @@ def _resolve_assignee(task_payload: TaskSpec):
     return None
 
 
-def _resolve_project(project_id: Optional[str], workspace_id: Optional[str]):
+def _resolve_project(project_id: str | None, workspace_id: str | None):
     _, _, Project, _ = _get_project_models()
     if not project_id or not workspace_id:
         return None
@@ -85,7 +91,7 @@ def _resolve_project(project_id: Optional[str], workspace_id: Optional[str]):
         return None
 
 
-def _resolve_team_and_workspace(team_id: Optional[str], workspace_id: Optional[str]) -> Tuple[Optional, Optional]:
+def _resolve_team_and_workspace(team_id: str | None, workspace_id: str | None) -> tuple[Optional, Optional]:
     Team = _get_team_models()
     Workspace = _get_workspace_models()
     team = None
@@ -99,14 +105,18 @@ def _resolve_team_and_workspace(team_id: Optional[str], workspace_id: Optional[s
     return team, workspace
 
 
-def _resolve_column(team, workspace, title: str, *, order_hint: Optional[int], owner):
+def _resolve_column(team, workspace, title: str, *, order_hint: int | None, owner):
+    """Resolve (or create) the board column a synced task lands in.
+
+    ``order_hint`` is applied on CREATE only. Rewriting an existing column's
+    order on every sync is the same reorder-revert landmine as F3 (QA report
+    2026-08-16): operators reorder columns on the board, and a background
+    sync must never silently undo that.
+    """
     _, Column, _, _ = _get_project_models()
     existing = Column.objects.filter(team=team, workspace=workspace, title__iexact=title).first()
     if existing:
         updates = []
-        if order_hint is not None and existing.order != order_hint:
-            existing.order = order_hint
-            updates.append("order")
         if existing.project_id is not None:
             existing.project = None
             updates.append("project")
@@ -126,7 +136,7 @@ def _resolve_column(team, workspace, title: str, *, order_hint: Optional[int], o
     )
 
 
-def _ensure_description_comment(task, description: Optional[str], author) -> None:
+def _ensure_description_comment(task, description: str | None, author) -> None:
     """
     Persist a description on the Task via a TaskComment if provided.
 
@@ -145,7 +155,7 @@ def _ensure_description_comment(task, description: Optional[str], author) -> Non
     )
 
 
-def upsert_task_from_spec(task_spec: TaskSpec, *, created_by_id: Optional[str] = None):
+def upsert_task_from_spec(task_spec: TaskSpec, *, created_by_id: str | None = None):
     """
     Create or update a Task and its Column based on a TaskSpec.
 
@@ -168,13 +178,17 @@ def upsert_task_from_spec(task_spec: TaskSpec, *, created_by_id: Optional[str] =
     if not owner:
         owner = getattr(workspace, "workspace_owner", None)
 
-    # Ensure default columns exist to avoid duplication later.
-    try:
-        from infrastructure.persistence.workspaces.utils import ensure_team_board_columns
-        ensure_team_board_columns(workspace, team, owner)
-    except Exception:
-        # Non-fatal; continue with best-effort column resolution.
-        pass
+    # Ensure the default board columns exist so column resolution below lands
+    # on a complete board. This step had silently NEVER run: the fork carried
+    # an import of ``infrastructure.persistence.workspaces.utils`` (a module
+    # that does not exist here) inside a blanket ``except Exception: pass`` —
+    # exactly the error-silencing the project rules forbid (QA report
+    # 2026-08-16, F4). The real function is exposed by the workspace facade.
+    # Safe to run now that the seeder is append-only (F3): it creates missing
+    # columns and never rewrites an existing column's order.
+    from components.workspace.application.facades.workspace_facade import ensure_team_board_columns
+
+    ensure_team_board_columns(workspace, team, owner)
 
     normalized = normalize_task_for_kanban(task_spec)
     column_title = normalized["column_title"]
