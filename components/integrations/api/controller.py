@@ -642,6 +642,211 @@ class VcsConnectionVerifyView(APIView):
         return Response({"success": True, "data": VcsConnectionResource.from_model(connection).to_dict()})
 
 
+# ── GitHub App install / setup / webhook (ADR 0010 D6 / Phase B) ──
+#    App-mode auth for VcsConnection: the operator installs our GitHub App on
+#    their org; PRs are authored by the app's bot identity from short-lived
+#    installation tokens (no stored user PAT). Install + setup are flag-gated
+#    behind feature.vcs_github_app (default OFF); the WEBHOOK is deliberately
+#    NOT flag-gated — GitHub calls it, and the HMAC signature is its gate.
+
+
+def _vcs_github_app_enabled(workspace_id) -> bool:
+    """Fail-closed check of the app-mode dark-launch flag (mirrors vercel D6)."""
+    from components.shared_platform.application.providers.feature_flags_provider import (
+        get_feature_flags_provider,
+    )
+
+    try:
+        return bool(
+            get_feature_flags_provider().is_feature_enabled("feature.vcs_github_app", workspace_id=str(workspace_id))
+        )
+    except Exception:
+        logger.exception("vcs_github_app flag check failed workspace=%s", workspace_id)
+        return False
+
+
+_VCS_GITHUB_APP_DISABLED_RESPONSE = {
+    "success": False,
+    "error": "vcs_github_app_not_enabled",
+}
+
+
+class GitHubAppInstallView(APIView):
+    """POST /integrations/workspaces/<ws>/vcs/github-app/install/
+
+    Returns the GitHub install URL carrying a SIGNED state param
+    ({workspace_id, user_id}, 15-minute max age). The state — not any query
+    param — is what the setup redirect later trusts, so only a caller who held
+    manage_integrations on THIS workspace can ever produce a state that binds
+    an installation to it.
+    """
+
+    permission_classes = (permissions.IsAuthenticated, CanManageIntegrations)
+    name = "integrations-vcs-github-app-install"
+
+    def post(self, request, workspace_id):
+        from components.integrations.api.resources.github_app_resources import GitHubAppInstallResource
+        from components.integrations.application.ports.vcs_port import VcsApiError
+        from components.integrations.application.providers.github_app_provider import (
+            build_github_app_install_url,
+        )
+
+        if not _vcs_github_app_enabled(workspace_id):
+            return Response(_VCS_GITHUB_APP_DISABLED_RESPONSE, status=status.HTTP_403_FORBIDDEN)
+        try:
+            install_url = build_github_app_install_url(workspace_id=str(workspace_id), user_id=str(request.user.id))
+        except VcsApiError as exc:
+            # Not registered yet (no GITHUB_APP_SLUG) — an honest config error,
+            # not a 500: the operator can act (run the registration runbook).
+            return Response(
+                {"success": False, "error": "github_app_not_configured", "detail": str(exc)},
+                status=status.HTTP_409_CONFLICT,
+            )
+        return Response({"success": True, "data": GitHubAppInstallResource(install_url=install_url).to_dict()})
+
+
+class GitHubAppSetupView(APIView):
+    """GET /integrations/vcs/github-app/setup/ — GitHub's Setup URL target.
+
+    The installing user's BROWSER lands here after the GitHub install flow with
+    ?installation_id=…&setup_action=…&state=…. There is no JWT on a browser
+    redirect — the SIGNED STATE is the authorization: unsigned/tampered/expired
+    state 4xxes and binds nothing, and the workspace comes ONLY from the state
+    (mass-assignment guard: a workspace_id in the query string is ignored).
+    On success the app-mode VcsConnection is created/updated idempotently and
+    the browser is bounced to the HUD when a frontend URL is configured.
+    """
+
+    permission_classes = (permissions.AllowAny,)
+    name = "integrations-vcs-github-app-setup"
+
+    def get(self, request):
+        from components.integrations.application.providers.github_app_provider import (
+            WorkspaceUnresolvedError,
+            bind_github_app_installation,
+            get_install_state_error,
+            parse_github_app_install_state,
+        )
+
+        state_error = get_install_state_error()
+        try:
+            state = parse_github_app_install_state(request.query_params.get("state") or "")
+        except state_error as exc:
+            reason = getattr(exc, "reason", "invalid")
+            return Response(
+                {"success": False, "error": f"install_state_{reason}"},
+                status=status.HTTP_403_FORBIDDEN if reason == "expired" else status.HTTP_400_BAD_REQUEST,
+            )
+
+        workspace_id = state["workspace_id"]  # ONLY the signed state names the workspace
+        if not _vcs_github_app_enabled(workspace_id):
+            return Response(_VCS_GITHUB_APP_DISABLED_RESPONSE, status=status.HTTP_403_FORBIDDEN)
+
+        raw_installation_id = (request.query_params.get("installation_id") or "").strip()
+        if not raw_installation_id.isdigit():
+            return Response(
+                {"success": False, "error": "installation_id_missing"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            connection = bind_github_app_installation(
+                workspace_id=workspace_id,
+                installation_id=int(raw_installation_id),
+                user_id=state["user_id"],
+            )
+        except WorkspaceUnresolvedError:
+            return Response(
+                {"success": False, "error": "workspace_not_found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        from django.conf import settings as django_settings
+
+        frontend = (
+            getattr(django_settings, "FRONTEND_URL", "") or getattr(django_settings, "LOCALHOST_FRONTEND_URL", "") or ""
+        ).rstrip("/")
+        if frontend:
+            from django.shortcuts import redirect
+
+            return redirect(f"{frontend}/dashboard?panel=integrations&github_app=connected")
+        return Response(
+            {
+                "success": True,
+                "data": {
+                    "connection_id": str(connection.id),
+                    "workspace_id": str(workspace_id),
+                    "installation_id": int(raw_installation_id),
+                    "status": connection.status,
+                },
+            }
+        )
+
+
+@method_decorator(sensitive_post_parameters(), name="dispatch")
+class GitHubAppWebhookView(APIView):
+    """POST /integrations/vcs/github-app/webhook/ — GitHub's webhook target.
+
+    Deliberately NOT flag-gated (GitHub calls it; the HMAC signature is its
+    gate) and deliberately THIN: verify X-Hub-Signature-256 over the RAW body
+    BEFORE any parsing (unverified → 401, unconfigured secret → 503), extract
+    ids, enqueue the Celery task (>100ms rule), answer 202/204. Handled:
+    installation deleted/suspend (revocation sync), installation_repositories
+    removed (note), pull_request closed+merged (feeds the existing reconcile
+    seam). Everything else → 204.
+    """
+
+    permission_classes = (permissions.AllowAny,)
+    name = "integrations-vcs-github-app-webhook"
+
+    def get_throttles(self):
+        from infrastructure.api.throttles import VcsWebhookThrottle
+
+        return [VcsWebhookThrottle()]
+
+    def post(self, request):
+        import json
+
+        from components.integrations.application.providers.github_app_provider import (
+            github_webhook_secret_configured,
+            route_github_app_webhook,
+            verify_github_webhook_signature,
+        )
+
+        if not github_webhook_secret_configured():
+            # Fail closed AND loud: without a secret no signature can verify, so
+            # 503 tells ops "misconfigured", distinct from 401 "forged".
+            return Response(
+                {"success": False, "error": "webhook_secret_not_configured"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        signature = request.headers.get("X-Hub-Signature-256")
+        if not verify_github_webhook_signature(request.body, signature):
+            # No body parsing has happened — the raw bytes were only HMAC'd.
+            return Response(
+                {"success": False, "error": "invalid_signature"},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        try:
+            payload = json.loads(request.body or b"{}")
+        except ValueError:
+            return Response({"success": False, "error": "invalid_json"}, status=status.HTTP_400_BAD_REQUEST)
+
+        event = request.headers.get("X-GitHub-Event", "")
+        outcome = route_github_app_webhook(event, payload if isinstance(payload, dict) else {})
+        logger.info(
+            "github_app_webhook_received event=%s delivery=%s handled=%s",
+            event,
+            request.headers.get("X-GitHub-Delivery", ""),
+            bool(outcome),
+        )
+        if outcome is None:
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        return Response({"success": True, "data": outcome}, status=status.HTTP_202_ACCEPTED)
+
+
 # ── VercelConnection CRUD + verify + scan (ADR 0021 D2/D3) — link the ONE Vercel
 #    team a workspace consents to posture-scan. Token-shaped (the GitHub-PAT
 #    precedent); the pillar is dark behind feature.vercel_posture (D6): create and

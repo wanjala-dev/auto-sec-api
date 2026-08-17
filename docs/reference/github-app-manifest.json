@@ -1,0 +1,19 @@
+{
+  "name": "Auto-Sec (dev)",
+  "url": "https://www.auto-sec.ai",
+  "description": "Auto-Sec draft-PR remediation: opens draft pull requests for triaged security findings. Dev registration.",
+  "public": false,
+  "hook_attributes": {
+    "url": "https://REPLACE-WITH-API-BASE/integrations/vcs/github-app/webhook/",
+    "active": true
+  },
+  "redirect_url": "http://localhost:8765/autosec/manifest-redirect",
+  "setup_url": "https://REPLACE-WITH-API-BASE/integrations/vcs/github-app/setup/",
+  "setup_on_update": true,
+  "default_permissions": {
+    "contents": "write",
+    "pull_requests": "write",
+    "metadata": "read"
+  },
+  "default_events": ["pull_request"]
+}

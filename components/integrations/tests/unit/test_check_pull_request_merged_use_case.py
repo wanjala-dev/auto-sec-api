@@ -110,3 +110,33 @@ class TestMergeCheck:
         assert status.merged is False
         assert status.allowed is True  # the URL WAS allowlisted; the host just failed
         assert status.reason == "host_api_error"
+
+
+class TestAuthStrategy:
+    """Phase B: the per-connection resolve_token seam, when wired, is authoritative."""
+
+    def test_resolve_token_is_preferred_over_decrypt(self):
+        adapter = _FakeAdapter(PullRequestState(merged=True, state="closed", merged_at="t"))
+        uc = CheckPullRequestMergedUseCase(
+            resolve_connection=lambda ws: _connection(),
+            decrypt=lambda ct: (_ for _ in ()).throw(AssertionError("raw decrypt used despite strategy")),
+            resolve_adapter=lambda provider, token: adapter,
+            resolve_token=lambda conn: "ghs_app_token",
+        )
+        status = uc.execute(workspace_id="ws", pr_url=_URL)
+        assert status.merged is True
+
+    def test_revoked_installation_fails_closed(self):
+        # A typed app-auth failure (revoked/suspended installation) means the
+        # merge cannot be confirmed — skip, never crash the reconciler.
+        adapter = _FakeAdapter(PullRequestState(merged=True, state="closed"))
+        uc = CheckPullRequestMergedUseCase(
+            resolve_connection=lambda ws: _connection(),
+            decrypt=lambda ct: "tok",
+            resolve_adapter=lambda provider, token: adapter,
+            resolve_token=lambda conn: (_ for _ in ()).throw(VcsApiError("revoked", status_code=404)),
+        )
+        status = uc.execute(workspace_id="ws", pr_url=_URL)
+        assert status.merged is False and status.allowed is False
+        assert status.reason == "token_unavailable"
+        assert adapter.calls == []  # the host was never reached

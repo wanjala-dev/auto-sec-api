@@ -438,6 +438,27 @@ SOC_RESPONSE_DRY_RUN_DEFAULT = os.environ.get("SOC_RESPONSE_DRY_RUN_DEFAULT", "t
 # only with a customer-granted write role + explicit opt-in (a deliberate, reviewable change).
 SOC_RESPONSE_READ_ONLY = os.environ.get("SOC_RESPONSE_READ_ONLY", "true").lower() == "true"
 
+# ── GitHub App authentication (ADR 0010 Phase B / D6) ───────────────────────
+# The VCS integration's app-mode credentials. All four arrive via the
+# environment (k8s secret `github-app` keys in the infra repo) and are NEVER
+# committed or logged:
+#   GITHUB_APP_ID          — the app's numeric id or client id (GitHub accepts
+#                            either as the JWT `iss`; the client id is what the
+#                            docs recommend).
+#   GITHUB_APP_PRIVATE_KEY — the PEM private key from the app registration.
+#                            May arrive with literal "\n" escapes (a k8s
+#                            single-line secret); the auth adapter normalizes.
+#   GITHUB_APP_WEBHOOK_SECRET — the HMAC secret for X-Hub-Signature-256 on
+#                            POST /integrations/vcs/github-app/webhook/.
+#   GITHUB_APP_SLUG        — the app's URL slug, used to build the install URL
+#                            (https://github.com/apps/<slug>/installations/new).
+# Empty defaults keep the surface dark: the auth adapter raises a typed
+# not-configured error and the webhook receiver answers 503 until ops sets them.
+GITHUB_APP_ID = os.environ.get("GITHUB_APP_ID", "")
+GITHUB_APP_PRIVATE_KEY = os.environ.get("GITHUB_APP_PRIVATE_KEY", "")
+GITHUB_APP_WEBHOOK_SECRET = os.environ.get("GITHUB_APP_WEBHOOK_SECRET", "")
+GITHUB_APP_SLUG = os.environ.get("GITHUB_APP_SLUG", "")
+
 # Verification loop (L2) — which of the TWO implementations grades a worker answer.
 # Exactly one is ever active per run (runner.execute_plan_once skips the hand-rolled
 # reflective_worker wrap when this is on), so this is a swap, not an addition:
@@ -645,6 +666,10 @@ REST_FRAMEWORK = {
         "checkout_anon": "20/min",
         "checkout_user": "30/min",
         "payment_webhook": "200/min",
+        # GitHub App webhook (ADR 0010 Phase B): generous but bounded — an org
+        # with many repos can burst pull_request events; GitHub retries failed
+        # deliveries, so a hard 429 wall would drop revocation syncs.
+        "vcs_webhook": "200/min",
         "donation_anon": "15/min",
         # Newsletter public endpoints. Subscribe is 5/min/IP to slow
         # email-enumeration attacks. Unsubscribe is looser at 30/min

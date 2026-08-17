@@ -22,6 +22,10 @@ class VcsConnectionService:
     _resolve_adapter: Any  # (provider, token) -> VcsPort
     _encrypt: Any  # (plaintext) -> ciphertext
     _decrypt: Any  # (ciphertext) -> plaintext
+    # Per-connection auth strategy (ADR 0010 Phase B): (connection) -> token.
+    # Preferred over the raw decrypt when wired, so app-mode connections mint
+    # installation tokens; None keeps the Phase-A decrypt-only behavior.
+    _resolve_token: Any = None
 
     # ── Reads ────────────────────────────────────────────────────────────
 
@@ -100,6 +104,31 @@ class VcsConnectionService:
         logger.info("vcs_connection_deleted connection_id=%s workspace_id=%s", connection.id, connection.workspace_id)
         self._repo.delete(connection)
 
+    def bind_github_app_installation(self, *, workspace_id, installation_id: int, created_by_id=None):
+        """Bind a GitHub App installation to the workspace (ADR 0010 Phase B).
+
+        Idempotent — called from the signed-state setup redirect, which GitHub
+        may replay (and re-fires on app updates). The repository upserts ONE
+        app-mode GitHub row per workspace: same installation → re-connect it;
+        a new installation id (re-install) → re-point the existing row. No
+        secret is stored — app-mode rows mint short-lived tokens at use time.
+        The repo allowlist is deliberately NOT granted here: installing the app
+        authenticates us; which repos the agent may open PRs against stays the
+        operator's explicit allowlist edit (consent stays two-key).
+        """
+        connection = self._repo.upsert_github_app_installation(
+            workspace_id=workspace_id,
+            installation_id=int(installation_id),
+            created_by_id=created_by_id,
+        )
+        logger.info(
+            "vcs_connection_github_app_bound connection_id=%s workspace_id=%s installation_id=%s",
+            connection.id,
+            workspace_id,
+            installation_id,
+        )
+        return connection
+
     # ── Verify ───────────────────────────────────────────────────────────
 
     def verify_connection(self, connection):
@@ -109,8 +138,21 @@ class VcsConnectionService:
         (token valid + all repos reachable) keeps it CONNECTED (+ last_verified_at); any
         failure marks ERROR with a scrubbed reason. Never raises for an expected
         auth/config/probe failure."""
-        token = self._decrypt(connection.token_ciphertext)
+        if self._resolve_token is not None:
+            from components.integrations.application.ports.vcs_port import VcsApiError
+
+            try:
+                token = self._resolve_token(connection)
+            except VcsApiError as exc:
+                # Typed app-mode failures — a revoked/suspended installation or
+                # missing app credentials. Recorded on the row (scrubbed: the
+                # typed errors carry no secret), so the panel names the cause.
+                return self._repo.mark_error(connection, str(exc))
+        else:
+            token = self._decrypt(connection.token_ciphertext)
         if not token:
+            if (getattr(connection, "auth_mode", "") or "pat") == "github_app":
+                return self._repo.mark_error(connection, "The connection has no GitHub App installation bound.")
             return self._repo.mark_error(connection, "The connection has no stored token.")
 
         try:
@@ -120,9 +162,13 @@ class VcsConnectionService:
 
         # 1) Token probe (GET /user) — an invalid/missing-scope token fails everything, so
         #    report it as the single root cause rather than N per-repo failures.
-        token_health = adapter.verify(None)
-        if not token_health.ok:
-            return self._repo.mark_error(connection, token_health.detail or "token invalid or missing scope")
+        #    SKIPPED in app mode: /user is a user-token endpoint an installation
+        #    token cannot call, and the successful token mint above already
+        #    proved the installation live (a revoked one raised the typed error).
+        if (getattr(connection, "auth_mode", "") or "pat") != "github_app":
+            token_health = adapter.verify(None)
+            if not token_health.ok:
+                return self._repo.mark_error(connection, token_health.detail or "token invalid or missing scope")
 
         # 2) Per-repo probe — one call per repo (allowlists are small). Aggregate the
         #    unreachable ones so the operator sees WHICH repos are blocked. A repo can

@@ -203,6 +203,7 @@ class OpenDraftPrUseCase:
         pr_recorder: FindingPrRecorderPort | None = None,
         resolve_connection: Callable[[str], object | None] | None = None,
         decrypt: Callable[[str], str] | None = None,
+        resolve_token: Callable[[object], str] | None = None,
         capability_port: AgentCapabilityPort | None = None,
         resolve_workspace_owner_id: Callable[[str], str | None] | None = None,
         resolve_operator_identity: Callable[[str], dict | None] | None = None,
@@ -223,6 +224,9 @@ class OpenDraftPrUseCase:
         #     CheckPullRequestMergedUseCase; the row is resolved in the provider)
         #   * token ciphertext    → decrypt (a runtime credential produced by the
         #     injected secret-envelope callable; never a port return value)
+        #   * per-connection auth strategy → resolve_token (Phase B: PAT rows
+        #     decrypt; github_app rows mint installation tokens — preferred over
+        #     the raw decrypt when wired)
         #   * triage capability   → AgentCapabilityPort (#216, agents context)
         #   * workspace owner id  → resolve_workspace_owner_id
         #   * operator identity   → resolve_operator_identity (name/email only)
@@ -232,6 +236,7 @@ class OpenDraftPrUseCase:
         self._pr_recorder = pr_recorder
         self._resolve_connection = resolve_connection
         self._decrypt = decrypt
+        self._resolve_token = resolve_token
         self._capability_port = capability_port
         self._resolve_workspace_owner_id = resolve_workspace_owner_id
         self._resolve_operator_identity = resolve_operator_identity
@@ -991,15 +996,22 @@ class OpenDraftPrUseCase:
         return self._advisor
 
     def _decrypt_token(self, connection) -> str:
-        # The ciphertext lives on the resolver-provided connection object; the injected
-        # secret-envelope callable turns it into the runtime token. The token is a
-        # credential the use case must USE to call the host — it is never returned across
-        # a port (no port method exposes it; #213's status seam stays presence-only).
-        token = self._decrypt_fn()(getattr(connection, "token_ciphertext", "") or "")
+        # The runtime credential for the resolver-provided connection. When the
+        # composition root wired the per-connection strategy (Phase B), it is
+        # authoritative: PAT rows decrypt the stored ciphertext, github_app rows
+        # mint a short-lived installation token (the stored PAT is never read in
+        # app mode). Without it, the injected secret-envelope callable decrypts
+        # the ciphertext directly — the Phase-A behavior tests fake. Either way
+        # the token is a credential the use case must USE to call the host — it
+        # is never returned across a port (#213's status seam stays presence-only).
+        if self._resolve_token is not None:
+            token = self._resolve_token(connection)
+        else:
+            token = self._decrypt_fn()(getattr(connection, "token_ciphertext", "") or "")
         if not token:
             raise DraftPrPreconditionError(
                 "no_github_token",
-                "The GitHub connection has no stored token.",
+                "The GitHub connection has no usable credential (no stored token / no app installation).",
             )
         return token
 

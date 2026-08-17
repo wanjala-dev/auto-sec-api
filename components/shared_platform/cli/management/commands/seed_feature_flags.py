@@ -142,6 +142,18 @@ DEFAULT_FLAGS = [
         "explicit disable rule still wins. See docs/adr/0021-vercel-posture-provider.md.",
     ),
     (
+        "feature.vcs_github_app",
+        False,
+        "GitHub App auth for the VCS integration (ADR 0010 D6 / Phase B): the "
+        "install + setup endpoints that bind a workspace's VcsConnection to a "
+        "GitHub App installation (short-lived installation tokens, PRs authored "
+        "by the app's bot — no stored user PAT). OFF by default until the app "
+        "is registered (docs/reference/GITHUB_APP_REGISTRATION.md) and the "
+        "credentials are in the deployment env. Existing PAT connections are "
+        "unaffected either way. The webhook receiver is deliberately NOT gated "
+        "by this flag — GitHub calls it, and its HMAC signature is the gate.",
+    ),
+    (
         "feature.cloud_asset_graph",
         False,
         "Cloud asset graph (ADR 0004 / CNAPP): the code-to-cloud resource graph "

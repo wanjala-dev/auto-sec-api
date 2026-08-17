@@ -34,6 +34,17 @@ class WebhookThrottle(AnonRateThrottle):
     scope = "payment_webhook"
 
 
+class VcsWebhookThrottle(AnonRateThrottle):
+    """Rate limit for the inbound GitHub App webhook (ADR 0010 Phase B).
+
+    Its own scope (not payment_webhook's) so a PR-event burst from a busy org
+    can be tuned without loosening the payment surface. Signature verification
+    is the real gate; this bounds unauthenticated flood cost.
+    """
+
+    scope = "vcs_webhook"
+
+
 class DonationAnonThrottle(AnonRateThrottle):
     """Rate limit for unauthenticated donation submissions."""
 

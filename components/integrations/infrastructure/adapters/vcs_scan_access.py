@@ -15,6 +15,31 @@ from django.views.decorators.debug import sensitive_variables
 logger = logging.getLogger(__name__)
 
 
+@sensitive_variables("token")
+def _connection_token(connection) -> str:
+    """The connection's runtime token via the ONE auth-strategy seam, or ``""``.
+
+    Every read here degrades on a missing credential rather than raising, so a
+    typed app-mode failure (revoked installation, unconfigured app) is reduced
+    to "no token" with a log line — a scan/suggestion is an enhancement, never
+    something that should crash on a revoked consent.
+    """
+    from components.integrations.application.ports.vcs_port import VcsApiError
+    from components.integrations.infrastructure.adapters.connection_token_resolver import (
+        resolve_connection_token,
+    )
+
+    try:
+        return resolve_connection_token(connection)
+    except VcsApiError as exc:
+        logger.warning(
+            "vcs_scan_access_token_unavailable connection_id=%s status=%s",
+            getattr(connection, "id", None),
+            exc.status_code,
+        )
+        return ""
+
+
 def resolve_scan_connection(workspace_id, repo: str, connection_id: str | None = None):
     """Return the ``VcsConnection`` allowed to scan ``repo``, or ``None`` (fail closed).
 
@@ -65,7 +90,6 @@ def read_repo_file(*, workspace_id, repo: str, path: str, ref: str = "") -> str 
     ``None`` (a suggestion is an enhancement, never a gate on triage).
     """
     from components.integrations.application.ports.vcs_port import VcsApiError
-    from components.integrations.application.providers.secret_envelope_provider import decrypt_secret
     from components.integrations.application.providers.vcs_provider import get_vcs_adapter
 
     clean_path = (path or "").strip().lstrip("/")
@@ -78,7 +102,7 @@ def read_repo_file(*, workspace_id, repo: str, path: str, ref: str = "") -> str 
     if connection is None:
         logger.warning("vcs_file_read_denied workspace_id=%s repo=%s (not allowlisted)", workspace_id, repo)
         return None
-    token = decrypt_secret(connection.token_ciphertext)
+    token = _connection_token(connection)
     if not token:
         return None
     adapter = get_vcs_adapter(connection.provider, token)
@@ -102,14 +126,13 @@ def _consented_adapter(workspace_id, repo: str):
     not something each function remembers to do, it is the only way to get an
     adapter at all.
     """
-    from components.integrations.application.providers.secret_envelope_provider import decrypt_secret
     from components.integrations.application.providers.vcs_provider import get_vcs_adapter
 
     connection = resolve_scan_connection(workspace_id, repo)
     if connection is None:
         logger.warning("vcs_read_denied workspace_id=%s repo=%s (not allowlisted)", workspace_id, repo)
         return None, None
-    token = decrypt_secret(connection.token_ciphertext)
+    token = _connection_token(connection)
     if not token:
         return None, None
     return get_vcs_adapter(connection.provider, token), connection
@@ -174,7 +197,6 @@ def vend_repo_read_access(*, workspace_id, repo: str, connection_id: str | None 
     scan task then fails loud on the missing credentials rather than scanning
     without consent.
     """
-    from components.integrations.application.providers.secret_envelope_provider import decrypt_secret
     from components.integrations.application.providers.vcs_provider import get_vcs_adapter
 
     connection = resolve_scan_connection(workspace_id, repo, connection_id)
@@ -187,7 +209,7 @@ def vend_repo_read_access(*, workspace_id, repo: str, connection_id: str | None 
         )
         return None
 
-    token = decrypt_secret(connection.token_ciphertext)
+    token = _connection_token(connection)
     if not token:
         logger.warning("vcs_scan_access_no_token workspace_id=%s connection_id=%s", workspace_id, connection.id)
         return None
