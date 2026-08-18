@@ -83,9 +83,13 @@ class OrmWorkspaceDetailQueryRepository(WorkspaceDetailQueryPort):
                 "stripe_subscription_id",
             )
             # ``TeamSummaryWithMembersSerializer`` renders members through
-            # ``UserSummarySerializer`` (profile summary + sector slugs) —
-            # prefetch those chains or every member fires two lazy loads.
-            .prefetch_related("members__profile", "members__sectors")
+            # ``UserSummarySerializer`` (profile summary) — prefetch the chain
+            # or every member fires a lazy load.
+            # NOTE: members__sectors removed — the `sectors` app was dropped in
+            # the auto-sec fork; evaluating the queryset with it raised
+            # AttributeError and 500'd the workspace detail endpoint
+            # (membership_query_repository carries the same note).
+            .prefetch_related("members__profile")
         )
 
     @staticmethod
@@ -129,7 +133,10 @@ class OrmWorkspaceDetailQueryRepository(WorkspaceDetailQueryPort):
 
         return list(
             Project.objects.filter(team_id__in=team_ids)
-            .select_related("team", "created_by", "lead", "budget")
+            # NOTE: `budget` removed from select_related/only — the budgeting
+            # app was dropped in the auto-sec fork; the dead field name raised
+            # KeyError at queryset evaluation for any workspace with projects.
+            .select_related("team", "created_by", "lead")
             .only(
                 "id",
                 "team",
@@ -145,7 +152,6 @@ class OrmWorkspaceDetailQueryRepository(WorkspaceDetailQueryPort):
                 "resources",
                 "description",
                 "bgColor",
-                "budget",
             )
             .prefetch_related(*prefetches)
         )
@@ -156,7 +162,10 @@ class OrmWorkspaceDetailQueryRepository(WorkspaceDetailQueryPort):
 
         return list(
             Project.objects.filter(workspace=workspace)
-            .select_related("team", "created_by", "lead", "budget")
+            # NOTE: `budget` removed from select_related/only — the budgeting
+            # app was dropped in the auto-sec fork; the dead field name raised
+            # KeyError at queryset evaluation for any workspace with projects.
+            .select_related("team", "created_by", "lead")
             .only(
                 "id",
                 "team",
@@ -172,7 +181,6 @@ class OrmWorkspaceDetailQueryRepository(WorkspaceDetailQueryPort):
                 "resources",
                 "description",
                 "bgColor",
-                "budget",
             )
             .prefetch_related(*prefetches)
         )

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
-
 from django.db.models import Count, QuerySet
 
 
@@ -14,12 +12,14 @@ class ContentRepository:
 
     def list_categories(self) -> QuerySet:
         from infrastructure.persistence.workspaces.news.models import Category
+
         return Category.objects.annotate(news_count=Count("entries"))
 
     # ── Tags ────────────────────────────────────────────────────────────
 
     def list_tags(self) -> QuerySet:
         from infrastructure.persistence.workspaces.news.models import Tag
+
         return Tag.objects.all()
 
     # ── News ────────────────────────────────────────────────────────────
@@ -33,6 +33,7 @@ class ContentRepository:
         # A bare ``.all()`` here made a 9-row news page fire 50+ queries
         # (see components/content/tests/integration/test_news_list_query_count.py).
         from infrastructure.persistence.workspaces.news.models import News
+
         return (
             News.objects.all()
             .select_related("author", "category")
@@ -40,7 +41,10 @@ class ContentRepository:
                 "author__profile__country",
                 "author__profile__followers",
                 "author__followers",
-                "author__sectors",
+                # NOTE: author__sectors removed — the `sectors` app was dropped
+                # in the auto-sec fork; a dead prefetch raises AttributeError at
+                # queryset evaluation (same drift as members__sectors in the
+                # workspace/membership repositories).
                 "author__contributor_profile__contribution_means",
                 "author__contributor_profile__preferred_locations",
                 "tags",
@@ -62,20 +66,24 @@ class ContentRepository:
 
     def get_news_by_title(self, title: str):
         from infrastructure.persistence.workspaces.news.models import News
+
         return News.objects.get(title=title)
 
     # ── Comments ────────────────────────────────────────────────────────
 
     def get_comments_for_news(self, news_id: int) -> QuerySet:
         from infrastructure.persistence.workspaces.news.models import Comment
+
         return Comment.objects.filter(news=news_id)
 
     def get_comment_by_id(self, comment_id: int):
         from infrastructure.persistence.workspaces.news.models import Comment
+
         return Comment.objects.get(id=comment_id)
 
     def create_comment(self, *, author, news, body: str, parent=None):
         from infrastructure.persistence.workspaces.news.models import Comment
+
         return Comment.objects.create(
             author=author,
             news=news,
@@ -87,9 +95,11 @@ class ContentRepository:
 
     def create_news(self, *, author, **kwargs):
         from infrastructure.persistence.workspaces.news.models import News
+
         return News.objects.create(author=author, **kwargs)
 
     def update_news(self, news_id, **kwargs):
         from infrastructure.persistence.workspaces.news.models import News
+
         News.objects.filter(pk=news_id).update(**kwargs)
         return News.objects.get(pk=news_id)
