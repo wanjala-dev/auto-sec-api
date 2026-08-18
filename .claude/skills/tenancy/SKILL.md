@@ -338,10 +338,26 @@ Before any RLS policy can be trusted:
 
 ## 8. Operating the dedicated tier
 
+**The runbook is a command now** — `provision_tenant`
+(`components/shared_platform/cli/management/commands/provision_tenant.py`) runs steps
+1 and 3–6 below in the safe order (registry row LAST, seeds inside the binding,
+password via `TENANT_ADMIN_PASSWORD` env, idempotent re-runs after partial failure).
+Step 2 (`TENANT_DATABASE_URLS` + restarts) stays a deploy-config action by nature;
+the command fails fast with instructions when the alias is missing:
+
+```bash
+# pooled: registry row (+ optional admin/workspace) only
+python manage.py provision_tenant senso --name "Senso"
+# dedicated: database, migrate, seeds, admin, workspace, registry row
+TENANT_ADMIN_PASSWORD=... python manage.py provision_tenant wanjala \
+    --name "Wanjala" --dedicated --create-db \
+    --admin-email admin@wanjala.test --workspace-name "Wanjala"
+```
+
 **PROVEN LIVE 2026-08-16** with tenant `acme` on the local cluster (251 tables in
 `tenant_acme`, zero registry/EPSS tables; login served entirely from the tenant
 database; the acme user invisible to the pool and the pool user invisible to acme).
-The exact runbook, in order:
+The exact runbook, in order (what the command automates):
 
 1. `CREATE DATABASE tenant_<name> OWNER <app_user>;` on the Postgres (or a separate
    instance — the URL decides where).
