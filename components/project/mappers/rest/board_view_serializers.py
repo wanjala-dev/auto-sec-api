@@ -16,7 +16,15 @@ from infrastructure.persistence.project.models import BoardView, WorkflowStatus
 
 
 class BoardViewSerializer(serializers.ModelSerializer):
-    """One saved view — a row in the views bar."""
+    """One saved view — a row in the views bar.
+
+    ``created_by`` (creator's user id; null on system views) + ``mine``
+    (this view belongs to the requester) carry the task #74 personal-view
+    affordances: the bar marks yours and only yours grow rename/delete.
+    """
+
+    created_by = serializers.PrimaryKeyRelatedField(read_only=True)
+    mine = serializers.SerializerMethodField()
 
     class Meta:
         model = BoardView
@@ -30,8 +38,20 @@ class BoardViewSerializer(serializers.ModelSerializer):
             "group_by",
             "order",
             "is_system",
+            "created_by",
+            "mine",
         ]
         read_only_fields = fields
+
+    def get_mine(self, obj) -> bool:
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        return bool(
+            user is not None
+            and getattr(user, "is_authenticated", False)
+            and obj.created_by_id is not None
+            and str(obj.created_by_id) == str(user.id)
+        )
 
 
 class WorkflowStatusLaneSerializer(serializers.ModelSerializer):

@@ -25,6 +25,7 @@ from components.workspace.application.facades.workspace_facade import (
     user_is_workspace_admin_or_owner,
     user_is_workspace_member,
 )
+from components.workspace.application.providers.board_view_mutation_provider import BoardViewMutationProvider
 from components.workspace.application.providers.board_view_query_provider import BoardViewQueryProvider
 from components.workspace.application.providers.column_query_provider import ColumnQueryProvider
 from components.workspace.application.providers.time_tracking_provider import TimeTrackingProvider
@@ -1623,6 +1624,129 @@ class TeamBoardViewsView(APIView):
                 "data": serializer.data,
             },
             status=status.HTTP_200_OK,
+        )
+
+    def post(self, request, team_id=None):
+        """POST /project/teams/<team_id>/views/ — save a personal view (task #74).
+
+        Body: ``name`` (required), ``filter`` (closed vocabulary, validated by
+        the model), ``group_by`` (optional; only "status" exists). The row is
+        appended after the team's existing views. ``created_by`` is ALWAYS the
+        authenticated user and ``is_system`` always False — never read from
+        the body (mass-assignment protection).
+        """
+        from components.project.domain.errors import (
+            AuthorizationError,
+            NotFoundError,
+        )
+        from components.project.domain.errors import (
+            ValidationError as DomainValidationError,
+        )
+        from components.workspace.application.commands.board_view_commands import CreateBoardViewCommand
+
+        command = CreateBoardViewCommand(
+            team_id=team_id,
+            name=request.data.get("name"),
+            filter=request.data.get("filter") if request.data.get("filter") is not None else {},
+            group_by=request.data.get("group_by") if request.data.get("group_by") is not None else "status",
+        )
+        try:
+            view = BoardViewMutationProvider.build_create_view_use_case().execute(command=command, user=request.user)
+        except NotFoundError as exc:
+            return Response({"success": False, "message": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+        except AuthorizationError as exc:
+            return Response({"success": False, "message": str(exc)}, status=status.HTTP_403_FORBIDDEN)
+        except DomainValidationError as exc:
+            return Response({"success": False, "message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = BoardViewSerializer(view, context={"request": request})
+        return Response(
+            {
+                "success": True,
+                "status_code": status.HTTP_201_CREATED,
+                "message": "View saved successfully",
+                "data": serializer.data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class BoardViewDetailView(APIView):
+    """PATCH/DELETE /project/views/<view_id>/ — manage a personal saved view (task #74).
+
+    Own views only: another member's personal view answers the same 404 the
+    list implies (it was never visible); workspace admins/owners may manage
+    any personal view (the established admin bypass). System views are
+    IMMUTABLE — 403 with an explicit message. Same flag gate + resource-scoped
+    flag resolution as the P2a reads.
+    """
+
+    permission_classes = (permissions.IsAuthenticated, RequiresFeatureFlag)
+    feature_flag_key = _BOARDS_AS_VIEWS_FLAG_KEY
+    name = "view-detail"
+
+    def get_feature_flag_workspace_id(self, request) -> str | None:
+        """Evaluate the flag against the VIEW's workspace (resource-scoped)."""
+        from components.project.application.providers.project_models_provider import get_project_models_provider
+
+        BoardView = get_project_models_provider().BoardView
+        ws_id = BoardView.objects.filter(pk=self.kwargs.get("view_id")).values_list("workspace_id", flat=True).first()
+        return str(ws_id) if ws_id else None
+
+    def patch(self, request, view_id=None):
+        """Rename / re-filter / reorder — partial; only provided keys change."""
+        from components.project.domain.errors import (
+            AuthorizationError,
+            NotFoundError,
+        )
+        from components.project.domain.errors import (
+            ValidationError as DomainValidationError,
+        )
+        from components.workspace.application.commands.board_view_commands import UpdateBoardViewCommand
+
+        command = UpdateBoardViewCommand(
+            view_id=view_id,
+            name=request.data.get("name") if "name" in request.data else None,
+            filter=request.data.get("filter") if "filter" in request.data else None,
+            group_by=request.data.get("group_by") if "group_by" in request.data else None,
+            order=request.data.get("order") if "order" in request.data else None,
+        )
+        try:
+            view = BoardViewMutationProvider.build_update_view_use_case().execute(command=command, user=request.user)
+        except NotFoundError as exc:
+            return Response({"success": False, "message": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+        except AuthorizationError as exc:
+            return Response({"success": False, "message": str(exc)}, status=status.HTTP_403_FORBIDDEN)
+        except DomainValidationError as exc:
+            return Response({"success": False, "message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = BoardViewSerializer(view, context={"request": request})
+        return Response(
+            {
+                "success": True,
+                "status_code": status.HTTP_200_OK,
+                "message": "View updated successfully",
+                "data": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    def delete(self, request, view_id=None):
+        from components.project.domain.errors import (
+            AuthorizationError,
+            NotFoundError,
+        )
+
+        try:
+            BoardViewMutationProvider.build_delete_view_use_case().execute(view_id=view_id, user=request.user)
+        except NotFoundError as exc:
+            return Response({"success": False, "message": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+        except AuthorizationError as exc:
+            return Response({"success": False, "message": str(exc)}, status=status.HTTP_403_FORBIDDEN)
+
+        return Response(
+            {"success": True, "message": "View deleted successfully"},
+            status=status.HTTP_204_NO_CONTENT,
         )
 
 

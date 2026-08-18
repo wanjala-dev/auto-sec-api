@@ -225,13 +225,25 @@ class BoardView(models.Model):
     Every existing "board" becomes a system view at migration: the team board
     is the unfiltered view; each project board is a ``{"project": "<id>"}``
     view. This entity is deliberately the substrate for task #74 (Tom's
-    persisted saved views): a user-saved view is a later non-system row. P1
-    ships the model + backfill only — no API, no read path.
+    persisted saved views): a user-saved view is a non-system row with a
+    ``created_by`` — personal to its creator, visible to nobody else.
     """
 
     # FK / relations
     workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE)
     team = models.ForeignKey(Team, related_name="board_views", on_delete=models.CASCADE)
+    # Who saved this view (task #74). System views (the P1 backfill + the P3
+    # Intake/Acting seeds) stay NULL — they belong to the team, not a person.
+    # SET_NULL so deleting an account never deletes the row mid-render; an
+    # orphaned personal view is invisible to everyone and reclaimable by a
+    # workspace admin (the mutation seam's admin bypass).
+    created_by = models.ForeignKey(
+        CustomUser,
+        related_name="board_views",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
     # Data fields
     name = models.CharField(max_length=255)
     slug = models.SlugField(max_length=255)
