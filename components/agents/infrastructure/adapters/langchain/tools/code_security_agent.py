@@ -5,7 +5,7 @@ high/critical ones as cards routed to the ``code_security_agent``. These tools l
 that specialist (dispatched by the finding router, or driven interactively) answer
 repo-risk questions from the pillar's own deterministic reads, and triage each
 pending SAST finding: ground a minimal fix suggestion on the REAL file content at
-the scanned commit, comment it on the card, and move the card into the Triage
+the scanned commit, comment it on the card, and move the card into the In Progress
 column — the exact ``process_pending_finding`` choreography every board-acting
 specialist shares (advise → grounded-verify → row-locked comment/move/stamp +
 provenance).
@@ -25,7 +25,7 @@ from components.shared_kernel.domain.triage import SOURCE_CODE_SECURITY as _CODE
 logger = logging.getLogger(__name__)
 
 _SSOT_SOURCE = "code_security.opengrep"
-TRIAGE_COLUMN_TITLE = "Triage"
+ACTING_COLUMN_TITLE = fp.ACTING_COLUMN_TITLE
 
 
 def _parse(input_str: str, default_key: str = "repo") -> dict:
@@ -152,7 +152,7 @@ def list_pending_code_findings(agent, input_str: str = "") -> str:
 def triage_code_finding(agent, input_str: str) -> str:
     """REVERSIBLE_WRITE — triage one pending SAST finding: ground a minimal fix
     suggestion (before/after snippet) on the real file at the scanned commit,
-    comment it, move the card to Triage, and record the trace + provenance.
+    comment it, move the card to In Progress, and record the trace + provenance.
 
     Same board choreography + concurrency guard + grounded-verification loop as
     every specialist (via ``process_pending_finding``); this supplies only the
@@ -277,7 +277,7 @@ def triage_code_finding(agent, input_str: str) -> str:
         agent,
         input_str,
         source_type=_CODE_SECURITY_SOURCE,
-        column_title=TRIAGE_COLUMN_TITLE,
+        column_title=ACTING_COLUMN_TITLE,
         acting_agent="code_security_agent",
         advise=advise,
         build_comment=build_comment,

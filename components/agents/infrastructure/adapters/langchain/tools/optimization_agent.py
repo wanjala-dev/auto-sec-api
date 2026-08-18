@@ -6,7 +6,7 @@ over-scheduled beat task, health-check noise, a volume hotspot) via the
 optimization agent — invoked as a worker through the orchestrator/deep pipeline
 from the detector cycle — pick up each pending pattern, turn its measured
 frequency into a concrete tuning recommendation, comment it on the card, and
-move the card into the Optimize column, recording a full trace + provenance.
+move the card into the In Progress lane (ADR 0030 D2), recording a full trace + provenance.
 
 The board choreography + concurrency guard + provenance are shared with the
 triage agent (``_finding_processing``); this module supplies only the
@@ -25,7 +25,7 @@ from components.agents.infrastructure.adapters.langchain.tools import _finding_p
 logger = logging.getLogger(__name__)
 
 _LOG_OPTIMIZATION_SOURCE = "ai.log_optimization"
-OPTIMIZE_COLUMN_TITLE = "Optimize"
+ACTING_COLUMN_TITLE = fp.ACTING_COLUMN_TITLE
 
 
 def _pending_findings_qs(workspace_id):
@@ -58,7 +58,7 @@ def list_pending_optimizations(agent, input_str: str = "") -> str:
 def advise_optimization(agent, input_str: str) -> str:
     """REVERSIBLE_WRITE — advise one pending optimization: turn the measured
     pattern into a concrete tuning recommendation, comment it, move the card to
-    the Optimize column, and record the trace + provenance.
+    the In Progress lane, and record the trace + provenance.
     """
     from components.integrations.application.log_optimization_advisor_service import LogOptimizationAdvisor
 
@@ -109,7 +109,7 @@ def advise_optimization(agent, input_str: str) -> str:
         agent,
         input_str,
         source_type=_LOG_OPTIMIZATION_SOURCE,
-        column_title=OPTIMIZE_COLUMN_TITLE,
+        column_title=ACTING_COLUMN_TITLE,
         acting_agent="optimization_agent",
         advise=advise,
         build_comment=build_comment,

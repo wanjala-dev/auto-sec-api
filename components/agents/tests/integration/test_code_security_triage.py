@@ -174,7 +174,7 @@ class TestCodeSecurityTriagePipeline:
         assert meta["triage"]["agent"] == "code_security_agent"
         assert meta["triage"]["needs_human"] is False
         assert meta["triage"]["verification"] == "verified"
-        assert task.column.title == "Triage"
+        assert task.column.title == "In Progress"
         comment = TaskComment.objects.filter(task=task).first()
         assert comment is not None and _GROUNDED.fix_before in comment.comment
         events = meta["provenance"]["events"]

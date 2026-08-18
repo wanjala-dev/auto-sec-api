@@ -490,7 +490,7 @@ def handle_finding_raised_board(event: FindingRaised) -> None:
         persist_finding_as_task,
     )
     from components.agents.application.providers.ai_provider import AIProvider
-    from components.agents.infrastructure.services.agents_board_service import SUGGESTED
+    from components.agents.infrastructure.services.agents_board_service import TODO
     from components.agents.infrastructure.services.finding_dispatch_service import (
         request_specialist_dispatch,
     )
@@ -517,7 +517,7 @@ def handle_finding_raised_board(event: FindingRaised) -> None:
     # Board floor for EVERY source (ADR 0019 D4 layer 2): the source's baked-in
     # ``min_severity`` above is the default; ``settings.AI_BOARD_MIN_SEVERITY``
     # can override it per source or floor all remaining sources at once (the
-    # "default" key) to cap the low-severity flood into Triage. Late import —
+    # "default" key) to cap the low-severity flood into the intake lane. Late import —
     # the resolver reads Django settings, which the application layer must not.
     from components.agents.infrastructure.services.board_floor import resolve_board_floor
 
@@ -535,13 +535,13 @@ def handle_finding_raised_board(event: FindingRaised) -> None:
 
     card = mapping["build"](finding, event, mapping)
     board = ensure_agents_board(workspace)
-    suggested_column = board.column(SUGGESTED)
+    intake_column = board.column(TODO)
     ai_user_id = str(board.team.created_by_id)
 
     try:
         task_id = persist_finding_as_task(
             workspace=workspace,
-            suggested_column=suggested_column,
+            intake_column=intake_column,
             ai_user_id=ai_user_id,
             title=card["title"],
             summary=card["summary"],

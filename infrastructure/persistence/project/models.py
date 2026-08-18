@@ -207,7 +207,16 @@ class WorkflowStatus(models.Model):
 #: The closed ``BoardView.filter`` key vocabulary (ADR 0030: "a small, closed
 #: vocabulary — NOT a query language"). Extending it is a deliberate change,
 #: made here, never by writing a new key at a call site.
-BOARD_VIEW_FILTER_KEYS = frozenset({"project", "source_type", "min_severity", "assignee", "tag"})
+#: ``source_type_prefix`` + ``category`` were added deliberately for the P3
+#: Agents-team system views (ADR 0030 Decision §3): "Intake" filters
+#: AI-sourced cards (``source_type_prefix: "ai."``) in ``unstarted``
+#: statuses; "Acting" the same in ``started``. ``category`` restricts BOTH
+#: the tasks and the lanes rendered (a category view shows only its own
+#: category's lanes — the honest funnel surface, not six lanes with four
+#: permanently empty).
+BOARD_VIEW_FILTER_KEYS = frozenset(
+    {"project", "source_type", "source_type_prefix", "category", "min_severity", "assignee", "tag"}
+)
 
 
 class BoardView(models.Model):

@@ -28,7 +28,7 @@ def _board(workspace_factory, team_factory):
     owner = workspace.workspace_owner
     team = team_factory(workspace=workspace, created_by=owner, members=[owner])
     column = Column.objects.create(
-        team=team, workspace=workspace, project=None, title="Suggested", order=0, created_by=owner
+        team=team, workspace=workspace, project=None, title="Todo", order=0, created_by=owner
     )
     return workspace, owner, team, column
 
@@ -155,7 +155,7 @@ class TestRunQualityDetector:
 
         task_id = persist_finding_as_task(
             workspace=workspace,
-            suggested_column=column,
+            intake_column=column,
             ai_user_id=str(owner.id),
             title=result.title,
             summary=result.summary,
@@ -179,7 +179,7 @@ class TestRunQualityDetector:
         assert (
             persist_finding_as_task(
                 workspace=workspace,
-                suggested_column=column,
+                intake_column=column,
                 ai_user_id=str(owner.id),
                 title=result.title,
                 summary=result.summary,

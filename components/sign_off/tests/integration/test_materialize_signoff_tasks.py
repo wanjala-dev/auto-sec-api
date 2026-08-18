@@ -5,13 +5,13 @@ board (team / project / columns) using an in-memory ``FakeSignOffAdapter``
 registered on a fresh ``SignOffRegistry`` (one fake per port, per the
 testing skill). Proves:
 
-* a pending item becomes a card on the "Suggested" column, assigned to the
+* a pending item becomes a card on the canonical "Todo" intake lane, assigned to the
   workspace owner, carrying the artifact ref + risk band + receipts in
   ``metadata.context``;
 * the projection is idempotent (same idempotency key → no duplicate);
 * reconcile moves a card whose artifact is no longer pending to the terminal
-  column matching its final review state (approved → Accepted, rejected →
-  Dismissed).
+  lane matching its final review state (approved → Complete, rejected →
+  Canceled; ADR 0030 D2 canonical lanes).
 """
 from __future__ import annotations
 
@@ -68,7 +68,7 @@ class TestMaterializeWorkspaceSignoffTasks:
         from infrastructure.persistence.project.models import Task
 
         from components.agents.infrastructure.services.agents_board_service import (
-            SUGGESTED,
+            TODO,
         )
         from components.agents.application.facades.ai_teammate_facade import (
             ensure_agents_board,
@@ -86,9 +86,9 @@ class TestMaterializeWorkspaceSignoffTasks:
         task = Task.objects.get(
             workspace=workspace, source_type=SIGN_OFF_SOURCE_TYPE
         )
-        # Landed on the Suggested column of the AI Findings board.
+        # Landed on the Todo intake lane of the AI Findings board.
         board = ensure_agents_board(workspace)
-        assert task.column_id == board.column(SUGGESTED).id
+        assert task.column_id == board.column(TODO).id
         # Assigned to the workspace owner.
         assert workspace.workspace_owner_id in {
             u.id for u in task.assigned_to.all()
@@ -129,12 +129,12 @@ class TestMaterializeWorkspaceSignoffTasks:
             ensure_agents_board,
         )
         from components.agents.infrastructure.services.agents_board_service import (
-            ACCEPTED,
+            COMPLETE,
         )
 
         workspace = workspace_factory()
 
-        # Run 1: item pending → card on Suggested.
+        # Run 1: item pending → card on Todo.
         pending_adapter = FakeSignOffAdapter(
             ARTIFACT_TYPE, pending=[_item(str(workspace.id))]
         )
@@ -155,7 +155,7 @@ class TestMaterializeWorkspaceSignoffTasks:
         task = Task.objects.get(
             workspace=workspace, source_type=SIGN_OFF_SOURCE_TYPE
         )
-        assert task.column_id == board.column(ACCEPTED).id
+        assert task.column_id == board.column(COMPLETE).id
         assert task.status == Task.DONE
 
     def test_reconcile_rejected_moves_to_dismissed(self, workspace_factory):
@@ -165,7 +165,7 @@ class TestMaterializeWorkspaceSignoffTasks:
             ensure_agents_board,
         )
         from components.agents.infrastructure.services.agents_board_service import (
-            DISMISSED,
+            CANCELED,
         )
 
         workspace = workspace_factory()
@@ -189,7 +189,7 @@ class TestMaterializeWorkspaceSignoffTasks:
         task = Task.objects.get(
             workspace=workspace, source_type=SIGN_OFF_SOURCE_TYPE
         )
-        assert task.column_id == board.column(DISMISSED).id
+        assert task.column_id == board.column(CANCELED).id
         assert task.status == Task.ARCHIVED
 
     def test_reconcile_idempotent_when_already_terminal(self, workspace_factory):
@@ -209,7 +209,7 @@ class TestMaterializeWorkspaceSignoffTasks:
         materialize_workspace_signoff_tasks(
             str(workspace.id), registry=approved_registry
         )
-        # Second reconcile pass — card already Accepted → no re-move.
+        # Second reconcile pass — card already Complete → no re-move.
         again = materialize_workspace_signoff_tasks(
             str(workspace.id), registry=approved_registry
         )

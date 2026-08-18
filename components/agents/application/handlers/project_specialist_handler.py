@@ -4,7 +4,7 @@ on the workspace's AI agent team Kanban.
 Action List item P1 #24. Third specialist through the Phase 3
 ``SubscriptionRegistry`` — subscribes to ``ProjectCreated`` (published
 from ``CreateProjectUseCase`` after the underlying port succeeds) and
-posts a one-line "Set up <Project>" card to the Suggested column so a
+posts a one-line "Set up <Project>" card to the Todo intake lane so a
 fresh project doesn't sit configured-but-empty.
 
 This is intentionally a thin starter specialist; the value is the
@@ -56,7 +56,7 @@ def handle_project_created(event: ProjectCreated) -> None:
     )
     from components.agents.application.providers.ai_provider import AIProvider
     from components.agents.infrastructure.services.agents_board_service import (
-        SUGGESTED,
+        TODO,
     )
 
     if event.workspace_id is None:
@@ -78,7 +78,7 @@ def handle_project_created(event: ProjectCreated) -> None:
     project_id_str = str(event.project_id)
 
     board = ensure_agents_board(workspace)
-    suggested_column = board.column(SUGGESTED)
+    intake_column = board.column(TODO)
     ai_user_id = str(board.team.created_by_id)
 
     stripped_title = (event.title or "").strip()
@@ -106,7 +106,7 @@ def handle_project_created(event: ProjectCreated) -> None:
     try:
         task_id = persist_finding_as_task(
             workspace=workspace,
-            suggested_column=suggested_column,
+            intake_column=intake_column,
             ai_user_id=ai_user_id,
             title=title,
             summary=summary,

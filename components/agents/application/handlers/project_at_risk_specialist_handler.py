@@ -53,7 +53,7 @@ def handle_project_at_risk_findings_detected(
     )
     from components.agents.application.providers.ai_provider import AIProvider
     from components.agents.infrastructure.services.agents_board_service import (
-        SUGGESTED,
+        TODO,
     )
 
     workspace = AIProvider.build_workspace_query().get_by_id(event.workspace_id)
@@ -74,7 +74,7 @@ def handle_project_at_risk_findings_detected(
         return
 
     board = ensure_agents_board(workspace)
-    suggested_column = board.column(SUGGESTED)
+    intake_column = board.column(TODO)
     ai_user_id = str(board.team.created_by_id)
 
     persisted = 0
@@ -108,7 +108,7 @@ def handle_project_at_risk_findings_detected(
         try:
             task_id = persist_finding_as_task(
                 workspace=workspace,
-                suggested_column=suggested_column,
+                intake_column=intake_column,
                 ai_user_id=ai_user_id,
                 title=title,
                 summary=summary,

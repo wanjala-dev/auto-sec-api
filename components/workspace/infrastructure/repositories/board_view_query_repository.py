@@ -28,6 +28,7 @@ import logging
 import uuid as uuid_module
 from typing import Any
 
+from components.project.domain.workflow_status_vocabulary import CATEGORIES
 from components.shared_kernel.domain.security import Severity
 from components.workspace.application.ports.board_view_query_port import (
     BoardViewQueryPort,
@@ -62,6 +63,14 @@ def apply_view_filter(tasks_queryset, view_filter: Any):
       stores it as ``str(project.id)``; both str and int are accepted).
     - ``source_type``: exact match on ``task.source_type`` (the AI
       provenance label, e.g. ``ai.cloud_posture_drift``).
+    - ``source_type_prefix``: ``task.source_type`` starts with the value
+      (``"ai."`` = every AI-sourced card — the P3 Intake/Acting system
+      views' source filter, mirroring the established
+      ``task_source_type_prefix`` workflow-filter concept).
+    - ``category``: the task's ``workflow_status.category`` equals the value
+      (one of the domain vocabulary's CATEGORIES). The companion lane
+      restriction lives in ``statuses_for_view`` — a category view renders
+      only its own category's lanes.
     - ``min_severity``: severity floor over ``task.metadata.severity`` — the
       canonical top-level severity every finding card carries
       (``specialist_persistence_service``). A task with no severity is below
@@ -95,6 +104,16 @@ def apply_view_filter(tasks_queryset, view_filter: Any):
                 logger.warning("board_view filter bad source_type value=%r", value)
                 return tasks_queryset.none()
             qs = qs.filter(source_type=value)
+        elif key == "source_type_prefix":
+            if not isinstance(value, str) or not value:
+                logger.warning("board_view filter bad source_type_prefix value=%r", value)
+                return tasks_queryset.none()
+            qs = qs.filter(source_type__startswith=value)
+        elif key == "category":
+            if value not in CATEGORIES:
+                logger.warning("board_view filter unknown category value=%r", value)
+                return tasks_queryset.none()
+            qs = qs.filter(workflow_status__category=value)
         elif key == "min_severity":
             allowed = _severity_names_at_or_above(value)
             if allowed is None:
@@ -179,7 +198,15 @@ class OrmBoardViewQueryRepository(BoardViewQueryPort):
         from infrastructure.persistence.project.models import WorkflowStatus
 
         # Meta.ordering is ("order", "id"); explicit for the same reason as views.
-        return WorkflowStatus.objects.filter(team=view.team, workspace=view.workspace).order_by("order", "id")
+        statuses = WorkflowStatus.objects.filter(team=view.team, workspace=view.workspace).order_by("order", "id")
+        # A category view renders ONLY its category's lanes (ADR 0030 §3: the
+        # Intake/Acting system views are honest funnel surfaces, not six lanes
+        # with four permanently empty). An unknown category fails closed to no
+        # lanes, matching apply_view_filter's no-tasks answer for the same row.
+        category = (view.filter or {}).get("category") if isinstance(view.filter, dict) else None
+        if category is not None:
+            statuses = statuses.filter(category=category) if category in CATEGORIES else statuses.none()
+        return statuses
 
     @staticmethod
     def _get_team_for_member(team_id: Any, user: Any) -> Any:

@@ -797,7 +797,7 @@ def _execute_publish_event(run: Any, node: dict[str, Any], config: dict[str, Any
             "event_type": "task_accepted_from_board",  # dispatch key
             "filters": {                                 # optional
                 "task_source_type_prefix": "ai.",
-                "new_column_title": "Accepted"
+                "new_column_title": "Complete"
             }
         }
 

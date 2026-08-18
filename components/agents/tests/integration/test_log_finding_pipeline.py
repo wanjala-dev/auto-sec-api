@@ -92,7 +92,7 @@ class TestOptimizationPipeline:
 
         assert "Handled" in result
         task.refresh_from_db()
-        assert task.column.title == "Optimize"
+        assert task.column.title == "In Progress"
         meta = task.metadata
         assert meta["triage"]["status"] == "triaged"
         assert meta["triage"]["agent"] == "optimization_agent"
@@ -242,7 +242,7 @@ class TestTriagePipeline:
 
         assert "Handled" in result
         task.refresh_from_db()
-        assert task.column.title == "Triage"
+        assert task.column.title == "In Progress"
         assert task.metadata["payload"]["suggested_fix"] == "Add X to the module."
         assert task.metadata["triage"]["agent"] == "triage_agent"
 
@@ -252,10 +252,10 @@ class TestCreationProvenanceAndSerializer:
     def test_persist_finding_stamps_creation_provenance(self, workspace_factory, team_factory):
         from components.agents.application.handlers.specialist_persistence_service import persist_finding_as_task
 
-        workspace, owner, team, intake = _board(workspace_factory, team_factory)
+        workspace, owner, _team, intake = _board(workspace_factory, team_factory)
         task_id = persist_finding_as_task(
             workspace=workspace,
-            suggested_column=intake,
+            intake_column=intake,
             ai_user_id=str(owner.id),
             title="[OPTIMIZE] noisy task",
             summary="fires a lot",

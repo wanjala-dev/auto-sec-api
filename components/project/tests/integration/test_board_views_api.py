@@ -416,6 +416,89 @@ class TestViewBoardFilters:
 
 
 # ---------------------------------------------------------------------------
+# The P3 system-view filter keys (ADR 0030 Decision §3: Intake / Acting)
+# ---------------------------------------------------------------------------
+
+
+class TestP3SystemViewFilters:
+    def test_source_type_prefix_matches_every_ai_source(self, api_client, board):
+        owner, workspace, team = board
+        columns, _ = _seed_lanes(workspace, team, owner)
+        _task(workspace, team, owner, columns["Todo"], title="posture", source_type="ai.cloud_posture")
+        _task(workspace, team, owner, columns["Todo"], title="logwatch", source_type="ai.log_watch")
+        _task(workspace, team, owner, columns["Todo"], title="human")
+        view = _view(workspace, team, slug="ai", name="AI", filter={"source_type_prefix": "ai."})
+
+        api_client.force_authenticate(owner)
+        lanes = _lanes_by_name(api_client.get(_board_url(view)))
+        assert sorted(t["title"] for t in lanes["Todo"]["tasks"]) == ["logwatch", "posture"]
+
+    def test_category_view_renders_only_its_categorys_lanes(self, api_client, board):
+        """The Intake view is an honest funnel surface: only the unstarted
+        lanes render, and only AI-sourced unstarted cards populate them."""
+        owner, workspace, team = board
+        columns, _statuses = _seed_lanes(workspace, team, owner)
+        _task(workspace, team, owner, columns["Todo"], title="fresh finding", source_type="ai.log_watch")
+        _task(workspace, team, owner, columns["In Progress"], title="acting finding", source_type="ai.log_watch")
+        _task(workspace, team, owner, columns["Todo"], title="human todo")
+        intake = _view(
+            workspace,
+            team,
+            slug="intake",
+            name="Intake",
+            filter={"source_type_prefix": "ai.", "category": "unstarted"},
+        )
+
+        api_client.force_authenticate(owner)
+        lanes = _lanes_by_name(api_client.get(_board_url(intake)))
+        assert set(lanes) == {"Todo"}  # unstarted = the Todo lane only
+        assert [t["title"] for t in lanes["Todo"]["tasks"]] == ["fresh finding"]
+
+    def test_acting_view_shows_started_ai_cards(self, api_client, board):
+        owner, workspace, team = board
+        columns, _ = _seed_lanes(workspace, team, owner)
+        _task(workspace, team, owner, columns["In Progress"], title="acting", source_type="ai.log_watch")
+        _task(workspace, team, owner, columns["Testing"], title="verifying", source_type="ai.code_security")
+        _task(workspace, team, owner, columns["Todo"], title="fresh", source_type="ai.log_watch")
+        acting = _view(
+            workspace,
+            team,
+            slug="acting",
+            name="Acting",
+            filter={"source_type_prefix": "ai.", "category": "started"},
+        )
+
+        api_client.force_authenticate(owner)
+        lanes = _lanes_by_name(api_client.get(_board_url(acting)))
+        assert set(lanes) == {"In Progress", "Testing"}  # both started lanes
+        assert [t["title"] for t in lanes["In Progress"]["tasks"]] == ["acting"]
+        assert [t["title"] for t in lanes["Testing"]["tasks"]] == ["verifying"]
+
+    def test_unknown_category_fails_closed(self, api_client, board):
+        owner, workspace, team = board
+        columns, _ = _seed_lanes(workspace, team, owner)
+        _task(workspace, team, owner, columns["Todo"], title="card", source_type="ai.log_watch")
+        view = _view(workspace, team, slug="bad-cat", name="Bad")
+        # Bypass model validation the way drift/tampering would.
+        BoardView.objects.filter(pk=view.pk).update(filter={"category": "sideways"})
+
+        api_client.force_authenticate(owner)
+        response = api_client.get(_board_url(view))
+        assert response.data["data"]["lanes"] == []
+
+    def test_bad_source_type_prefix_fails_closed(self, api_client, board):
+        owner, workspace, team = board
+        columns, _ = _seed_lanes(workspace, team, owner)
+        _task(workspace, team, owner, columns["Todo"], title="card", source_type="ai.log_watch")
+        view = _view(workspace, team, slug="bad-prefix", name="Bad prefix")
+        BoardView.objects.filter(pk=view.pk).update(filter={"source_type_prefix": ""})
+
+        api_client.force_authenticate(owner)
+        lanes = _lanes_by_name(api_client.get(_board_url(view)))
+        assert all(lane["tasks_total"] == 0 for lane in lanes.values())
+
+
+# ---------------------------------------------------------------------------
 # Windowing parity with the column board
 # ---------------------------------------------------------------------------
 
