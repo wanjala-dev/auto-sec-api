@@ -569,6 +569,39 @@ class DocumentIndexView(APIView):
         )
 
 
+class TenantLoginBrandView(APIView):
+    """Pre-auth login brand for the host serving the request — ``/tenant/login-brand/``.
+
+    The URL identifies the tenant (Host header → tenancy middleware), so the
+    login screen on ``faura.auto-sec.ai`` can say "Faura" instead of
+    "Auto-Sec" — the wanjala login-brand pattern keyed by host instead of a
+    workspace id. Served entirely from the control-plane registry: no tenant
+    database is touched and no auth exists yet at this point.
+
+    Security posture: NOT an existence oracle. Unknown subdomains 404 at the
+    middleware before this view runs; every non-tenant host (console, bare
+    host) gets the byte-identical platform default. Global anon throttle
+    applies (deliberately no view-level ``throttle_classes`` — that would
+    REPLACE the default anon ceiling, see settings note).
+    """
+
+    permission_classes = (permissions.AllowAny,)
+
+    def get(self, request):
+        from components.shared_platform.application.providers.tenant_identity_provider import (
+            get_tenant_identity_port,
+        )
+
+        identity = get_tenant_identity_port().current_login_identity()
+        return Response(
+            {
+                "name": identity.name,
+                "subdomain": identity.subdomain,
+                "branded": identity.branded,
+            }
+        )
+
+
 # Module-level service instance
 from components.shared_platform.application.service import SharedPlatformService
 

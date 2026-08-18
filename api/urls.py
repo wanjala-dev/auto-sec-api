@@ -12,6 +12,7 @@ from components.shared_platform.api.urls import (
     documents_urlpatterns,
     honeypot_urlpatterns,
     imports_urlpatterns,
+    tenant_urlpatterns,
     uploads_urlpatterns,
 )
 from components.workspace.api.controller import (
@@ -63,6 +64,8 @@ api_patterns = [
     path("userpreferences/<str:uuid>/", UserPreferenceDetailView.as_view()),
     path("notifications/", include("components.notifications.api.urls")),
     path("feature-flags/", include(core_urlpatterns)),
+    # Pre-auth tenant identity (login brand by Host) — shared_platform.
+    path("tenant/", include(tenant_urlpatterns)),
     path("jobs/", include(jobs_urlpatterns)),
     path("workspaces/", include("components.workspace.api.urls")),
     path("team/", include("components.team.api.urls")),
