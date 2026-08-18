@@ -82,16 +82,16 @@ DEFAULT_FLAGS = [
     ),
     (
         "feature.onboarding_team_choice",
-        False,
-        "Onboarding team choice (teams/boards QA 2026-08-16 §c): when ON for a "
-        "user, the workspace-create + bootstrap paths accept an optional "
-        "team_name for the single home team (instead of the silent 'General') "
-        "and an include_red_team opt-in — the Red Team is only seeded when "
-        "explicitly requested. OFF (default) preserves today's behavior "
-        "exactly: silent 'General' + auto Red Team, inputs ignored. The Agents "
-        "team + AI Findings board stay UNCONDITIONAL in both modes (the "
-        "finding pipeline depends on them). Enable per-user for dogfood "
-        "first; graduate by flipping the seed default to ON.",
+        True,
+        "Onboarding team choice (teams/boards QA 2026-08-16 §c; GRADUATED to "
+        "default-ON per Henry 2026-08-18 — every new workspace admin is "
+        "prompted to name their own team at onboarding): the workspace-create "
+        "+ bootstrap paths accept an optional team_name for the single home "
+        "team (instead of the silent 'General') and an include_red_team "
+        "opt-in — the Red Team is only seeded when explicitly requested. "
+        "Disable via a rule to restore the silent 'General' + auto Red Team. "
+        "The Agents team + AI Findings board stay UNCONDITIONAL in both modes "
+        "(the finding pipeline depends on them).",
     ),
     (
         "feature.logwatch_board_from_findings",
