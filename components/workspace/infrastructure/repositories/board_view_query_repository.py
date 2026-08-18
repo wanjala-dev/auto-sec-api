@@ -142,11 +142,23 @@ class OrmBoardViewQueryRepository(BoardViewQueryPort):
     def fetch_team_views(self, *, team_id: Any, user: Any) -> list[Any]:
         team = self._get_team_for_member(team_id, user)
         check_team_membership(user, team)
+        from django.db.models import Q
+
         from infrastructure.persistence.project.models import BoardView
 
-        # Meta.ordering is ("order", "id") — stated explicitly so the views
-        # bar cannot silently reorder if the model default ever changes.
-        return list(BoardView.objects.filter(team=team, workspace=team.workspace).order_by("order", "id"))
+        # Personal views (task #74) are visible to their CREATOR only; system
+        # views to every team member. `-is_system` first guarantees the
+        # contract "user views after system views" even though per-user order
+        # sequences are gappy (each user only sees their own appends);
+        # ("order", "id") is then the model's stated ordering.
+        # No eager-load needed for the serializer's `created_by`/`mine`: both
+        # read the local created_by_id (DRF PrimaryKeyRelatedField pk-only
+        # optimization), so the list stays a single query.
+        return list(
+            BoardView.objects.filter(team=team, workspace=team.workspace)
+            .filter(Q(is_system=True) | Q(created_by=user))
+            .order_by("-is_system", "order", "id")
+        )
 
     def fetch_view_board(self, *, view_id: Any, user: Any, tasks_limit: int) -> ViewBoard:
         view = self._get_view_for_member(view_id, user)
@@ -221,11 +233,27 @@ class OrmBoardViewQueryRepository(BoardViewQueryPort):
 
     @staticmethod
     def _get_view_for_member(view_id: Any, user: Any) -> Any:
-        """BoardView, visible only inside its own workspace (else 404)."""
-        from components.workspace.application.facades.workspace_facade import user_is_workspace_member
+        """BoardView, visible only inside its own workspace (else 404).
+
+        Personal views (task #74) narrow further: another member's personal
+        view answers the SAME 404 as a missing id — the list never shows it,
+        so no other read/write path may confirm it exists. Workspace
+        admins/owners bypass (they can manage any personal view — the same
+        admin bypass as ``check_team_membership``); the creator of an
+        orphaned view (``created_by`` nulled by account deletion) no longer
+        exists, so only admins reach those.
+        """
+        from components.workspace.application.facades.workspace_facade import (
+            user_is_workspace_admin_or_owner,
+            user_is_workspace_member,
+        )
         from infrastructure.persistence.project.models import BoardView
 
         view = BoardView.objects.select_related("team", "team__workspace", "workspace").filter(pk=view_id).first()
         if view is None or not user_is_workspace_member(user, view.workspace):
             raise WorkspaceNotFoundError("View not found.")
+        if not view.is_system:
+            is_creator = view.created_by_id is not None and str(view.created_by_id) == str(user.id)
+            if not is_creator and not user_is_workspace_admin_or_owner(user, view.workspace):
+                raise WorkspaceNotFoundError("View not found.")
         return view

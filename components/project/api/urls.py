@@ -9,6 +9,7 @@ from components.project.api.controller import (
     AssignedTasksView,
     AssignUsersToTaskView,
     BatchMoveTasksView,
+    BoardViewDetailView,
     ColumnDetailView,
     ColumnReorderView,
     ColumnsView,
@@ -68,8 +69,10 @@ urlpatterns = [
     ),
     path("columns/team/<int:team_id>/", ColumnsView.as_view(), name="columns-by-team"),
     path("columns/workspaces/<uuid:workspace_id>/", ColumnsView.as_view(), name="columns-by-workspace"),
-    # Boards-as-views read API (ADR 0030 P2a) — flag `feature.boards_as_views`.
+    # Boards-as-views API (ADR 0030 P2a reads + task #74 saved-view writes) —
+    # flag `feature.boards_as_views`.
     path("teams/<int:team_id>/views/", TeamBoardViewsView.as_view(), name="team-board-views"),
+    path("views/<int:view_id>/", BoardViewDetailView.as_view(), name="view-detail"),
     path("views/<int:view_id>/board/", ViewBoardView.as_view(), name="view-board"),
     path(
         "views/<int:view_id>/lanes/<int:status_id>/tasks/",

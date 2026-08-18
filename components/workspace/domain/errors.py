@@ -62,6 +62,12 @@ class WorkspaceAdminRequiredError(WorkspaceAuthorizationError):
     """Caller must be a workspace admin."""
 
 
+class SystemBoardViewImmutableError(WorkspaceAuthorizationError):
+    """System board views (the seeded/backfilled boards) cannot be edited or
+    deleted — they are the team's shared surfaces (ADR 0030), not personal
+    saved views (task #74)."""
+
+
 class ProjectNotFoundError(WorkspaceDomainError, NotFoundError):
     """A project could not be located."""
 

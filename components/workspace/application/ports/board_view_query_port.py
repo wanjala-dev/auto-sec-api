@@ -37,6 +37,10 @@ class BoardViewQueryPort(abc.ABC):
     def fetch_team_views(self, *, team_id: Any, user: Any) -> list[Any]:
         """Return the team's ``BoardView`` rows in views-bar order.
 
+        System views first, then the requester's OWN personal views (task
+        #74) appended after — another user's personal views are never
+        returned, to anyone (personal views are per-user, not team-shared).
+
         Raises:
             WorkspaceNotFoundError: unknown team, OR the requester is not a
                 member of the team's workspace. Cross-tenant probes get the
@@ -58,8 +62,9 @@ class BoardViewQueryPort(abc.ABC):
         contract as :meth:`ColumnQueryPort.fetch_columns`.
 
         Raises:
-            WorkspaceNotFoundError: unknown view OR requester outside the
-                view's workspace (same non-leaking 404 as above).
+            WorkspaceNotFoundError: unknown view, requester outside the
+                view's workspace, OR another user's personal view (invisible
+                → the same non-leaking 404; workspace admins/owners bypass).
             TeamMembershipRequiredError: workspace member, not a team member.
         """
         ...
