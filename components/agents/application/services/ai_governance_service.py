@@ -8,15 +8,15 @@ the HITL ledger (draft PRs a human approved), the credential surface
 (GitHubConnection scopes — NEVER token material), and the kill-switch state.
 Every number is computed from rows that already exist — ``DeepRun`` /
 ``DeepRunLog`` telemetry, ``Agent.config``, board-finding metadata,
-``GitHubConnection`` and ``Workspace.ai_teammate_enabled``. Nothing here
+``VcsConnection`` and ``Workspace.ai_teammate_enabled``. Nothing here
 calls a model; the LLM in ``ai_governance_agent`` only narrates what these
 functions return.
 
 The three CROSS-context reads are routed through ports (app-layer ORM
 burndown PR-6), never their persistence models: the HITL draft-PR ledger via
 ``project.TaskLookupPort``, the workspace kill-switch toggle via the agents
-``WorkspaceQueryPort``, and the ``GitHubConnection`` credential surface via the
-integrations ``GitHubConnectionStatusReadPort`` (which reduces the encrypted
+``WorkspaceQueryPort``, and the ``VcsConnection`` credential surface via the
+integrations ``VcsConnectionStatusReadPort`` (which reduces the encrypted
 token to a presence boolean INSIDE its adapter — the ciphertext never crosses
 the port). Only this context's own ``ai.*`` reads remain inline (PR-10).
 
@@ -283,15 +283,19 @@ def compute_credential_inventory(conn_rows: list[dict[str, Any]], *, now: dateti
     """Shape the credential surface the AI can reach. NO secret material.
 
     Args:
-        conn_rows: one dict per ``GitHubConnection``:
-            ``{"id": str, "name": str, "status": str,
+        conn_rows: one dict per ``VcsConnection``:
+            ``{"id": str, "provider": str, "name": str, "status": str,
+               "auth_mode": str, "installation_id": int|None,
                "repo_allowlist": list[str], "has_token": bool,
+               "credential": str, "last_error": str,
                "created_at": datetime, "updated_at": datetime,
                "last_used_at": datetime|None}``.
 
     The collector reduces the encrypted token to a presence boolean before
     this function ever sees the row — ciphertext/plaintext is structurally
-    unreachable from here.
+    unreachable from here. ``credential`` is a human-readable, secret-free
+    label ("fine-grained PAT (encrypted)" / "GitHub App installation <id>");
+    ``installation_id`` is an opaque numeric id, not a secret.
     """
     connections = []
     for row in conn_rows:
@@ -299,14 +303,22 @@ def compute_credential_inventory(conn_rows: list[dict[str, Any]], *, now: dateti
         updated_at = _parse_iso(row.get("updated_at"))
         last_used_at = _parse_iso(row.get("last_used_at"))
         allowlist = row.get("repo_allowlist") if isinstance(row.get("repo_allowlist"), list) else []
+        installation_id = row.get("installation_id")
         connections.append(
             {
                 "id": str(row.get("id")),
+                "provider": str(row.get("provider") or "github"),
                 "name": str(row.get("name") or ""),
                 "status": str(row.get("status") or "unknown"),
+                "auth_mode": str(row.get("auth_mode") or "pat"),
+                "installation_id": int(installation_id) if installation_id is not None else None,
+                "credential": str(row.get("credential") or ""),
                 "repo_allowlist": [str(repo) for repo in allowlist],
                 "repo_allowlist_count": len(allowlist),
                 "has_token": bool(row.get("has_token")),
+                # Honesty for revoked/errored rows: the operational note stamped by
+                # verify / the revocation sync (non-secret).
+                "last_error": str(row.get("last_error") or ""),
                 "created_at": created_at.isoformat() if created_at else None,
                 "updated_at": updated_at.isoformat() if updated_at else None,
                 "last_used_at": last_used_at.isoformat() if last_used_at else None,
@@ -315,7 +327,10 @@ def compute_credential_inventory(conn_rows: list[dict[str, Any]], *, now: dateti
 
     return {
         "computed_at": now.isoformat(),
-        "github_connections": {
+        # Key renamed from ``github_connections`` when the inventory migrated onto
+        # the provider-tagged ``VcsConnection`` (ADR 0010) — this report is consumed
+        # only by the governance agent tool (JSON to the LLM); no FE reads it.
+        "vcs_connections": {
             "count": len(connections),
             "items": connections,
             "no_data": not connections,
@@ -502,29 +517,37 @@ def hitl_ledger(workspace_id: str, window_days: int = 30) -> dict[str, Any]:
 
 
 def credential_inventory(workspace_id: str) -> dict[str, Any]:
-    """GitHub credential surface: presence, allowlist, dates. NO secrets.
+    """VCS credential surface: presence, auth mode, allowlist, dates. NO secrets.
 
-    The ``integrations`` context owns ``GitHubConnection`` (which holds the
-    encrypted PAT). Its credential surface is read through the integrations
-    inbound seam (``GitHubConnectionStatusReadPort``) rather than this service
-    reaching into ``integrations``' ORM (Rule 2 / architecture-skill C3). The
-    adapter reduces ``token_ciphertext`` to a ``has_token`` boolean before it ever
-    returns — the ciphertext is structurally unreachable from here.
+    The ``integrations`` context owns ``VcsConnection`` (an encrypted PAT in
+    ``pat`` mode; a GitHub App installation — no stored secret — in
+    ``github_app`` mode). Its credential surface is read through the
+    integrations inbound seam (``VcsConnectionStatusReadPort``) rather than this
+    service reaching into ``integrations``' ORM (Rule 2 / architecture-skill
+    C3). The adapter reduces ``token_ciphertext`` to a ``has_token`` boolean
+    before it ever returns — the ciphertext is structurally unreachable from
+    here. (Previously this inventoried the deprecated ``GitHubConnection``
+    model, which left app-mode installations invisible to governance.)
     """
-    from components.integrations.application.providers.github_connection_status_provider import (
-        get_github_connection_status_reader,
+    from components.integrations.application.providers.vcs_connection_status_provider import (
+        get_vcs_connection_status_reader,
     )
 
     now = _utc_now()
-    statuses = get_github_connection_status_reader().list_statuses(workspace_id=str(workspace_id))
+    statuses = get_vcs_connection_status_reader().list_statuses(workspace_id=str(workspace_id))
     conn_rows = [
         {
             "id": status.id,
+            "provider": status.provider,
             "name": status.name,
             "status": status.status,
+            "auth_mode": status.auth_mode,
+            "installation_id": status.installation_id,
+            "credential": status.credential,
             "repo_allowlist": status.repo_allowlist,
             # The port DTO carries only the presence boolean — never the token.
             "has_token": status.has_token,
+            "last_error": status.last_error,
             "created_at": status.created_at,
             "updated_at": status.updated_at,
             "last_used_at": status.last_used_at,

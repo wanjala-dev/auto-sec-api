@@ -421,6 +421,17 @@ class VcsConnection(models.Model):
     def __str__(self):
         return f"{self.name} [{self.provider}] ({self.workspace_id})"
 
+    @property
+    def has_usable_credential(self) -> bool:
+        """True when this row can produce a runtime token: a stored (encrypted)
+        PAT, or — app mode — a bound installation that mints short-lived tokens
+        on demand. The ONE definition of "has a credential"; the REST resource's
+        ``has_token`` and the governance credential inventory both read it, so
+        the two surfaces can never drift."""
+        return bool(self.token_ciphertext) or (
+            self.auth_mode == VcsConnection.AuthMode.GITHUB_APP and bool(self.installation_id)
+        )
+
 
 class VercelConnection(models.Model):
     """Workspace-scoped Vercel access for posture scanning (ADR 0021 D2).
