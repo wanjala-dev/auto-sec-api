@@ -92,6 +92,10 @@ class FindingResource:
             "draft_pr": triage.draft_pr,
             "blocked_reason": triage.blocked_reason,
             "can_draft_fix": triage.can_draft_fix,
+            # Task #145: the outcome contract. ``design_change`` means the
+            # artifact is the brief below, and can_draft_fix is always False.
+            "outcome": triage.outcome,
+            "remediation_brief": triage.remediation_brief,
         }
 
     @staticmethod

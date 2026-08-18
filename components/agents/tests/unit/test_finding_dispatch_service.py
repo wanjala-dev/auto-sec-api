@@ -224,6 +224,25 @@ def test_draft_fix_lease_is_per_finding_not_per_specialist():
             "no_repo_target",
         ),
         (_card(source_type="ai.cloud_exposure", metadata={"agent_type": "triage_agent"}), "no_repo_target"),
+        # Task #145: an explicit design_change decline — the remediation brief
+        # on the card is the artifact; re-running the specialist would re-derive
+        # the same decline and the engine would refuse the PR anyway.
+        (
+            _card(
+                metadata={
+                    "agent_type": "code_security_agent",
+                    "payload": {
+                        "outcome": "design_change",
+                        "remediation_brief": {
+                            "what_is_wrong": "x",
+                            "why_not_patchable": "y",
+                            "design_change": ["z"],
+                        },
+                    },
+                }
+            ),
+            "design_change_no_pr",
+        ),
     ],
 )
 def test_draft_fix_refuses_with_a_reason(card, expected_reason):

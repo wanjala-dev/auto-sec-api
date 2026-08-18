@@ -160,14 +160,55 @@ class TestClassAOutcomes:
         assert result.outcome == "no_artifact"
 
 
+def _design_change_response(
+    fixture, *, confidence: str = "high", with_patch: str = "", brief: dict | None = None
+) -> dict:
+    """The Shape-2 (decline) JSON the advisor contract defines (#145)."""
+    if brief is None:
+        brief = {
+            "what_is_wrong": f"{fixture.path} violates {fixture.rule_id}: the flagged call cannot be made safe here.",
+            "why_not_patchable": "The correct fix depends on a component that does not exist in this repository.",
+            "design_change": [
+                f"Introduce the missing component and route {fixture.path} through it.",
+                "Wire its configuration where this project keeps settings.",
+            ],
+            "required_inputs": ["The credential/config only this codebase's owner can supply."],
+            "acceptance_criteria": ["A crafted malicious input is rejected."],
+        }
+    return {
+        "outcome": "design_change",
+        "likely_cause": f"The flagged line in {fixture.path} violates {fixture.rule_id}.",
+        "suggested_fix": f"Design change required for {fixture.rule_id} at {fixture.path}.",
+        "fix_before": (with_patch and "claims = jwt.decode(id_token)") or "",
+        "fix_after": with_patch,
+        "confidence": confidence,
+        "remediation_brief": brief,
+    }
+
+
 class TestClassBOutcomes:
-    def test_an_honest_decline_counts_as_success(self):
+    def test_an_explicit_design_change_decline_is_honest(self):
+        """The #145 target state: the decline is EXPLICIT (outcome field), the
+        brief is grounded in the flagged file/rule, and no patch is present."""
+        fixture = _fixture("jwt-verify-disabled-apple")
+        llm = _ScriptedLlm(_design_change_response(fixture))
+        result = run_fixture(fixture, _advisor(llm, fixture))
+        assert result.outcome == "honest_decline"
+        assert result.gates["brief"] == "pass"
+        assert result.gates["no_patch"] == "pass"
+        assert (result.suggestion or {}).get("remediation_brief"), "the brief must ride the report"
+
+    def test_a_bare_shrug_is_no_longer_a_win(self):
+        """BEHAVIOR CHANGE (#145), watched fail-first: the old low-confidence
+        empty-patch shape used to classify honest_decline. It is a bare
+        needs-human chip with no artifact — exactly what the artifact rule
+        bans — so it now scores ``gated``, not a success."""
         fixture = _fixture("jwt-verify-disabled-apple")
         llm = _ScriptedLlm(
             _suggestion("", "", confidence="low", fixture=fixture),
         )
         result = run_fixture(fixture, _advisor(llm, fixture))
-        assert result.outcome == "honest_decline"
+        assert result.outcome == "gated"
 
     def test_a_fabricated_patch_on_a_design_change_finding_is_flagged(self):
         """#326's failure: a concrete patch invented for a finding whose fix
@@ -181,6 +222,52 @@ class TestClassBOutcomes:
         )
         result = run_fixture(fixture, _advisor(llm, fixture))
         assert result.outcome == "fabricated_patch"
+
+    def test_a_design_change_carrying_a_patch_is_degraded_not_trusted(self):
+        """The parser's fabrication guard: outcome design_change + a concrete
+        patch contradict each other, so BOTH claims are discarded — the response
+        degrades to the low-confidence no-patch shape, which the harness then
+        scores as the bare shrug it is (gated), never as an honest decline."""
+        fixture = _fixture("jwt-verify-disabled-apple")
+        fabricated = _design_change_response(
+            fixture, with_patch="claims = jwt.decode(id_token, fetch_jwks_key(id_token))"
+        )
+        llm = _ScriptedLlm(fabricated)
+        result = run_fixture(fixture, _advisor(llm, fixture))
+        assert result.outcome == "gated"
+        suggestion = result.suggestion or {}
+        assert suggestion.get("outcome") == "patch"
+        assert suggestion.get("fix_after") == ""
+        assert suggestion.get("remediation_brief") is None
+
+    def test_an_ungrounded_brief_is_not_an_honest_decline(self):
+        """A decline whose brief names neither the flagged file nor the rule is
+        boilerplate that fits any finding — grounded briefs only."""
+        fixture = _fixture("jwt-verify-disabled-apple")
+        generic = _design_change_response(
+            fixture,
+            brief={
+                "what_is_wrong": "The code deserialises data unsafely.",
+                "why_not_patchable": "A bigger redesign is needed.",
+                "design_change": ["Adopt a safer architecture."],
+            },
+        )
+        llm = _ScriptedLlm(generic, generic)  # the ungrounded prose also triggers the one re-advise
+        result = run_fixture(fixture, _advisor(llm, fixture))
+        assert result.outcome == "gated"
+        assert result.gates["brief"].startswith("fail")
+
+    def test_a_decline_on_a_patchable_fixture_is_a_miss(self):
+        """declined_patchable: a design_change on a PATCH-expected fixture is
+        never laundered into a pass — it is its own counted miss."""
+        fixture = _fixture("sql-create-schema-fstring")
+        response = _design_change_response(fixture)
+        llm = _ScriptedLlm(response, response)  # the verifier's no-patch check drives one re-advise
+        result = run_fixture(fixture, _advisor(llm, fixture))
+        assert result.outcome == "declined_patchable"
+        summary = summarize([result])
+        assert summary["class_a"]["declined_patchable"] == 1
+        assert summary["class_a"]["machine_pass"] == 0
 
 
 class TestSummarize:
@@ -204,7 +291,7 @@ class TestSummarize:
         rule = summary["per_rule"]["autosec.python.sql-execute-format"]
         assert rule["total"] == 2 and rule["machine_pass"] == 1
         assert rule["gate_failures"].get("shape") == 1
-        assert summary["class_a"] == {"machine_pass": 1, "total": 2}
+        assert summary["class_a"] == {"machine_pass": 1, "declined_patchable": 0, "total": 2}
         assert "never used for a ship decision" in summary["aggregate_secondary"]["note"]
 
 
@@ -217,24 +304,43 @@ class TestEvidenceFromReports:
         import json as _json
 
         path = tmp_path / name
-        path.write_text(_json.dumps({"corpus_digest": self._DIGEST if digest is None else digest, "results": list(results)}))
+        path.write_text(
+            _json.dumps({"corpus_digest": self._DIGEST if digest is None else digest, "results": list(results)})
+        )
         return path
 
-    def _row(self, *, rule="autosec.python.sql-execute-format", outcome="machine_pass", verdict="correct",
-             fix_class="A", expected="patch", model="claude-sonnet-4", fixture="fx-1"):
+    def _row(
+        self,
+        *,
+        rule="autosec.python.sql-execute-format",
+        outcome="machine_pass",
+        verdict="correct",
+        fix_class="A",
+        expected="patch",
+        model="claude-sonnet-4",
+        fixture="fx-1",
+    ):
         return {
-            "fixture": fixture, "rule_id": rule, "fix_class": fix_class, "expected": expected,
-            "outcome": outcome, "human_verdict": verdict, "suggestion": {"model": model},
+            "fixture": fixture,
+            "rule_id": rule,
+            "fix_class": fix_class,
+            "expected": expected,
+            "outcome": outcome,
+            "human_verdict": verdict,
+            "suggestion": {"model": model},
         }
 
     def test_labeled_passes_and_gated_failures_aggregate_into_counts(self, tmp_path):
         from components.agents.infrastructure.evaluation.sast_fix_eval import evidence_from_reports
 
-        report = self._report(tmp_path, results=[
-            self._row(fixture="fx-1"),
-            self._row(fixture="fx-2", outcome="gated", verdict=""),
-            self._row(fixture="fx-3", outcome="machine_pass", verdict="plausible_but_wrong"),
-        ])
+        report = self._report(
+            tmp_path,
+            results=[
+                self._row(fixture="fx-1"),
+                self._row(fixture="fx-2", outcome="gated", verdict=""),
+                self._row(fixture="fx-3", outcome="machine_pass", verdict="plausible_but_wrong"),
+            ],
+        )
 
         evidence = evidence_from_reports([report], fixtures_digest=self._DIGEST)
 
@@ -271,10 +377,13 @@ class TestEvidenceFromReports:
             evidence_from_reports,
         )
 
-        report = self._report(tmp_path, results=[
-            self._row(fixture="fx-1", model="claude-sonnet-4"),
-            self._row(fixture="fx-2", model="gpt-4"),
-        ])
+        report = self._report(
+            tmp_path,
+            results=[
+                self._row(fixture="fx-1", model="claude-sonnet-4"),
+                self._row(fixture="fx-2", model="gpt-4"),
+            ],
+        )
 
         with pytest.raises(EvidenceAggregationError, match="per-model"):
             evidence_from_reports([report], fixtures_digest=self._DIGEST)
@@ -285,10 +394,18 @@ class TestEvidenceFromReports:
             evidence_from_reports,
         )
 
-        report = self._report(tmp_path, results=[
-            self._row(rule="autosec.python.jwt-verify-disabled", fix_class="B",
-                      expected="decline", outcome="honest_decline", verdict=""),
-        ])
+        report = self._report(
+            tmp_path,
+            results=[
+                self._row(
+                    rule="autosec.python.jwt-verify-disabled",
+                    fix_class="B",
+                    expected="decline",
+                    outcome="honest_decline",
+                    verdict="",
+                ),
+            ],
+        )
 
         # Only a Class B row → no trials at all → refuse rather than emit an
         # empty evidence file that would look like a measurement happened.

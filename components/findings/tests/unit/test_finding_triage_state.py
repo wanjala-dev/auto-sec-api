@@ -77,6 +77,54 @@ def test_triaged_with_a_suggestion_is_fix_ready():
     assert state.can_draft_fix is True
 
 
+def test_design_change_decline_carries_the_brief_and_never_offers_a_pr():
+    """Task #145: for a design_change outcome the BRIEF is the artifact. The
+    state surfaces outcome + brief for the HUD to render, explains why there is
+    no PR, and never offers the doomed draft-fix click (the request path would
+    refuse it as design_change_no_pr)."""
+    brief = {
+        "what_is_wrong": "auth/jwt_apple_auth.py decodes tokens with verification disabled.",
+        "why_not_patchable": "Verification needs a key source that does not exist in this repo.",
+        "design_change": ["Fetch and cache the issuer JWKS.", "Verify with a pinned algorithm list."],
+        "required_inputs": ["The Apple client id used as audience."],
+        "acceptance_criteria": ["A tampered token is rejected."],
+    }
+    state = derive_triage_state(
+        card=_card(
+            metadata={
+                "triage": {"status": "triaged", "suggested": True},
+                "payload": {
+                    "suggested_fix": "Design change: verify against Apple's JWKS keys.",
+                    "confidence": "high",
+                    "verification": "verified",
+                    "outcome": "design_change",
+                    "remediation_brief": brief,
+                },
+            }
+        )
+    )
+    assert state.state == TriageState.FIX_READY.value
+    assert state.outcome == "design_change"
+    assert state.remediation_brief == brief
+    assert state.can_draft_fix is False
+    assert "design change" in state.reason.lower()
+
+
+def test_design_change_outcome_without_a_brief_degrades_to_the_patch_contract():
+    """A contract-violating stamp (outcome with no brief behind it) must not
+    strip the affordances — there is no artifact to point to instead."""
+    state = derive_triage_state(
+        card=_card(
+            metadata={
+                "triage": {"status": "triaged", "suggested": True},
+                "payload": {"suggested_fix": "x", "outcome": "design_change"},
+            }
+        )
+    )
+    assert state.remediation_brief is None
+    assert state.can_draft_fix is True
+
+
 def test_fix_ready_with_an_open_pr_no_longer_offers_to_draft_one():
     state = derive_triage_state(
         card=_card(

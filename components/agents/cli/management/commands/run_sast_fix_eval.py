@@ -104,8 +104,14 @@ class Command(BaseCommand):
         summary = summarize(results)
         self.stdout.write(self.style.SUCCESS(f"\nReport: {report_path}"))
         a, b = summary["class_a"], summary["class_b"]
-        self.stdout.write(f"Class A (patchable): {a['machine_pass']}/{a['total']} machine-pass")
-        self.stdout.write(f"Class B (design change): {b['honest_decline']}/{b['total']} honest declines")
+        self.stdout.write(
+            f"Class A (patchable): {a['machine_pass']}/{a['total']} machine-pass"
+            + (f", {a['declined_patchable']} declined_patchable (misses)" if a.get("declined_patchable") else "")
+        )
+        self.stdout.write(
+            f"Class B (design change): {b['honest_decline']}/{b['total']} honest declines"
+            + (f", {b['fabricated_patch']} fabricated" if b.get("fabricated_patch") else "")
+        )
         for rule, counts in summary["per_rule"].items():
             self.stdout.write(
                 f"  {rule}: {counts['machine_pass']}/{counts['total']} pass"

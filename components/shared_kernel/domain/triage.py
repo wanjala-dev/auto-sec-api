@@ -72,6 +72,50 @@ ROUTABLE_SOURCE_TYPES: tuple[str, ...] = (
     "ai.code_security",
 )
 
+# ── Advisor outcome — WHAT KIND of artifact the specialist produced ──────────
+#
+# Task #145 (the Class B outcome). A SAST advisor's answer is one of two shapes:
+# a PATCH (fix_before → fix_after, the draft-PR path) or a DESIGN CHANGE — an
+# explicit, structured remediation brief for a finding no local edit can fix
+# (JWKS verification that needs a key source, pickle → JSON format migration).
+# Before this existed, the engine's shape forced a snippet even when the correct
+# answer was "this needs a design change": both Class B evidence fixtures
+# fabricated concrete patches in all 10 passes (0/20 honest declines).
+#
+# The contract crosses three contexts — ``agents`` writes ``payload.outcome``,
+# ``integrations`` reads it (a design_change never opens a code PR), ``findings``
+# reads it (the HUD renders the brief, not a doomed draft-PR affordance) — so it
+# lives here, beside the remediation-target contract it complements. Henry's
+# standing artifact rule still binds: for a design_change the BRIEF is the
+# artifact; a bare "needs human" chip with nothing behind it is never an outcome.
+
+OUTCOME_PATCH = "patch"
+OUTCOME_DESIGN_CHANGE = "design_change"
+
+#: Payload key the structured brief is stamped under (written by the
+#: code_security triage tool, read by the findings triage state + the HUD).
+REMEDIATION_BRIEF_KEY = "remediation_brief"
+
+
+def design_change_brief(payload: dict | None) -> dict:
+    """The finding's remediation brief, or ``{}`` when this is not a decline.
+
+    Non-empty ONLY when the payload declares ``outcome: design_change`` AND
+    carries a non-empty structured brief — both halves, deliberately: an outcome
+    stamp without a brief has no artifact behind it, and treating it as a
+    decline would skip the PR while leaving the operator a bare chip. Such a
+    (contract-violating) payload degrades to the patch path instead, where the
+    engine's own guardrails still apply.
+    """
+    data = payload or {}
+    if str(data.get("outcome") or "").strip() != OUTCOME_DESIGN_CHANGE:
+        return {}
+    brief = data.get(REMEDIATION_BRIEF_KEY)
+    if isinstance(brief, dict) and any(str(v or "").strip() or v for v in brief.values()):
+        return brief
+    return {}
+
+
 # ── Remediation target — WHERE a finding's fix lands ─────────────────────────
 #
 # The artifact must MATCH the target. A finding whose subject lives in a

@@ -232,6 +232,8 @@ def prompt_block(guidance: RemediationGuidance | None) -> str:
     """
     if guidance is None:
         return ""
+    if guidance.strategy == STRATEGY_GUIDANCE_ONLY:
+        return _decline_prompt_block(guidance)
     lines = [
         "remediation guidance for this rule class "
         f"({guidance.remediation_class}) — follow it unless the code contradicts it:",
@@ -256,6 +258,45 @@ def prompt_block(guidance: RemediationGuidance | None) -> str:
         "  use the identifiers that exist in THIS file — never copy a name from the "
         "example; it is illustrative and its symbols may not exist here",
         "  name the rule and the flagged file in suggested_fix, as required above",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def _decline_prompt_block(guidance: RemediationGuidance) -> str:
+    """The advisor-facing block for a ``guidance_only`` class (task #145).
+
+    For these classes the per-class strategy decision is "we do not patch this":
+    the correct fix depends on knowledge that lives only in the customer's
+    codebase, so any concrete patch is a fabrication — measured, not assumed
+    (both Class B evidence fixtures fabricated patches in all 10 passes when the
+    engine's shape forced a snippet). The correct output is the ``design_change``
+    response shape with a structured remediation brief.
+
+    Same ordering discipline as the patch block: the near-miss appears only as a
+    LABELED CONTRASTIVE PAIR with its why attached, and the instruction the
+    model must follow — decline, with the brief — is the LAST thing it reads.
+    """
+    lines = [
+        "remediation guidance for this rule class "
+        f"({guidance.remediation_class}) — follow it unless the code contradicts it:",
+        f"  what a correct remediation requires: {guidance.recommendation}",
+        "  the near-miss this rule's fixes are drawn to:",
+        *[f"    {ln}" for ln in guidance.wrong.splitlines()],
+        f"  why it fails: {guidance.why}",
+        "  THIS CLASS IS NOT PATCHABLE BY A LOCAL EDIT. The correct fix depends on "
+        "knowledge that lives in this codebase's owner's hands (a key source, a "
+        "format/serialisation decision), so any concrete fix_before/fix_after you "
+        "write here would be a fabrication.",
+        '  therefore respond with the "design_change" shape: outcome "design_change", '
+        'fix_before and fix_after set to "", and a remediation_brief that',
+        "    - states what is wrong in the flagged file (name the rule and the file),",
+        "    - explains why a local edit cannot fix it,",
+        "    - lays out the design change as concrete steps naming REAL components "
+        "from this codebase (never an invented helper or key),",
+        "    - lists what evidence/keys/config the codebase owner must supply,",
+        "    - gives acceptance criteria: how they will know it is fixed.",
+        "  the brief is the deliverable — do NOT produce a patch.",
         "",
     ]
     return "\n".join(lines)

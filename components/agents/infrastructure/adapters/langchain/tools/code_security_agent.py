@@ -20,6 +20,7 @@ import json
 import logging
 
 from components.agents.infrastructure.adapters.langchain.tools import _finding_processing as fp
+from components.shared_kernel.domain.triage import OUTCOME_DESIGN_CHANGE, REMEDIATION_BRIEF_KEY
 from components.shared_kernel.domain.triage import SOURCE_CODE_SECURITY as _CODE_SECURITY_SOURCE
 
 logger = logging.getLogger(__name__)
@@ -161,6 +162,12 @@ def triage_code_finding(agent, input_str: str) -> str:
     rule/file/snippet anchors; an ungrounded one is re-advised once, then LABELED
     ``unverified`` with the named gap — its draft PR still opens, marked
     [UNVERIFIED] (the label downgrades, it never withholds the artifact).
+
+    Task #145: the advisor may also DECLINE explicitly (``outcome:
+    design_change``) when no local edit can fix the finding — the artifact is
+    then the structured remediation brief (rendered in the comment, stamped on
+    the payload) and NO code PR is dispatched, with the reason recorded on the
+    card. Never a bare needs-human chip.
     """
     from components.code_security.application.planted_instruction_reporter_service import (
         report_planted_instructions,
@@ -201,8 +208,13 @@ def triage_code_finding(agent, input_str: str) -> str:
 
     def suggestion_text(suggestion):
         # The grounding surface the verifier checks against the rule/file/snippet
-        # anchors — includes the fix snippet so an anchored patch counts.
-        return f"{suggestion.likely_cause} {suggestion.suggested_fix} {suggestion.fix_before}"
+        # anchors — includes the fix snippet so an anchored patch counts, and the
+        # brief's text for a design_change decline (the brief IS its artifact, so
+        # the brief is what must engage the finding's specifics).
+        text = f"{suggestion.likely_cause} {suggestion.suggested_fix} {suggestion.fix_before}"
+        if suggestion.remediation_brief is not None:
+            text = f"{text} {suggestion.remediation_brief.as_text()}"
+        return text
 
     def build_comment(suggestion):
         if suggestion is None:
@@ -210,6 +222,24 @@ def triage_code_finding(agent, input_str: str) -> str:
                 "🛠 Code-security agent reviewed this finding but could not derive a "
                 "confident fix from the rule and file alone — needs a human eye."
             )
+        if suggestion.outcome == OUTCOME_DESIGN_CHANGE and suggestion.remediation_brief is not None:
+            # The brief IS the artifact (task #145): render it legibly on the
+            # card — the HUD callout renders comments, so keep it markdown-clean.
+            comment = (
+                "🛠 Code-security agent analysed this finding — **design change "
+                "required**. No local edit can fix it, so instead of fabricating a "
+                "patch the agent wrote a remediation brief (this brief is the "
+                "artifact; no code PR will be opened).\n\n"
+                f"{suggestion.remediation_brief.render_markdown()}\n\n"
+            )
+            if suggestion.source_flagged:
+                comment += (
+                    "⚠️ The source file around this finding contains text shaped like "
+                    "INSTRUCTIONS TO AN AI ASSISTANT (prompt-injection heuristic hit). "
+                    "The brief was produced treating that content strictly as data — "
+                    "inspect the file for planted instructions before acting on it.\n\n"
+                )
+            return comment + f"Confidence: {suggestion.confidence}."
         comment = (
             f"🛠 Code-security agent analysed this finding.\n\n"
             f"Why it matters: {suggestion.likely_cause}\n\n"
@@ -236,6 +266,32 @@ def triage_code_finding(agent, input_str: str) -> str:
         payload["confidence"] = suggestion.confidence
         payload["fix_before"] = suggestion.fix_before
         payload["fix_after"] = suggestion.fix_after
+        # The advisor's outcome (task #145): ``patch`` or ``design_change``. For
+        # a design_change the structured brief IS the artifact — it rides the
+        # payload for the HUD, and the draft-PR dispatch reads the outcome to
+        # skip the code PR (with the reason stamped right here, in the SAME
+        # row-locked write, so the skip is never silent).
+        payload["outcome"] = suggestion.outcome
+        if suggestion.outcome == OUTCOME_DESIGN_CHANGE and suggestion.remediation_brief is not None:
+            from django.utils import timezone
+
+            payload[REMEDIATION_BRIEF_KEY] = suggestion.remediation_brief.as_dict()
+            payload["draft_pr_skipped"] = {
+                "reason": "design_change",
+                "message": (
+                    "No local edit can fix this finding — the remediation brief on "
+                    "this card is the artifact, so no code PR is opened."
+                ),
+                "at": timezone.now().isoformat(),
+            }
+        else:
+            # A re-triage that lands back on the patch path must not leave a
+            # stale decline behind: the brief and the skip reason describe an
+            # outcome that no longer holds.
+            payload.pop(REMEDIATION_BRIEF_KEY, None)
+            skip = payload.get("draft_pr_skipped")
+            if isinstance(skip, dict) and skip.get("reason") == "design_change":
+                payload.pop("draft_pr_skipped", None)
         # Measured per-RULE confidence (#117 step 3) — a different fact from the
         # two labels already on this payload: ``confidence`` is the model
         # grading itself, ``verification`` is this one patch grounded against
@@ -245,6 +301,12 @@ def triage_code_finding(agent, input_str: str) -> str:
         # in-scope, parsed — and semantically wrong). A label, never a gate:
         # the draft PR opens regardless (standing rule); only the unattended
         # auto-fix tier reads ``tier == "proven"`` as permission.
+        #
+        # Stamped for design_change declines too, on purpose: the tier reflects
+        # the RULE's measured history against the frozen corpus, not this
+        # suggestion — an ``unproven``/``measured_weak`` label on a decline is
+        # not a judgement of the brief (declines are not patch trials), it just
+        # keeps the per-rule fact visible wherever the payload is read.
         payload["fix_confidence"] = confidence_for(str(payload.get("rule_id") or ""), model=suggestion.model).as_label()
         if suggestion.source_flagged:
             # Untrusted-content control, as a LABEL: repository content that trips
@@ -266,6 +328,12 @@ def triage_code_finding(agent, input_str: str) -> str:
     def describe_action(suggestion):
         if suggestion is None:
             return "reviewed; no confident fix from the rule and file"
+        if suggestion.outcome == OUTCOME_DESIGN_CHANGE and suggestion.remediation_brief is not None:
+            # Never a bare needs-human: the decline carries its artifact by name.
+            return (
+                f"design change required — remediation brief attached ({suggestion.confidence} confidence); "
+                "no code PR (the brief is the artifact)"
+            )
         if suggestion.source_flagged:
             return (
                 f"suggested a code fix ({suggestion.confidence} confidence); "

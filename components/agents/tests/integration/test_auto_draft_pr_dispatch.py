@@ -25,6 +25,8 @@ from components.agents.infrastructure.adapters.langchain.tools import (
     code_security_agent as code_security_tools,
 )
 from components.code_security.application.sast_fix_advisor_service import SastFixSuggestion
+from components.code_security.domain.remediation_brief import RemediationBrief
+from components.shared_kernel.domain.triage import OUTCOME_DESIGN_CHANGE
 from infrastructure.persistence.project.models import Column, Task
 
 _SOURCE = "ai.code_security"
@@ -38,6 +40,59 @@ _GROUNDED = SastFixSuggestion(
     fix_before='cursor.execute("DROP TABLE %s" % table)',
     fix_after='cursor.execute(sql.SQL("DROP TABLE {}").format(sql.Identifier(table)))',
 )
+
+
+_DESIGN_CHANGE = SastFixSuggestion(
+    likely_cause="jwt.decode runs with signature verification disabled, so forged Apple id_tokens are accepted.",
+    suggested_fix=(
+        "Design change: verify id_tokens in auth/jwt_apple_auth.py against Apple's JWKS keys (jwt-verify-disabled)."
+    ),
+    confidence="high",
+    outcome=OUTCOME_DESIGN_CHANGE,
+    remediation_brief=RemediationBrief(
+        what_is_wrong=(
+            "auth/jwt_apple_auth.py decodes Apple id_tokens with verify_signature disabled (jwt-verify-disabled)."
+        ),
+        why_not_patchable=(
+            "Verification needs the issuer's real public key; no key source exists in this repo, "
+            "so a one-line edit would verify against nothing."
+        ),
+        design_change=(
+            "Fetch and cache Apple's JWKS, select the key by the token's kid header.",
+            "Pass that key to jwt.decode with a pinned algorithm list plus audience and issuer checks.",
+        ),
+        required_inputs=("The Apple client id used as the token audience.",),
+        acceptance_criteria=("A token with a tampered payload is rejected.",),
+    ),
+)
+
+
+def _jwt_task(workspace, owner, team, column):
+    return Task.objects.create(
+        team=team,
+        workspace=workspace,
+        column=column,
+        created_by=owner,
+        title="High: jwt-verify-disabled — auth/jwt_apple_auth.py:13",
+        source_type=_SOURCE,
+        metadata={
+            "agent_type": "code_security_agent",
+            "payload": {
+                "signal": "jwt.decode with signature verification disabled",
+                "message": "jwt.decode with signature verification disabled accepts forged tokens (CWE-347).",
+                "severity": "high",
+                "rule_id": "autosec.python.jwt-verify-disabled",
+                "repo": "wanjala-dev/api-v0.2.0",
+                "commit_sha": "abc123def456",
+                "path": "auth/jwt_apple_auth.py",
+                "start_line": 13,
+                "end_line": 13,
+                "snippet": 'claims = jwt.decode(id_token, options={"verify_signature": False})',
+                "language": "python",
+                "triage": {"status": "pending"},
+            },
+        },
+    )
 
 
 def _board(workspace_factory, team_factory):
@@ -187,4 +242,66 @@ class TestAutoDraftPrTask:
         actors = [e.get("actor") for e in events]
         assert any(a == "agent:code_security_agent" for a in actors), (
             "the board must show the AGENT opened this off its own triage — not that a human asked"
+        )
+
+
+@pytest.mark.django_db
+class TestDesignChangeSkipsPr:
+    """Task #145: a design_change outcome never opens a code PR — and the skip
+    is RECORDED on the card, never silent. The brief on the card is the artifact
+    (Henry's standing rule), so this is a clean by-design outcome, not a block."""
+
+    def test_design_change_outcome_does_not_dispatch_a_pr(
+        self, workspace_factory, team_factory, django_capture_on_commit_callbacks
+    ):
+        workspace, owner, team, intake = _board(workspace_factory, team_factory)
+        task = _jwt_task(workspace, owner, team, intake)
+        agent = _agent(workspace, owner)
+
+        with mock.patch(_SUGGEST_PATH, return_value=_DESIGN_CHANGE), mock.patch(_DISPATCH_PATH) as delay:
+            with django_capture_on_commit_callbacks(execute=True):
+                code_security_tools.triage_code_finding(agent, str(task.id))
+
+        assert delay.call_count == 0, "a design_change decline must never open a code PR"
+        task.refresh_from_db()
+        payload = task.metadata["payload"]
+        # NOT a silent skip: the reason rides the card in the same triage write.
+        assert payload["outcome"] == OUTCOME_DESIGN_CHANGE
+        assert payload["draft_pr_skipped"]["reason"] == "design_change"
+        assert payload["remediation_brief"]["design_change"], "the brief is the artifact — it must be on the card"
+
+    def test_stray_open_task_records_the_skip_instead_of_engaging_the_engine(self, workspace_factory, team_factory):
+        """A direct/cadence caller that reaches the open task with a design_change
+        card must get the typed no-PR outcome — never the engine's fallback
+        advisor, which would fabricate the exact patch the specialist declined."""
+        from components.agents.infrastructure.tasks import agent_tasks
+
+        workspace, owner, team, intake = _board(workspace_factory, team_factory)
+        task = _jwt_task(workspace, owner, team, intake)
+        meta = task.metadata
+        meta["triage"] = {"status": "triaged", "agent": "code_security_agent", "suggested": True}
+        payload = meta["payload"]
+        payload["outcome"] = OUTCOME_DESIGN_CHANGE
+        payload["remediation_brief"] = _DESIGN_CHANGE.remediation_brief.as_dict()
+        task.metadata = meta
+        task.save(update_fields=["metadata"])
+
+        with mock.patch(
+            "components.integrations.application.providers.vcs_provider.get_open_draft_pr_use_case"
+        ) as engine:
+            result = agent_tasks.auto_draft_pr_for_finding(
+                workspace_id=str(workspace.id),
+                task_id=str(task.id),
+                performed_by=str(owner.id),
+                acting_agent="code_security_agent",
+            )
+
+        assert engine.call_count == 0
+        assert result["reason"] == "design_change_no_pr"
+        task.refresh_from_db()
+        stamp = (task.metadata.get("payload") or {}).get("draft_pr_skipped") or {}
+        assert stamp.get("reason") == "design_change"
+        events = (task.metadata.get("provenance") or {}).get("events") or []
+        assert any("design change" in str(e.get("action") or "") for e in events), (
+            "the skip must be recorded on the card, not just returned to the caller"
         )

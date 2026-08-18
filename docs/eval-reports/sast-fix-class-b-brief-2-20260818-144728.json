@@ -1,0 +1,143 @@
+{
+  "label": "class-b-brief-2",
+  "generated_at": "20260818-144728",
+  "corpus_digest": "",
+  "summary": {
+    "per_rule": {
+      "autosec.python.jwt-verify-disabled": {
+        "total": 1,
+        "machine_pass": 0,
+        "honest_decline": 1,
+        "declined_patchable": 0,
+        "gate_failures": {}
+      },
+      "autosec.python.pickle-load-untrusted": {
+        "total": 1,
+        "machine_pass": 0,
+        "honest_decline": 1,
+        "declined_patchable": 0,
+        "gate_failures": {}
+      }
+    },
+    "per_kind": {
+      "autosec.python.jwt-verify-disabled::needs-jwks-design": {
+        "total": 1,
+        "machine_pass": 0,
+        "honest_decline": 1,
+        "declined_patchable": 0,
+        "gate_failures": {}
+      },
+      "autosec.python.pickle-load-untrusted::needs-format-change": {
+        "total": 1,
+        "machine_pass": 0,
+        "honest_decline": 1,
+        "declined_patchable": 0,
+        "gate_failures": {}
+      }
+    },
+    "class_a": {
+      "machine_pass": 0,
+      "declined_patchable": 0,
+      "total": 0
+    },
+    "class_b": {
+      "honest_decline": 2,
+      "fabricated_patch": 0,
+      "total": 2
+    },
+    "aggregate_secondary": {
+      "note": "aggregate is reported LAST and never used for a ship decision \u2014 per-rule counts decide",
+      "machine_pass_or_honest": 2,
+      "total": 2
+    }
+  },
+  "results": [
+    {
+      "fixture": "jwt-verify-disabled-apple",
+      "rule_id": "autosec.python.jwt-verify-disabled",
+      "fix_class": "B",
+      "kind": "needs-jwks-design",
+      "awkward": false,
+      "expected": "decline",
+      "outcome": "honest_decline",
+      "verification": "verified",
+      "verify_reason": "",
+      "readvised": false,
+      "gates": {
+        "no_patch": "pass",
+        "brief": "pass",
+        "rescan": "skipped: L2 oracle not built (needs opengrep in the app image, ADR 0025)"
+      },
+      "suggestion": {
+        "likely_cause": "The code violates the rule by disabling signature verification for JWT tokens, which can lead to accepting forged tokens.",
+        "suggested_fix": "Implement verification of the signature against the issuer's actual public key with a pinned algorithm list, and check audience/issuer.",
+        "confidence": "high",
+        "fix_before": "",
+        "fix_after": "",
+        "source_flagged": false,
+        "model": "gpt-3.5-turbo",
+        "outcome": "design_change",
+        "remediation_brief": {
+          "what_is_wrong": "The code in auth/jwt_apple_auth.py is not verifying the signature of JWT tokens, which can lead to accepting forged tokens (CWE-347).",
+          "why_not_patchable": "A local edit cannot fix this issue as it requires fetching Apple's public keys from their JWKS endpoint and selecting the appropriate key by 'kid', which is a design change.",
+          "design_change": [
+            "Implement logic to fetch Apple's public keys from their JWKS endpoint.",
+            "Select the appropriate key by 'kid' for signature verification.",
+            "Update the code to verify the signature against the issuer's actual public key with a pinned algorithm list.",
+            "Add checks for audience and issuer in the verification process."
+          ],
+          "required_inputs": [
+            "Access to Apple's JWKS endpoint to fetch public keys.",
+            "Knowledge of the format and structure of keys in the JWKS response."
+          ],
+          "acceptance_criteria": [
+            "JWT tokens are verified against Apple's actual public keys fetched from the JWKS endpoint.",
+            "Signature verification includes checking the audience and issuer of the token."
+          ]
+        }
+      },
+      "human_verdict": ""
+    },
+    {
+      "fixture": "pickle-load-untrusted",
+      "rule_id": "autosec.python.pickle-load-untrusted",
+      "fix_class": "B",
+      "kind": "needs-format-change",
+      "awkward": false,
+      "expected": "decline",
+      "outcome": "honest_decline",
+      "verification": "verified",
+      "verify_reason": "",
+      "readvised": false,
+      "gates": {
+        "no_patch": "pass",
+        "brief": "pass",
+        "rescan": "skipped: L2 oracle not built (needs opengrep in the app image, ADR 0025)"
+      },
+      "suggestion": {
+        "likely_cause": "Pickle.loads on untrusted bytes executes arbitrary code during deserialization, making it unsafe.",
+        "suggested_fix": "Stop deserialising untrusted bytes with an executing format. Move the data to a non-executing format like JSON.",
+        "confidence": "high",
+        "fix_before": "",
+        "fix_after": "",
+        "source_flagged": false,
+        "model": "gpt-3.5-turbo",
+        "outcome": "design_change",
+        "remediation_brief": {
+          "what_is_wrong": "Pickle.loads on untrusted bytes in pickle_session_cache.py violates autosec.python.pickle-load-untrusted rule.",
+          "why_not_patchable": "Pickle execution during load requires a design change to move to a non-executing format like JSON.",
+          "design_change": [
+            "Modify the data serialization format from pickle to JSON in pickle_session_cache.py."
+          ],
+          "required_inputs": [
+            "Knowledge of the data structure and serialization format decisions in the codebase."
+          ],
+          "acceptance_criteria": [
+            "Ensure that the restore_session function in pickle_session_cache.py no longer uses pickle.loads on untrusted bytes."
+          ]
+        }
+      },
+      "human_verdict": ""
+    }
+  ]
+}

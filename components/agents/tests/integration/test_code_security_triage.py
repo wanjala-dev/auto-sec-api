@@ -566,3 +566,143 @@ class TestCodeSecurityBoardRouting:
         assert payload["snippet"] == 'cursor.execute("DROP TABLE %s" % table)'
         assert payload["rule_id"] == "autosec.python.django.sql-execute-format"
         assert payload["path"] == "api/scripts/migrate_schema.py"
+
+
+# ── Task #145: the Class B outcome — an explicit decline with a brief ─────────
+
+from components.code_security.domain.remediation_brief import RemediationBrief  # noqa: E402
+from components.shared_kernel.domain.triage import OUTCOME_DESIGN_CHANGE  # noqa: E402
+
+_DESIGN_CHANGE = SastFixSuggestion(
+    likely_cause="jwt.decode runs with signature verification disabled, so forged Apple id_tokens are accepted.",
+    suggested_fix=(
+        "Design change: verify id_tokens in auth/jwt_apple_auth.py against Apple's JWKS keys (jwt-verify-disabled)."
+    ),
+    confidence="high",
+    outcome=OUTCOME_DESIGN_CHANGE,
+    remediation_brief=RemediationBrief(
+        what_is_wrong=(
+            "auth/jwt_apple_auth.py decodes Apple id_tokens with verify_signature disabled (jwt-verify-disabled)."
+        ),
+        why_not_patchable=(
+            "Verification needs the issuer's real public key; no key source exists in this repo, so a "
+            "one-line edit would verify against nothing."
+        ),
+        design_change=(
+            "Fetch and cache Apple's JWKS, select the key by the token's kid header.",
+            "Pass that key to jwt.decode with a pinned algorithm list plus audience and issuer checks.",
+        ),
+        required_inputs=("The Apple client id used as the token audience.",),
+        acceptance_criteria=("A token with a tampered payload is rejected.",),
+    ),
+)
+
+
+def _jwt_task(workspace, owner, team, column):
+    return Task.objects.create(
+        team=team,
+        workspace=workspace,
+        column=column,
+        created_by=owner,
+        title="High: jwt-verify-disabled — auth/jwt_apple_auth.py:13",
+        source_type=_SOURCE,
+        metadata={
+            "agent_type": "code_security_agent",
+            "payload": {
+                "signal": "jwt.decode with signature verification disabled",
+                "message": "jwt.decode with signature verification disabled accepts forged tokens (CWE-347).",
+                "severity": "high",
+                "rule_id": "autosec.python.jwt-verify-disabled",
+                "repo": "wanjala-dev/api-v0.2.0",
+                "commit_sha": "abc123def456",
+                "path": "auth/jwt_apple_auth.py",
+                "start_line": 13,
+                "end_line": 13,
+                "snippet": 'claims = jwt.decode(id_token, options={"verify_signature": False})',
+                "language": "python",
+                "triage": {"status": "pending"},
+            },
+        },
+    )
+
+
+@pytest.mark.django_db
+class TestDesignChangeOutcome:
+    """The decline is a first-class outcome whose artifact is the BRIEF —
+    structured on the payload, legible in the comment, never a bare needs-human."""
+
+    def test_design_change_triage_stamps_the_brief_as_the_artifact(self, workspace_factory, team_factory):
+        workspace, owner, team, intake = _board(workspace_factory, team_factory)
+        task = _jwt_task(workspace, owner, team, intake)
+        agent = _agent(workspace, owner)
+
+        with mock.patch(_SUGGEST_PATH, return_value=_DESIGN_CHANGE) as suggest:
+            result = code_security_tools.triage_code_finding(agent, str(task.id))
+
+        assert "Handled" in result
+        assert suggest.call_count == 1  # a grounded decline needs no re-advise
+        task.refresh_from_db()
+        meta = task.metadata
+        payload = meta["payload"]
+        assert payload["outcome"] == OUTCOME_DESIGN_CHANGE
+        brief = payload["remediation_brief"]
+        assert brief["what_is_wrong"].startswith("auth/jwt_apple_auth.py")
+        assert brief["why_not_patchable"]
+        assert len(brief["design_change"]) == 2
+        assert brief["required_inputs"] and brief["acceptance_criteria"]
+        # No patch, and no patch attestation — there is nothing to attest to.
+        assert payload["fix_before"] == "" and payload["fix_after"] == ""
+        assert PATCH_ATTESTATION_KEY not in payload
+        # The decline is verified (guidance_only classes are exempt from the
+        # no-patch check; the brief anchors on the rule + file), and it is NOT a
+        # needs-human dead end — the brief is the artifact.
+        assert meta["triage"]["verification"] == "verified"
+        assert meta["triage"]["needs_human"] is False
+        assert payload.get("needs_human") is not True
+        # The skip reason is recorded in the SAME write — never a silent no-PR.
+        assert payload["draft_pr_skipped"]["reason"] == "design_change"
+        # The per-rule confidence tier still stamps (it reflects the RULE's
+        # measured history, not this decline).
+        assert payload["fix_confidence"]
+        # Provenance names the outcome with the artifact attached.
+        assert any(
+            "design change required — remediation brief attached" in str(e.get("action") or "")
+            for e in meta["provenance"]["events"]
+        )
+
+    def test_design_change_comment_renders_the_brief_legibly(self, workspace_factory, team_factory):
+        workspace, owner, team, intake = _board(workspace_factory, team_factory)
+        task = _jwt_task(workspace, owner, team, intake)
+        agent = _agent(workspace, owner)
+
+        with mock.patch(_SUGGEST_PATH, return_value=_DESIGN_CHANGE):
+            code_security_tools.triage_code_finding(agent, str(task.id))
+
+        comment = TaskComment.objects.filter(task=task).first()
+        assert comment is not None
+        body = comment.comment
+        assert "design change" in body.lower()
+        assert "**What's wrong:**" in body
+        assert "**Why a local edit can't fix it:**" in body
+        assert "**The design change:**" in body
+        assert "1. Fetch and cache Apple's JWKS" in body
+        assert "**What you need to supply:**" in body
+        assert "**How you'll know it's fixed:**" in body
+        # A brief carries prose, never code fences — nothing to render as a patch.
+        assert "```" not in body
+
+    def test_design_change_card_counts_as_handled(self, workspace_factory, team_factory):
+        """The decline is a COMPLETED outcome with an artifact, not a re-attemptable
+        no-fix: a second triage pass must no-op instead of burning an LLM call and
+        re-commenting the same brief."""
+        workspace, owner, team, intake = _board(workspace_factory, team_factory)
+        task = _jwt_task(workspace, owner, team, intake)
+        agent = _agent(workspace, owner)
+
+        with mock.patch(_SUGGEST_PATH, return_value=_DESIGN_CHANGE):
+            code_security_tools.triage_code_finding(agent, str(task.id))
+        with mock.patch(_SUGGEST_PATH, return_value=_DESIGN_CHANGE) as second:
+            result = code_security_tools.triage_code_finding(agent, str(task.id))
+
+        assert "already handled" in result
+        second.assert_not_called()

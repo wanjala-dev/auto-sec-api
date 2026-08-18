@@ -823,7 +823,7 @@ def _open_draft_pr_for_finding(
     from components.integrations.application.use_cases.open_draft_pr_use_case import (
         DraftPrPreconditionError,
     )
-    from components.shared_kernel.domain.triage import TARGET_REPO, remediation_target
+    from components.shared_kernel.domain.triage import TARGET_REPO, design_change_brief, remediation_target
 
     # The artifact must MATCH the remediation target: a finding with no linked
     # repository (public/unlinked container image, cloud resource) has nothing
@@ -847,6 +847,35 @@ def _open_draft_pr_for_finding(
                 "ships as guidance/a snippet on the finding, not a pull request."
             ),
         }
+    # Task #145: a design_change decline never opens a code PR. Reaching the
+    # engine anyway would be worse than a wasted call — its fallback advisor
+    # GENERATES a patch when the card carries none, i.e. it would fabricate the
+    # exact patch the specialist just declined to write. The skip is RECORDED on
+    # the card (stamp + provenance), never silent: the brief is the artifact.
+    if design_change_brief(metadata.get("payload") or {}):
+        message = (
+            "The specialist determined this finding needs a design change — the "
+            "remediation brief on the card is the artifact; no code PR is opened."
+        )
+        _append_finding_provenance(
+            task_id,
+            actor="agent:code_fix",
+            action="draft PR not opened (design change — the remediation brief on this card is the artifact)",
+            payload_patch={
+                "draft_pr_skipped": {
+                    "reason": "design_change",
+                    "message": message,
+                    "at": timezone.now().isoformat(),
+                }
+            },
+            clear_dispatch=True,  # the run is over — stop showing DRAFTING
+        )
+        logger.info(
+            "draft_fix_for_finding design_change_no_pr workspace_id=%s task_id=%s",
+            workspace_id,
+            task_id,
+        )
+        return {"pr_url": "", "reason": "design_change_no_pr", "message": message}
     triage = metadata.get("triage") or {}
     if triage.get("status") != "triaged":
         return _record_draft_pr_blocked(
@@ -890,8 +919,15 @@ def _record_draft_pr_blocked(workspace_id: str, task_id: str, reason: str, messa
     return {"pr_url": "", "reason": reason, "message": message}
 
 
-def _append_finding_provenance(task_id, *, actor: str, action: str, extra=None, patch=None, clear_dispatch=False):
+def _append_finding_provenance(
+    task_id, *, actor: str, action: str, extra=None, patch=None, payload_patch=None, clear_dispatch=False
+):
     """Append one provenance event to a finding card (and optionally patch its metadata).
+
+    ``patch`` merges into the metadata TOP level (the ``draft_pr_blocked`` shape);
+    ``payload_patch`` merges into ``metadata.payload`` — for facts that travel with
+    the finding's payload contract (``outcome`` / ``draft_pr_skipped``), so the
+    reader never has to know two locations for one fact.
 
     ONE row-locked writer for every on-demand outcome — the operator's request, the
     run that produced a fix, and a refusal — instead of three copies of the same
@@ -915,6 +951,10 @@ def _append_finding_provenance(task_id, *, actor: str, action: str, extra=None, 
             meta = locked.metadata or {}
             if patch:
                 meta.update(patch)
+            if payload_patch:
+                payload = meta.get("payload") or {}
+                payload.update(payload_patch)
+                meta["payload"] = payload
             if clear_dispatch:
                 meta.pop("triage_dispatch", None)
             provenance = meta.get("provenance") or {"events": []}
