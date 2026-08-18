@@ -34,3 +34,35 @@ export const E2E = {
 /** Matches the HUD root (origin + "/", optional query) on ANY base URL —
  *  replaces the old hardcoded /localhost:3001\/$/ assertions. */
 export const HUD_ROOT_RE = /^https?:\/\/[^/]+\/(?:\?.*)?$/;
+
+/**
+ * Tenant-host smoke contract (tenant-hosts.smoke.spec.ts) — the local
+ * multi-tenant parity stack: gateway path-split on *.auto-sec.ai + the shared
+ * HUD dev server on :3050 (auto-sec-infra k8s/README.md "Local tenant-host
+ * testing"). Hosts resolve inside Chromium via --host-resolver-rules (see the
+ * `tenant-hosts` project in playwright.config.ts) — /etc/hosts is not needed.
+ *
+ * Defaults = the seeded local tenants. The wanjala/pooled credentials mirror
+ * the seed defaults the same way E2E.email/password mirror the demo login;
+ * override any of it via env for a differently-seeded environment.
+ */
+export const TENANT_QA = {
+  /** Tenant hosts that must serve the branded HUD (CSV env override). */
+  hosts: (
+    process.env.QA_TENANT_HOSTS ||
+    'faura.auto-sec.ai,acme.auto-sec.ai,senso.auto-sec.ai,wanjala.auto-sec.ai'
+  )
+    .split(',')
+    .map((h) => h.trim())
+    .filter(Boolean),
+  /** The tenant whose admin login the positive/isolation probes use. */
+  loginHost: process.env.QA_TENANT_LOGIN_HOST || 'wanjala.auto-sec.ai',
+  email: process.env.QA_TENANT_EMAIL || 'admin@wanjala.test',
+  password: process.env.QA_TENANT_PASSWORD || 'WanjalaTest2026!',
+  /** A DIFFERENT tenant host, where those credentials must NOT work. */
+  crossHost: process.env.QA_TENANT_CROSS_HOST || 'faura.auto-sec.ai',
+  /** The pooled demo admin — must work on autosec.local, not on a dedicated host. */
+  pooledEmail: process.env.E2E_EMAIL || process.env.QA_ADMIN_EMAIL || 'test@autosec.local',
+  pooledPassword:
+    process.env.E2E_PASSWORD || process.env.QA_ADMIN_PASSWORD || 'AutoSecTest2026!',
+};

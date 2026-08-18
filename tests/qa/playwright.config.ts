@@ -50,5 +50,23 @@ export default defineConfig({
         viewport: { width: 1440, height: 900 },
       },
     },
+    {
+      // Tenant-host parity smoke (tenant-hosts.smoke.spec.ts): drives the
+      // REAL tenant hostnames through the local gateway. The resolver rule
+      // maps *.auto-sec.ai to the gateway inside Chromium, so the spec needs
+      // no /etc/hosts entries and can never leak a request to the public
+      // auto-sec.ai DNS. Separate project because launchOptions are
+      // browser-scoped. Prereq: the shared tenant HUD dev server on :3050
+      // (auto-sec-infra k8s/README.md "Local tenant-host testing").
+      name: 'tenant-hosts',
+      testMatch: /tenant-hosts\.smoke\.spec\.ts/,
+      use: {
+        ...devices['Desktop Chrome'],
+        viewport: { width: 1440, height: 900 },
+        launchOptions: {
+          args: ['--host-resolver-rules=MAP *.auto-sec.ai 127.0.0.1'],
+        },
+      },
+    },
   ],
 });
