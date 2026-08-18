@@ -27,6 +27,7 @@ from components.shared_platform.api.controller import (
     HoneypotLoginView,
     PresignedPutUploadView,
     PresignedUploadConfirmView,
+    TenantLoginBrandView,
 )
 from components.shared_platform.api.document_import_controller import (
     DocumentImportApplyView,
@@ -57,6 +58,16 @@ broadcast_urlpatterns = broadcast_router.urls
 core_urlpatterns = [
     path("", FeatureFlagsView.as_view(), name="feature-flags"),
     path("<str:key>/", FeatureFlagStatusView.as_view(), name="feature-flag"),
+]
+
+
+# =============================================================================
+# TENANT (PRE-AUTH IDENTITY) URLS
+# =============================================================================
+
+tenant_urlpatterns = [
+    # Pre-auth login brand for the host serving the request (Host → tenant).
+    path("login-brand/", TenantLoginBrandView.as_view(), name="tenant-login-brand"),
 ]
 
 
