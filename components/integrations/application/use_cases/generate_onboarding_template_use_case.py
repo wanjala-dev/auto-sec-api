@@ -16,9 +16,21 @@ from dataclasses import dataclass, field
 from types import SimpleNamespace
 from urllib.parse import quote
 
+from components.integrations.domain.aws_role_naming import (
+    audit_policy_name,
+    stackset_name,
+)
+
 
 def _no_template_url() -> str:
     return ""
+
+
+def _workspace_name(conn) -> str:
+    """The connection's workspace display name, "" when unavailable (the hosted,
+    workspace-agnostic template path passes a bare namespace)."""
+    ws = getattr(conn, "workspace", None)
+    return str(getattr(ws, "workspace_name", "") or getattr(ws, "name", "") or "")
 
 
 @dataclass
@@ -35,6 +47,7 @@ class GenerateOnboardingTemplateUseCase:
     def cloudformation(self, conn) -> dict:
         """The customer-side template: audit role (+ optional org StackSet)."""
         vendor = self._vendor_account_resolver()
+        ws_name = _workspace_name(conn)
         role = {
             "Type": "AWS::IAM::Role",
             "Properties": {
@@ -60,7 +73,7 @@ class GenerateOnboardingTemplateUseCase:
                 ],
                 "Policies": [
                     {
-                        "PolicyName": "AutoSecAuditReadOnly",
+                        "PolicyName": audit_policy_name(ws_name),
                         "PolicyDocument": {
                             "Version": "2012-10-17",
                             "Statement": [
@@ -103,23 +116,23 @@ class GenerateOnboardingTemplateUseCase:
                 ],
             },
         }
-        resources = {"AutoSecAuditRole": role}
+        resources = {"AuditRole": role}
         if conn.org_wide:
             # Member-account role rollout: service-managed StackSet with
             # auto-deployment — future accounts are covered automatically.
             member_template = {
                 "AWSTemplateFormatVersion": "2010-09-09",
-                "Resources": {"AutoSecAuditRole": json.loads(json.dumps(role))},  # same role, member scope
+                "Resources": {"AuditRole": json.loads(json.dumps(role))},  # same role, member scope
             }
             # Members don't need org discovery.
-            member_policy = member_template["Resources"]["AutoSecAuditRole"]["Properties"]["Policies"][0]
+            member_policy = member_template["Resources"]["AuditRole"]["Properties"]["Policies"][0]
             member_policy["PolicyDocument"]["Statement"] = [
                 s for s in member_policy["PolicyDocument"]["Statement"] if s["Sid"] != "OrgDiscovery"
             ]
-            resources["AutoSecOrgStackSet"] = {
+            resources["OrgAuditStackSet"] = {
                 "Type": "AWS::CloudFormation::StackSet",
                 "Properties": {
-                    "StackSetName": f"AutoSec-{str(conn.id)[:8]}",
+                    "StackSetName": stackset_name(ws_name, conn.id),
                     "PermissionModel": "SERVICE_MANAGED",
                     "AutoDeployment": {"Enabled": True, "RetainStacksOnAccountRemoval": False},
                     "Capabilities": ["CAPABILITY_NAMED_IAM"],
@@ -134,7 +147,7 @@ class GenerateOnboardingTemplateUseCase:
             }
         return {
             "AWSTemplateFormatVersion": "2010-09-09",
-            "Description": "Auto-Sec read-only audit access (CloudTrail ingestion).",
+            "Description": f"Read-only security-audit access for {ws_name or 'this workspace'} (CloudTrail ingestion).",
             "Parameters": (
                 {"RootOuId": {"Type": "String", "Description": "Root OU id (r-xxxx) for org-wide rollout."}}
                 if conn.org_wide
@@ -155,16 +168,16 @@ class GenerateOnboardingTemplateUseCase:
             external_id={"Ref": "ExternalId"}, role_name={"Ref": "RoleName"}, org_wide=False, id="hosted"
         )
         tmpl = self.cloudformation(ref)
-        tmpl["Description"] = "Auto-Sec read-only audit role (assume-role, External-ID protected)."
+        tmpl["Description"] = "Read-only security-audit role (assume-role, External-ID protected)."
         tmpl["Parameters"] = {
             "ExternalId": {
                 "Type": "String",
                 "MinLength": 8,
-                "Description": "Your Auto-Sec External ID (shown in the connect wizard) — confused-deputy protection.",
+                "Description": "The External ID shown in the connect wizard — confused-deputy protection.",
             },
             "RoleName": {
                 "Type": "String",
-                "Default": "AutoSecAuditRole",
+                "Default": "AuditRole",
                 "Description": "Name for the read-only audit role.",
             },
         }
@@ -201,13 +214,14 @@ class GenerateOnboardingTemplateUseCase:
         vendors ship BOTH formats).
         """
         vendor = self._vendor_account_resolver()
+        policy_name = audit_policy_name(_workspace_name(conn))
         return f'''variable "external_id" {{
-  description = "Auto-Sec vendor-generated external id (confused-deputy token)"
+  description = "Vendor-generated external id (confused-deputy token)"
   type        = string
   default     = "{conn.external_id}"
 }}
 
-resource "aws_iam_role" "autosec_audit" {{
+resource "aws_iam_role" "audit" {{
   name = "{conn.role_name}"
 
   assume_role_policy = jsonencode({{
@@ -221,9 +235,9 @@ resource "aws_iam_role" "autosec_audit" {{
   }})
 }}
 
-resource "aws_iam_role_policy" "autosec_audit_read" {{
-  name = "AutoSecAuditReadOnly"
-  role = aws_iam_role.autosec_audit.id
+resource "aws_iam_role_policy" "audit_read_only" {{
+  name = "{policy_name}"
+  role = aws_iam_role.audit.id
 
   policy = jsonencode({{
     Version = "2012-10-17"
@@ -260,17 +274,17 @@ resource "aws_iam_role_policy" "autosec_audit_read" {{
 
 # AWS-managed read-only policies powering the Prowler CSPM scan (Phase 3).
 # Kept in lockstep with the CloudFormation generator (never widen one alone).
-resource "aws_iam_role_policy_attachment" "autosec_security_audit" {{
-  role       = aws_iam_role.autosec_audit.name
+resource "aws_iam_role_policy_attachment" "audit_security_audit" {{
+  role       = aws_iam_role.audit.name
   policy_arn = "arn:aws:iam::aws:policy/SecurityAudit"
 }}
 
-resource "aws_iam_role_policy_attachment" "autosec_view_only" {{
-  role       = aws_iam_role.autosec_audit.name
+resource "aws_iam_role_policy_attachment" "audit_view_only" {{
+  role       = aws_iam_role.audit.name
   policy_arn = "arn:aws:iam::aws:policy/job-function/ViewOnlyAccess"
 }}
 
-output "autosec_role_arn" {{
-  value = aws_iam_role.autosec_audit.arn
+output "audit_role_arn" {{
+  value = aws_iam_role.audit.arn
 }}
 '''

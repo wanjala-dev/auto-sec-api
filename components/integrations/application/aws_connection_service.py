@@ -58,20 +58,30 @@ class AwsConnectionService:
 
         Generates the vendor-side ``external_id`` (confused-deputy token per
         AWS SEC03-BP09) — never customer-chosen.
+
+        Defaults are WORKSPACE-derived (aws_role_naming): the artifacts live in
+        the customer's account and should read as theirs — ``FauraAuditRole``,
+        not a vendor-branded name (Henry, 2026-08-18).
         """
+        from components.integrations.domain.aws_role_naming import (
+            default_audit_role_name,
+            external_id_prefix,
+        )
+
+        ws_name = self._repo.workspace_name(workspace_id)
         return self._repo.get_or_create(
             workspace_id=workspace_id,
             management_account_id=management_account_id,
             created_by=created_by,
             defaults={
                 "name": name or "AWS Organization",
-                "role_name": role_name or "AutoSecAuditRole",
+                "role_name": role_name or default_audit_role_name(ws_name),
                 "org_wide": org_wide,
                 "regions": regions or [],
                 "trail_s3_bucket": trail_s3_bucket or "",
                 "sqs_queue_url": sqs_queue_url or "",
                 # Vendor-generated, URL-safe, unique — the confused-deputy token.
-                "external_id": f"autosec-{secrets.token_urlsafe(24)}",
+                "external_id": f"{external_id_prefix(ws_name)}-{secrets.token_urlsafe(24)}",
             },
         )
 

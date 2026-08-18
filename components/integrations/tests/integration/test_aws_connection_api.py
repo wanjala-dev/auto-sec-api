@@ -53,8 +53,12 @@ class TestAwsConnectionLoop:
         body = resp.data["data"]
         assert resp.data["created"] is True
         assert body["management_account_id"] == _MGMT_ACCOUNT
-        # The confused-deputy token is vendor-generated (never customer-chosen).
-        assert body["external_id"].startswith("autosec-")
+        # The confused-deputy token is vendor-generated (never customer-chosen);
+        # its prefix is the WORKSPACE slug, not a vendor brand (2026-08-18).
+        import re
+
+        assert re.match(r"^[a-z0-9-]{1,21}-[A-Za-z0-9_-]{20,}$", body["external_id"])
+        assert not body["external_id"].startswith("autosec-")
         # No long-lived AWS secret is ever accepted or echoed — this is role-assumption.
         assert not any(k in body for k in ("secret", "secret_access_key", "token", "password"))
 

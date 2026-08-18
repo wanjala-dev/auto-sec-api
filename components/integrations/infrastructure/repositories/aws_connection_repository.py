@@ -24,6 +24,14 @@ logger = logging.getLogger(__name__)
 class AwsConnectionRepository:
     """ORM access for AWS onboarding connections, workspace-scoped."""
 
+    def workspace_name(self, workspace_id) -> str:
+        """Display name of the workspace, "" when it doesn't exist — feeds the
+        workspace-derived default role naming (aws_role_naming)."""
+        from infrastructure.persistence.workspaces.models import Workspace
+
+        row = Workspace.objects.all_objects().filter(id=workspace_id).values_list("workspace_name", flat=True).first()
+        return str(row or "")
+
     def list_for_workspace(self, workspace_id) -> list[AwsOrganizationConnection]:
         return list(AwsOrganizationConnection.objects.filter(workspace_id=workspace_id).prefetch_related("accounts"))
 
