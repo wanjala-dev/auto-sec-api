@@ -212,6 +212,41 @@ class TestPromptBlock:
         assert "do not produce this" not in block.lower()
 
 
+class TestGuidanceOnlyPromptBlock:
+    """Task #145: for a guidance_only class the block instructs the DECLINE —
+    the design_change shape with a structured brief — never a patch."""
+
+    GUIDANCE_ONLY_RULES = ("autosec.python.jwt-verify-disabled", "autosec.python.pickle-load-untrusted")
+
+    @pytest.mark.parametrize("rule_id", GUIDANCE_ONLY_RULES)
+    def test_block_instructs_the_design_change_decline(self, rule_id):
+        block = prompt_block(guidance_for(rule_id))
+        assert "design_change" in block, "the block must name the decline outcome"
+        assert "remediation_brief" in block
+        assert "NOT PATCHABLE BY A LOCAL EDIT" in block
+        assert "fabrication" in block.lower()
+
+    @pytest.mark.parametrize("rule_id", GUIDANCE_ONLY_RULES)
+    def test_block_feeds_the_recommendation_and_keeps_the_contrastive_pair(self, rule_id):
+        guidance = guidance_for(rule_id)
+        block = prompt_block(guidance)
+        # The class's recommendation prose is the knowledge the brief is built
+        # from — it must ride the block.
+        assert guidance.recommendation.split(".")[0][:40] in block.replace("\n", " ")
+        assert "why it fails:" in block
+        # The decline instruction is the LAST thing the model reads (recency
+        # wins — same measured ordering rule as the patch block).
+        assert block.index("why it fails:") < block.index("design_change")
+
+    @pytest.mark.parametrize("rule_id", GUIDANCE_ONLY_RULES)
+    def test_block_never_shows_a_correct_patch_to_copy(self, rule_id):
+        """The 'correct' exemplar is placeholder-bearing code for the OPERATOR;
+        showing code labeled correct to a model told not to patch invites the
+        exact fabrication the decline exists to end."""
+        block = prompt_block(guidance_for(rule_id))
+        assert "the correct SHAPE to produce instead" not in block
+
+
 class TestExemplarsCannotBePasted:
     """The failure this class of test exists for, observed live.
 
@@ -315,8 +350,12 @@ class TestPromptCarriesTheGeneralConstraints:
     restate the constraints it would otherwise crowd out.
     """
 
+    # These two used jwt-verify-disabled, which was fine while every class got
+    # the patch block. That class is guidance_only, and #145 gives guidance_only
+    # classes the DECLINE block (no example code to copy → no placeholder line),
+    # so the constraint tests now pin a placeholder-bearing llm-strategy class.
     def test_block_forbids_copying_identifiers_from_the_example(self):
-        block = prompt_block(guidance_for("autosec.python.jwt-verify-disabled"))
+        block = prompt_block(guidance_for("autosec.python.requests-verify-disabled"))
         assert "never copy a name from the" in block
         assert "illustration" in block or "illustrative" in block
 
@@ -325,9 +364,9 @@ class TestPromptCarriesTheGeneralConstraints:
         assert "name the rule and the flagged file" in block
 
     def test_block_lists_placeholders_when_the_class_has_them(self):
-        block = prompt_block(guidance_for("autosec.python.jwt-verify-disabled"))
+        block = prompt_block(guidance_for("autosec.python.requests-verify-disabled"))
         assert "PLACEHOLDERS" in block
-        assert "<AUDIENCE>" in block
+        assert "<PATH TO THIS PROJECT'S CA BUNDLE>" in block
 
     def test_block_omits_the_placeholder_line_when_there_are_none(self):
         block = prompt_block(guidance_for("autosec.python.tempfile-mktemp"))

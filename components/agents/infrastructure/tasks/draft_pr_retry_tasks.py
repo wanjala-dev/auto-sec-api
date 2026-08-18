@@ -104,6 +104,7 @@ def _refill_freed_slots(released: dict[str, set[str]], dispatch) -> int:
     gets the scarce slot — picking arbitrarily would hand it to whatever the DB
     returned first. Severity is the ranking we already have on the card.
     """
+    from components.shared_kernel.domain.triage import design_change_brief
     from infrastructure.persistence.project.models import Task
     from infrastructure.persistence.workspaces.models import Workspace
 
@@ -128,6 +129,11 @@ def _refill_freed_slots(released: dict[str, set[str]], dispatch) -> int:
                 if (meta.get("triage") or {}).get("status") != "triaged":
                     continue
                 if not str(payload.get("suggested_fix") or "").strip():
+                    continue
+                # Task #145: a design_change decline will never have a PR — its
+                # artifact is the brief already on the card. Handing it the
+                # scarce freed slot would burn the retry on a guaranteed skip.
+                if design_change_brief(payload):
                     continue
                 candidates.append((_SEVERITY_RANK.get(str(payload.get("severity") or "").lower(), 9), task.id))
             if not candidates:

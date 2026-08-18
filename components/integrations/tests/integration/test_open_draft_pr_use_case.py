@@ -375,6 +375,49 @@ class TestOpenDraftPrPreconditions:
         assert exc.value.reason == "repo_not_allowlisted"
         assert fake.calls == []
 
+    def test_design_change_decline_is_refused_with_its_own_reason(self, workspace_factory, team_factory):
+        """Task #145: a design_change decline's artifact is the BRIEF on the card.
+        Reaching the patch pipeline would fabricate the exact patch the specialist
+        declined to write (empty fix_after → the fallback advisor generates one),
+        so the engine refuses typed — before any GitHub call."""
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _triaged_finding(
+            workspace,
+            owner,
+            team,
+            column,
+            extra_payload={
+                "outcome": "design_change",
+                "remediation_brief": {
+                    "what_is_wrong": "The flagged call cannot be made safe here.",
+                    "why_not_patchable": "The fix needs a component that does not exist in this repo.",
+                    "design_change": ["Introduce the missing component and route the call through it."],
+                },
+            },
+        )
+        _connection(workspace, owner)
+        _capability_agent(workspace, owner)
+        fake = _FakeGitHub()
+        with mock.patch(_REQUESTS_PATH, new=fake), pytest.raises(DraftPrPreconditionError) as exc:
+            _use_case().execute(workspace_id=str(workspace.id), task_id=str(task.id), performed_by=str(owner.id))
+        assert exc.value.reason == "design_change_no_pr"
+        assert fake.calls == []
+
+    def test_design_change_stamp_without_a_brief_does_not_refuse(self, workspace_factory, team_factory):
+        """A contract-violating stamp (outcome, no brief) has no artifact to point
+        to instead — it degrades to the normal patch pipeline, whose own
+        guardrails still apply."""
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _triaged_finding(workspace, owner, team, column, extra_payload={"outcome": "design_change"})
+        _connection(workspace, owner)
+        _capability_agent(workspace, owner)
+        fake = _FakeGitHub()
+        with mock.patch(_REQUESTS_PATH, new=fake), mock.patch(_PROPOSE_PATH, return_value=_PATCH):
+            result = _use_case().execute(
+                workspace_id=str(workspace.id), task_id=str(task.id), performed_by=str(owner.id)
+            )
+        assert result.url  # the normal pipeline ran
+
     def test_needs_human_finding_opens_a_labeled_pr_not_a_refusal(self, workspace_factory, team_factory):
         """Gate → labeler: an ungrounded (needs_human) fix still gets its draft PR
         — title-prefixed [UNVERIFIED], the gap named in the body, the label on

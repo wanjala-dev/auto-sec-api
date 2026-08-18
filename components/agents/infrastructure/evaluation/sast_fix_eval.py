@@ -55,6 +55,7 @@ from components.code_security.domain.remediation_guidance import (
     guidance_for,
     patch_parses,
 )
+from components.shared_kernel.domain.triage import OUTCOME_DESIGN_CHANGE
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +120,10 @@ class FixtureResult:
     verify_reason: str = ""
     readvised: bool = False
     gates: dict = field(default_factory=dict)  # gate -> "pass" | "fail: ..." | "abstained" | "skipped: ..."
-    outcome: str = ""  # machine_pass | gated | no_artifact | honest_decline | fabricated_patch
+    # machine_pass | gated | no_artifact | honest_decline | fabricated_patch |
+    # declined_patchable (a design_change on a PATCH-expected fixture — a MISS,
+    # counted as a failed trial by evidence aggregation, never a win)
+    outcome: str = ""
 
     def as_dict(self) -> dict:
         return {
@@ -198,10 +202,16 @@ def run_fixture(fixture: FixEvalFixture, advisor) -> FixtureResult:
         )
 
     def verify(s):
+        # Same grounding surface production's triage tool builds: prose plus,
+        # for a design_change decline, the brief's text — the brief IS the
+        # artifact, so the brief is what must engage the finding's specifics.
+        text = f"{s.likely_cause}\n{s.suggested_fix}"
+        if s.remediation_brief is not None:
+            text = f"{text}\n{s.remediation_brief.as_text()}"
         return verify_suggestion(
             source_type=SOURCE_CODE_SECURITY,
             payload=payload,
-            suggestion_text=f"{s.likely_cause}\n{s.suggested_fix}",
+            suggestion_text=text,
             patch_code=s.fix_after,
         )
 
@@ -228,7 +238,17 @@ def run_fixture(fixture: FixEvalFixture, advisor) -> FixtureResult:
     guidance_only = guidance is not None and guidance.strategy == STRATEGY_GUIDANCE_ONLY
     patch = suggestion.fix_after or ""
 
-    if guidance_only or not patch.strip():
+    if suggestion.outcome == OUTCOME_DESIGN_CHANGE:
+        # The decline's own gates (#145). Independent of the parser's guarantees
+        # on purpose — the harness grades the artifact it sees, it does not
+        # trust the code that produced it.
+        result.gates["no_patch"] = (
+            "pass"
+            if not patch.strip() and not (suggestion.fix_before or "").strip()
+            else "fail: a design_change decline carries patch code — fabrication"
+        )
+        result.gates["brief"] = _brief_gate(suggestion, fixture)
+    elif guidance_only or not patch.strip():
         result.gates["artifact"] = "pass" if guidance_only else "fail: no patch produced"
     else:
         result.gates["artifact"] = "pass"
@@ -256,6 +276,28 @@ def run_fixture(fixture: FixEvalFixture, advisor) -> FixtureResult:
 
     result.outcome = _classify(result, patch=patch)
     return result
+
+
+def _brief_gate(suggestion, fixture: FixEvalFixture) -> str:
+    """A decline's brief must exist AND engage THIS finding (#145).
+
+    Grounding for a brief is the same question grounding asks of a patch — "is
+    this about THIS finding, or boilerplate that fits any finding?" — answered
+    the same deterministic way: the brief must reference the flagged file or
+    the rule. A decline failing this gate is not an honest decline; it is the
+    bare needs-human chip the artifact rule exists to kill.
+    """
+    brief = suggestion.remediation_brief
+    if brief is None:
+        return "fail: no remediation brief — a decline without a brief is a bare needs-human"
+    text = brief.as_text().lower()
+    rule_id = fixture.rule_id.lower()
+    rule_label = rule_id.rsplit(".", 1)[-1]
+    path = fixture.path.lower()
+    path_base = path.rsplit("/", 1)[-1]
+    if any(anchor and anchor in text for anchor in (rule_id, rule_label, path, path_base)):
+        return "pass"
+    return "fail: the brief references neither the flagged file nor the rule — ungrounded boilerplate"
 
 
 def _targets_flagged_span(fix_before: str, fixture: FixEvalFixture) -> str:
@@ -296,15 +338,32 @@ def _anti_gaming_gate(patch: str, fixture: FixEvalFixture) -> str:
 
 def _classify(result: FixtureResult, *, patch: str) -> str:
     fixture = result.fixture
+    outcome_field = str((result.suggestion or {}).get("outcome") or "")
+
     if fixture.expected == "decline":
-        # Class B: the honest output is prose + no fabricated patch. A concrete
-        # patch on a finding that needs a design change is the #326 failure
-        # (an invented helper), not a success — and doubly so on a
-        # guidance_only class, whose whole strategy decision is "we do not
-        # patch this".
+        # Class B: the honest output is an EXPLICIT design_change decline with a
+        # grounded brief and no patch. A concrete patch on a finding that needs
+        # a design change is the #326 failure (an invented helper), not a
+        # success — and doubly so on a guidance_only class, whose whole
+        # strategy decision is "we do not patch this".
         if patch.strip():
             return "fabricated_patch"
-        return "honest_decline" if result.suggestion else "no_artifact"
+        if result.suggestion is None:
+            return "no_artifact"
+        if outcome_field == OUTCOME_DESIGN_CHANGE:
+            decline_gates = [g for g in ("brief", "no_patch") if g in result.gates]
+            failed = [g for g in decline_gates if str(result.gates[g]).startswith("fail")]
+            return "gated" if failed else "honest_decline"
+        # A patch-outcome answer with no patch is the OLD bare shrug — not a
+        # win. Henry's artifact rule: the decline must carry its brief; a bare
+        # needs-human chip is the noise this outcome exists to kill.
+        return "gated"
+
+    if outcome_field == OUTCOME_DESIGN_CHANGE:
+        # A decline on a PATCH-expected fixture is a MISS, never laundered into
+        # a pass: the advisor refused a finding a bounded edit fixes. Named as
+        # its own outcome so per-rule counts show WHERE the advisor over-declines.
+        return "declined_patchable"
 
     hard_gates = [g for g in ("artifact", "targets_flagged_span", "parse", "shape", "anti_gaming") if g in result.gates]
     failed = [g for g in hard_gates if str(result.gates[g]).startswith("fail")]
@@ -323,9 +382,12 @@ def summarize(results: list[FixtureResult]) -> dict:
         out: dict[str, dict] = {}
         for r in results:
             key = key_fn(r)
-            slot = out.setdefault(key, {"total": 0, "machine_pass": 0, "honest_decline": 0, "gate_failures": {}})
+            slot = out.setdefault(
+                key,
+                {"total": 0, "machine_pass": 0, "honest_decline": 0, "declined_patchable": 0, "gate_failures": {}},
+            )
             slot["total"] += 1
-            if r.outcome in ("machine_pass", "honest_decline"):
+            if r.outcome in ("machine_pass", "honest_decline", "declined_patchable"):
                 slot[r.outcome] += 1
             for gate, verdict in r.gates.items():
                 if str(verdict).startswith("fail"):
@@ -339,10 +401,17 @@ def summarize(results: list[FixtureResult]) -> dict:
         "per_kind": bucket(lambda r: f"{r.fixture.rule_id}::{r.fixture.kind}" if r.fixture.kind else r.fixture.rule_id),
         "class_a": {
             "machine_pass": sum(1 for r in class_a if r.outcome == "machine_pass"),
+            # Over-declining is a Class A failure mode of its own (#145): the
+            # advisor refused a finding a bounded edit fixes. Counted separately
+            # so it can be watched, never folded into a pass.
+            "declined_patchable": sum(1 for r in class_a if r.outcome == "declined_patchable"),
             "total": len(class_a),
         },
         "class_b": {
             "honest_decline": sum(1 for r in class_b if r.outcome == "honest_decline"),
+            # The failure the decline outcome exists to end — kept visible so a
+            # regression is a number, not an anecdote.
+            "fabricated_patch": sum(1 for r in class_b if r.outcome == "fabricated_patch"),
             "total": len(class_b),
         },
         "aggregate_secondary": {
@@ -435,6 +504,10 @@ def evidence_from_reports(report_paths: list[Path], *, fixtures_digest: str) -> 
         for row in doc.get("results") or []:
             if row.get("fix_class") != "A" or row.get("expected") != "patch":
                 continue
+            # NOTE: a ``declined_patchable`` row deliberately still counts as a
+            # TRIAL below (outcome != machine_pass → no pass) — over-declining a
+            # patchable rule lowers its measured confidence, exactly as a wrong
+            # patch does. Declines are never laundered into passes (#145).
             rule = str(row.get("rule_id") or "")
             outcome = str(row.get("outcome") or "")
             verdict = str(row.get("human_verdict") or "").strip()

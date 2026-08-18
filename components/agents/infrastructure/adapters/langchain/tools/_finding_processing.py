@@ -23,7 +23,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from components.shared_kernel.domain.patch_attestation import is_graded
-from components.shared_kernel.domain.triage import SOURCE_CODE_SECURITY
+from components.shared_kernel.domain.triage import SOURCE_CODE_SECURITY, design_change_brief
 
 logger = logging.getLogger(__name__)
 
@@ -173,7 +173,12 @@ def _handled_with_suggestion(metadata: dict, *, source_type: str = "") -> bool:
         return False
     payload = meta.get("payload") or {}
     if (source_type or "") == SOURCE_CODE_SECURITY:
-        return is_graded(payload)
+        # Two completed shapes (task #145): a GRADED patch, or an explicit
+        # design_change decline carrying its brief. The decline is a finished
+        # outcome with an artifact — re-running the advisor on it would burn an
+        # LLM call to re-derive the same brief and re-comment the card. (A bare
+        # decline WITHOUT a brief still re-attempts, like any no-fix.)
+        return is_graded(payload) or bool(design_change_brief(payload))
     return bool(triage.get("suggested")) or bool(str(payload.get("suggested_fix") or "").strip())
 
 
@@ -509,6 +514,19 @@ def _dispatch_draft_pr_after_commit(
 
     payload = (metadata or {}).get("payload") or {}
     if remediation_target(source_type, payload) != TARGET_REPO:
+        return
+    # Task #145: a design_change decline never opens a code PR — the BRIEF on
+    # the card is the finding's artifact (Henry's rule: the artifact is never
+    # withheld; here it simply isn't a PR). Not a silent skip: the triage write
+    # this dispatch follows already stamped ``payload.draft_pr_skipped`` with
+    # the reason and commented the brief; this guard only removes the enqueue.
+    if design_change_brief(payload):
+        logger.info(
+            "auto draft-PR skipped (design_change — the brief is the artifact) workspace_id=%s task_id=%s agent=%s",
+            workspace_id,
+            task_id,
+            acting_agent,
+        )
         return
     if (payload.get("draft_pr") or {}).get("url"):
         return

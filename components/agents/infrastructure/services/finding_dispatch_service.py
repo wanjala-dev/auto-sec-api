@@ -51,6 +51,7 @@ from components.shared_kernel.domain.triage import (
     ROUTABLE_SOURCE_TYPES,
     TARGET_REPO,
     TriageState,
+    design_change_brief,
     is_routable_to_specialist,
     remediation_target,
 )
@@ -407,6 +408,17 @@ def request_draft_fix(workspace_id, task_id, *, performed_by: str) -> dict:
             "This finding's remediation target is not a connected repository — there is "
             "nothing to open a pull request against. The fix ships as guidance/a snippet "
             "on the finding, refreshed on each triage pass.",
+        )
+    # Task #145: an explicit design_change decline. The brief on the card is the
+    # artifact; re-running the specialist would re-derive the same decline, and
+    # the PR engine would refuse anyway (design_change_no_pr). Typed refusal
+    # BEFORE a specialist run is burned, same shape as ``no_repo_target``.
+    if design_change_brief(meta.get("payload") or {}):
+        raise DraftFixRefused(
+            "design_change_no_pr",
+            "The specialist determined this finding needs a design change — the "
+            "remediation brief on the card is the artifact; there is no code patch "
+            "to open a pull request for.",
         )
     if get_draft_pr(meta).get("url"):
         raise DraftFixRefused("draft_pr_exists", "A draft PR is already open for this finding.")

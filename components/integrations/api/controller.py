@@ -410,6 +410,9 @@ class FindingDraftFixView(APIView):
         # has nothing to open a PR against — its fix ships as a snippet on the
         # finding. Typed refusal, before any specialist run is burned.
         "no_repo_target": status.HTTP_409_CONFLICT,
+        # Task #145: an explicit design_change decline — the remediation brief
+        # on the card is the artifact; there is no code patch to PR.
+        "design_change_no_pr": status.HTTP_409_CONFLICT,
         "draft_pr_exists": status.HTTP_409_CONFLICT,
         "ai_unavailable": status.HTTP_409_CONFLICT,
     }

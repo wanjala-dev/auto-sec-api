@@ -15,6 +15,10 @@ HITL endpoints are thin callers, so no path can skip a gate:
    ever see): at most ``settings.CODE_SECURITY_MAX_OPEN_DRAFT_PRS`` (default 3)
    SAST draft PRs may be open per repo at once — merge rate, not PR count, is
    the metric.
+6. The finding's outcome is patchable (task #145): a ``design_change`` decline's
+   artifact is the remediation brief on the card, and the engine refuses
+   (``design_change_no_pr``) rather than fabricating the patch the specialist
+   declined to write.
 
 Verification is a LABEL, not a gate. A fix the grounded verifier could not
 anchor in the finding's evidence (``needs_human``/``verification: unverified``,
@@ -344,6 +348,7 @@ class OpenDraftPrUseCase:
                 verification_gap=str(existing.get("verification_gap") or ""),
             )
 
+        self._require_patchable_outcome(payload)
         self._require_capability(workspace_id)
         self._require_sast_gates(workspace_id, task, target_repo)
         verification, verification_gap = self._verification_label(task, payload)
@@ -483,6 +488,7 @@ class OpenDraftPrUseCase:
                 pr_url=existing["url"],
             )
 
+        self._require_patchable_outcome(payload)
         self._require_capability(workspace_id)
         self._require_sast_gates(workspace_id, task, target_repo)
         verification, verification_gap = self._verification_label(task, payload)
@@ -892,6 +898,28 @@ class OpenDraftPrUseCase:
         # Deliberately NO needs_human/ungrounded gate: verification is a label
         # (``_verification_label``), never a reason to withhold the artifact.
         return finding
+
+    @staticmethod
+    def _require_patchable_outcome(payload: dict) -> None:
+        """Task #145: a ``design_change`` decline never becomes a code PR.
+
+        The specialist explicitly determined that no local edit can fix this
+        finding and wrote a remediation brief instead — the brief on the card is
+        the finding's artifact. Letting the engine continue would be worse than
+        a wasted call: with an empty ``fix_after`` it falls back to GENERATING a
+        patch, i.e. it would fabricate the exact patch the specialist declined
+        to write. Enforced HERE (as well as at the agents-layer triggers)
+        because every precondition is enforced in the one engine — a thin HITL
+        caller must not be able to skip it.
+        """
+        from components.shared_kernel.domain.triage import design_change_brief
+
+        if design_change_brief(payload):
+            raise DraftPrPreconditionError(
+                "design_change_no_pr",
+                "The specialist determined this finding needs a design change — the "
+                "remediation brief on the card is the artifact; no code PR is opened.",
+            )
 
     def _require_capability(self, workspace_id: str) -> None:
         # #216: the triage agent's capability map belongs to the ``agents`` context —

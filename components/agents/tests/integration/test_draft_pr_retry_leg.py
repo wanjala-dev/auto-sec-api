@@ -153,6 +153,40 @@ class TestSweepReleasesAndRetries:
         assert delay.call_args.kwargs["task_id"] == str(waiting_critical.id)
         assert delay.call_args.kwargs["task_id"] != str(waiting_low.id)
 
+    def test_a_design_change_decline_never_gets_the_freed_slot(self, workspace_factory, team_factory):
+        """Task #145: a design_change card can never have a PR (its artifact is
+        the brief), so handing it the scarce freed slot burns the retry on a
+        guaranteed skip. The slot goes to the next patchable finding — even a
+        lower-severity one."""
+        from components.agents.infrastructure.tasks import draft_pr_retry_tasks as sweep
+
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        _finding(workspace, owner, team, column, pr_url="https://github.com/o/r/pull/1")
+        declined_critical = _finding(workspace, owner, team, column, severity="critical")
+        meta = declined_critical.metadata
+        meta["payload"]["outcome"] = "design_change"
+        meta["payload"]["remediation_brief"] = {
+            "what_is_wrong": "x",
+            "why_not_patchable": "y",
+            "design_change": ["z"],
+        }
+        declined_critical.metadata = meta
+        declined_critical.save(update_fields=["metadata"])
+        waiting_low = _finding(workspace, owner, team, column, severity="low")
+
+        status = SimpleNamespace(allowed=True, merged=False, state="closed")
+        with (
+            mock.patch(
+                f"{self._SWEEP}.get_check_pr_merged_use_case",
+                return_value=SimpleNamespace(execute=lambda **kw: status),
+            ),
+            mock.patch("components.agents.infrastructure.tasks.agent_tasks.auto_draft_pr_for_finding.delay") as delay,
+        ):
+            result = sweep.release_rejected_draft_prs(workspace_id=str(workspace.id))
+
+        assert result["retried"] == 1
+        assert delay.call_args.kwargs["task_id"] == str(waiting_low.id)
+
     def test_a_still_open_pr_is_left_alone(self, workspace_factory, team_factory):
         from components.agents.infrastructure.tasks import draft_pr_retry_tasks as sweep
 

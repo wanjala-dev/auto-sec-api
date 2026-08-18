@@ -36,8 +36,10 @@ import json
 import logging
 from dataclasses import dataclass, replace
 
+from components.code_security.domain.remediation_brief import RemediationBrief
 from components.code_security.domain.remediation_guidance import guidance_for, prompt_block
 from components.knowledge.domain.value_objects.injection_scan import is_injection_suspected
+from components.shared_kernel.domain.triage import OUTCOME_DESIGN_CHANGE, OUTCOME_PATCH
 from components.shared_kernel.utils.untrusted_framing import (
     CODE_CLOSE,
     CODE_OPEN,
@@ -49,7 +51,10 @@ from components.shared_kernel.utils.untrusted_framing import (
 
 logger = logging.getLogger(__name__)
 
-_MAX_TOKENS = 900
+# 900 fit the patch shape; the design-change brief (#145) is a five-field
+# structured object and a truncated response fails JSON parsing outright — which
+# loses the WHOLE artifact, not just its tail. Sized for the larger shape.
+_MAX_TOKENS = 1400
 _TEMPERATURE = 0.1
 # The file window around the flagged span the model grounds on (lines each side).
 _CONTEXT_LINES = 40
@@ -60,17 +65,38 @@ _SYSTEM = (
     "You are a senior application-security engineer fixing ONE static-analysis "
     "finding. You are given the rule id, the flagged file location, the matched "
     "code snippet, and a window of the file's REAL content around the flagged "
-    "lines. Respond with STRICT JSON and nothing else, shaped exactly:\n"
-    '{"likely_cause": "<one sentence: why this code violates the rule>", '
+    "lines. Respond with STRICT JSON and nothing else. There are exactly two "
+    "valid response shapes.\n"
+    "Shape 1 — a bounded local edit fixes this finding:\n"
+    '{"outcome": "patch", '
+    '"likely_cause": "<one sentence: why this code violates the rule>", '
     '"suggested_fix": "<one or two concrete steps naming the rule and the file>", '
     '"fix_before": "<the EXACT offending lines, copied verbatim from the file '
     'window or the snippet>", '
     '"fix_after": "<the corrected replacement for those lines — minimal, same '
     'style, no refactors>", "confidence": "high|medium|low"}\n'
-    "Rules: the fix must change ONLY the flagged region; fix_before MUST be "
+    "Shape 2 — the correct remediation is a DESIGN CHANGE no local edit can "
+    "express (the remediation guidance for this rule class says so, or the fix "
+    "depends on keys/components/config that do not exist at this call site):\n"
+    '{"outcome": "design_change", '
+    '"likely_cause": "<one sentence: why this code violates the rule>", '
+    '"suggested_fix": "<one-sentence summary of the required design change, '
+    'naming the rule and the file>", '
+    '"fix_before": "", "fix_after": "", "confidence": "high|medium|low", '
+    '"remediation_brief": {'
+    '"what_is_wrong": "<what is wrong in the flagged file, named to this finding>", '
+    '"why_not_patchable": "<why a local edit cannot fix it>", '
+    '"design_change": ["<concrete step naming REAL components from this '
+    'codebase — never an invented helper>", "..."], '
+    '"required_inputs": ["<evidence/keys/config the codebase owner must supply>", "..."], '
+    '"acceptance_criteria": ["<how they will know it is fixed>", "..."]}}\n'
+    "Rules: a patch must change ONLY the flagged region; fix_before MUST be "
     "copied verbatim from the provided code (never paraphrased); never invent "
-    "APIs. If the evidence is insufficient for a concrete fix, set confidence to "
-    'low and fix_before/fix_after to "". No preamble, no markdown, JSON only.\n' + UNTRUSTED_FRAMING_RULE
+    "APIs. A design_change response MUST NOT contain any code in "
+    "fix_before/fix_after — inventing a patch for a design-change finding is a "
+    "fabrication. If the evidence is insufficient for either shape, use shape 1 "
+    'with confidence "low" and fix_before/fix_after set to "". No preamble, no '
+    "markdown, JSON only.\n" + UNTRUSTED_FRAMING_RULE
 )
 
 
@@ -92,6 +118,17 @@ class SastFixSuggestion:
     fix_before: str = ""
     fix_after: str = ""
     source_flagged: bool = False
+    #: WHAT KIND of artifact this is (task #145): ``patch`` (fix_before →
+    #: fix_after, the draft-PR path) or ``design_change`` — an explicit decline
+    #: whose artifact is ``remediation_brief``, never a code PR. The parser
+    #: enforces the contract's exclusivity: a design_change carrying patch code
+    #: is a fabrication and is degraded to the old low-confidence no-patch
+    #: shape rather than trusted.
+    outcome: str = OUTCOME_PATCH
+    #: The structured brief backing a ``design_change`` outcome; ``None`` for
+    #: patches. Non-None implies non-empty (RemediationBrief.from_raw refuses
+    #: a brief missing its load-bearing fields).
+    remediation_brief: RemediationBrief | None = None
     #: The model that authored this suggestion, from ``LlmResponse.model`` —
     #: NOT configuration. The per-rule fix-confidence evidence is bound to a
     #: model id, and the binding only means something if the id records what
@@ -109,6 +146,8 @@ class SastFixSuggestion:
             "fix_after": self.fix_after,
             "source_flagged": self.source_flagged,
             "model": self.model,
+            "outcome": self.outcome,
+            "remediation_brief": self.remediation_brief.as_dict() if self.remediation_brief else None,
         }
 
 
@@ -359,15 +398,48 @@ class SastFixAdvisor:
         confidence = str(data.get("confidence") or "").strip().lower()
         if confidence not in ("high", "medium", "low"):
             confidence = "low"
+        # Models sometimes echo the framing delimiters they were shown back
+        # into the snippet they return; strip them so the operator sees code,
+        # not our scaffolding (and so the grounding check compares real code).
+        fix_before = strip_untrusted_delimiters(str(data.get("fix_before") or ""))
+        fix_after = strip_untrusted_delimiters(str(data.get("fix_after") or ""))
+        outcome = str(data.get("outcome") or "").strip().lower() or OUTCOME_PATCH
+
+        if outcome == OUTCOME_DESIGN_CHANGE:
+            # The contract's exclusivity is load-bearing (#145): a design_change
+            # claiming "no local edit can fix this" while ALSO shipping an edit
+            # is a fabrication — the #326 failure with a new label. Same for a
+            # decline with no usable brief: an outcome stamp with nothing behind
+            # it is the bare NEEDS HUMAN chip the artifact rule bans. Both
+            # degrade to the old honest low-confidence no-patch shape (prose
+            # kept, patch and decline claim discarded), and say so in the log.
+            brief = RemediationBrief.from_raw(data.get("remediation_brief"))
+            if fix_before.strip() or fix_after.strip():
+                logger.warning(
+                    "sast_fix_advisor design_change carried a patch — fabrication discarded to low-confidence"
+                )
+            elif brief is None:
+                logger.warning("sast_fix_advisor design_change carried no usable brief — degraded to low-confidence")
+            else:
+                return SastFixSuggestion(
+                    likely_cause=likely_cause,
+                    suggested_fix=suggested_fix,
+                    confidence=confidence,
+                    outcome=OUTCOME_DESIGN_CHANGE,
+                    remediation_brief=brief,
+                )
+            return SastFixSuggestion(
+                likely_cause=likely_cause,
+                suggested_fix=suggested_fix,
+                confidence="low",
+            )
+
         return SastFixSuggestion(
             likely_cause=likely_cause,
             suggested_fix=suggested_fix,
             confidence=confidence,
-            # Models sometimes echo the framing delimiters they were shown back
-            # into the snippet they return; strip them so the operator sees code,
-            # not our scaffolding (and so the grounding check compares real code).
-            fix_before=strip_untrusted_delimiters(str(data.get("fix_before") or "")),
-            fix_after=strip_untrusted_delimiters(str(data.get("fix_after") or "")),
+            fix_before=fix_before,
+            fix_after=fix_after,
         )
 
     @staticmethod
@@ -387,6 +459,15 @@ class SastFixAdvisor:
 
         def _norm(text: str) -> str:
             return " ".join((text or "").split())
+
+        # A design_change decline has no patch BY CONTRACT (the parser enforces
+        # it), so the fix_before-in-file gate has nothing to check and must not
+        # demand low confidence — declining a guidance_only class confidently is
+        # the correct behaviour, not a shrug. Whether the BRIEF engages this
+        # finding's specifics is graded downstream by the deterministic verifier
+        # (rule/file/snippet anchors), which labels rather than withholds.
+        if suggestion.outcome == OUTCOME_DESIGN_CHANGE:
+            return True
 
         before = _norm(suggestion.fix_before)
         if not before:

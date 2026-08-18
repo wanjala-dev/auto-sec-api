@@ -25,6 +25,7 @@ from components.project.application.ports.record_finding_draft_pr_port import ge
 from components.shared_kernel.domain.triage import (
     TARGET_REPO,
     TriageState,
+    design_change_brief,
     is_routable_to_specialist,
     remediation_target,
 )
@@ -68,6 +69,15 @@ class FindingTriageStateView:
     #: A fix exists but a guardrail refused the pull request (scope, throttle,
     #: confidence). Surfaced so a blocked PR is visible, never silent.
     blocked_reason: str = ""
+    #: WHAT KIND of artifact the specialist produced (task #145): ``patch``
+    #: (fix_before → fix_after, the draft-PR path) or ``design_change`` — an
+    #: explicit decline whose artifact is ``remediation_brief``. Empty for
+    #: rows triaged before the outcome contract existed.
+    outcome: str = ""
+    #: The structured brief backing a ``design_change`` outcome — what the HUD
+    #: renders instead of a patch (what_is_wrong / why_not_patchable /
+    #: design_change steps / required_inputs / acceptance_criteria).
+    remediation_brief: dict | None = None
     #: True when the operator's on-demand "draft a fix PR" action is available.
     #: Always False off the ``repo`` target — offering the button for an
     #: unlinked image was a doomed click (the engine refused it as
@@ -121,6 +131,11 @@ def derive_triage_state(
     # image findings get the fix snippet, cloud/service findings get guidance.
     target = remediation_target(source_type, payload)
     pr_target = target == TARGET_REPO
+    # Task #145: an explicit design_change decline — the BRIEF is the artifact,
+    # and the draft-PR affordance would be a doomed click (the request path
+    # refuses it as ``design_change_no_pr``), so it is never offered.
+    brief = design_change_brief(payload)
+    declined = bool(brief)
     base = {
         "specialist": specialist,
         "task_id": task_id,
@@ -129,6 +144,8 @@ def derive_triage_state(
         "remediation_target": target,
         "fix_snippet": str(payload.get("fix_snippet") or ""),
         "fix_snippet_language": str(payload.get("fix_snippet_language") or ""),
+        "outcome": str(payload.get("outcome") or ""),
+        "remediation_brief": brief or None,
     }
 
     if triage.get("status") == "triaged":
@@ -164,7 +181,7 @@ def derive_triage_state(
                     verification="unverified",
                     verification_gap=gap,
                     blocked_reason=str(blocked.get("reason") or ""),
-                    can_draft_fix=pr_target and base["draft_pr"] is None,
+                    can_draft_fix=pr_target and base["draft_pr"] is None and not declined,
                     **base,
                 )
             return FindingTriageStateView(
@@ -173,8 +190,14 @@ def derive_triage_state(
                 confidence=confidence,
                 verification=str(payload.get("verification") or ""),
                 blocked_reason=str(blocked.get("reason") or ""),
-                reason=str(blocked.get("message") or ""),
-                can_draft_fix=pr_target and base["draft_pr"] is None,
+                reason=str(blocked.get("message") or "")
+                or (
+                    "Design change required — no local edit can fix this, so the "
+                    "remediation brief is the artifact; no code PR is opened."
+                    if declined
+                    else ""
+                ),
+                can_draft_fix=pr_target and base["draft_pr"] is None and not declined,
                 **base,
             )
         no_fix_why = str(triage.get("no_fix_reason") or "").strip()
