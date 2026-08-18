@@ -23,11 +23,18 @@ from __future__ import annotations
 
 import logging
 
-from celery import shared_task
+from celery import current_app, shared_task
 
 logger = logging.getLogger(__name__)
 
 _CHUNK = 200
+
+#: The post-merge verification rescan (#118): a cooldown-exempt code-security
+#: scan of the repo a just-merged remediation PR targeted, so the fixed finding
+#: verifies closed now instead of waiting for the next scheduled scan.
+#: Dispatched BY NAME so this context never imports another context's
+#: infrastructure (the same seam shape the webhook uses to reach THIS task).
+_RESCAN_TASK = "code_security.rescan_repo_after_remediation"
 
 
 def _iter_candidate_tasks(workspace_id: str | None):
@@ -81,6 +88,7 @@ def _build_candidate(task, meta: dict, payload: dict, pr_url: str):
     The sign-off artifact + fix code are read off the finding's own metadata — the
     gate re-verifies them, so this is untrusted input the gate independently checks.
     """
+    from components.project.application.ports.record_finding_draft_pr_port import get_draft_pr
     from components.remediation.application.use_cases.reconcile_applied_remediations_use_case import (
         RemediationCandidate,
     )
@@ -102,6 +110,10 @@ def _build_candidate(task, meta: dict, payload: dict, pr_url: str):
         title=(task.title or "")[:200],
         summary=str(payload.get("probable_cause") or ""),
         tags=tuple(str(t) for t in (payload.get("tags") or []) if t),
+        # The repo the draft PR targeted (canonical accessor — same record the
+        # candidate query filtered on) — what the #118 verification rescan runs
+        # against. Records that predate repo stamping yield "" → no rescan.
+        repo=str(get_draft_pr(meta).get("repo") or ""),
     )
 
 
@@ -148,10 +160,19 @@ def reconcile_applied_remediations(workspace_id: str | None = None) -> dict:
         # no-op the summary should not re-count).
         return bool(result.resolved and not result.already_resolved)
 
+    def request_rescan(ws_id, repo: str) -> None:
+        # #118: a NEW resolved transition earns ONE cooldown-exempt verification
+        # rescan of the merged repo. Dispatched BY NAME (never a cross-context
+        # infrastructure import); the rescan task owns its own gates (flag,
+        # consent, one-in-flight). IDs only, and the use case invokes this only
+        # AFTER every resolution write has committed (dispatch-after-commit).
+        current_app.send_task(_RESCAN_TASK, kwargs={"workspace_id": str(ws_id), "repo": repo})
+
     use_case = ReconcileAppliedRemediationsUseCase(
         check_merged=check_merged,
         resolve_finding=resolve_finding,
         capture=capture_remediation_if_gated,
+        request_rescan=request_rescan,
     )
     result = use_case.execute(_candidates(workspace_id))
 
@@ -163,6 +184,7 @@ def reconcile_applied_remediations(workspace_id: str | None = None) -> dict:
         "skipped_unmerged": result.skipped_unmerged,
         "gate_refused": result.gate_refused,
         "errors": result.errors,
+        "rescans_requested": result.rescans_requested,
     }
     logger.info("reconcile_applied_remediations completed workspace_id=%s summary=%s", workspace_id, summary)
     return summary

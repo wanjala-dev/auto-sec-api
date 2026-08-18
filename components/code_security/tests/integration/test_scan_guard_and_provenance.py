@@ -334,3 +334,55 @@ def test_repo_status_read_query_count_is_constant_in_repo_count(workspace_factor
     assert all(r["last_snapshot"] is not None for r in rows)
     assert {r["last_snapshot"]["total_findings"] for r in rows if r["repo"] != _REPO} == {3}
     assert len(four_repos) == len(one_repo)
+
+
+class TestMergeRescanCooldownExemption:
+    """#118: the post-merge verification rescan is the ONE trigger path exempt
+    from the completed-run cooldown — manual stays locked, and the exempt
+    dispatch stamps ``merge_rescan`` provenance."""
+
+    def test_cooldown_blocks_manual_but_not_the_merge_rescan(self, workspace_factory, _dispatch_spy):
+        ws = workspace_factory()
+        _connection(ws)
+        _run(ws, status=ScanRun.Status.COMPLETED, completed_delta=timedelta(minutes=10))
+        use_case = TriggerRepoScanUseCase()
+
+        # The manual path keeps the anti-spam window (the narrowness guarantee)...
+        with pytest.raises(RepoScanRejected) as excinfo:
+            use_case.execute(workspace_id=ws.id, repo=_REPO)
+        assert excinfo.value.code == "scan_cooldown"
+        assert _dispatch_spy == []
+
+        # ...the merge-rescan path dispatches NOW, with its own provenance.
+        result = use_case.execute(workspace_id=ws.id, repo=_REPO, trigger="merge_rescan", bypass_cooldown=True)
+
+        assert result["task_id"] == "task-1"
+        assert len(_dispatch_spy) == 1
+        assert _dispatch_spy[0]["trigger"] == "merge_rescan"
+
+    def test_merge_rescan_still_respects_a_running_scan(self, workspace_factory, _dispatch_spy):
+        """The exemption is cooldown-only: one-in-flight always holds."""
+        ws = workspace_factory()
+        _connection(ws)
+        _run(ws, status=ScanRun.Status.RUNNING)
+
+        with pytest.raises(RepoScanRejected) as excinfo:
+            TriggerRepoScanUseCase().execute(
+                workspace_id=ws.id, repo=_REPO, trigger="merge_rescan", bypass_cooldown=True
+            )
+
+        assert excinfo.value.code == "scan_already_running"
+        assert _dispatch_spy == []
+
+    def test_merge_rescan_never_bypasses_consent(self, workspace_factory, _dispatch_spy):
+        """Cooldown exemption must not widen consent: an un-allowlisted repo is
+        rejected before the budget gate is ever consulted."""
+        ws = workspace_factory()  # no connection at all → nothing is allowlisted
+
+        with pytest.raises(RepoScanRejected) as excinfo:
+            TriggerRepoScanUseCase().execute(
+                workspace_id=ws.id, repo=_REPO, trigger="merge_rescan", bypass_cooldown=True
+            )
+
+        assert excinfo.value.code == "repo_not_allowlisted"
+        assert _dispatch_spy == []

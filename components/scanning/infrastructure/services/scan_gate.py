@@ -26,7 +26,7 @@ Two layers, fail-closed:
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 from django.core.cache import cache
 from django.utils import timezone
@@ -48,11 +48,39 @@ def release_dispatch_lock(*, workspace_id, source: str, target_ref: str) -> None
     cache.delete(dispatch_lock_key(workspace_id, source, target_ref))
 
 
-def check_and_lock_dispatch(*, workspace_id, source: str, target_ref: str, cooldown_seconds: int) -> dict:
+def _lock_predates_completion(lock_key: str, last_completed) -> bool:
+    """True when the held dispatch lock belongs to a run that has ALREADY completed.
+
+    The lock value is the dispatch timestamp. If it is older than the newest
+    completed run's ``completed_at``, the lock is that run's success mirror (kept
+    deliberately so the cache mirrors the DB cooldown) — NOT a queued-but-unstarted
+    dispatch. Anything unparseable/missing is treated as contended (fail closed)."""
+    if last_completed is None or last_completed.completed_at is None:
+        return False
+    raw = cache.get(lock_key)
+    if not raw:
+        return False
+    try:
+        locked_at = datetime.fromisoformat(str(raw))
+    except ValueError:
+        return False
+    if timezone.is_naive(locked_at):
+        locked_at = timezone.make_aware(locked_at, UTC)
+    return locked_at <= last_completed.completed_at
+
+
+def check_and_lock_dispatch(
+    *, workspace_id, source: str, target_ref: str, cooldown_seconds: int, bypass_cooldown: bool = False
+) -> dict:
     """Gate one dispatch. Returns ``{"allowed": bool, "reason", "retry_after", "last_scanned_at"}``.
 
     On ``allowed=True`` the dispatch lock is HELD — the caller must proceed to
     ``dispatch_scan`` (or call ``release_dispatch_lock`` if it aborts).
+
+    ``bypass_cooldown`` (#118 — the post-merge verification rescan) skips ONLY the
+    completed-run cooldown window; the one-in-flight invariant and the queued-race
+    lock still hold. It is deliberately narrow: the sole caller is the
+    merge-triggered rescan task — scheduled and manual triggers never pass it.
     """
     from infrastructure.persistence.scanning.models import ScanRun
 
@@ -71,7 +99,7 @@ def check_and_lock_dispatch(*, workspace_id, source: str, target_ref: str, coold
         return {"allowed": False, "reason": "running", "retry_after": None, "last_scanned_at": None}
 
     last_completed = runs.filter(status=ScanRun.Status.COMPLETED).order_by("-completed_at").first()
-    if last_completed is not None and last_completed.completed_at is not None:
+    if last_completed is not None and last_completed.completed_at is not None and not bypass_cooldown:
         elapsed = (now - last_completed.completed_at).total_seconds()
         if elapsed < cooldown_seconds:
             return {
@@ -82,10 +110,18 @@ def check_and_lock_dispatch(*, workspace_id, source: str, target_ref: str, coold
             }
 
     # Atomic race-closer for the queued-not-yet-started window. add() returns
-    # False when the key already exists → another dispatch is already queued.
-    acquired = cache.add(dispatch_lock_key(workspace_id, source, target_ref), now.isoformat(), cooldown_seconds)
+    # False when the key already exists → another dispatch is already queued —
+    # OR (success path) the previous completed run's lock is still mirroring the
+    # DB cooldown. A cooldown-bypassing caller may take over ONLY the latter:
+    # a lock provably older than the newest completion is cooldown residue, while
+    # a younger one is a genuinely queued dispatch and still rejects.
+    lock_key = dispatch_lock_key(workspace_id, source, target_ref)
+    acquired = cache.add(lock_key, now.isoformat(), cooldown_seconds)
     if not acquired:
-        return {"allowed": False, "reason": "running", "retry_after": None, "last_scanned_at": None}
+        if bypass_cooldown and _lock_predates_completion(lock_key, last_completed):
+            cache.set(lock_key, now.isoformat(), cooldown_seconds)
+        else:
+            return {"allowed": False, "reason": "running", "retry_after": None, "last_scanned_at": None}
     return {
         "allowed": True,
         "reason": "",

@@ -125,3 +125,125 @@ class TestResilience:
         assert captured == ["1", "3"]  # 2 errored but 1 and 3 still processed
         assert result.errors == 1
         assert result.captured == 2
+
+
+class TestRescanRequests:
+    """#118: a merged remediation asks for ONE cooldown-exempt rescan per
+    (workspace, repo) — only on the NEW resolved transition. Unmerged or
+    already-stamped candidates request nothing, a candidate without a repo
+    requests nothing, and a dispatch failure never sinks the batch."""
+
+    def _uc(self, recorder, rescans):
+        return ReconcileAppliedRemediationsUseCase(
+            check_merged=recorder.check_merged,
+            resolve_finding=recorder.resolve_finding,
+            capture=recorder.capture,
+            request_rescan=lambda ws_id, repo: rescans.append((ws_id, repo)),
+        )
+
+    def test_merged_and_newly_resolved_requests_exactly_one_rescan(self):
+        rec = _Recorder(merged=True, capture_returns=object())
+        rescans: list[tuple] = []
+        ws = uuid4()
+        candidate = _candidate(workspace_id=ws, repo="acme/app")
+
+        result = self._uc(rec, rescans).execute([candidate])
+
+        assert rescans == [(ws, "acme/app")]
+        assert result.rescans_requested == 1
+
+    def test_two_findings_in_the_same_repo_request_one_rescan(self):
+        rec = _Recorder(merged=True, capture_returns=object())
+        rescans: list[tuple] = []
+        ws = uuid4()
+
+        result = self._uc(rec, rescans).execute(
+            [
+                _candidate(workspace_id=ws, finding_task_id="1", repo="acme/app"),
+                _candidate(workspace_id=ws, finding_task_id="2", repo="acme/app"),
+            ]
+        )
+
+        assert rescans == [(ws, "acme/app")]  # deduped per (workspace, repo)
+        assert result.rescans_requested == 1
+
+    def test_distinct_repos_each_get_a_rescan(self):
+        rec = _Recorder(merged=True, capture_returns=object())
+        rescans: list[tuple] = []
+        ws = uuid4()
+
+        result = self._uc(rec, rescans).execute(
+            [
+                _candidate(workspace_id=ws, finding_task_id="1", repo="acme/app"),
+                _candidate(workspace_id=ws, finding_task_id="2", repo="acme/infra"),
+            ]
+        )
+
+        assert sorted(r for _, r in rescans) == ["acme/app", "acme/infra"]
+        assert result.rescans_requested == 2
+
+    def test_unmerged_requests_no_rescan(self):
+        rec = _Recorder(merged=False, capture_returns=object())
+        rescans: list[tuple] = []
+
+        result = self._uc(rec, rescans).execute([_candidate(repo="acme/app")])
+
+        assert rescans == []
+        assert result.rescans_requested == 0
+
+    def test_already_stamped_candidate_requests_no_rescan(self):
+        """The loop-guard: a candidate whose resolve is a no-op (already resolved —
+        e.g. a re-delivered webhook raced the beat) must NOT re-fire a rescan."""
+        rec = _Recorder(merged=True, capture_returns=object())
+        rec.resolve_finding = lambda ws_id, task_id, reason, resolved_by: False  # no NEW transition
+        rescans: list[tuple] = []
+
+        result = self._uc(rec, rescans).execute([_candidate(repo="acme/app")])
+
+        assert rescans == []
+        assert result.rescans_requested == 0
+
+    def test_candidate_without_a_repo_requests_no_rescan(self):
+        rec = _Recorder(merged=True, capture_returns=object())
+        rescans: list[tuple] = []
+
+        result = self._uc(rec, rescans).execute([_candidate(repo="")])
+
+        assert rescans == []
+        assert result.rescans_requested == 0
+
+    def test_no_request_rescan_wired_is_a_no_op(self):
+        rec = _Recorder(merged=True, capture_returns=object())
+
+        result = _run(rec, [_candidate(repo="acme/app")])  # default wiring: no rescan seam
+
+        assert result.rescans_requested == 0
+        assert result.captured == 1  # everything else unaffected
+
+    def test_a_failing_rescan_dispatch_never_sinks_the_batch(self):
+        rec = _Recorder(merged=True, capture_returns=object())
+        ws = uuid4()
+        attempted: list[str] = []
+
+        def request_rescan(ws_id, repo):
+            attempted.append(repo)
+            if repo == "acme/broken":
+                raise RuntimeError("broker down")
+
+        uc = ReconcileAppliedRemediationsUseCase(
+            check_merged=rec.check_merged,
+            resolve_finding=rec.resolve_finding,
+            capture=rec.capture,
+            request_rescan=request_rescan,
+        )
+        result = uc.execute(
+            [
+                _candidate(workspace_id=ws, finding_task_id="1", repo="acme/broken"),
+                _candidate(workspace_id=ws, finding_task_id="2", repo="acme/app"),
+            ]
+        )
+
+        assert attempted == ["acme/broken", "acme/app"]  # the failure didn't stop the rest
+        assert result.rescans_requested == 1  # only the successful dispatch is counted
+        assert result.captured == 2  # candidate processing itself was untouched
+        assert result.errors == 0  # a dispatch failure is not a candidate failure

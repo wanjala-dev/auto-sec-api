@@ -52,6 +52,10 @@ class RemediationCandidate:
     title: str = ""
     summary: str = ""
     tags: tuple[str, ...] = field(default_factory=tuple)
+    #: The "owner/repo" the draft PR targeted (off the finding's draft-PR record) —
+    #: what the post-merge verification rescan (#118) is requested against. Empty
+    #: when the record predates repo stamping; no rescan is requested then.
+    repo: str = ""
 
 
 @dataclass(frozen=True)
@@ -63,6 +67,9 @@ class ReconcileResult:
     skipped_unmerged: int = 0
     gate_refused: int = 0
     errors: int = 0
+    #: Post-merge verification rescans requested (#118) — one per (workspace, repo)
+    #: that saw a NEW resolved transition this run.
+    rescans_requested: int = 0
 
 
 class ReconcileAppliedRemediationsUseCase:
@@ -72,16 +79,26 @@ class ReconcileAppliedRemediationsUseCase:
         check_merged: Callable[[UUID, str], bool],
         resolve_finding: Callable[[UUID, str, str, str], bool],
         capture: Callable[..., object | None],
+        request_rescan: Callable[[UUID, str], None] | None = None,
     ) -> None:
         # check_merged: (workspace_id, pr_url) -> bool  (integrations app surface)
         # resolve_finding: (workspace_id, task_id, reason, resolved_by) -> resolved?  (project app surface)
         # capture: capture_remediation_if_gated  (remediation gated capture)
+        # request_rescan: (workspace_id, repo) -> None — the #118 verification-rescan
+        #   seam (the driving task wires it to a by-name Celery dispatch of the
+        #   code_security rescan task). Optional: callers that only reconcile
+        #   (tests, ops one-offs) omit it and nothing is requested.
         self._check_merged = check_merged
         self._resolve_finding = resolve_finding
         self._capture = capture
+        self._request_rescan = request_rescan
 
     def execute(self, candidates: Iterable[RemediationCandidate]) -> ReconcileResult:
         scanned = merged = resolved = captured = skipped = refused = errors = 0
+        # (workspace_id, repo) pairs that saw a NEW resolved transition this run —
+        # each gets ONE verification rescan request after the loop (deduped, and
+        # dispatched only once every resolution write has committed).
+        rescan_targets: dict[tuple[UUID, str], None] = {}
 
         for candidate in candidates:
             scanned += 1
@@ -101,6 +118,12 @@ class ReconcileAppliedRemediationsUseCase:
                 )
                 if did_resolve:
                     resolved += 1
+                    # A NEW resolved transition on a repo-carrying finding earns ONE
+                    # verification rescan (#118). Gating on the transition (not the
+                    # merge) is the loop-guard: an already-stamped candidate — a
+                    # re-run, a webhook racing the beat — never re-fires a rescan.
+                    if candidate.repo:
+                        rescan_targets.setdefault((candidate.workspace_id, candidate.repo), None)
 
                 # (b) Offer the fix to the entry-gate. It independently re-verifies
                 # all three conditions; if sign-off isn't approved it still refuses
@@ -133,6 +156,24 @@ class ReconcileAppliedRemediationsUseCase:
                     candidate.finding_task_id,
                 )
 
+        # Request the verification rescans AFTER the candidate loop: every
+        # resolution write has committed by now (each goes through the project
+        # surface's own transaction), the set is deduped per (workspace, repo),
+        # and one failed dispatch never blocks the others — nor the batch.
+        rescans = 0
+        for workspace_id, repo in rescan_targets:
+            if self._request_rescan is None:
+                break
+            try:
+                self._request_rescan(workspace_id, repo)
+                rescans += 1
+            except Exception:
+                logger.exception(
+                    "remediation_rescan_request_failed workspace_id=%s repo=%s",
+                    workspace_id,
+                    repo,
+                )
+
         result = ReconcileResult(
             scanned=scanned,
             merged=merged,
@@ -141,10 +182,11 @@ class ReconcileAppliedRemediationsUseCase:
             skipped_unmerged=skipped,
             gate_refused=refused,
             errors=errors,
+            rescans_requested=rescans,
         )
         logger.info(
             "remediation_reconcile_summary scanned=%s merged=%s resolved=%s captured=%s "
-            "skipped_unmerged=%s gate_refused=%s errors=%s",
+            "skipped_unmerged=%s gate_refused=%s errors=%s rescans_requested=%s",
             scanned,
             merged,
             resolved,
@@ -152,5 +194,6 @@ class ReconcileAppliedRemediationsUseCase:
             skipped,
             refused,
             errors,
+            rescans,
         )
         return result

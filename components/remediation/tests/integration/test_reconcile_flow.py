@@ -14,6 +14,10 @@ Proves the load-bearing contract of Phase 4a:
 
 from __future__ import annotations
 
+import dataclasses
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from components.project.application.ports.resolve_finding_task_port import ResolveFindingTaskCommand
@@ -85,8 +89,11 @@ def _finding_task(workspace, owner, team, column, *, source_type="ai.log_watch")
     )
 
 
-def _wire(*, merged: bool, approved: bool):
-    """Reconciler with faked merge-check + faked sign-off; real resolve + real capture."""
+def _wire(*, merged: bool, approved: bool, rescans: list | None = None):
+    """Reconciler with faked merge-check + faked sign-off; real resolve + real capture.
+
+    ``rescans`` (optional) records the #118 verification-rescan requests the
+    reconciler makes — ``(workspace_id, repo)`` per NEW resolved transition."""
     resolve_uc = ProjectProvider.build_resolve_finding_task_use_case()
     service = build_remediation_service(
         store=DjangoRemediationEntryRepository(),
@@ -110,8 +117,12 @@ def _wire(*, merged: bool, approved: bool):
     def capture(**kwargs):
         return capture_remediation_if_gated(service=service, **kwargs)
 
+    request_rescan = None if rescans is None else (lambda ws_id, repo: rescans.append((ws_id, repo)))
     return ReconcileAppliedRemediationsUseCase(
-        check_merged=check_merged, resolve_finding=resolve_finding, capture=capture
+        check_merged=check_merged,
+        resolve_finding=resolve_finding,
+        capture=capture,
+        request_rescan=request_rescan,
     )
 
 
@@ -247,3 +258,101 @@ class TestCandidateScanIsSourceTypeAgnostic:
             metadata={"triage": {"status": "triaged"}, "payload": {"fingerprint": "fp"}},
         )
         assert list(_candidates(str(ws.id))) == []
+
+
+class TestMergeTriggersVerificationRescan:
+    """#118: a NEW resolved transition earns ONE cooldown-exempt verification
+    rescan request for the merged repo — and a re-run (the finding already
+    stamped resolved) never re-fires it."""
+
+    def test_merged_requests_one_rescan_for_the_pr_repo(self, workspace_factory, team_factory):
+        ws, owner, team, column = _board(workspace_factory, team_factory)
+        task = _finding_task(ws, owner, team, column)
+        rescans: list[tuple] = []
+
+        result = _wire(merged=True, approved=True, rescans=rescans).execute(
+            [dataclasses.replace(_candidate(ws, task), repo="acme/repo")]
+        )
+
+        assert result.resolved == 1
+        assert rescans == [(ws.id, "acme/repo")]
+        assert result.rescans_requested == 1
+
+    def test_rerun_does_not_refire_the_rescan(self, workspace_factory, team_factory):
+        """The loop-guard at the persistence level: the second pass finds the
+        finding already resolved (no NEW transition) → no rescan request. A
+        rescan can therefore never chain into another rescan — only a merge
+        observation that newly resolves a finding fires one."""
+        ws, owner, team, column = _board(workspace_factory, team_factory)
+        task = _finding_task(ws, owner, team, column)
+        rescans: list[tuple] = []
+        reconciler = _wire(merged=True, approved=True, rescans=rescans)
+        candidate = dataclasses.replace(_candidate(ws, task), repo="acme/repo")
+
+        reconciler.execute([candidate])
+        second = reconciler.execute([candidate])
+
+        assert rescans == [(ws.id, "acme/repo")]  # exactly once, from the FIRST pass
+        assert second.rescans_requested == 0
+
+    def test_task_wiring_dispatches_the_rescan_by_name(self, workspace_factory, team_factory):
+        """Drive the REAL Celery task body (real candidate query off the board,
+        real resolve through the project surface) with only the merge check and
+        the broker faked: the rescan goes out BY NAME with IDs-only kwargs."""
+        from components.remediation.infrastructure.tasks.reconcile_remediations_tasks import (
+            reconcile_applied_remediations,
+        )
+
+        ws, owner, team, column = _board(workspace_factory, team_factory)
+        _finding_task(ws, owner, team, column)
+
+        merge_check = SimpleNamespace(execute=lambda **kwargs: SimpleNamespace(merged=True))
+        fake_app = MagicMock()
+        with (
+            patch(
+                "components.integrations.application.providers.vcs_provider.get_check_pr_merged_use_case",
+                return_value=merge_check,
+            ),
+            patch(
+                "components.remediation.infrastructure.tasks.reconcile_remediations_tasks.current_app",
+                fake_app,
+            ),
+        ):
+            summary = reconcile_applied_remediations(str(ws.id))
+
+        assert summary["resolved"] == 1
+        assert summary["rescans_requested"] == 1
+        fake_app.send_task.assert_called_once_with(
+            "code_security.rescan_repo_after_remediation",
+            kwargs={"workspace_id": str(ws.id), "repo": "acme/repo"},
+        )
+
+    def test_task_rerun_dispatches_nothing(self, workspace_factory, team_factory):
+        """Idempotency at the task level: after the first reconcile resolved the
+        finding, a re-run yields no candidates (the resolved screen) → no
+        merge-check, no rescan dispatch."""
+        from components.remediation.infrastructure.tasks.reconcile_remediations_tasks import (
+            reconcile_applied_remediations,
+        )
+
+        ws, owner, team, column = _board(workspace_factory, team_factory)
+        _finding_task(ws, owner, team, column)
+
+        merge_check = SimpleNamespace(execute=lambda **kwargs: SimpleNamespace(merged=True))
+        fake_app = MagicMock()
+        with (
+            patch(
+                "components.integrations.application.providers.vcs_provider.get_check_pr_merged_use_case",
+                return_value=merge_check,
+            ),
+            patch(
+                "components.remediation.infrastructure.tasks.reconcile_remediations_tasks.current_app",
+                fake_app,
+            ),
+        ):
+            reconcile_applied_remediations(str(ws.id))
+            second = reconcile_applied_remediations(str(ws.id))
+
+        assert second["scanned"] == 0  # the resolved finding never re-enters the sweep
+        assert second["rescans_requested"] == 0
+        assert fake_app.send_task.call_count == 1  # only the first pass dispatched
