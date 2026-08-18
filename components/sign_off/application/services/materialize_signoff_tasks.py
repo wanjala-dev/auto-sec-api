@@ -12,12 +12,13 @@ adapter) stays the single source of truth; the task is a *projection*
 kept in sync by this materializer:
 
 * **Upsert** — for every currently-pending item, create (idempotently,
-  via ``persist_finding_as_task``) a card on the "Suggested" column,
+  via ``persist_finding_as_task``) a card on the canonical "Todo" intake lane,
   assigned to ``workspace.workspace_owner``.
 * **Reconcile** — for every existing ``ai.sign_off_pending`` task whose
   artifact is NO LONGER pending, move it to the terminal column that
-  matches the artifact's final review state (approved → "Accepted",
-  rejected → "Dismissed") and stamp the task status. Idempotent: a task
+  matches the artifact's final review state (approved → "Complete",
+  rejected → "Canceled"; ADR 0030 D2 canonical lanes) and stamp the task
+  status. Idempotent: a task
   already in the right column is left untouched.
 
 Approve/Reject already exist (Phase-6a ``SignOffQueueService`` + the
@@ -139,7 +140,7 @@ def materialize_workspace_signoff_tasks(
     ``reconciled_dismissed``, and ``reconcile_skipped``.
     """
     from components.agents.application.facades.ai_teammate_facade import (
-        SUGGESTED,
+        TODO,
         ensure_agents_board,
     )
     from components.agents.application.handlers.specialist_persistence_service import (
@@ -160,14 +161,14 @@ def materialize_workspace_signoff_tasks(
         }
 
     board = ensure_agents_board(workspace)
-    suggested_column = board.column(SUGGESTED)
+    intake_column = board.column(TODO)
     ai_user_id = str(board.team.created_by_id)
     owner_id = str(workspace.workspace_owner_id) if workspace.workspace_owner_id else None
 
     pending = list_pending_sign_offs(str(workspace_id), registry=registry)
     pending_refs: set[tuple[str, str]] = {(item.artifact_type, str(item.artifact_id)) for item in pending}
 
-    # ── Upsert: pending item → Suggested-column card ────────────────────
+    # ── Upsert: pending item → Todo-lane (intake) card ──────────────────
     created = 0
     for item in pending:
         title, summary = _finding_copy(item)
@@ -182,7 +183,7 @@ def materialize_workspace_signoff_tasks(
         try:
             task_id = persist_finding_as_task(
                 workspace=workspace,
-                suggested_column=suggested_column,
+                intake_column=intake_column,
                 ai_user_id=ai_user_id,
                 title=title,
                 summary=summary,
@@ -246,21 +247,21 @@ def _reconcile_terminal_tasks(
     column matching the artifact's final review state. Idempotent.
 
     The move + status stamp go through ``project``'s ``UpdateTaskUseCase`` —
-    a same-board column move (Suggested → Accepted/Dismissed on this workspace's
+    a same-board column move (Todo → Complete/Canceled on this workspace's
     own Agents board) plus the terminal status — so the sign-off service never
     writes ``project.Task`` directly. Existing tasks are read through the
     sign-off board port. The AI user (the Agents team's creator, ``ai_user_id``)
     is the actor, so the use case's membership check passes.
     """
     from components.agents.application.facades.ai_teammate_facade import (
-        ACCEPTED,
-        DISMISSED,
+        CANCELED,
+        COMPLETE,
     )
     from components.project.application.ports.update_task_port import UpdateTaskCommand
     from components.project.application.providers.project_provider import ProjectProvider
 
-    accepted_col = board.column(ACCEPTED)
-    dismissed_col = board.column(DISMISSED)
+    accepted_col = board.column(COMPLETE)
+    dismissed_col = board.column(CANCELED)
     update_task = ProjectProvider.build_update_task_use_case()
 
     reconciled_accepted = 0

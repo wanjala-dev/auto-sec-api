@@ -32,7 +32,7 @@ def _board(workspace_factory, team_factory):
 def _file_finding(workspace, owner, column, *, impact_score, key, service="web"):
     return persist_finding_as_task(
         workspace=workspace,
-        suggested_column=column,
+        intake_column=column,
         ai_user_id=str(owner.id),
         title="[FINDING] web · Internal Server Error",
         summary="500s spiking on web",

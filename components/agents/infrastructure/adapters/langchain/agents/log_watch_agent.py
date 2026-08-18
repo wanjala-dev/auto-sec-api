@@ -7,7 +7,7 @@ The SOC log pipeline has three cleanly separated stages:
    the POC rule) and files evidence-bearing findings via the ``AIActionCreated``
    path (``persist_finding_as_task``), never a direct ``Task.objects.create``.
 2. **Triage** — the triage agent, dispatched by the detector cycle, attaches the
-   grounded fix, comments, and moves the card into the Triage column.
+   grounded fix, comments, and moves the card into the In Progress lane.
 3. **This agent** — the on-demand, operator-facing surface: surface recent
    findings and propose a fix for a specific error line. It does NOT file
    findings (that would bypass the AIAction path — §5.7). The former

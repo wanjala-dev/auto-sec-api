@@ -228,7 +228,7 @@ def run_detector_cycle(
         persist_finding_as_task,
     )
     from components.agents.infrastructure.services.agents_board_service import (
-        SUGGESTED,
+        TODO,
     )
 
     teammate_profile, ai_user = ensure_ai_identity(workspace)
@@ -243,7 +243,7 @@ def run_detector_cycle(
     teammate = teammate_profile
 
     board = ensure_agents_board(workspace)
-    suggested_column = board.column(SUGGESTED)
+    intake_column = board.column(TODO)
     ai_user_id = str(board.team.created_by_id)
 
     detectors = _build_detectors(detector_entries)
@@ -321,7 +321,7 @@ def run_detector_cycle(
                 try:
                     task_id = persist_finding_as_task(
                         workspace=workspace,
-                        suggested_column=suggested_column,
+                        intake_column=intake_column,
                         ai_user_id=ai_user_id,
                         title=result.title,
                         summary=result.summary,
@@ -416,7 +416,7 @@ def run_detector_cycle(
                 payload = item.get("payload") or {}
                 task_id = persist_finding_as_task(
                     workspace=workspace,
-                    suggested_column=suggested_column,
+                    intake_column=intake_column,
                     ai_user_id=ai_user_id,
                     title=item.get("title") or f"{alias} update",
                     summary=item.get("summary") or "",

@@ -28,9 +28,9 @@ class OrmCreateTaskRepository(CreateTaskPort):
 
         # ── Resolve column ──────────────────────────────────────────
         try:
-            column = Column.objects.select_related("team", "workspace").get(id=command.column_id)
+            column = Column.objects.select_related("team", "workspace", "project").get(id=command.column_id)
         except Column.DoesNotExist:
-            raise ColumnNotFoundError("Invalid column ID.")
+            raise ColumnNotFoundError("Invalid column ID.") from None
 
         team = column.team
         if team.status != "active":
@@ -47,17 +47,25 @@ class OrmCreateTaskRepository(CreateTaskPort):
             user_is_workspace_admin_or_owner,
         )
 
-        if not user_is_workspace_admin_or_owner(user, column.workspace):
-            if not team.members.filter(id=user.id).exists():
-                raise TeamMembershipRequiredError("You must be a member of this team.")
+        if not user_is_workspace_admin_or_owner(user, column.workspace) and not team.members.filter(
+            id=user.id
+        ).exists():
+            raise TeamMembershipRequiredError("You must be a member of this team.")
 
         # ── Resolve project (optional) ──────────────────────────────
-        project = None
+        # No explicit project: a task created into a PROJECT column belongs
+        # to that column's project (ADR 0030 P3 / MoveTaskToBoardView
+        # semantics — team/project/column stay consistent by construction).
+        # Before this, an AI finding born in a project lane carried
+        # project=NULL, so every project-filtered read missed it.
+        project = column.project
         if command.project_id:
             try:
                 project = Project.objects.get(pk=command.project_id)
             except Project.DoesNotExist:
-                raise TaskValidationError("Invalid project ID or the project does not belong to your active team.")
+                raise TaskValidationError(
+                    "Invalid project ID or the project does not belong to your active team."
+                ) from None
             if project.team_id != team.id:
                 raise TaskValidationError("Project does not belong to the specified team.")
             if project.workspace_id != column.workspace_id:
@@ -69,7 +77,7 @@ class OrmCreateTaskRepository(CreateTaskPort):
             try:
                 grant = Grant.objects.get(pk=command.grant_id)
             except Grant.DoesNotExist:
-                raise TaskValidationError("Invalid grant ID.")
+                raise TaskValidationError("Invalid grant ID.") from None
             if grant.workspace_id and column.workspace_id and grant.workspace_id != column.workspace_id:
                 raise TaskValidationError("Grant does not belong to the selected workspace.")
 
@@ -162,7 +170,9 @@ class OrmCreateTaskRepository(CreateTaskPort):
                 task.assigned_to.add(*newly_assigned)
 
         # ── Emit workflow event ─────────────────────────────────────
-        from components.workflow.application.providers.workflow_dispatcher_provider import get_workflow_dispatcher_provider
+        from components.workflow.application.providers.workflow_dispatcher_provider import (
+            get_workflow_dispatcher_provider,
+        )
 
         transaction.on_commit(
             lambda: get_workflow_dispatcher_provider().emit_workflow_event(

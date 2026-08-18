@@ -17,12 +17,14 @@ class DomainEvent:
 
 @dataclass(frozen=True, kw_only=True)
 class TaskAcceptedFromBoard(DomainEvent):
-    """A Kanban task was moved into an "Accepted" column.
+    """A Kanban task was accepted from the board.
 
     Phase 4 of the Agents-as-Teammates migration
     (``docs/plans/AGENTS_AS_TEAMMATES_MIGRATION.md``). When a user
-    drags an AI-finding task into "Accepted" on the agent team board,
-    the ``ai-findings-accepted`` workflow's ``publish_event`` node
+    moves an AI-finding task into the canonical "Complete" lane on the
+    AI Findings board (human accept — ADR 0030 D2; the retired
+    "Accepted" lane pre-dates the P3 cutover), the
+    ``ai-findings-accepted`` workflow's ``publish_event`` node
     fires this event. Phase 5 specialist agents subscribe to it to
     take follow-up action (e.g. budget specialist queues a budget
     review, sponsorship specialist drafts a check-in message).

@@ -104,7 +104,15 @@ class TestBoardViewFilterVocabulary:
     def test_the_vocabulary_is_exactly_the_adr_set(self):
         """Pin the closed set — extending it must edit this test, i.e. be a
         deliberate reviewed change (ADR 0030: "no query language")."""
-        assert {"project", "source_type", "min_severity", "assignee", "tag"} == BOARD_VIEW_FILTER_KEYS
+        assert {
+            "project",
+            "source_type",
+            "source_type_prefix",
+            "category",
+            "min_severity",
+            "assignee",
+            "tag",
+        } == BOARD_VIEW_FILTER_KEYS
 
     def test_slug_is_unique_per_team_and_workspace(self, workspace_factory, team_factory):
         workspace, team = _team(workspace_factory, team_factory)

@@ -27,6 +27,14 @@ from components.shared_kernel.domain.triage import SOURCE_CODE_SECURITY
 
 logger = logging.getLogger(__name__)
 
+#: The canonical lane a specialist-handled card moves to (ADR 0030 D2): a
+#: specialist acting = "In Progress" on the finding's OWN board — the AI state
+#: (triaged / optimizing / fix-ready / needs-human) is the
+#: ``metadata.triage`` chip, never a bespoke lane. ONE constant shared by the
+#: triage / optimization / code-security tools so the acting lane cannot
+#: fork per specialist again (dry-reuse.md).
+ACTING_COLUMN_TITLE = "In Progress"
+
 
 def _stamp_patch_attestation(payload: dict, *, acting_agent: str, graded: bool) -> None:
     """Record — or explicitly clear — the proof that this patch was graded.
@@ -81,33 +89,45 @@ def _resolve_user(agent):
         return ws.workspace_owner if ws else None
 
 
-def ensure_board_column(team, workspace, creator, title):
+def ensure_board_column(team, workspace, creator, title, *, project_id=None):
     """Return the board's column with ``title``, creating it once.
 
+    ``project_id=None`` addresses the team board (project-less columns);
+    a project id addresses that project's board — ADR 0030 P3 moved the
+    specialist move onto the finding's OWN project board (the AI Findings
+    canonical lanes), so the destination column shares the task's
+    team + project by construction.
+
     A NEW column lands AFTER every existing lane: ``max(order) + 1`` over the
-    team's project-less columns. (The previous ``first().order + 1`` took the
+    board's sibling columns. (The previous ``first().order + 1`` took the
     MINIMUM, so any auto-created column collided with an existing lane's order
     — Triage landing on Todo's slot on a default board; QA report 2026-08-16,
     F8.) The max is computed under ``select_for_update`` on the sibling rows,
     in the same transaction as the create, so two concurrent creates of
     DIFFERENT titles can't mint the same slot. For the SAME title,
-    ``get_or_create`` + the DB partial-unique constraint on
-    ``(team, workspace, title) where project is null`` stay the guard — the
-    loser hits the constraint and re-reads.
+    ``get_or_create`` (plus, on team boards, the DB partial-unique constraint
+    on ``(team, workspace, title) where project is null``) stays the guard —
+    the loser hits the constraint and re-reads. Soft-deleted columns are
+    never adopted (``is_deleted=False`` in the lookup) — a lane the P3
+    migration retired stays retired.
     """
     from django.db import transaction
     from django.db.models import Max
 
     from infrastructure.persistence.project.models import Column
 
+    team_id = getattr(team, "id", team)  # accepts an instance or a pk
     with transaction.atomic():
-        siblings = Column.objects.select_for_update().filter(team=team, workspace=workspace, project__isnull=True)
+        siblings = Column.objects.select_for_update().filter(
+            team_id=team_id, workspace=workspace, project_id=project_id
+        )
         max_order = siblings.aggregate(max_order=Max("order"))["max_order"]
         column, _ = Column.objects.get_or_create(
-            team=team,
+            team_id=team_id,
             workspace=workspace,
-            project=None,
+            project_id=project_id,
             title=title,
+            is_deleted=False,
             defaults={"order": (max_order or 0) + 1, "created_by": creator},
         )
     return column
@@ -227,7 +247,7 @@ def process_pending_finding(
 
     task = (
         Task.objects.filter(id=task_id, workspace_id=agent.workspace_id, source_type=source_type)
-        .select_related("team", "column")
+        .select_related("team", "column", "project")
         .first()
     )
     if task is None:
@@ -359,9 +379,27 @@ def process_pending_finding(
 
         moved = False
         if task.team is not None and workspace is not None:
-            col = ensure_board_column(task.team, workspace, creator, column_title)
+            # The destination lane lives on the finding's OWN board — its
+            # project's board when it has one (the AI Findings canonical
+            # lanes), the team board otherwise. When the task carries a
+            # project, the project's team wins over a (possibly stale)
+            # ``task.team`` so the resolved column is internally consistent.
+            dest_team_id = task.project.team_id if task.project is not None else task.team_id
+            col = ensure_board_column(
+                dest_team_id,
+                workspace,
+                creator,
+                column_title,
+                project_id=task.project_id,
+            )
             if col and locked.column_id != col.id:
+                # MoveTaskToBoardView semantics (QA F1): the destination board
+                # is the COLUMN's own team + project — deriving all three FKs
+                # from the destination column makes the stale-project
+                # inconsistency impossible by construction, not by discipline.
                 locked.column = col
+                locked.team_id = col.team_id
+                locked.project_id = col.project_id
                 moved = True
                 actions.append(f"moved to {column_title} column")
 
@@ -400,7 +438,12 @@ def process_pending_finding(
         locked.metadata = lmeta
         update_fields = ["metadata", "updated_at"]
         if moved:
-            update_fields.append("column")
+            # team/project ride along with column (MoveTaskToBoardView
+            # semantics). The workflow_status mirror is handled by the P1
+            # sync bridge: its pre_save resolves the mirror because "column"
+            # is in update_fields, and its post_save persists the mirror this
+            # partial save would otherwise drop.
+            update_fields.extend(["column", "team", "project"])
         locked.save(update_fields=update_fields)
 
         # THE HAND-OFF. A suggested fix is not an artifact — the artifact is the

@@ -21,11 +21,11 @@ def _board(workspace):
         ensure_agents_board,
     )
     from components.agents.infrastructure.services.agents_board_service import (
-        SUGGESTED,
+        TODO,
     )
 
     board = ensure_agents_board(workspace)
-    return board, board.column(SUGGESTED), str(board.team.created_by_id)
+    return board, board.column(TODO), str(board.team.created_by_id)
 
 
 @pytest.mark.django_db

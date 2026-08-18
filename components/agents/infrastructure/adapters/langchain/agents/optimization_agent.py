@@ -6,7 +6,7 @@ files evidence-bearing pattern findings — an over-scheduled beat task, health-
 check noise, a service dominating volume — targeting this agent. The agent turns
 each measured pattern into a concrete tuning recommendation ("raise the interval
 from */5 to */15 — ~66% fewer scheduler wakeups"), comments it on the card, and
-advances it to the Optimize column.
+advances it to the In Progress lane.
 
 This exists as a DISTINCT specialist (not folded into triage) to prove the
 pipeline scales to new finding KINDS: a new detector emits a new
@@ -51,7 +51,7 @@ class OptimizationAgent(WorkspaceContextMixin, BaseAgent):
             "List pending log-optimization findings on the board",
             "Turn a measured frequency pattern into a concrete tuning recommendation",
             "Estimate the resource win of a change",
-            "Comment the recommendation and advance the card to Optimize",
+            "Comment the recommendation and advance the card to In Progress",
         ],
         "sample_prompts": [
             "What log-optimization findings are pending?",
@@ -77,7 +77,7 @@ class OptimizationAgent(WorkspaceContextMixin, BaseAgent):
         description=(
             "Advise one pending log-optimization finding: turn its measured "
             "frequency into a concrete tuning recommendation, post it as a comment, "
-            'and move the card to the Optimize column. Input: JSON {"task_id": '
+            'and move the card to the In Progress lane. Input: JSON {"task_id": '
             '"<id>"} (or the bare task_id). Reversible — safe for autonomous runs.'
         ),
         risk=ToolRisk.REVERSIBLE_WRITE,

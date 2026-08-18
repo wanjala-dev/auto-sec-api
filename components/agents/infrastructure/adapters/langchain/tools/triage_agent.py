@@ -4,7 +4,8 @@ The ``LogWatchErrorDetector`` files evidence-bearing findings (pending triage)
 via the ``AIActionCreated`` path. These tools let the triage agent — invoked as
 a worker through the orchestrator/deep pipeline from the detector cycle — pick
 up each pending finding, look at the error, propose a grounded fix, comment it
-on the card, and move the card into the Triage column, recording a full trace.
+on the card, and move the card into the In Progress lane (ADR 0030 D2 — the AI state is the
+metadata.triage chip, not a bespoke lane), recording a full trace.
 
 The board choreography + concurrency guard + provenance live in
 ``_finding_processing`` (shared with the optimization agent). These functions
@@ -26,7 +27,7 @@ logger = logging.getLogger(__name__)
 _LOG_WATCH_SOURCE = "ai.log_watch"
 _CLOUD_EXPOSURE_SOURCE = "ai.cloud_exposure"
 _CONTAINER_SECURITY_SOURCE = "ai.container_security"
-TRIAGE_COLUMN_TITLE = "Triage"
+ACTING_COLUMN_TITLE = fp.ACTING_COLUMN_TITLE
 
 
 def _pending_findings_qs(workspace_id):
@@ -55,7 +56,7 @@ def list_pending_log_findings(agent, input_str: str = "") -> str:
 
 def triage_finding(agent, input_str: str) -> str:
     """REVERSIBLE_WRITE — triage one pending finding: suggest a fix, comment it,
-    move the card to the Triage column, and record the trace + provenance.
+    move the card to the In Progress lane, and record the trace + provenance.
     """
     from components.integrations.application.log_fix_advisor_service import LogFixAdvisor
 
@@ -106,7 +107,7 @@ def triage_finding(agent, input_str: str) -> str:
         agent,
         input_str,
         source_type=_LOG_WATCH_SOURCE,
-        column_title=TRIAGE_COLUMN_TITLE,
+        column_title=ACTING_COLUMN_TITLE,
         acting_agent="triage_agent",
         advise=advise,
         build_comment=build_comment,
@@ -139,7 +140,7 @@ def list_pending_cloud_exposure_findings(agent, input_str: str = "") -> str:
 
 def triage_cloud_exposure(agent, input_str: str) -> str:
     """REVERSIBLE_WRITE — triage one pending cloud attack-path finding: recommend how to
-    break the toxic chain, comment it, move the card to Triage, and record the trace.
+    break the toxic chain, comment it, move the card to In Progress, and record the trace.
 
     Same board choreography + concurrency guard + grounded-verification loop as
     ``triage_finding`` (via ``process_pending_finding``); it supplies only the
@@ -194,7 +195,7 @@ def triage_cloud_exposure(agent, input_str: str) -> str:
         agent,
         input_str,
         source_type=_CLOUD_EXPOSURE_SOURCE,
-        column_title=TRIAGE_COLUMN_TITLE,
+        column_title=ACTING_COLUMN_TITLE,
         acting_agent="triage_agent",
         advise=advise,
         build_comment=build_comment,
@@ -227,7 +228,7 @@ def list_pending_container_vuln_findings(agent, input_str: str = "") -> str:
 def triage_container_vuln(agent, input_str: str) -> str:
     """REVERSIBLE_WRITE — triage one pending container-image CVE finding: recommend the
     package upgrade (or a mitigation when no fix exists), comment it, move the card to
-    Triage, and record the trace.
+    In Progress, and record the trace.
 
     Same board choreography + concurrency guard + grounded-verification loop as
     ``triage_finding`` (via ``process_pending_finding``); it supplies only the CVE-specific
@@ -291,7 +292,7 @@ def triage_container_vuln(agent, input_str: str) -> str:
         agent,
         input_str,
         source_type=_CONTAINER_SECURITY_SOURCE,
-        column_title=TRIAGE_COLUMN_TITLE,
+        column_title=ACTING_COLUMN_TITLE,
         acting_agent="triage_agent",
         advise=advise,
         build_comment=build_comment,

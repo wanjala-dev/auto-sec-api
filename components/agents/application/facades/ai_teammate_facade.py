@@ -13,15 +13,17 @@ from __future__ import annotations
 
 from typing import Any
 
-# Re-export the AI Findings board column names as part of the agents
+# Re-export the AI Findings board lane names as part of the agents
 # context's published language, so external contexts (e.g. sign_off's
-# task materializer) can address the board's columns WITHOUT importing
+# task materializer) can address the board's lanes WITHOUT importing
 # agents' infrastructure. Pure string constants — no ORM at import.
+# Canonical vocabulary since ADR 0030 P3 (D2): intake = TODO, specialist
+# action = IN_PROGRESS, human accept = COMPLETE, dismissed = CANCELED.
 from components.agents.infrastructure.services.agents_board_service import (  # noqa: F401
-    ACCEPTED,
-    DISMISSED,
-    SUGGESTED,
-    UNDER_REVIEW,
+    CANCELED,
+    COMPLETE,
+    IN_PROGRESS,
+    TODO,
 )
 
 
@@ -47,8 +49,8 @@ def ensure_agents_team(workspace: Any, ai_user: Any) -> Any:
 
 
 def ensure_agents_board(workspace: Any) -> Any:
-    """Ensure the workspace's Agents team, 'AI Findings' project, and four
-    columns exist.
+    """Ensure the workspace's Agents team, 'AI Findings' project, its
+    canonical lanes, and the Intake/Acting system views exist.
 
     Idempotent — safe to call on workspace bootstrap and on every finding.
     Returns the ``AgentsBoard`` value object (team + project + columns).

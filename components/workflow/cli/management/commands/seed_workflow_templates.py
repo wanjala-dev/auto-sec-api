@@ -187,16 +187,18 @@ SYSTEM_TEMPLATES = [
     },
     # ── Phase 4 of the Agents-as-Teammates migration ──────────────────
     # Fires whenever a task with ``source_type LIKE 'ai.%'`` moves into the
-    # ``Accepted`` column on the AI agent team board — publishes a
-    # ``TaskAcceptedFromBoard`` shared-kernel event for downstream specialists.
+    # canonical ``Complete`` lane (ADR 0030 D2: human accept = Complete; the
+    # retired "Accepted" lane is gone) — publishes a ``TaskAcceptedFromBoard``
+    # shared-kernel event for downstream specialists. Existing per-workspace
+    # clones are re-pointed by workflows migration 0004.
     {
         "id": "ai-findings-accepted",
         "label": "AI Findings Accepted",
         "category": "agents",
         "version": "1",
         "description": (
-            "When an AI-finding task moves into the Accepted column on "
-            "the agent team board, publish a TaskAcceptedFromBoard "
+            "When an AI-finding task moves into the Complete lane on "
+            "the AI Findings board, publish a TaskAcceptedFromBoard "
             "event so downstream specialist agents can react."
         ),
         "default_graph": {
@@ -215,7 +217,7 @@ SYSTEM_TEMPLATES = [
                     "subtitle": "Fan out to specialist handlers",
                     "config": {
                         "event_type": "task_accepted_from_board",
-                        "filters": {"task_source_type_prefix": "ai.", "new_column_title": "Accepted"},
+                        "filters": {"task_source_type_prefix": "ai.", "new_column_title": "Complete"},
                     },
                 },
                 {"id": "end", "type": "end", "label": "Done", "subtitle": "Workflow complete", "config": {}},

@@ -121,7 +121,7 @@ class TriageAgent(WorkspaceContextMixin, BaseAgent):
         description=(
             "Triage one pending Log-Watch finding: look at the error, propose a "
             "grounded fix, post it as a comment on the card, and move the card "
-            'into the Triage column. Input: JSON {"task_id": "<id>"} (or the '
+            'into the In Progress lane. Input: JSON {"task_id": "<id>"} (or the '
             "bare task_id). Reversible — safe for autonomous runs."
         ),
         risk=ToolRisk.REVERSIBLE_WRITE,
@@ -146,7 +146,7 @@ class TriageAgent(WorkspaceContextMixin, BaseAgent):
         description=(
             "Triage one pending cloud attack-path finding: recommend how to break the "
             "toxic chain (a public asset reaching admin privileges or sensitive data), "
-            "post it as a comment on the card, and move the card into the Triage column. "
+            "post it as a comment on the card, and move the card into the In Progress lane. "
             'Input: JSON {"task_id": "<id>"} (or the bare task_id). Reversible — safe for '
             "autonomous runs."
         ),
@@ -173,7 +173,7 @@ class TriageAgent(WorkspaceContextMixin, BaseAgent):
         description=(
             "Triage one pending container-image CVE finding: recommend the package upgrade "
             "(or a mitigation when no fix exists), post it as a comment on the card, and "
-            'move the card into the Triage column. Input: JSON {"task_id": "<id>"} (or the '
+            'move the card into the In Progress lane. Input: JSON {"task_id": "<id>"} (or the '
             "bare task_id). Reversible — safe for autonomous runs."
         ),
         risk=ToolRisk.REVERSIBLE_WRITE,

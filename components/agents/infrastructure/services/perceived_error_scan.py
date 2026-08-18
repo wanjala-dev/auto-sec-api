@@ -48,7 +48,7 @@ def scan_workspace_for_perceived_errors(
     from components.agents.domain.detectors.perceived_error import (
         detect_perceived_errors,
     )
-    from components.agents.infrastructure.services.agents_board_service import SUGGESTED
+    from components.agents.infrastructure.services.agents_board_service import TODO
     from infrastructure.persistence.ai.conversations.models import ConversationMessage
     from infrastructure.persistence.workspaces.models import Workspace
 
@@ -90,7 +90,7 @@ def scan_workspace_for_perceived_errors(
     _teammate, ai_user = ensure_ai_identity(workspace)
     ensure_agents_team(workspace, ai_user)
     board = ensure_agents_board(workspace)
-    suggested_column = board.column(SUGGESTED)
+    intake_column = board.column(TODO)
     ai_user_id = str(board.team.created_by_id)
 
     created = 0
@@ -99,7 +99,7 @@ def scan_workspace_for_perceived_errors(
         try:
             task_id = persist_finding_as_task(
                 workspace=workspace,
-                suggested_column=suggested_column,
+                intake_column=intake_column,
                 ai_user_id=ai_user_id,
                 title="AI answer flagged by a user",
                 summary=(

@@ -65,7 +65,7 @@ def _derive_severity(impact_score: int) -> str:
 def persist_finding_as_task(
     *,
     workspace,
-    suggested_column,
+    intake_column,
     ai_user_id: str,
     title: str,
     summary: str,
@@ -86,7 +86,8 @@ def persist_finding_as_task(
 
     Args:
         workspace: Workspace ORM instance the finding belongs to.
-        suggested_column: Column ORM instance on the agent team board.
+        intake_column: the intake lane's Column ORM instance — the canonical
+            Todo lane on the AI Findings board (ADR 0030 D2).
         ai_user_id: User id that owns the agent team (used as
             ``created_by`` so the team-membership check inside the
             Task port passes).
@@ -188,7 +189,7 @@ def persist_finding_as_task(
     with atomic():
         command = CreateTaskCommand(
             title=truncated_title,
-            column_id=str(suggested_column.id),
+            column_id=str(intake_column.id),
             user_id=ai_user_id,
             workspace_id=str(workspace.id),
             source_type=source_type,

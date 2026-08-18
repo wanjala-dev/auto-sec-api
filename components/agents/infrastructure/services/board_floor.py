@@ -2,7 +2,7 @@
 
 The board floor (ADR 0019 D4 layer 2) decides which raised findings become
 Kanban cards at all: a finding below its source's floor stays SSOT-only (the
-HUD findings panel) and never lands in Triage. Historically only
+HUD findings panel) and never lands on the board's intake lane. Historically only
 ``code_security`` and ``vercel_posture`` carried a floor — hardcoded in the
 handler's ``_SOURCE_BOARD`` mapping — so every other source flooded the board
 with low-severity cards (QA report 2026-08-16, F9/§g5). This service makes the

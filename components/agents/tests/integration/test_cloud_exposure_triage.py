@@ -139,7 +139,7 @@ class TestCloudExposureTriagePipeline:
         assert "Handled" in result
         task.refresh_from_db()
         meta = task.metadata
-        assert task.column.title == "Triage"
+        assert task.column.title == "In Progress"
         assert meta["triage"]["status"] == "triaged"
         assert meta["triage"]["agent"] == "triage_agent"
         assert meta["triage"].get("needs_human") is not True  # grounded → not flagged

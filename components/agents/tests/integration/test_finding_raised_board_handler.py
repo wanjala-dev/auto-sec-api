@@ -20,7 +20,7 @@ from components.findings.infrastructure.repositories.django_finding_repository i
 )
 from components.shared_kernel.domain.events import FindingRaised
 from components.shared_kernel.domain.security import FindingStatus, Severity
-from infrastructure.persistence.project.models import Task
+from infrastructure.persistence.project.models import Column, Task
 
 pytestmark = [pytest.mark.integration, pytest.mark.django_db]
 
@@ -91,6 +91,30 @@ def test_creates_board_task_matching_the_detector_shape(workspace_factory):
     assert task.metadata["payload"]["finding_id"] == str(finding.id)  # local copy → its finding
     assert task.metadata["payload"]["check_id"] == "iam_root_mfa_enabled"
     assert task.metadata["payload"]["compliance"] == {"CIS-2.0": ["1.5"]}
+
+
+def test_card_is_born_in_the_canonical_todo_intake_lane(workspace_factory):
+    """ADR 0030 P3 (D2): intake lands in Todo on the AI Findings project
+    board — one surface, three consistent FKs, chip ``pending`` from birth."""
+    ws = workspace_factory()
+    finding = _seed_finding(ws)
+
+    handle_finding_raised_board(_event(finding))
+
+    task = Task.objects.get(workspace=ws, source_type="ai.cloud_posture")
+    assert task.column is not None
+    assert task.column.title == "Todo"
+    assert task.project is not None
+    assert task.project.title == "AI Findings"
+    assert task.column.project_id == task.project_id
+    assert task.column.team_id == task.team_id
+    assert task.workflow_status_id == task.column.workflow_status_id
+    assert task.workflow_status.name == "Todo"
+    assert task.metadata["triage"] == {"status": "pending"}
+    # The retired AI vocabulary is never minted for a new workspace.
+    assert not Column.objects.filter(
+        workspace=ws, title__in=["Suggested", "Under Review", "Accepted", "Dismissed", "Triage", "Optimize"]
+    ).exists()
 
 
 def test_reraise_is_idempotent_no_duplicate_card(workspace_factory):
