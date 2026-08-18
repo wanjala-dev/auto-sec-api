@@ -208,3 +208,66 @@ def test_board_card_created_at_the_severity_floor(workspace_factory, django_capt
     # The matched region rides the card so the advisor + HUD callout can ground on it.
     assert "snippet" in card.metadata["payload"]
     assert ":" in card.title  # rule — path:line copy
+
+
+class _FilteredOpengrepScanner:
+    """The stub scanner minus one rule — simulates a rescan AFTER a fix merged
+    (the fixed finding is simply no longer observed)."""
+
+    def __init__(self, *, drop_rule: str):
+        self._drop_rule = drop_rule
+
+    def scan(self, target, on_progress=None):
+        sarif = json.loads(_FIXTURE.read_text())
+        for run in sarif.get("runs", []):
+            run["results"] = [r for r in run.get("results", []) if self._drop_rule not in str(r.get("ruleId", ""))]
+        return opengrep_sarif_to_scan_result(sarif, repo=_REPO, commit_sha=_SHA)
+
+
+def test_rescan_without_the_fixed_finding_leaves_it_resolved(workspace_factory, django_capture_on_commit_callbacks):
+    """The #118 rescan outcome flows the EXISTING lifecycle unchanged: the merged
+    fix's finding was resolved by the reconciler; the verification rescan simply
+    no longer observes it — nothing reopens it (re-observation is what reopens a
+    terminal finding), while the still-present findings are re-observed."""
+    from django.utils import timezone as dj_timezone
+
+    from components.findings.application.commands.change_finding_status_command import (
+        ChangeFindingStatusCommand,
+    )
+    from components.findings.application.providers.finding_provider import FindingProvider
+
+    ws = workspace_factory()
+    first = _CapturingPublisher()
+    with django_capture_on_commit_callbacks(execute=True):
+        _run_scan(ws, first)
+    _ingest_to_ssot(first)
+
+    fixed_rows = list(Finding.objects.filter(workspace_id=ws.id, fingerprint__contains="jwt-verify-disabled|"))
+    assert fixed_rows, "the fixture must observe the rule we are about to fix"
+    # The reconciler resolved the finding(s) when the draft PR merged (existing path).
+    for row in fixed_rows:
+        FindingProvider.build_change_finding_status_use_case().execute(
+            ChangeFindingStatusCommand(
+                workspace_id=ws.id, finding_id=row.id, action="resolve", at=dj_timezone.now(), actor_id="reconciler"
+            )
+        )
+
+    # The verification rescan: same repo, the fixed finding absent from the results.
+    second = _CapturingPublisher()
+    with django_capture_on_commit_callbacks(execute=True):
+        run = run_scan_and_ingest(
+            workspace_id=ws.id,
+            source=_SOURCE,
+            target=ScanTarget(identifier=_REPO, credentials={"token": "t", "commit_sha": _SHA}),
+            scanner=_FilteredOpengrepScanner(drop_rule="jwt-verify-disabled"),
+            event_publisher=second,
+        )
+    _ingest_to_ssot(second)
+
+    for row in fixed_rows:
+        row.refresh_from_db()
+        assert row.status == "resolved", "not re-observed → the existing lifecycle keeps it closed"
+    assert run.failed_count == 20 - len(fixed_rows), "the rescan genuinely lacked the fixed finding(s)"
+    # The records are retained (no hard delete) and the sibling findings are still open.
+    assert Finding.objects.filter(workspace_id=ws.id, source=_SOURCE).count() == 20
+    assert Finding.objects.filter(workspace_id=ws.id, source=_SOURCE, status="open").count() == 20 - len(fixed_rows)

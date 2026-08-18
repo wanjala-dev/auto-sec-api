@@ -14,7 +14,10 @@ anything is enqueued:
    ``scan_cooldown`` (+ ``retry_after``); failed scans do NOT start a cooldown.
 
 Provenance: manual triggers stamp ``triggered_by`` (the operator's user id) and
-``trigger="manual"`` onto the run row via the shared scan choreography.
+``trigger="manual"`` onto the run row via the shared scan choreography; the
+post-merge verification rescan (#118) stamps ``trigger="merge_rescan"`` and is
+the ONE caller allowed to pass ``bypass_cooldown=True`` (gate 2 only — gate 1,
+consent, is never bypassed).
 """
 
 from __future__ import annotations
@@ -73,8 +76,26 @@ class TriggerRepoScanUseCase:
             "connection_id": str(connection.id),
         }
 
-    def execute(self, *, workspace_id, repo: str, connection_id: str | None = None, triggered_by=None) -> dict:
-        """Gate (consent + budget) + enqueue. Returns ``{"task_id", "repo", "source"}``."""
+    def execute(
+        self,
+        *,
+        workspace_id,
+        repo: str,
+        connection_id: str | None = None,
+        triggered_by=None,
+        trigger: str = "manual",
+        bypass_cooldown: bool = False,
+    ) -> dict:
+        """Gate (consent + budget) + enqueue. Returns ``{"task_id", "repo", "source"}``.
+
+        ``trigger`` is the provenance the run row records (``manual`` /
+        ``merge_rescan``). ``bypass_cooldown`` skips ONLY the completed-run
+        cooldown — the one-in-flight invariant always holds. It exists for ONE
+        caller: the post-merge verification rescan task (#118), so a just-merged
+        fix verifies closed now instead of waiting out the anti-spam window.
+        The consent gate is never bypassed. Manual (controller/CLI) and
+        scheduled triggers keep the defaults.
+        """
         from components.scanning.application.providers.scan_dispatch_provider import dispatch_scan
         from components.scanning.application.providers.scan_gate_provider import (
             check_and_lock_dispatch,
@@ -88,6 +109,7 @@ class TriggerRepoScanUseCase:
             source=SOURCE,
             target_ref=kwargs["target_ref"],
             cooldown_seconds=COOLDOWN_SECONDS,
+            bypass_cooldown=bypass_cooldown,
         )
         if not gate["allowed"]:
             if gate["reason"] == "cooldown":
@@ -105,7 +127,7 @@ class TriggerRepoScanUseCase:
         try:
             async_result = dispatch_scan(
                 **kwargs,
-                trigger="manual",
+                trigger=trigger,
                 triggered_by=str(triggered_by) if triggered_by else None,
             )
         except Exception:
@@ -113,10 +135,11 @@ class TriggerRepoScanUseCase:
             release_dispatch_lock(workspace_id=kwargs["workspace_id"], source=SOURCE, target_ref=kwargs["target_ref"])
             raise
         logger.info(
-            "code_security_scan_dispatched workspace_id=%s repo=%s task_id=%s triggered_by=%s",
+            "code_security_scan_dispatched workspace_id=%s repo=%s task_id=%s trigger=%s triggered_by=%s",
             workspace_id,
             kwargs["target_ref"],
             async_result.id,
+            trigger,
             triggered_by,
         )
         return {"task_id": str(async_result.id), "repo": kwargs["target_ref"], "source": SOURCE}

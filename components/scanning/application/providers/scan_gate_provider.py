@@ -9,12 +9,23 @@ history (last-scanned/provenance) without touching scanning's persistence.
 from __future__ import annotations
 
 
-def check_and_lock_dispatch(*, workspace_id, source: str, target_ref: str, cooldown_seconds: int) -> dict:
+def check_and_lock_dispatch(
+    *, workspace_id, source: str, target_ref: str, cooldown_seconds: int, bypass_cooldown: bool = False
+) -> dict:
+    """Gate one dispatch. ``bypass_cooldown`` skips ONLY the completed-run cooldown
+    (the one-in-flight invariant always holds) — reserved for the post-merge
+    verification rescan (#118); scheduled/manual triggers must not pass it."""
     from components.scanning.infrastructure.services.scan_gate import (
         check_and_lock_dispatch as _check,
     )
 
-    return _check(workspace_id=workspace_id, source=source, target_ref=target_ref, cooldown_seconds=cooldown_seconds)
+    return _check(
+        workspace_id=workspace_id,
+        source=source,
+        target_ref=target_ref,
+        cooldown_seconds=cooldown_seconds,
+        bypass_cooldown=bypass_cooldown,
+    )
 
 
 def release_dispatch_lock(*, workspace_id, source: str, target_ref: str) -> None:
