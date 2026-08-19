@@ -26,8 +26,21 @@ logger = logging.getLogger(__name__)
 
 
 @shared_task(
+    # NO queue= pin: this rides the project default queue ("default"), which the
+    # celery-worker Deployment consumes, exactly like every other per-tenant beat
+    # reconciler (identity.sweep_user_sessions, remediation.*,
+    # workflow.run_due_schedules, cloud_posture.schedule_prowler_runs) — none of
+    # which pin a queue either.
+    #
+    # It SHIPPED pinned to queue="celery" and every run black-holed. That string
+    # is Celery's STOCK default queue name, so it reads like "the default queue"
+    # — but this project overrides task_default_queue to "default"
+    # (infrastructure/celery/routes.py), so "celery" is a queue no deployed
+    # worker subscribes to. Beat published it hourly into the broker for weeks
+    # and nothing consumed it, while the connections it exists to reconcile kept
+    # reading CONNECTED. Do not re-pin without a worker that consumes the pin;
+    # tests/test_celery_task_routes.py asserts it both ways.
     name="integrations.rediscover_aws_org_accounts",
-    queue="celery",
     soft_time_limit=540,
     time_limit=600,
 )
