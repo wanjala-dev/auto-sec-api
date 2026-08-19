@@ -6,7 +6,11 @@ from django.conf import settings
 from django.db import connection
 from django.db.models import Q
 
-from infrastructure.persistence.workspaces.payments.models import PaymentProvider, WorkspacePaymentMethod
+from infrastructure.persistence.workspaces.payments.models import (
+    PaymentEvent,
+    PaymentProvider,
+    WorkspacePaymentMethod,
+)
 
 ZERO_DECIMAL_CURRENCIES = {
     "bif",
@@ -100,13 +104,9 @@ def resolve_workspace_payment_method(
     if provider_slug:
         queryset = queryset.filter(provider__slug=provider_slug)
 
-    supports_json_contains = getattr(
-        connection.features, "supports_json_field_contains", False
-    )
+    supports_json_contains = getattr(connection.features, "supports_json_field_contains", False)
     if context and supports_json_contains:
-        queryset = queryset.filter(
-            Q(enabled_contexts__contains=[context]) | Q(enabled_contexts=[])
-        )
+        queryset = queryset.filter(Q(enabled_contexts__contains=[context]) | Q(enabled_contexts=[]))
 
     if preferred_method_id:
         try:
@@ -148,11 +148,7 @@ def resolve_workspace_payment_method(
         return sorted(candidates, key=_sort_key)[0]
 
     if context:
-        method = (
-            queryset.filter(primary_contexts__contains=[context])
-            .order_by("sort_order", "created_at")
-            .first()
-        )
+        method = queryset.filter(primary_contexts__contains=[context]).order_by("sort_order", "created_at").first()
         if method:
             return method
 
@@ -161,6 +157,20 @@ def resolve_workspace_payment_method(
         return method
 
     return queryset.order_by("sort_order", "created_at").first()
+
+
+def payment_event_write_alias() -> str:
+    """The DB alias the CURRENTLY BOUND tenant writes payment events to.
+
+    A webhook handler must open its transaction on the same connection its
+    writes land on: under the tenant router a bare ``transaction.atomic()``
+    only opens a transaction on ``default``, so a bound dedicated tenant would
+    write outside any transaction (and its ``on_commit`` hooks would fire
+    against the wrong connection). Ask the router rather than assuming.
+    """
+    from components.shared_kernel.application.transactional import db_alias_for
+
+    return db_alias_for(PaymentEvent)
 
 
 def resolve_db_alias_for_stripe_account(account_id: str | None) -> str | None:
@@ -181,12 +191,16 @@ def resolve_db_alias_for_stripe_account(account_id: str | None) -> str | None:
 
     for alias in aliases:
         try:
-            exists = WorkspacePaymentMethod.objects.using(alias).filter(
-                provider__slug__istartswith="stripe",
-                provider_account_id=account_id,
-                status=WorkspacePaymentMethod.STATUS_ACTIVE,
-                is_deleted=False,
-            ).exists()
+            exists = (
+                WorkspacePaymentMethod.objects.using(alias)
+                .filter(
+                    provider__slug__istartswith="stripe",
+                    provider_account_id=account_id,
+                    status=WorkspacePaymentMethod.STATUS_ACTIVE,
+                    is_deleted=False,
+                )
+                .exists()
+            )
         except Exception:
             continue
         if exists:

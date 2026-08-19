@@ -335,24 +335,49 @@ class StripeSubscriptionWebhookController(APIView):
         return [WebhookThrottle()]
 
     def post(self, request, *args, **kwargs):
-        from components.shared_kernel.application.providers.django_orm_provider import (
-            get_django_orm_provider as _get_django_orm_provider,
+        """Verify, then BIND THE OWNING TENANT, then record + process.
+
+        A provider POSTs to one fixed URL with no tenant subdomain, so the
+        request arrives bound to the shared console. Everything this handler
+        writes — the ``PaymentEvent`` idempotency row, its claim, and whatever
+        the provider-specific service mutates — belongs to whichever tenant
+        owns the connected account named in the SIGNED event body, which is
+        not knowable until the signature has been checked.
+
+        So the binding is two-phase, and the split is deliberate:
+
+        * Phase 1 wraps verification only. Verification READS (candidate
+          methods and their signing secrets); an endpoint-configuration hint
+          (``Stripe-Account`` / ``?account=``) scopes those reads when present.
+        * Phase 2 wraps EVERY WRITE, using the alias resolved from the
+          verified event. Nothing is written between the two phases — the
+          verifier is read-only by construction — so there is no gap.
+
+        The transaction opens on the bound tenant's alias, not on ``default``:
+        under the tenant router a bare ``atomic()`` transacts the control
+        plane while the writes land in the tenant's database.
+        """
+        from components.payments.application.providers.payment_runtime_provider import (
+            PaymentWebhookIntakeResult,
         )
-
-        _django_orm = _get_django_orm_provider()
-        transaction = _django_orm.transaction
-
+        from components.payments.application.providers.webhook_tenant_binding_provider import (
+            resolve_webhook_tenant_alias,
+            webhook_tenant_scope,
+            webhook_write_alias,
+        )
         from components.payments.domain.errors import WebhookVerificationError
+        from components.shared_kernel.application.transactional import atomic
 
         logger.warning(
             "Deprecated billing webhook /team/stripe/webhook/ used. Use /workspaces/billing/stripe/webhook/."
         )
-        with transaction.atomic():
+
+        runtime = _payment_services_factory.build_payment_runtime_provider()
+
+        hint_alias = resolve_webhook_tenant_alias(request.META.get("HTTP_STRIPE_ACCOUNT") or request.GET.get("account"))
+        with webhook_tenant_scope(hint_alias):
             try:
-                verification = _payment_services_factory.build_payment_runtime_provider().verify_webhook(
-                    request,
-                    endpoint_name="team_subscriptions",
-                )
+                verification = runtime.verify_webhook(request, endpoint_name="team_subscriptions")
             except WebhookVerificationError as exc:
                 # Signature mismatch is permanent — return 4xx so Stripe
                 # stops retrying. The donation controller had the same bug
@@ -365,30 +390,41 @@ class StripeSubscriptionWebhookController(APIView):
                 )
             except ValueError as exc:
                 return HttpResponseBadRequest(str(exc))
-            request.payment_api_key = verification.api_key  # type: ignore[attr-defined]
-            request.payment_event = verification.payment_event  # type: ignore[attr-defined]
-            request.payment_event_duplicate = verification.payment_event_duplicate  # type: ignore[attr-defined]
-            request.payment_event_processable = verification.payment_event_processable  # type: ignore[attr-defined]
-            event = verification.event
-            method = verification.method
-            workspace = verification.workspace
-            provider = verification.provider_slug
 
-            if provider != "stripe":
+        db_alias = verification.db_alias or hint_alias
+        with webhook_tenant_scope(db_alias), atomic(using=webhook_write_alias()):
+            if verification.recordable:
+                intake = runtime.record_and_claim_webhook_event(
+                    verification,
+                    claimed_by="components.payments.api.stripe_subscription_webhook",
+                    claim_message="Webhook received.",
+                )
+            else:
+                # Connect/platform cross-delivery guard: the event verified but
+                # must not enter the shared idempotency ledger, or the endpoint
+                # that legitimately owns this ``event_id`` would dedupe-skip it.
+                intake = PaymentWebhookIntakeResult(payment_event=None, duplicate=False, processable=False)
+            request.payment_api_key = verification.api_key  # type: ignore[attr-defined]
+            request.payment_event = intake.payment_event  # type: ignore[attr-defined]
+            request.payment_event_duplicate = intake.duplicate  # type: ignore[attr-defined]
+            request.payment_event_processable = intake.processable  # type: ignore[attr-defined]
+
+            # Order preserved from the pre-fix flow: the event is recorded
+            # (audit trail) before a non-Stripe provider is waved through.
+            if verification.provider_slug != "stripe":
                 return Response({"status": "ignored"})
 
-            payment_event = getattr(request, "payment_event", None)
-            should_process = getattr(request, "payment_event_processable", True)
-            if payment_event and not should_process:
+            payment_event = intake.payment_event
+            if payment_event and not intake.processable:
                 return Response({"status": "duplicate"})
 
             try:
                 team_plan_webhook_service.handle_verified_webhook(
-                    event=event,
-                    workspace=workspace,
-                    method=method,
+                    event=verification.event,
+                    workspace=verification.workspace,
+                    method=verification.method,
                     payment_event=payment_event,
-                    api_key=getattr(request, "payment_api_key", None),
+                    api_key=verification.api_key,
                 )
             except ValueError as exc:
                 return HttpResponseBadRequest(str(exc))

@@ -97,6 +97,20 @@ DATABASES = {
         **_sqlite_db("ltg"),
         "TEST": {"MIRROR": "default"},
     },
+    # A REAL second database — deliberately NOT a mirror.
+    #
+    # The dedicated tenancy tier's whole safety property is "this customer's
+    # rows are on a different connection". Every alias above mirrors `default`,
+    # which means a test can call `.using("workspace")`, watch it succeed, and
+    # prove nothing: the row went to the same file. Any test that has to
+    # distinguish "wrote to the tenant" from "wrote to the pool" — the
+    # cross-tenant leak proofs — needs two physically distinct databases to
+    # count rows in.
+    #
+    # Cost is one extra schema creation per pytest session. Tests must declare
+    # it (`@pytest.mark.django_db(databases=["default", "tenant_probe"])`) to
+    # touch it, so it is inert for everything else.
+    "tenant_probe": _sqlite_db("tenant_probe"),
 }
 
 # For tests we don't need tenant-aware routing; route everything to the default

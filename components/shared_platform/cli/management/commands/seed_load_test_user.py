@@ -27,6 +27,7 @@ Usage::
     docker exec compose-web-1 python manage.py seed_load_test_user
     docker exec -e LOAD_TEST_PASSWORD=mysecret compose-web-1 python manage.py seed_load_test_user
 """
+
 from __future__ import annotations
 
 import os
@@ -38,9 +39,6 @@ class Command(BaseCommand):
     help = "Seed dedicated user + workspace for load testing (idempotent)."
 
     def handle(self, *args, **options):
-        from components.shared_platform.infrastructure.middleware.tenant_middlewares import (
-            set_db_for_router,
-        )
         from infrastructure.persistence.users.models import CustomUser
         from infrastructure.persistence.workspaces.models import (
             Workspace,
@@ -48,10 +46,12 @@ class Command(BaseCommand):
             WorkspaceRole,
         )
 
-        # Multi-tenant router reads from thread-local; in a management command
-        # the middleware never ran, so the thread-local is unset and routing
-        # is inconsistent across queries. Lock to the default DB for this seed.
-        set_db_for_router("default")
+        # Every query below is already explicit (`.using(DB)`), and the pooled
+        # tenant is bound for the whole command run by
+        # ``run_management_command()`` in manage.py. This body previously
+        # called ``set_db_for_router("default")``, which wrote a
+        # threading.local the live ContextVar-based router never reads — a
+        # no-op that read as a binding. Deleted 2026-08-19.
 
         email = os.getenv("LOAD_TEST_EMAIL", "loadtest@wanjala.local")
         password = os.getenv("LOAD_TEST_PASSWORD", "loadtest-dev-only-password")
@@ -71,9 +71,7 @@ class Command(BaseCommand):
         # Use _base_manager — Workspace.objects is filtered to status="active",
         # so a fresh workspace (default status="inactive") would be invisible
         # to get_or_create on the next run and we'd create duplicates.
-        workspace = (
-            Workspace._base_manager.using(DB).filter(workspace_name=workspace_name).first()
-        )
+        workspace = Workspace._base_manager.using(DB).filter(workspace_name=workspace_name).first()
         ws_created = workspace is None
         if workspace is None:
             workspace = Workspace(
@@ -92,16 +90,14 @@ class Command(BaseCommand):
         # (capability bundle), not the legacy string field. A null workspace_role
         # is treated as "no permissions" and would 403 every endpoint that uses
         # has_workspace_permission(...). See ADR 0002.
-        owner_role = (
-            WorkspaceRole.objects.using(DB)
-            .filter(slug="owner", is_system=True)
-            .first()
-        )
+        owner_role = WorkspaceRole.objects.using(DB).filter(slug="owner", is_system=True).first()
         if owner_role is None:
-            self.stdout.write(self.style.WARNING(
-                "  Could not find system role slug='owner' — has seed_system_roles run? "
-                "RBAC checks will likely 403."
-            ))
+            self.stdout.write(
+                self.style.WARNING(
+                    "  Could not find system role slug='owner' — has seed_system_roles run? "
+                    "RBAC checks will likely 403."
+                )
+            )
 
         membership, m_created = WorkspaceMembership.objects.using(DB).get_or_create(
             workspace=workspace,
@@ -130,7 +126,9 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS("Load test seed ready:"))
         self.stdout.write(f"  user         = {email} ({'created' if user_created else 'updated'})")
         self.stdout.write(f"  password     = {password}")
-        self.stdout.write(f"  workspace    = {workspace_name} ({'created' if ws_created else 'existing'}, status={workspace.status})")
+        self.stdout.write(
+            f"  workspace    = {workspace_name} ({'created' if ws_created else 'existing'}, status={workspace.status})"
+        )
         self.stdout.write(f"  workspace_id = {workspace.id}")
         self.stdout.write(
             f"  membership   = role={membership.role} workspace_role="

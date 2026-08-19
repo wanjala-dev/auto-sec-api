@@ -4,24 +4,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from components.payments.application.providers import make_payment_gateway_provider
-from components.payments.application.use_cases.record_and_claim_payment_event_use_case import (
-    RecordAndClaimPaymentEventUseCase,
-)
-from components.payments.application.use_cases.verify_provider_webhook_use_case import (
-    VerifiedProviderWebhookEnvelope,
-    VerifyProviderWebhookUseCase,
-)
 from components.payments.domain.errors import WebhookVerificationError
 from components.payments.infrastructure.adapters.payment_utils import resolve_db_alias_for_stripe_account
-from components.payments.infrastructure.repositories.orm_payment_event_claim_repository import (
-    OrmPaymentEventClaimRepository,
-)
-from components.payments.infrastructure.repositories.orm_payment_event_recording_repository import (
-    OrmPaymentEventRecordingRepository,
-)
-from components.shared_platform.application.providers.router_db_provider import set_db_for_router
 from infrastructure.persistence.workspaces.models import Workspace
-from infrastructure.persistence.workspaces.payments.models import PaymentEvent, WorkspacePaymentMethod
+from infrastructure.persistence.workspaces.payments.models import WorkspacePaymentMethod
 
 
 @dataclass(frozen=True)
@@ -32,14 +18,37 @@ class LegacyWebhookVerificationResult:
     account_id: str | None
     legacy_context: object | None
     provider_slug: str
-    payment_event: PaymentEvent | None
-    payment_event_duplicate: bool
-    payment_event_processable: bool
     api_key: str | None
+    #: The database alias that owns the connected account this event belongs
+    #: to, or ``None`` when the event names no account (a platform event) or
+    #: no configured database claims it. Resolution only — the CALLER binds
+    #: it, because the binding has to outlive this call and cover every write
+    #: the webhook triggers.
+    db_alias: str | None = None
+    #: ``False`` when the event verified but must NOT enter the idempotency
+    #: ledger — the Connect/platform cross-delivery guard below. Recording it
+    #: would make the correct endpoint dedupe-skip the same ``event_id``.
+    recordable: bool = True
 
 
 class LegacyIncomingWebhookVerifier:
-    """Transitional verifier that keeps the old webhook contract while delegating into payments components."""
+    """Transitional verifier that keeps the old webhook contract while delegating into payments components.
+
+    READ-ONLY BY CONSTRUCTION. This used to also record + claim the
+    ``PaymentEvent`` idempotency row, which meant the money-path write
+    happened inside verification — before any caller had a chance to bind the
+    tenant that owns the event. It called ``set_db_for_router(db_alias)`` to
+    cover that, and that function wrote a ``threading.local`` the live
+    ContextVar-based ``TenantRouter`` never reads, so the write landed in
+    whatever database the REQUEST bound (the pool, since webhooks arrive on a
+    fixed URL with no tenant subdomain).
+
+    The intake now belongs to the caller, which runs it inside
+    ``webhook_tenant_scope(db_alias)``. Keeping this method free of writes is
+    what makes that ordering possible: verification may run under the request's
+    own binding because it only reads, and every write happens after the owning
+    alias is known.
+    """
 
     @staticmethod
     def _extract_stripe_event_account(event: object) -> str | None:
@@ -50,10 +59,12 @@ class LegacyIncomingWebhookVerifier:
     def verify(self, request, endpoint_name: str | None = None) -> LegacyWebhookVerificationResult:
         force_platform_webhook = endpoint_name == "team_subscriptions"
         account_id = request.META.get("HTTP_STRIPE_ACCOUNT") or request.GET.get("account")
+        db_alias: str | None = None
         if account_id and not force_platform_webhook:
+            # Endpoint-configuration hint (our own ``?account=`` / header
+            # convention). Stripe itself puts the connected account in the
+            # signed event body, handled below.
             db_alias = resolve_db_alias_for_stripe_account(account_id)
-            if db_alias:
-                set_db_for_router(db_alias)
 
         gateway_provider = make_payment_gateway_provider()
         for provider_slug, gateway in gateway_provider.registered_gateways():
@@ -108,20 +119,23 @@ class LegacyIncomingWebhookVerifier:
                         account_id=event_account,
                         legacy_context=result.legacy_context,
                         provider_slug=provider_slug,
-                        payment_event=None,
-                        payment_event_duplicate=False,
-                        payment_event_processable=False,
                         api_key=result.api_key,
+                        db_alias=None,
+                        recordable=False,
                     )
 
             if provider_slug == "stripe" and not result.method and not force_platform_webhook:
                 event_account = self._extract_stripe_event_account(result.event)
                 if event_account:
-                    db_alias = resolve_db_alias_for_stripe_account(event_account)
-                    if db_alias:
-                        set_db_for_router(db_alias)
+                    # The authoritative account lives in the SIGNED body, so
+                    # this resolution is only possible after verification —
+                    # which is why the caller binds in two phases and does all
+                    # of its writing in the second.
+                    resolved_alias = resolve_db_alias_for_stripe_account(event_account)
+                    if resolved_alias:
+                        db_alias = resolved_alias
                         method = (
-                            WorkspacePaymentMethod.objects.using(db_alias)
+                            WorkspacePaymentMethod.objects.using(resolved_alias)
                             .select_related("workspace", "provider")
                             .filter(
                                 provider__slug__startswith="stripe",
@@ -136,28 +150,6 @@ class LegacyIncomingWebhookVerifier:
                             result.workspace = method.workspace
                             result.account_id = method.provider_account_id or event_account
 
-            handling = VerifyProviderWebhookUseCase(
-                RecordAndClaimPaymentEventUseCase(
-                    payment_event_recorder=OrmPaymentEventRecordingRepository(),
-                    payment_event_claims=OrmPaymentEventClaimRepository(),
-                )
-            ).execute(
-                envelope=VerifiedProviderWebhookEnvelope(
-                    provider=provider_slug,
-                    event=result.event,
-                    account_id=result.account_id,
-                    workspace_id=getattr(result.workspace, "id", None),
-                    method_id=getattr(result.method, "id", None),
-                ),
-                claimed_by="components.payments.infrastructure.webhook_verifier",
-                claim_message="Webhook received.",
-            )
-            payment_event = (
-                PaymentEvent.objects.filter(id=handling.intake.payment_event_id).first()
-                if handling.intake.payment_event_id
-                else None
-            )
-
             return LegacyWebhookVerificationResult(
                 event=result.event,
                 method=result.method,
@@ -165,10 +157,8 @@ class LegacyIncomingWebhookVerifier:
                 account_id=result.account_id,
                 legacy_context=result.legacy_context,
                 provider_slug=provider_slug,
-                payment_event=payment_event,
-                payment_event_duplicate=bool(payment_event and not handling.intake.is_new),
-                payment_event_processable=bool(handling.intake.claimed) if payment_event else True,
                 api_key=result.api_key,
+                db_alias=db_alias,
             )
 
         raise WebhookVerificationError("Unable to verify webhook payload.")
