@@ -15,12 +15,19 @@ from components.integrations.application.use_cases.generate_onboarding_template_
 
 
 def get_aws_connection_service() -> AwsConnectionService:
+    from components.integrations.infrastructure.adapters.post_commit_scan_dispatch_adapter import (
+        PostCommitScanDispatchAdapter,
+    )
     from components.integrations.infrastructure.adapters.sts_org_adapter import StsOrgAdapter
     from components.integrations.infrastructure.repositories.aws_connection_repository import (
         AwsConnectionRepository,
     )
 
-    return AwsConnectionService(_repo=AwsConnectionRepository(), _verifier=StsOrgAdapter())
+    return AwsConnectionService(
+        _repo=AwsConnectionRepository(),
+        _verifier=StsOrgAdapter(),
+        _scan_dispatcher=PostCommitScanDispatchAdapter(),
+    )
 
 
 def get_onboarding_template_use_case() -> GenerateOnboardingTemplateUseCase:

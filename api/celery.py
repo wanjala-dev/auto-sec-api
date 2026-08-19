@@ -42,6 +42,7 @@ import components.container_security.infrastructure.tasks.container_security_tas
 import components.findings.infrastructure.tasks.attck_coverage_tasks
 import components.findings.infrastructure.tasks.finding_risk_tasks
 import components.identity.workers.tasks
+import components.integrations.infrastructure.tasks.aws_discovery_tasks
 import components.integrations.infrastructure.tasks.github_app_webhook_tasks
 import components.knowledge.infrastructure.tasks.index_freshness_tasks
 import components.knowledge.infrastructure.tasks.workspace_index_tasks

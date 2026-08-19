@@ -26,7 +26,16 @@ class OrgVerificationPort(ABC):
     ) -> dict:
         """Dry-run assume the audit role; optionally walk the organization.
 
-        Returns ``{"organization_id": str, "accounts": [{"id", "name"}, ...]}``.
-        Raises on assume-role failure — the caller records the error state.
+        Returns ``{"organization_id": str, "accounts": [{"id", "name"}, ...],
+        "org_walked": bool}``. Raises on assume-role failure — the caller
+        records the error state.
+
+        ``accounts`` lists only accounts that are ACTIVE in the organization.
+        ``org_walked`` says whether that list is AUTHORITATIVE — True only when
+        ``organizations:ListAccounts`` was paginated to completion. It is False
+        for a single-account connection (``discover=False``) and for an org walk
+        the customer's role was denied, where the result degrades to just the
+        management account. A reconciler must never read absence-from-``accounts``
+        as "this account left the org" unless ``org_walked`` is True.
         """
         raise NotImplementedError

@@ -51,7 +51,13 @@ class StsOrgAdapter(OrgVerificationPort):
         # discovery lists it too. Seed it so a connected connection never has
         # zero scannable accounts (which the scan scheduler would silently skip).
         discovered: dict[str, str] = {management_account_id: ""}
-        result: dict = {"organization_id": "", "accounts": []}
+        # ``org_walked`` says whether ``accounts`` is the AUTHORITATIVE membership
+        # of the organization or merely what we could see. It is the difference
+        # between "these three accounts left the org" and "we were denied the
+        # listing, so we only know about the management account" — and the
+        # reconciler needs it, because suspending every account of a customer's
+        # org on a transient AccessDenied would be a self-inflicted outage.
+        result: dict = {"organization_id": "", "accounts": [], "org_walked": False}
 
         if discover:
             org = boto3.client(
@@ -68,6 +74,9 @@ class StsOrgAdapter(OrgVerificationPort):
                     for acct in page.get("Accounts", []):
                         if acct.get("Status") == "ACTIVE":
                             discovered[acct["Id"]] = acct.get("Name", "")
+                # Set only after the FULL pagination completed — a walk that
+                # died halfway is not an authoritative membership list.
+                result["org_walked"] = True
             except org.exceptions.AccessDeniedException:
                 # Single-account (non-org) customer — role works, no org to walk.
                 logger.info(

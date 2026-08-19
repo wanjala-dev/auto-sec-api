@@ -24,6 +24,38 @@ SOURCE = "cloud_posture.prowler"
 # users can't spam the system). Env-overridable per deployment.
 COOLDOWN_SECONDS = int(os.environ.get("CLOUD_POSTURE_SCAN_COOLDOWN_SECONDS", "3600"))
 
+# How long a deferred account is told to wait before the next sweep should look
+# at it again. Roughly the time a Prowler scan of one account takes, so the
+# ceiling has actually drained by the time the next wave arrives. Far below the
+# per-account cooldown, so a drain wave can only reach accounts that have NOT
+# been scanned this cycle — it never turns a nightly scan into a rolling one.
+DEFER_RETRY_AFTER_SECONDS = int(os.environ.get("CLOUD_POSTURE_DEFER_RETRY_AFTER_SECONDS", "300"))
+
+
+def _max_concurrent_scans() -> int:
+    """The configured global ceiling; ``<= 0`` means unbounded.
+
+    Read per call rather than at import so an operator changing the env (or a
+    test overriding the setting) takes effect without a redeploy of intent.
+    """
+    from django.conf import settings
+
+    try:
+        return int(getattr(settings, "CLOUD_POSTURE_MAX_CONCURRENT_SCANS", 0) or 0)
+    except (TypeError, ValueError):
+        logger.warning("CLOUD_POSTURE_MAX_CONCURRENT_SCANS is not an integer; treating the cap as unbounded")
+        return 0
+
+
+def _headroom() -> int | None:
+    """Slots available under the global ceiling, or ``None`` when unbounded."""
+    from components.scanning.application.providers.scan_gate_provider import count_in_flight
+
+    cap = _max_concurrent_scans()
+    if cap <= 0:
+        return None
+    return max(0, cap - count_in_flight(SOURCE))
+
 
 def dispatch_account_scan(connection, account_id: str, *, trigger: str, triggered_by=None) -> dict:
     """Gate + dispatch ONE per-account scan. Returns the gate verdict:
@@ -71,11 +103,21 @@ def dispatch_account_scan(connection, account_id: str, *, trigger: str, triggere
 def dispatch_connection_scans(connection, *, trigger: str, triggered_by=None) -> dict:
     """Gate + dispatch one scan per scannable account link of a connection.
 
-    Shared by the beat scheduler and the on-demand endpoint (byte-for-byte the
-    same path — only ``trigger``/``triggered_by`` differ). Skips terminal links
-    (FAILED / SUSPENDED / EXCLUDED); DISCOVERED + VERIFIED are scanned — the
-    scan re-verifies each account on every run. Returns
-    ``{"enqueued": n, "blocked": m, "retry_after": max-or-None}``.
+    Shared by the beat scheduler, the on-demand endpoint and the post-verify
+    auto-scan (byte-for-byte the same path — only ``trigger``/``triggered_by``
+    differ). Skips terminal links (FAILED / SUSPENDED / EXCLUDED); DISCOVERED +
+    VERIFIED are scanned — the scan re-verifies each account on every run.
+
+    **Bounded by the global in-flight ceiling** (``CLOUD_POSTURE_MAX_CONCURRENT_SCANS``).
+    Accounts past the ceiling are DEFERRED, not dropped: they take no dispatch
+    lock, start no cooldown, and are dispatched by the next sweep — which is why
+    the return distinguishes ``deferred`` from ``blocked``. Reporting them as
+    "blocked" would be the silent-failure class this gate exists to remove: an
+    operator would read "40 of 200 scanned" as a mystery rather than as a queue.
+
+    Returns ``{"scannable", "enqueued", "blocked", "deferred", "retry_after"}``
+    where ``enqueued + blocked + deferred == scannable`` — every account lands in
+    exactly one bucket, so nothing can go missing unnoticed.
     """
     from infrastructure.persistence.integrations.models import AwsAccountLink
 
@@ -84,33 +126,67 @@ def dispatch_connection_scans(connection, *, trigger: str, triggered_by=None) ->
         AwsAccountLink.Status.SUSPENDED,
         AwsAccountLink.Status.EXCLUDED,
     ]
-    account_ids = (
+    account_ids = list(
         AwsAccountLink.objects.filter(connection_id=connection.id)
         .exclude(status__in=terminal)
         .values_list("account_id", flat=True)
     )
 
+    # Counted ONCE, then decremented locally: the ScanRun rows for this sweep's
+    # own dispatches do not exist yet at the moment we ask, so re-reading the
+    # count per account would let a single fan-out blow straight through the
+    # ceiling it just measured.
+    headroom = _headroom()
+
     enqueued = 0
     blocked = 0
+    deferred = 0
     retry_after: int | None = None
     for account_id in account_ids:
+        if headroom is not None and headroom <= 0:
+            deferred += 1
+            retry_after = max(retry_after or 0, DEFER_RETRY_AFTER_SECONDS)
+            continue
         verdict = dispatch_account_scan(connection, account_id, trigger=trigger, triggered_by=triggered_by)
         if verdict["enqueued"]:
             enqueued += 1
+            if headroom is not None:
+                headroom -= 1
         else:
             blocked += 1
             if verdict["retry_after"] is not None:
                 retry_after = max(retry_after or 0, verdict["retry_after"])
-    return {"enqueued": enqueued, "blocked": blocked, "retry_after": retry_after}
+
+    if deferred:
+        logger.info(
+            "cloud_posture_scans_deferred workspace_id=%s connection_id=%s cap=%s "
+            "scannable=%d enqueued=%d deferred=%d retry_after=%s",
+            connection.workspace_id,
+            connection.id,
+            _max_concurrent_scans(),
+            len(account_ids),
+            enqueued,
+            deferred,
+            retry_after,
+        )
+
+    return {
+        "scannable": len(account_ids),
+        "enqueued": enqueued,
+        "blocked": blocked,
+        "deferred": deferred,
+        "retry_after": retry_after,
+    }
 
 
 def dispatch_scans_for_workspace_connection(
     *, workspace_id, connection_id, trigger: str = "manual", triggered_by=None
 ) -> dict | None:
-    """Workspace-scoped entry for the on-demand endpoint.
+    """Workspace-scoped entry for the on-demand endpoint and the post-verify auto-scan.
 
-    Returns the dispatch counts, or ``None`` when no such connection belongs to
-    the workspace (the endpoint maps that to 404).
+    Returns the dispatch counts (``scannable`` / ``enqueued`` / ``blocked`` /
+    ``deferred`` / ``retry_after``), or ``None`` when no such connection belongs
+    to the workspace (the endpoint maps that to 404).
     """
     from infrastructure.persistence.integrations.models import AwsOrganizationConnection
 

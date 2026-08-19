@@ -130,6 +130,31 @@ def check_and_lock_dispatch(
     }
 
 
+def count_in_flight(source: str) -> int:
+    """How many scans of ``source`` are queued or running RIGHT NOW.
+
+    The fleet-wide companion to the per-target gate above, and it reads the same
+    authority (``ScanRun`` rows) with the same staleness rule — a run stuck in
+    PENDING/RUNNING past ``_STALE_RUNNING_SECONDS`` belongs to a crashed worker
+    and must not hold a concurrency slot forever.
+
+    Deliberately NOT workspace-scoped: the resource this bounds is the scanner
+    cluster and the shared cloud-provider API budget, both of which every
+    workspace draws from. A per-workspace ceiling would let ten customers each
+    dispatch the maximum simultaneously — exactly the herd it exists to stop.
+    (Within one database: a dedicated-tier tenant's runs live in its own, so the
+    ceiling applies per database. Noted with the beat fan-out gap in the PR.)
+    """
+    from infrastructure.persistence.scanning.models import ScanRun
+
+    now = timezone.now()
+    return ScanRun.objects.filter(
+        source=source,
+        status__in=(ScanRun.Status.PENDING, ScanRun.Status.RUNNING),
+        created_at__gte=now - timedelta(seconds=_STALE_RUNNING_SECONDS),
+    ).count()
+
+
 def latest_runs_for(workspace_id, source: str, target_refs: list[str]) -> dict[str, dict]:
     """Per-target scan status for a pillar's history/read surface.
 

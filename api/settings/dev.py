@@ -371,6 +371,19 @@ CELERY_BEAT_SCHEDULE = {
         "task": "cloud_posture.schedule_prowler_runs",
         "schedule": crontab(hour=2, minute=0),
     },
+    # Hourly AWS Organization re-discovery (task #155) — re-walks
+    # organizations:ListAccounts per CONNECTED org-wide connection and reconciles
+    # AwsAccountLink rows. Without it a new account joining a customer's org gets
+    # the audit role via the StackSet's AutoDeployment and is NEVER discovered,
+    # so it is never scanned while the UI reads healthy. Hourly, not nightly: a
+    # new account is not urgent (the sweep is a read, and its scan waits for the
+    # 02:00 fan-out anyway), but a full day of invisibility is a real coverage
+    # hole — this bounds worst-case invisibility to ~1h. Offset off :00 so it
+    # does not pile onto the other sweeps. Idempotent; safe to re-run.
+    "rediscover_aws_org_accounts": {
+        "task": "integrations.rediscover_aws_org_accounts",
+        "schedule": crontab(minute=20),
+    },
     # Nightly Vercel posture scan (ADR 0021 D3) — fans out per CONNECTED VercelConnection
     # of opted-in workspaces (feature.vercel_posture). Dark until opt-in; the task
     # self-gates on the flag AND the scanning dispatch gate (cooldown/in-flight).
