@@ -14,6 +14,10 @@ from collections.abc import Callable
 from components.integrations.application.ports.vcs_port import VcsPort
 from components.integrations.application.use_cases.open_draft_pr_use_case import OpenDraftPrUseCase
 
+# Mirrors ``VcsConnection.Status.CONNECTED`` without importing persistence at module
+# scope (same constant the draft-PR use case gates on).
+_STATUS_CONNECTED = "connected"
+
 
 class UnsupportedVcsProviderError(Exception):
     """The requested VCS provider has no registered/enabled adapter."""
@@ -78,16 +82,55 @@ def get_finding_pr_recorder():
     return ProjectFindingPrRecorder()
 
 
-def resolve_vcs_connection(workspace_id: str):
-    """Resolve the workspace's most-recent ``VcsConnection`` (own-context ORM read).
+def _non_empty_allowlist(connection) -> list[str]:
+    """The connection's allowlisted repos, normalised (blank/non-string entries dropped)."""
+    raw = getattr(connection, "repo_allowlist", None) or []
+    return [r.strip() for r in raw if isinstance(r, str) and r.strip()]
+
+
+def resolve_vcs_connection(workspace_id: str, *, repo: str = ""):
+    """Resolve the ``VcsConnection`` that can actually serve ``repo`` for this workspace.
 
     The composition root owns this read (Rule 9) so the draft-PR use case holds no
-    persistence import. Most-recent connection wins — the same resolution the
-    ``_require_connection`` gate did inline (a per-repo refinement is Phase 3 work).
-    The status gate stays in the use case; this returns the row (or ``None``)."""
+    persistence import. ``VcsConnection`` is deliberately a **many-rows-per-workspace**
+    model (see the model docstring: an org can link GitHub *and* GitLab, each with its
+    own ``repo_allowlist``), so "most-recent row wins" was never a safe resolution — it
+    let ANY newer row silently take over the workspace's whole draft-PR capability:
+
+    * completing the GitHub App install flow writes a second ``connected`` row whose
+      allowlist is deliberately empty → every finding started refusing with
+      ``repo_not_allowlisted``;
+    * a connection whose ``verify`` failed goes ``status=error`` → every finding
+      refused with ``connection_not_connected``;
+    * a connection for a different repo won over the one that allowlists the
+      finding's repo → ``finding_repo_not_allowlisted`` for a repo that IS allowlisted.
+
+    Preference order, newest-first within each tier:
+
+    1. a CONNECTED row whose allowlist contains ``repo`` (the consent-exact match);
+    2. a CONNECTED row with a non-empty allowlist (can serve *some* PR);
+    3. any CONNECTED row;
+    4. the newest row of any status — so a workspace whose only connection is broken
+       still gets the accurate ``connection_not_connected`` diagnostic from the caller's
+       status gate rather than a misleading "no connection at all".
+
+    The status gate itself stays in the caller; this returns the row (or ``None``)."""
     from infrastructure.persistence.integrations.models import VcsConnection
 
-    return VcsConnection.objects.filter(workspace_id=str(workspace_id)).order_by("-created_at").first()
+    rows = list(VcsConnection.objects.filter(workspace_id=str(workspace_id)).order_by("-created_at"))
+    if not rows:
+        return None
+
+    connected = [r for r in rows if r.status == VcsConnection.Status.CONNECTED]
+    target = (repo or "").strip()
+    if target:
+        for row in connected:
+            if target in _non_empty_allowlist(row):
+                return row
+    for row in connected:
+        if _non_empty_allowlist(row):
+            return row
+    return connected[0] if connected else rows[0]
 
 
 def resolve_workspace_owner_id(workspace_id: str) -> str | None:
@@ -172,15 +215,15 @@ def get_check_pr_merged_use_case():
     )
 
     def _resolve_connection(workspace_id: str):
-        # Most-recent connected VcsConnection for the workspace wins — same
-        # resolution the draft-PR use case uses (a per-repo refinement is future work).
-        from infrastructure.persistence.integrations.models import VcsConnection
-
-        return (
-            VcsConnection.objects.filter(workspace_id=workspace_id, status=VcsConnection.Status.CONNECTED)
-            .order_by("-created_at")
-            .first()
-        )
+        # ONE canonical resolution shared with the draft-PR path (dry-reuse): this
+        # seam used to run its own `status=CONNECTED` ORM read, so the two disagreed
+        # about which row served a workspace — the drift that let a newer empty /
+        # errored row shadow the healthy connection. Only the CONNECTED gate is kept
+        # local, because this caller reports "no connection" rather than a status.
+        connection = resolve_vcs_connection(workspace_id)
+        if connection is None or connection.status != _STATUS_CONNECTED:
+            return None
+        return connection
 
     return CheckPullRequestMergedUseCase(
         resolve_connection=_resolve_connection,

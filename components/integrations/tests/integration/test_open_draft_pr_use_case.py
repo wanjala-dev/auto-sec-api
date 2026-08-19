@@ -1046,3 +1046,96 @@ class TestOpenDraftPrAmbiguousEndpoint:
         assert 400 <= response.status_code < 500, response.data
         assert response.status_code != 502
         assert response.data["reason"] == "ambiguous_candidate_path"
+
+
+@pytest.mark.django_db
+class TestVcsConnectionResolution:
+    """A second VcsConnection row must never shadow the one that can serve the PR.
+
+    ``VcsConnection`` is explicitly a **many-rows-per-workspace** model (an org can
+    link GitHub *and* GitLab, each with its own ``repo_allowlist``). Resolving it as
+    "newest row wins" meant any newer row — a GitHub App install, a failed verify, a
+    connection for a different repo — silently took over the whole draft-PR
+    capability for the workspace and every finding started refusing.
+    """
+
+    def _run(self, workspace, owner, task, *, repo=None):
+        fake = _FakeGitHub()
+        with mock.patch(_REQUESTS_PATH, new=fake), mock.patch(_PROPOSE_PATH, return_value=_PATCH):
+            result = _use_case().execute(
+                workspace_id=str(workspace.id),
+                task_id=str(task.id),
+                performed_by=str(owner.id),
+                repo=repo,
+            )
+        return result
+
+    def test_github_app_row_does_not_shadow_the_healthy_pat_connection(self, workspace_factory, team_factory):
+        """Repro 1 — completing the GitHub App install flow creates a second
+        ``connected`` row whose allowlist is deliberately empty. That row must not
+        take over remediation for the workspace."""
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _triaged_finding(workspace, owner, team, column)
+        _connection(workspace, owner, allowlist=[_REPO])  # the healthy PAT connection
+        _capability_agent(workspace, owner)
+        # The install-flow row: newer, connected, app-mode, EMPTY allowlist.
+        VcsConnection.objects.create(
+            workspace=workspace,
+            provider=VcsConnection.Provider.GITHUB,
+            name="GitHub App",
+            auth_mode=VcsConnection.AuthMode.GITHUB_APP,
+            installation_id=88888888,
+            repo_allowlist=[],
+            token_ciphertext="",
+            status=VcsConnection.Status.CONNECTED,
+            created_by=owner,
+        )
+
+        result = self._run(workspace, owner, task)
+
+        assert result.created is True
+        assert result.repo == _REPO
+
+    def test_errored_row_does_not_shadow_the_healthy_connection(self, workspace_factory, team_factory):
+        """Repro 2 — a junk-token connection that failed ``verify`` goes
+        ``status=error``. Being newest, it used to win resolution and every draft PR
+        died with ``connection_not_connected``."""
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _triaged_finding(workspace, owner, team, column)
+        _connection(workspace, owner, allowlist=[_REPO])
+        _capability_agent(workspace, owner)
+        _connection(workspace, owner, allowlist=[], status=VcsConnection.Status.ERROR)
+
+        result = self._run(workspace, owner, task)
+
+        assert result.created is True
+        assert result.repo == _REPO
+
+    def test_resolves_the_connection_that_allowlists_the_findings_repo(self, workspace_factory, team_factory):
+        """Repro 3 — with two connected rows for different repos, the finding's OWN
+        repo picks the connection. Newest-wins used to refuse with
+        ``finding_repo_not_allowlisted`` for a repo that WAS allowlisted, just on the
+        other row."""
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _triaged_finding(workspace, owner, team, column, extra_payload={"repo": _REPO})
+        _connection(workspace, owner, allowlist=[_REPO])
+        _capability_agent(workspace, owner)
+        _connection(workspace, owner, allowlist=["wanjala-dev/some-other-repo"])
+
+        result = self._run(workspace, owner, task)
+
+        assert result.created is True
+        assert result.repo == _REPO
+
+    def test_only_a_broken_connection_still_reports_the_status(self, workspace_factory, team_factory):
+        """The narrowed resolution must NOT swallow the accurate diagnostic: when the
+        workspace's only row is unusable, the operator still gets
+        ``connection_not_connected`` (not a misleading ``no_github_connection``)."""
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _triaged_finding(workspace, owner, team, column)
+        _connection(workspace, owner, status=VcsConnection.Status.ERROR)
+        _capability_agent(workspace, owner)
+
+        with pytest.raises(DraftPrPreconditionError) as exc:
+            self._run(workspace, owner, task)
+        assert exc.value.reason == "connection_not_connected"
