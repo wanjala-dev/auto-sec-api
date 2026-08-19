@@ -9,8 +9,12 @@ Current state:
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from copy import deepcopy
 from typing import Any
+
+from django.db import connection, transaction
 
 from components.agents.domain.value_objects.plan_schemas import PlanSpec
 from components.agents.infrastructure.adapters.langchain.deep.packs import get_deep_pack
@@ -19,6 +23,40 @@ try:
     from infrastructure.persistence.workspaces.models import Workspace
 except ImportError:  # pragma: no cover
     Workspace = None
+
+
+@contextmanager
+def _contained_db_failure() -> Iterator[None]:
+    """Savepoint the block, so a swallowed DB error stays swallowed.
+
+    Both prefetch helpers below deliberately catch every exception and return
+    ``[]``: the planner can run ungrounded, so a flaky retrieve must not fail the
+    run. That contract silently breaks the moment the caller holds a transaction
+    — and it does. ``AgentsService.deep_plan_and_run`` dispatches through the
+    command bus, whose ``transaction_middleware`` wraps the entire deep run in
+    one ``transaction.atomic()``. A database error inside that block aborts the
+    whole transaction at the server; catching the exception does not un-abort it,
+    so every later statement in the run raises "current transaction is aborted,
+    commands ignored until end of transaction block". The run then fails at 0%
+    with no events, long after the endpoint answered ``202 {"status":"pending"}``.
+
+    A pgvector ``UndefinedColumn`` did exactly that to 100% of async deep runs
+    (2026-08-19). Rolling back to a savepoint clears the aborted state and keeps
+    the failure local — the same fix ``langchain/base.py::_apply_run_context``
+    already carries for a caught ``IntegrityError``.
+
+    The savepoint is taken ONLY when a transaction is already open. Outside one
+    (``agent_chat`` bypasses the bus for this very reason) there is nothing to
+    protect, and an unconditional ``atomic()`` would hold a fresh transaction
+    open across the retrieval's LLM round-trips — a cost this path exists to
+    avoid. ``connection`` is the right alias: the pgvector adapters run their raw
+    SQL on it, and ``transaction_middleware`` opens its block on it too.
+    """
+    if connection.in_atomic_block:
+        with transaction.atomic():
+            yield
+    else:
+        yield
 
 
 def _resolve_domains_and_pack(workspace_id: str, requested_pack: str | None) -> tuple[tuple[str, ...], str | None]:
@@ -98,20 +136,21 @@ def _prefetch_pdf_scoped_context(
     never blocks the chat from rendering an answer.
     """
     try:
-        from components.knowledge.application.ports.vector_store_port import (
-            SearchMode,
-        )
-        from components.knowledge.application.providers.ai_vector_store_provider import (
-            AIVectorStoreProvider,
-        )
+        with _contained_db_failure():
+            from components.knowledge.application.ports.vector_store_port import (
+                SearchMode,
+            )
+            from components.knowledge.application.providers.ai_vector_store_provider import (
+                AIVectorStoreProvider,
+            )
 
-        vector_store = AIVectorStoreProvider().get_port()
-        chunks = vector_store.hybrid_search(
-            goal,
-            k=k,
-            filters={"pdf_id": pdf_id, "workspace_id": workspace_id},
-            mode=SearchMode.HYBRID,
-        )
+            vector_store = AIVectorStoreProvider().get_port()
+            chunks = vector_store.hybrid_search(
+                goal,
+                k=k,
+                filters={"pdf_id": pdf_id, "workspace_id": workspace_id},
+                mode=SearchMode.HYBRID,
+            )
     except Exception:
         import logging
 
@@ -196,64 +235,65 @@ def _prefetch_retrieved_context(
             k=k,
         )
     try:
-        from components.knowledge.application.providers.workspace_retrieval_provider import (
-            workspace_retrieval,
-        )
-        from components.knowledge.application.use_cases.iterative_retrieval_use_case import (
-            IterativeRetrievalUseCase,
-            is_self_verify_enabled,
-        )
-        from components.knowledge.application.use_cases.rerank_retrieved_chunks_use_case import (
-            DEFAULT_FETCH_MULTIPLIER,
-            RerankRetrievedChunksUseCase,
-        )
-        from components.knowledge.application.use_cases.rewrite_query_for_retrieval_use_case import (
-            RewriteQueryForRetrievalUseCase,
-        )
-
-        min_score = _rerank_min_score_from_env()
-
-        # SEE-199 — scope the planner's grounding to the tiers the invoking
-        # actor may read. Resolved once; captured by the round closure so both
-        # the single-shot and iterative paths inherit it. None (no resolvable
-        # role) is least-privilege → GENERAL-only.
-        from components.agents.infrastructure.adapters.langchain.base import (
-            resolve_workspace_role,
-        )
-
-        viewer_role = resolve_workspace_role(user_id, workspace_id)
-
-        def _single_round_retrieve(*, workspace_id: str, query: str) -> list:
-            """One pass of rewrite → over-fetch → rerank.
-
-            Closure so the iterative loop (when enabled) gets the
-            same #9 + #10 pipeline per round as the single-shot path.
-            ``min_score`` is the precision tuning knob from the
-            ``KNOWLEDGE_RERANK_MIN_SCORE`` env var — see the use
-            case docstring for the rationale.
-            """
-            search_query = RewriteQueryForRetrievalUseCase().rewrite(workspace_id=workspace_id, query=query)
-            candidates = workspace_retrieval().search(
-                workspace_id=workspace_id,
-                query=search_query,
-                k=k * DEFAULT_FETCH_MULTIPLIER,
-                viewer_role=viewer_role,
+        with _contained_db_failure():
+            from components.knowledge.application.providers.workspace_retrieval_provider import (
+                workspace_retrieval,
             )
-            return RerankRetrievedChunksUseCase().rerank(
-                query=query,
-                chunks=candidates,
-                top_k=k,
-                min_score=min_score,
+            from components.knowledge.application.use_cases.iterative_retrieval_use_case import (
+                IterativeRetrievalUseCase,
+                is_self_verify_enabled,
+            )
+            from components.knowledge.application.use_cases.rerank_retrieved_chunks_use_case import (
+                DEFAULT_FETCH_MULTIPLIER,
+                RerankRetrievedChunksUseCase,
+            )
+            from components.knowledge.application.use_cases.rewrite_query_for_retrieval_use_case import (
+                RewriteQueryForRetrievalUseCase,
             )
 
-        if is_self_verify_enabled():
-            chunks = IterativeRetrievalUseCase().retrieve(
-                workspace_id=str(workspace_id),
-                goal=goal,
-                retriever=_single_round_retrieve,
+            min_score = _rerank_min_score_from_env()
+
+            # SEE-199 — scope the planner's grounding to the tiers the invoking
+            # actor may read. Resolved once; captured by the round closure so both
+            # the single-shot and iterative paths inherit it. None (no resolvable
+            # role) is least-privilege → GENERAL-only.
+            from components.agents.infrastructure.adapters.langchain.base import (
+                resolve_workspace_role,
             )
-        else:
-            chunks = _single_round_retrieve(workspace_id=str(workspace_id), query=goal)
+
+            viewer_role = resolve_workspace_role(user_id, workspace_id)
+
+            def _single_round_retrieve(*, workspace_id: str, query: str) -> list:
+                """One pass of rewrite → over-fetch → rerank.
+
+                Closure so the iterative loop (when enabled) gets the
+                same #9 + #10 pipeline per round as the single-shot path.
+                ``min_score`` is the precision tuning knob from the
+                ``KNOWLEDGE_RERANK_MIN_SCORE`` env var — see the use
+                case docstring for the rationale.
+                """
+                search_query = RewriteQueryForRetrievalUseCase().rewrite(workspace_id=workspace_id, query=query)
+                candidates = workspace_retrieval().search(
+                    workspace_id=workspace_id,
+                    query=search_query,
+                    k=k * DEFAULT_FETCH_MULTIPLIER,
+                    viewer_role=viewer_role,
+                )
+                return RerankRetrievedChunksUseCase().rerank(
+                    query=query,
+                    chunks=candidates,
+                    top_k=k,
+                    min_score=min_score,
+                )
+
+            if is_self_verify_enabled():
+                chunks = IterativeRetrievalUseCase().retrieve(
+                    workspace_id=str(workspace_id),
+                    goal=goal,
+                    retriever=_single_round_retrieve,
+                )
+            else:
+                chunks = _single_round_retrieve(workspace_id=str(workspace_id), query=goal)
     except Exception:
         import logging
 
