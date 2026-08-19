@@ -11,12 +11,14 @@ See ``docs/adr/0002-personas-and-rbac.md`` — permission decisions read
 must NEVER be used in a permission check.
 """
 
-from rest_framework import permissions
+import uuid
 
+from rest_framework import permissions
 
 # =============================================================================
 # CONTACT PERMISSIONS
 # =============================================================================
+
 
 class IsLoggedInUserOrAdmin(permissions.BasePermission):
     """Allow access if user is the object owner or is admin staff."""
@@ -38,6 +40,7 @@ class IsAdminUser(permissions.BasePermission):
 # =============================================================================
 # CORE (FEATURE FLAGS) PERMISSIONS
 # =============================================================================
+
 
 class IsOwnerOrReadOnly(permissions.BasePermission):
     """Allow write access only to object owner; others can read."""
@@ -89,14 +92,14 @@ class RequiresFeatureFlag(permissions.BasePermission):
 
         workspace_id = _flags.resolve_workspace_id_from_request(request, view=view)
         return all(
-            _flags.is_feature_enabled(key, user=user, workspace_id=workspace_id, request=request)
-            for key in required
+            _flags.is_feature_enabled(key, user=user, workspace_id=workspace_id, request=request) for key in required
         )
 
 
 # =============================================================================
 # WORKSPACE MEMBERSHIP PERMISSIONS
 # =============================================================================
+
 
 def _resolve_workspace_id(view, request):
     """Pull the workspace_id from common URL kwarg / query param names."""
@@ -141,14 +144,23 @@ class HasWorkspaceMembership(permissions.BasePermission):
             # should pair this with another permission class.
             return True
 
+        try:
+            workspace_id = uuid.UUID(str(workspace_id))
+        except (AttributeError, TypeError, ValueError):
+            # Not a workspace identifier at all, so the caller cannot be a
+            # member of it. Denying (rather than letting the malformed value
+            # reach the ORM, where UUIDField raises and DRF renders a 500)
+            # keeps the answer identical to "foreign" and "nonexistent" —
+            # this permission must never become an existence oracle.
+            return False
+
         from components.workspace.application.providers.workspaces_models_provider import get_workspaces_models_provider
+
         _wsp = get_workspaces_models_provider()
         Workspace = _wsp.Workspace
         WorkspaceMembership = _wsp.WorkspaceMembership
 
-        if Workspace.objects.filter(
-            id=workspace_id, workspace_owner_id=user.id
-        ).exists():
+        if Workspace.objects.filter(id=workspace_id, workspace_owner_id=user.id).exists():
             return True
 
         return WorkspaceMembership.objects.filter(
@@ -190,13 +202,12 @@ class HasWorkspaceRole(permissions.BasePermission):
             return False
 
         from components.workspace.application.providers.workspaces_models_provider import get_workspaces_models_provider
+
         _wsp = get_workspaces_models_provider()
         Workspace = _wsp.Workspace
         WorkspaceMembership = _wsp.WorkspaceMembership
 
-        if "owner" in required and Workspace.objects.filter(
-            id=workspace_id, workspace_owner_id=user.id
-        ).exists():
+        if "owner" in required and Workspace.objects.filter(id=workspace_id, workspace_owner_id=user.id).exists():
             return True
 
         return WorkspaceMembership.objects.filter(

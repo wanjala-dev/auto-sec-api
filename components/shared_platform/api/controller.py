@@ -30,6 +30,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from components.shared_platform.api.permissions import (
+    HasWorkspaceMembership,
     IsOwnerOrReadOnly,
 )
 from components.shared_platform.application.providers.feature_flags_provider import (
@@ -131,9 +132,20 @@ class FeatureFlagsView(APIView):
     Query params:
     - workspace_id: UUID (optional; falls back to user's active workspace)
     - include_sources=1: include evaluation sources (staff only)
+
+    A workspace's evaluated flags ARE its product configuration — which
+    scanners and capabilities are on, whether it is running on sample data,
+    whether the AI kill switch is tripped. ``HasWorkspaceMembership`` is
+    therefore mandatory, not decorative: ``workspace_id`` arrives from the
+    caller, and autosec is single-DB with application-enforced isolation, so
+    an unchecked workspace param IS the cross-tenant boundary (ADR 0028).
+    When no workspace is named the permission stands down and the resolver
+    falls back to the caller's OWN active workspace — that path is safe, and
+    gating it would 403 the first-run bootstrap that runs before a workspace
+    is chosen.
     """
 
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, HasWorkspaceMembership]
 
     def get(self, request, format=None):
         _flags = get_feature_flags_provider()
@@ -166,9 +178,14 @@ class FeatureFlagStatusView(APIView):
     Query params:
     - workspace_id: UUID (optional; falls back to user's active workspace)
     - include_source=1: include evaluation source (staff only)
+
+    Membership-gated for the same reason as ``FeatureFlagsView``, and more
+    urgently: one flag per request makes this the sharper oracle — a caller
+    could walk the flag catalogue a bit at a time against any workspace UUID
+    they happened to see in a URL, invite link or Slack deep link.
     """
 
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, HasWorkspaceMembership]
 
     def get(self, request, key: str, format=None):
         _flags = get_feature_flags_provider()
