@@ -127,8 +127,41 @@ class WorkspaceQueryRepository:
         return workspace_qs.get(id=workspace_id)
 
     @staticmethod
+    def scope_to_user(queryset, user):
+        """Narrow ``queryset`` to the workspaces ``user`` may see.
+
+        Visible == the user OWNS the workspace, or holds an ACTIVE
+        ``WorkspaceMembership`` in it. This is the queryset counterpart of
+        ``components.membership.api.permissions.user_is_active_workspace_member``
+        — the two MUST agree, so a change to one belongs in both.
+
+        autosec is single-database (ADR 0028): there is no database boundary
+        behind this filter, so an unscoped workspace queryset IS a cross-tenant
+        disclosure. Anonymous callers get ``none()`` — never a fall-through to
+        the full table.
+        """
+        from django.db.models import Q
+
+        from infrastructure.persistence.workspaces.models import WorkspaceMembership
+
+        if not getattr(user, "is_authenticated", False):
+            return queryset.none()
+
+        return queryset.filter(
+            Q(workspace_owner_id=user.id)
+            | Q(
+                memberships__user_id=user.id,
+                memberships__status=WorkspaceMembership.Status.ACTIVE,
+            )
+        ).distinct()
+
+    @staticmethod
     def get_all_workspaces_with_relations():
-        """Fetch all workspaces with related data."""
+        """Fetch all workspaces with related data.
+
+        UNSCOPED — every caller serving this to a request MUST narrow it with
+        ``scope_to_user`` first.
+        """
         from infrastructure.persistence.workspaces.models import Workspace
 
         return Workspace.objects.select_related(

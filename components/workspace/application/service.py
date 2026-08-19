@@ -134,8 +134,20 @@ class WorkspaceService:
         return self.query_repository.get_workspace_with_prefetch(workspace_id, include_budget=include_budget)
 
     def get_all_workspaces_with_relations(self):
-        """Fetch all workspaces with related data."""
+        """Fetch all workspaces with related data (UNSCOPED — see below)."""
         return self.query_repository.get_all_workspaces_with_relations()
+
+    def get_workspaces_visible_to_user(self, user):
+        """Workspaces ``user`` owns or holds an ACTIVE membership in.
+
+        The scoped front door for every request-serving workspace read.
+        ``get_all_workspaces*`` is unscoped and must not be handed to a
+        response on its own.
+        """
+        return self.query_repository.scope_to_user(
+            self.query_repository.get_all_workspaces_with_relations(),
+            user,
+        )
 
     def get_all_workspace_categories(self):
         """Fetch all workspace categories."""
