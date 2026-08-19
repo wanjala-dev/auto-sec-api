@@ -157,6 +157,14 @@ def test_payment_runtime_provider_creates_checkout_and_adds_order_metadata():
 
 
 def test_payment_runtime_provider_maps_webhook_verification_result():
+    """Verification carries the OWNING DB ALIAS through to the caller.
+
+    The idempotency-ledger write used to happen inside the verifier (hence the
+    old ``payment_event*`` fields on this result). It moved to
+    ``record_and_claim_webhook_event`` so the caller can bind
+    ``db_alias`` first — a webhook has no tenant subdomain, so the request is
+    bound to the pool and the write would otherwise land there.
+    """
     verifier = FakeWebhookVerifier(
         SimpleNamespace(
             event={"id": "evt_123"},
@@ -165,10 +173,8 @@ def test_payment_runtime_provider_maps_webhook_verification_result():
             account_id="acct_123",
             legacy_context="legacy",
             provider_slug="stripe",
-            payment_event="payment_event",
-            payment_event_duplicate=True,
-            payment_event_processable=False,
             api_key="sk_test",
+            db_alias="tenant_acme",
         )
     )
     provider = PaymentRuntimeProvider(webhook_verifier=verifier)
@@ -177,6 +183,29 @@ def test_payment_runtime_provider_maps_webhook_verification_result():
     result = provider.verify_webhook(request, "donations")
 
     assert result.provider_slug == "stripe"
-    assert result.payment_event_duplicate is True
+    assert result.db_alias == "tenant_acme"
     assert result.api_key == "sk_test"
     assert verifier.calls == [(request, "donations")]
+
+
+def test_verification_result_without_a_db_alias_defaults_to_none_not_default():
+    """A verifier that reports no alias must never be read as "use the pool".
+
+    ``None`` means "no configured database claims this account" — the caller's
+    contract is "do not rebind", which keeps whatever the request bound.
+    """
+    verifier = FakeWebhookVerifier(
+        SimpleNamespace(
+            event={"id": "evt_456"},
+            method=None,
+            workspace=None,
+            account_id=None,
+            legacy_context=None,
+            provider_slug="stripe",
+            api_key="sk_test",
+        )
+    )
+
+    result = PaymentRuntimeProvider(webhook_verifier=verifier).verify_webhook(object(), "team_subscriptions")
+
+    assert result.db_alias is None

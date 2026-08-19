@@ -15,6 +15,7 @@ Usage::
 
     docker exec compose-web-1 python manage.py enable_private_space_for_user c0d3henry@gmail.com
 """
+
 from __future__ import annotations
 
 from django.core.management.base import BaseCommand, CommandError
@@ -27,9 +28,6 @@ class Command(BaseCommand):
         parser.add_argument("email", help="Email of the user to enable private space for.")
 
     def handle(self, *args, **options):
-        from components.shared_platform.application.providers.router_db_provider import (
-            set_db_for_router,
-        )
         from components.identity.application.providers.workspace_bootstrap_provider import (
             get_workspace_bootstrap_provider,
         )
@@ -39,9 +37,12 @@ class Command(BaseCommand):
         from infrastructure.persistence.core.models import FeatureFlag, FeatureFlagRule
         from infrastructure.persistence.users.models import CustomUser
 
-        # Management commands don't run tenant middleware, so the router's
-        # thread-local is unset. Lock to default for consistent routing.
-        set_db_for_router("default")
+        # The pooled tenant is already bound for the whole command run by
+        # ``run_management_command()`` in manage.py, so this body routes to
+        # ``default`` without doing anything. It previously called
+        # ``set_db_for_router("default")``, which wrote a threading.local the
+        # live ContextVar-based router never reads — a no-op that read as a
+        # binding. Deleted 2026-08-19.
 
         email = options["email"].strip()
         user = CustomUser.objects.filter(email__iexact=email).first()
