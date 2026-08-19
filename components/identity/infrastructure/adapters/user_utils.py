@@ -10,6 +10,8 @@ from django_otp.plugins.otp_totp.models import TOTPDevice
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
 
+from components.identity.infrastructure.adapters.otp_challenge_token import OtpChallengeToken
+
 
 class EmailThread(threading.Thread):
     def __init__(self, email):
@@ -159,9 +161,14 @@ def issue_tokens(user, *, otp_verified=False, device=None, include_refresh=True)
 
 def issue_preauth_token(user, lifetime_minutes=10) -> str:
     """
-    Issue a short-lived access token used only for completing OTP verification.
+    Issue a short-lived token usable ONLY for completing OTP verification.
+
+    This is an ``OtpChallengeToken``, not an access token: its ``token_type``
+    claim makes it structurally unusable on any endpoint authenticated by the
+    default ``JWTAuthentication`` (which decodes access tokens only). Endpoints
+    that must accept it opt in via ``OtpChallengeJWTAuthentication``.
     """
-    token = AccessToken.for_user(user)
+    token = OtpChallengeToken.for_user(user)
     token.set_exp(from_time=timezone.now(), lifetime=timedelta(minutes=lifetime_minutes))
     token["otp_verified"] = False
     token["otp_pending"] = True
