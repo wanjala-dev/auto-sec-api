@@ -116,7 +116,10 @@ class TestBoardViewFilterVocabulary:
 
     def test_slug_is_unique_per_team_and_workspace(self, workspace_factory, team_factory):
         workspace, team = _team(workspace_factory, team_factory)
-        BoardView.objects.create(workspace=workspace, team=team, name="Board", slug="board")
+        # A slug the runtime seam does NOT mint (it owns "board" and
+        # "project-<pk>"), so this pins the CONSTRAINT rather than colliding
+        # with the team's derived system view.
+        BoardView.objects.create(workspace=workspace, team=team, name="Hot", slug="hot")
 
         with pytest.raises(IntegrityError), transaction.atomic():
-            BoardView.objects.create(workspace=workspace, team=team, name="Board 2", slug="board")
+            BoardView.objects.create(workspace=workspace, team=team, name="Hot 2", slug="hot")

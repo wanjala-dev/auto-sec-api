@@ -48,9 +48,16 @@ def _tasks(workspace, team, owner, column, count, *, project=None, start=0):
 
 
 def _view(workspace, team, *, slug="board", filter=None):
-    return BoardView.objects.create(
-        workspace=workspace, team=team, name=slug, slug=slug, filter=filter or {}, is_system=True
+    """Adopt the runtime-minted system view when it already exists (the
+    ``django_system_board_view_bridge`` mints "board" / "project-<pk>" on
+    team and project create)."""
+    view, _created = BoardView.objects.update_or_create(
+        workspace=workspace,
+        team=team,
+        slug=slug,
+        defaults={"name": slug, "filter": filter or {}, "is_system": True},
     )
+    return view
 
 
 def _query_count(api_client, url, params):
