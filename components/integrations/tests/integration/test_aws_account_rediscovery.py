@@ -302,17 +302,20 @@ class TestScheduledRediscoverySweep:
         assert second["created"] == 0
         assert _status_of(conn, _MGMT) == AwsAccountLink.Status.VERIFIED
 
-    @pytest.mark.unbound_tenancy
-    def test_the_sweep_binds_a_tenant_rather_than_inheriting_one(self, workspace_factory):
-        """Tenancy skill §3i: a beat task arrives with nothing bound, and the
-        fail-closed router refuses unbound queries. Binding must be explicit —
-        'whatever the last task on this prefork child left' is a cross-tenant read.
-
-        ``unbound_tenancy`` opts out of the suite's pooled auto-bind, so this is
-        the real thing: if the task did not bind, nothing would be bound."""
+    def test_the_sweep_runs_under_the_tenant_the_fan_out_bound(self, workspace_factory):
+        """The task must NOT re-bind. Beat's binder is
+        ``shared_platform.run_for_each_tenant``, which dispatches this once per
+        tenant scope with that tenant stamped on the message; a ``pooled_scope()``
+        in here (which is what this task originally shipped with, before the beat
+        boundary had a binder) would override that and pin every sweep to the
+        pooled console — so no dedicated-tier customer's org would ever be
+        re-discovered. Asserted by binding a DEDICATED context and proving the
+        task did not replace it."""
         from components.shared_platform.infrastructure.tenancy.context import (
-            KIND_POOLED,
+            KIND_DEDICATED,
+            TenantContext,
             get_current_tenant,
+            tenant_context,
         )
 
         conn = _conn(workspace_factory())
@@ -323,11 +326,15 @@ class TestScheduledRediscoverySweep:
             seen.append(get_current_tenant())
             return _discovery([_MGMT])
 
-        with patch(f"{_STS_ADAPTER}.verify_and_discover", side_effect=_capture):
+        # 'default' so the test DB is still the one queried, while the KIND is
+        # dedicated — enough to prove the binding survived the call.
+        scope = TenantContext(kind=KIND_DEDICATED, subdomain="acme", db_alias="default")
+        with patch(f"{_STS_ADAPTER}.verify_and_discover", side_effect=_capture), tenant_context(scope):
             self._run()
 
         assert seen and seen[0] is not None, "the sweep queried with no tenant bound"
-        assert seen[0].kind == KIND_POOLED
+        assert seen[0].kind == KIND_DEDICATED, "the task re-bound and clobbered the fan-out's tenant"
+        assert seen[0].subdomain == "acme"
 
 
 @pytest.mark.integration

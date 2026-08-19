@@ -56,6 +56,7 @@ import components.remediation.infrastructure.tasks.reconcile_remediations_tasks
 import components.report.workers.tasks
 import components.scanning.infrastructure.tasks.scan_tasks
 import components.shared_platform.infrastructure.tasks.document_import_tasks
+import components.shared_platform.infrastructure.tasks.tenancy_fanout_tasks
 import components.shared_platform.workers.tasks
 import components.sign_off.workers.tasks
 import components.subscription.workers.tasks

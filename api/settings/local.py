@@ -510,7 +510,8 @@ CELERY_BEAT_SCHEDULE = {
     # beats removed in the fork). Task names reference kept task modules; add
     # security-domain schedules (alert sweeps, agent runs) here as they ship.
     "identity_sweep_user_sessions": {
-        "task": "identity.sweep_user_sessions",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "identity.sweep_user_sessions"},
         "schedule": crontab(minute="*/15"),
     },
     # Weekly push/delivery hygiene: delete PushSubscription rows dead
@@ -519,19 +520,23 @@ CELERY_BEAT_SCHEDULE = {
     # terminal NotificationDelivery ledger rows >
     # NOTIFICATION_DELIVERY_RETENTION_DAYS. Idempotent reconciliation.
     "notifications_prune_stale_push_subscriptions": {
-        "task": "notifications.prune_stale_push_subscriptions",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "notifications.prune_stale_push_subscriptions"},
         "schedule": crontab(hour=4, minute=40, day_of_week=0),
     },
     "workflow_run_due_schedules": {
-        "task": "workflow.run_due_schedules",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "workflow.run_due_schedules"},
         "schedule": crontab(minute="*"),
     },
     "sweep_stuck_document_imports": {
-        "task": "sweep_stuck_document_imports",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "sweep_stuck_document_imports"},
         "schedule": crontab(minute="*/10"),
     },
     "signoff_materialize_pending_tasks": {
-        "task": "sign_off.materialize_pending_signoff_tasks",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "sign_off.materialize_pending_signoff_tasks"},
         "schedule": crontab(minute="*/5"),
     },
     # AI teammate cycle — fans out to run_ai_teammate_cycle for every
@@ -542,7 +547,8 @@ CELERY_BEAT_SCHEDULE = {
     # Nightly Prowler CSPM scan — fans out per verified account of opted-in orgs
     # (feature.cloud_posture). Dark until opt-in; the task self-gates on the flag.
     "schedule_cloud_posture_scans": {
-        "task": "cloud_posture.schedule_prowler_runs",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "cloud_posture.schedule_prowler_runs"},
         "schedule": crontab(hour=2, minute=0),
     },
     # Hourly AWS Organization re-discovery (task #155) — re-walks
@@ -555,27 +561,31 @@ CELERY_BEAT_SCHEDULE = {
     # hole — this bounds worst-case invisibility to ~1h. Offset off :00 so it
     # does not pile onto the other sweeps. Idempotent; safe to re-run.
     "rediscover_aws_org_accounts": {
-        "task": "integrations.rediscover_aws_org_accounts",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "integrations.rediscover_aws_org_accounts"},
         "schedule": crontab(minute=20),
     },
     # Nightly Vercel posture scan (ADR 0021 D3) — fans out per CONNECTED VercelConnection
     # of opted-in workspaces (feature.vercel_posture). Dark until opt-in; the task
     # self-gates on the flag AND the scanning dispatch gate (cooldown/in-flight).
     "schedule_vercel_posture_scans": {
-        "task": "cloud_posture.schedule_vercel_prowler_runs",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "cloud_posture.schedule_vercel_prowler_runs"},
         "schedule": crontab(hour=2, minute=30),
     },
     # Daily Trivy container-SCA rescan — fans out per known image of opted-in
     # workspaces (feature.container_security). Dark until opt-in; self-gates on the flag.
     "schedule_container_scans": {
-        "task": "container_security.schedule_container_scans",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "container_security.schedule_container_scans"},
         "schedule": crontab(hour=3, minute=0),
     },
     # Nightly Opengrep SAST rescan (ADR 0019 D3) — fans out per allowlisted repo of
     # opted-in workspaces (feature.code_security). Dark until opt-in; self-gates on
     # the flag. Fingerprint identity makes the re-scan a cheap last_seen bump.
     "schedule_repo_scans": {
-        "task": "code_security.schedule_repo_scans",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "code_security.schedule_repo_scans"},
         "schedule": crontab(hour=3, minute=30),
     },
     # Hourly Remediation Memory capture reconciler (ADR 0012 P4a) — merge-checks
@@ -583,7 +593,8 @@ CELERY_BEAT_SCHEDULE = {
     # offers them to the gated corpus capture. The driver of the capture loop:
     # without a schedule nothing is captured autonomously. Idempotent.
     "reconcile_applied_remediations": {
-        "task": "remediation.reconcile_applied_remediations",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "remediation.reconcile_applied_remediations"},
         "schedule": crontab(minute=15),
     },
     # The draft-PR retry leg: settle PRs the operator closed without merging (which
@@ -592,18 +603,21 @@ CELERY_BEAT_SCHEDULE = {
     # freed slot. Runs after the merge reconciler so a merged PR is resolved by
     # its owner first. Idempotent; bounded per sweep.
     "release_rejected_draft_prs": {
-        "task": "infrastructure.ai.agents.tasks.release_rejected_draft_prs",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "infrastructure.ai.agents.tasks.release_rejected_draft_prs"},
         "schedule": crontab(minute=35),
     },
     # Daily Remediation Memory orphan-recovery sweep (ADR 0012 P6) — re-embeds
     # vetted fixes that cleared the D1 gate but whose after-commit embed never
     # landed (admitted-but-unretrievable) or whose rating changed. Idempotent.
     "reindex_remediation_corpus": {
-        "task": "remediation.reindex_remediation_corpus",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "remediation.reindex_remediation_corpus"},
         "schedule": crontab(hour=3, minute=30),
     },
     "schedule_ai_teammate_runs": {
-        "task": "infrastructure.ai.agents.tasks.schedule_ai_teammate_runs",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "infrastructure.ai.agents.tasks.schedule_ai_teammate_runs"},
         "schedule": crontab(minute="*/5"),
     },
     # Daily threat-intel feed refresh (ADR 0013 D2) — pulls EPSS + CISA KEV into
@@ -611,7 +625,8 @@ CELERY_BEAT_SCHEDULE = {
     # publishes VulnIntelRefreshed so the findings context rescores contextual risk.
     # Global (not per-workspace); runs before the 02:00 CSPM scan.
     "vuln_intel_refresh_feeds": {
-        "task": "vuln_intel.refresh_feeds",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "vuln_intel.refresh_feeds", "mode": "shared"},
         "schedule": crontab(hour=1, minute=30),
     },
     # Daily AI-action rollup — recomputes yesterday's AiActionDailyRollup
@@ -619,7 +634,8 @@ CELERY_BEAT_SCHEDULE = {
     # governance charts read these rollup rows instead of live-aggregating
     # DeepRun/DeepRunLog on the request path.
     "rollup_ai_action_daily": {
-        "task": "ai.rollup_ai_action_daily",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "ai.rollup_ai_action_daily"},
         "schedule": crontab(minute=20, hour=0),
     },
 }

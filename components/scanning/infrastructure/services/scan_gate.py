@@ -138,13 +138,47 @@ def count_in_flight(source: str) -> int:
     PENDING/RUNNING past ``_STALE_RUNNING_SECONDS`` belongs to a crashed worker
     and must not hold a concurrency slot forever.
 
-    Deliberately NOT workspace-scoped: the resource this bounds is the scanner
-    cluster and the shared cloud-provider API budget, both of which every
-    workspace draws from. A per-workspace ceiling would let ten customers each
-    dispatch the maximum simultaneously — exactly the herd it exists to stop.
-    (Within one database: a dedicated-tier tenant's runs live in its own, so the
-    ceiling applies per database. Noted with the beat fan-out gap in the PR.)
+    Deliberately NOT workspace-scoped, AND NOT database-scoped: the resource this
+    bounds is the scanner cluster and the shared cloud-provider API budget, and
+    every workspace of every tenant — pooled or dedicated — draws from the same
+    ones. A per-workspace ceiling would let ten customers each dispatch the
+    maximum simultaneously; a per-DATABASE ceiling would do the same per
+    dedicated tenant, which is the herd it exists to stop wearing a different
+    hat. So the count sums across every tenant scope.
+
+    That is N small indexed counts per fan-out (N = 1 + dedicated tenants), which
+    is the honest price of a ceiling that means what it says. A scope that fails
+    to answer is counted as CONTENDED rather than empty — failing closed keeps an
+    unreachable database from silently raising everyone else's ceiling.
     """
+    from components.shared_platform.application.providers.tenancy_scopes_provider import (
+        scheduled_sweep_scopes,
+    )
+
+    total = 0
+    for scope in scheduled_sweep_scopes():
+        try:
+            with scope.bind():
+                total += _count_in_flight_here(source)
+        except Exception:
+            logger.exception(
+                "scan_gate in-flight count failed for tenant=%s db_alias=%s; counting it as AT CAP "
+                "(fail closed) so an unreachable database cannot inflate the global ceiling",
+                scope.label,
+                scope.db_alias,
+            )
+            total += _UNREACHABLE_SCOPE_PENALTY
+    return total
+
+
+#: What an unreadable tenant scope contributes to the in-flight count. Non-zero
+#: on purpose: treating "I could not ask" as "nothing is running there" would
+#: quietly widen the global ceiling exactly when the cluster is least healthy.
+_UNREACHABLE_SCOPE_PENALTY = 1
+
+
+def _count_in_flight_here(source: str) -> int:
+    """In-flight runs for ``source`` in the CURRENTLY BOUND database."""
     from infrastructure.persistence.scanning.models import ScanRun
 
     now = timezone.now()
