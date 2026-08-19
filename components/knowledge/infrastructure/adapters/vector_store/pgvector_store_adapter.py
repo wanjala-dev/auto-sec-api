@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 
 from components.knowledge.application.ports.vector_store_port import (
     RetrievedChunk,
@@ -25,8 +24,12 @@ from components.knowledge.application.ports.vector_store_port import (
 
 logger = logging.getLogger(__name__)
 
-# Default embedding dimension — matches OpenAI text-embedding-ada-002 / text-embedding-3-small
-_EMBEDDING_DIM = int(os.environ.get("EMBEDDING_DIMENSION", "1536"))
+# The embedding dimension is a SCHEMA fact, not a runtime knob, so it lives
+# with the column that stores it: ``EMBEDDING_DIMENSIONS`` in
+# ``infrastructure.persistence.ai.models``. An ``EMBEDDING_DIMENSION`` env
+# override used to be declared here; nothing ever read it, and honouring it
+# could only have produced pgvector dimension-mismatch errors against a
+# column fixed at 1536.
 
 
 def _chunk_identity(chunk: RetrievedChunk) -> str:

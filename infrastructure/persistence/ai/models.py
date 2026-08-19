@@ -4,7 +4,17 @@ AI Models for document and chunk persistence
 from django.db import models
 from django.contrib.auth import get_user_model
 from django.utils import timezone
+from pgvector.django import VectorField
 import uuid
+
+# Dimension of the pgvector column on ``ai_embedding_chunks``.
+#
+# Fixed by the embeddings model the knowledge context uses —
+# ``text-embedding-ada-002`` (and ``text-embedding-3-small``) both emit 1536
+# floats. This is a SCHEMA fact, not a runtime knob: changing it means a
+# migration plus a re-embed of every stored chunk, so it must never be read
+# from the environment.
+EMBEDDING_DIMENSIONS = 1536
 
 try:
     from infrastructure.persistence.workspaces.models import Workspace
@@ -95,13 +105,28 @@ class EmbeddingChunk(models.Model):
     """Stores document chunks with pgvector embeddings for semantic search.
 
     This table is the pgvector alternative to Elasticsearch dense_vector
-    storage.  The ``embedding`` column uses raw SQL (the pgvector ``vector``
-    type is not natively supported by the Django ORM, so the column is
-    created via a RunSQL migration).
+    storage. It is the ONE canonical workspace-RAG store: the workspace
+    snapshot indexer, the uploaded-document indexer and Remediation Memory
+    all write here, and every retrieval path reads here.
+
+    ``embedding`` is a real ORM field. The docstring here used to say the
+    column was "not natively supported by the Django ORM, so the column is
+    created via a RunSQL migration" — that predated ``pgvector.django``, and
+    after the fork's migration reset no such RunSQL existed. The column was
+    simply absent, so every vector search raised ``UndefinedColumn``.
+
+    Writers still ATTACH the vector by raw SQL after insert (see
+    ``PgVectorWorkspaceIndexAdapter._attach_vectors``); declaring the field
+    fixes the schema, not the write style. Declaring it is also what lets
+    ``makemigrations`` see drift on this column at all.
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     content = models.TextField()
+    # Nullable because a row is inserted first (content + metadata) and the
+    # vector attached afterwards; a chunk with no vector stays
+    # keyword-retrievable rather than failing the write.
+    embedding = VectorField(dimensions=EMBEDDING_DIMENSIONS, null=True, blank=True)
     metadata = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
