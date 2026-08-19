@@ -8,12 +8,13 @@ rendering from the real payload shape, and no-findings honesty.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
 
 import pytest
 
+from components.report.application.ports.finding_source_port import FindingPage, FindingQuery
 from components.report.application.services.report_assembler_service import (
     AssembleScope,
     ReportAssemblerService,
@@ -26,36 +27,27 @@ pytestmark = pytest.mark.unit
 
 class FakeFindingSource:
     """In-memory ``FindingSourcePort`` — returns the findings it was seeded with,
-    honouring the source_types / prefix filters so scope tests are real."""
+    honouring the source allow-list so scope tests are real, and reporting the
+    truncation accounting the way a real adapter must."""
 
-    def __init__(self, findings: list[Mapping[str, Any]]) -> None:
+    def __init__(self, findings: list[Mapping[str, Any]], *, extra_matched: int = 0) -> None:
         self._findings = findings
-        self.last_call: dict[str, Any] | None = None
+        self._extra_matched = extra_matched  # matched-but-not-returned (truncation)
+        self.last_query: FindingQuery | None = None
 
-    def list_findings(
-        self,
-        *,
-        workspace_id: str,
-        source_type_prefixes: Sequence[str],
-        source_types: Sequence[str] | None = None,
-        since: datetime | None = None,
-        until: datetime | None = None,
-        limit: int = 500,
-    ) -> list[Mapping[str, Any]]:
-        self.last_call = {
-            "workspace_id": workspace_id,
-            "source_type_prefixes": tuple(source_type_prefixes),
-            "source_types": tuple(source_types) if source_types else None,
-            "since": since,
-            "until": until,
-            "limit": limit,
-        }
-        out = [
-            f for f in self._findings if any(str(f.get("source_type", "")).startswith(p) for p in source_type_prefixes)
-        ]
-        if source_types:
-            out = [f for f in out if f.get("source_type") in set(source_types)]
-        return out[:limit]
+    def list_findings(self, query: FindingQuery) -> FindingPage:
+        self.last_query = query
+        out = list(self._findings)
+        if query.source_prefixes:
+            out = [f for f in out if any(str(f.get("source", "")).startswith(p) for p in query.source_prefixes)]
+        if query.sources:
+            out = [f for f in out if any(str(f.get("source", "")).startswith(p) for p in query.sources)]
+        returned = out[: query.limit]
+        return FindingPage(
+            findings=tuple(returned),
+            total_matched=len(out) + self._extra_matched,
+            sample_count=sum(1 for f in returned if f.get("is_sample")),
+        )
 
 
 def _finding(
@@ -69,14 +61,34 @@ def _finding(
     signal: str = "Repeated auth failures",
     recommendation: str = "Rotate the affected credentials.",
     evidence: list | None = None,
+    source: str | None = None,
+    dedup_key: str | None = None,
+    on_board: bool = True,
+    is_sample: bool = False,
 ) -> dict[str, Any]:
-    return {
+    finding: dict[str, Any] = {
         "id": f"task-{fid_hint}",
         "title": title,
         "description": "",
+        # ``severity`` is first-class on the port's mapping now.
+        "severity": severity,
+        "source": source if source is not None else source_type,
         "source_type": source_type,
-        "status": "todo",
+        "status": "open",
         "created_at": datetime(2026, 7, 20, 12, 0, 0),
+        "is_sample": is_sample,
+        "triage": (
+            {
+                "on_board": True,
+                "column": "Todo",
+                "team": "AI Findings",
+                "task_status": "todo",
+                "triage_status": "pending",
+                "assignees": ["alice"],
+            }
+            if on_board
+            else {"on_board": False}
+        ),
         "metadata": {
             "severity": severity,
             "action_type": action_type,
@@ -94,6 +106,9 @@ def _finding(
             },
         },
     }
+    if dedup_key:
+        finding["dedup_key"] = dedup_key
+    return finding
 
 
 def _assemble(findings: list[Mapping[str, Any]], **scope_kwargs):
@@ -115,7 +130,13 @@ class TestHistogram:
             _finding(fid_hint="5", severity="critical", title="Crit A", signal="rce attempt"),
         ]
         report, _ = _assemble(findings)
-        assert report.histogram.counts == {"critical": 1, "high": 2, "medium": 1, "low": 1}
+        assert report.histogram.counts == {
+            "critical": 1,
+            "high": 2,
+            "medium": 1,
+            "low": 1,
+            "informational": 0,
+        }
         assert report.histogram.total == 5
         assert report.histogram.highest_band == "critical"
 
@@ -219,10 +240,104 @@ class TestScopeFilters:
         report, source = _assemble(findings, source_types=["ai.log_watch.error"])
         assert report.finding_count == 1
         assert report.technical_findings[0].title == "Log"
-        assert source.last_call["source_types"] == ("ai.log_watch.error",)
+        assert source.last_query.sources == ("ai.log_watch.error",)
 
     def test_unknown_kind_raises(self):
         source = FakeFindingSource([])
         service = ReportAssemblerService(source)
         with pytest.raises(UnknownReportKind):
             service.assemble(AssembleScope(workspace_id="ws-1", kind="nope"))
+
+
+class TestAccountingIsCarriedNotDiscarded:
+    """Whatever the port could not return, the assembled report STATES."""
+
+    def test_truncation_reaches_the_report_and_the_grounding(self):
+        findings = [_finding(fid_hint=str(i), severity="high", title=f"Issue {i}") for i in range(3)]
+        source = FakeFindingSource(findings, extra_matched=97)
+        report = ReportAssemblerService(source).assemble(AssembleScope(workspace_id="ws-1"))
+
+        assert report.total_matched == 100
+        assert report.truncated_count == 97
+        assert report.is_truncated
+        corpus = " ".join(report.grounding_texts)
+        assert "100 findings matched this report's scope" in corpus
+        assert "97 findings were not included" in corpus
+
+    def test_untriaged_findings_are_counted_and_grounded(self):
+        findings = [
+            _finding(fid_hint="1", severity="high", title="Triaged one", signal="a"),
+            _finding(fid_hint="2", severity="high", title="Nobody looked", signal="b", on_board=False),
+        ]
+        report, _ = _assemble(findings)
+
+        assert report.untriaged_count == 1
+        by_title = {t.title: t for t in report.technical_findings}
+        assert by_title["Nobody looked"].triage.label == "Untriaged"
+        assert by_title["Triaged one"].triage.label == "Todo — alice"
+        assert any("have not been triaged" in t for t in report.grounding_texts)
+
+    def test_sample_data_is_counted_marked_and_grounded(self):
+        findings = [
+            _finding(fid_hint="1", severity="high", title="Demo", signal="a", is_sample=True),
+            _finding(fid_hint="2", severity="high", title="Real", signal="b"),
+        ]
+        report, _ = _assemble(findings)
+
+        assert report.sample_finding_count == 1
+        assert report.contains_sample_data
+        assert {t.title: t.is_sample for t in report.technical_findings} == {"Demo": True, "Real": False}
+        assert any("CONTAINS SAMPLE DATA" in t for t in report.grounding_texts)
+
+    def test_the_kinds_inclusion_policy_reaches_the_port(self):
+        report, source = _assemble([])
+        # Pentest excludes terminal findings, includes sample data — and the
+        # scope goes out in SSOT vocabulary (every source), not board prefixes.
+        assert source.last_query.include_resolved is False
+        assert source.last_query.include_suppressed is False
+        assert source.last_query.include_sample is True
+        assert source.last_query.source_prefixes == ()
+        assert report.excluded_resolved == 0
+
+
+class TestIdentityDedupDoesNotUndercount:
+    def test_distinct_ssot_findings_are_never_fuzzily_merged(self):
+        """Two open security groups differ only by a hex id — the fuzzy board
+        signature would collapse them into one and undercount the report."""
+        findings = [
+            _finding(
+                fid_hint="1",
+                severity="critical",
+                title="Security group sg-0a1b2c3d4e5f allows SSH from 0.0.0.0/0",
+                signal="Security group sg-0a1b2c3d4e5f allows SSH from 0.0.0.0/0",
+                dedup_key="cloud_posture.prowler|sg-0a1b2c3d4e5f",
+            ),
+            _finding(
+                fid_hint="2",
+                severity="critical",
+                title="Security group sg-9f8e7d6c5b4a allows SSH from 0.0.0.0/0",
+                signal="Security group sg-9f8e7d6c5b4a allows SSH from 0.0.0.0/0",
+                dedup_key="cloud_posture.prowler|sg-9f8e7d6c5b4a",
+            ),
+        ]
+        report, _ = _assemble(findings)
+        assert report.distinct_finding_count == 2
+        assert all(row.occurrences == 1 for row in report.matrix)
+
+    def test_board_findings_still_collapse_fuzzily(self):
+        """The board is per-occurrence and has no stable identity, so the fuzzy
+        signature must keep working for it — unchanged behaviour."""
+        findings = [_finding(fid_hint=str(i), severity="high", title=f"celery task {i}") for i in range(50)]
+        report, _ = _assemble(findings)
+        assert report.distinct_finding_count == 1
+        assert report.matrix[0].occurrences == 50
+
+
+class TestInformationalBand:
+    def test_an_informational_finding_is_not_inflated_to_low(self):
+        findings = [_finding(fid_hint="1", severity="informational", title="FYI")]
+        report, _ = _assemble(findings)
+        assert report.histogram.counts["informational"] == 1
+        assert report.histogram.counts["low"] == 0
+        assert report.technical_findings[0].severity.band == "informational"
+        assert report.technical_findings[0].cvss == 0.0

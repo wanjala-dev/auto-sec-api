@@ -15,11 +15,12 @@ from uuid import UUID, uuid4
 
 from components.findings.application.ports.finding_store_port import FindingStorePort
 from components.findings.domain.entities.finding_entity import FindingEntity
-from components.findings.infrastructure.sample_findings import (
-    SAMPLE_FINDINGS,
+from components.findings.infrastructure.sample_findings import SAMPLE_FINDINGS
+from components.shared_kernel.domain.security import (
     SAMPLE_SOURCE_PREFIX,
+    FindingStatus,
+    Severity,
 )
-from components.shared_kernel.domain.security import FindingStatus, Severity
 
 logger = logging.getLogger(__name__)
 

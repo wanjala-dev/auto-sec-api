@@ -11,10 +11,15 @@ Each kind declares:
     display title ("Penetration Test Report").
   - ``template_name`` — the Django template the HTML builder renders.
   - ``section_order`` — the numbered sections, in order, for the ToC.
-  - ``source_type_prefixes`` — which board findings this kind pulls. A finding is
-    in scope when its ``Task.source_type`` starts with any of these (all
-    ``ai.*`` today, so every AI finding is a candidate; a future compliance kind
-    could pull a narrower slice).
+  - ``finding_source_prefixes`` — which SSOT findings this kind pulls (a finding
+    is in scope when its ``Finding.source`` starts with any of these). EMPTY =
+    every source in the workspace, which is the pentest default: a report about
+    "your security posture" must not silently omit a pillar.
+  - ``source_type_prefixes`` — the same scope expressed in BOARD vocabulary, for
+    the board-only ``BoardFindingRepository`` lens (``Task.source_type``).
+  - ``include_resolved`` / ``include_suppressed`` / ``include_sample`` — the
+    kind's inclusion policy. Whatever a kind excludes is still COUNTED and
+    stated in the deliverable; nothing is ever dropped in silence.
   - ``narrative_sections`` — the sections the grounded narrative writer fills
     (everything else the assembler fills deterministically).
 
@@ -43,7 +48,21 @@ class ReportKindSpec:
     template_name: str
     section_order: tuple[str, ...]
     source_type_prefixes: tuple[str, ...]
+    finding_source_prefixes: tuple[str, ...] = field(default=())
     narrative_sections: tuple[str, ...] = field(default=("executive_summary", "overall_assessment"))
+    # ── Inclusion policy (see the module docstring) ──
+    # A RESOLVED finding is "what we closed this period", not a live
+    # vulnerability: listing it in the Findings Matrix would overstate the
+    # assessment. A SUPPRESSED finding is an accepted risk / false positive the
+    # operator explicitly dismissed: listing it as identified would misrepresent
+    # a decision that was made. Both are excluded from the matrix and their
+    # counts are stated in the document, which is what an auditor actually wants.
+    include_resolved: bool = False
+    include_suppressed: bool = False
+    # Seeded demo findings ARE included — an empty demo report is its own kind of
+    # dishonesty — and the document is stamped as containing sample data, with a
+    # per-finding marker. See ``report_context_mapper``.
+    include_sample: bool = True
     # Curation policy (see components/report/domain/services/finding_curation.py):
     #  - full_detail_bands: severity bands that ALWAYS get a full §4 technical
     #    write-up, however many there are — a report must never bury a high.
@@ -78,8 +97,12 @@ REPORT_KINDS: dict[str, ReportKindSpec] = {
             "Appendix A — Methodology",
             "Appendix B — Severity Ratings",
         ),
-        # Every AI finding on the board is a pentest-report candidate; the
-        # operator narrows by scope filters at generation time.
+        # Every finding in the workspace is a pentest-report candidate — the
+        # SSOT is the spine, so nothing is filtered out by which pillar produced
+        # it or whether it happened to reach the board. The operator narrows by
+        # scope filters at generation time.
+        finding_source_prefixes=(),
+        # Board-lens equivalent, used only by ``BoardFindingRepository``.
         source_type_prefixes=("ai.",),
         narrative_sections=("executive_summary", "overall_assessment"),
     ),

@@ -61,6 +61,8 @@ def build_render_context(
             "occurrences": row.occurrences,
             # "×320" chip when a row stands for a collapsed cluster; "" when unique.
             "occurrence_label": f"×{row.occurrences}" if row.occurrences > 1 else "",
+            "triage": row.triage.label,
+            "is_sample": row.is_sample,
         }
         for row in assembled.matrix
     ]
@@ -80,6 +82,9 @@ def build_render_context(
             "remediation": list(tech.remediation),
             "evidence_lines": list(tech.evidence.lines),
             "evidence_caption": tech.evidence.caption,
+            "triage": tech.triage.label,
+            "triage_untriaged": not tech.triage.on_board,
+            "is_sample": tech.is_sample,
         }
         for tech in assembled.technical_findings
     ]
@@ -134,12 +139,66 @@ def build_render_context(
         )
         if assembled.deferred_count
         else "",
+        # ── Honesty notices (see the assembler: nothing is dropped in silence) ──
+        # A report is an artifact that leaves the building. If it contains seeded
+        # demo data, or if the scope limit cut findings off, or if findings were
+        # excluded by policy, the DOCUMENT says so — it is not left to whoever
+        # forwards the PDF to work it out.
+        "contains_sample_data": assembled.contains_sample_data,
+        "sample_finding_count": assembled.sample_finding_count,
+        "sample_notice": (
+            f"This document contains SAMPLE DATA. {assembled.sample_finding_count} of the findings below "
+            f"are seeded demonstration data, not observations of a real environment. Individually marked SAMPLE."
+        )
+        if assembled.contains_sample_data
+        else "",
+        "truncated_count": assembled.truncated_count,
+        "total_matched": assembled.total_matched,
+        "truncation_notice": (
+            f"{assembled.total_matched} findings matched this report's scope and "
+            f"{assembled.truncated_count} could not be included because the scope limit "
+            f"({assembled.total_matched - assembled.truncated_count} findings) was reached. "
+            f"Findings are included most-severe first, so the omitted findings are the least severe. "
+            f"Narrow the scope or raise the limit for a complete listing."
+        )
+        if assembled.is_truncated
+        else "",
+        "exclusion_notice": _exclusion_notice(assembled),
+        "untriaged_count": assembled.untriaged_count,
+        "untriaged_notice": (
+            f"{assembled.untriaged_count} of the findings listed have not been triaged: they were never "
+            f"picked up onto the response board and have no assigned owner."
+        )
+        if assembled.untriaged_count
+        else "",
         "highest_band": (assembled.histogram.highest_band or "none").capitalize(),
         "histogram": histogram,
         "matrix": matrix,
         "technical_findings": technical,
         "severity_ratings": severity_ratings,
     }
+
+
+def _exclusion_notice(assembled: AssembledReport) -> str:
+    """State what the report's inclusion policy left out, and why."""
+    parts: list[str] = []
+    if assembled.excluded_resolved:
+        parts.append(
+            f"{assembled.excluded_resolved} finding{'s were' if assembled.excluded_resolved != 1 else ' was'} "
+            f"resolved during the period covered and {'are' if assembled.excluded_resolved != 1 else 'is'} "
+            f"not listed as open"
+        )
+    if assembled.excluded_suppressed:
+        parts.append(
+            f"{assembled.excluded_suppressed} finding{'s are' if assembled.excluded_suppressed != 1 else ' is'} "
+            f"suppressed as accepted risk or a false positive and "
+            f"{'are' if assembled.excluded_suppressed != 1 else 'is'} not listed"
+        )
+    if assembled.excluded_sample:
+        parts.append(f"{assembled.excluded_sample} sample findings were excluded")
+    if not parts:
+        return ""
+    return "In addition to the findings listed: " + "; ".join(parts) + "."
 
 
 def _paragraphs(text: str) -> list[str]:

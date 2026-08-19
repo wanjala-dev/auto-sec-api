@@ -20,7 +20,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 # Canonical band order, highest first — drives the histogram + matrix sort.
-SEVERITY_ORDER: tuple[str, ...] = ("critical", "high", "medium", "low")
+#
+# ``informational`` is here because the Finding SSOT has it (shared-kernel
+# ``Severity.INFORMATIONAL``, OCSF severity_id 1). While reports read only the
+# board it was unreachable, so the report vocabulary stopped at ``low`` — and an
+# informational finding fed through this module would have normalised UP into the
+# ``low`` count, silently inflating it and misstating the finding's rating. A
+# report is an evidence artifact; it renders the band the finding actually has.
+SEVERITY_ORDER: tuple[str, ...] = ("critical", "high", "medium", "low", "informational")
 
 # Bands we recognise; anything else normalises to "low" (never dropped).
 _KNOWN_BANDS = frozenset(SEVERITY_ORDER)
@@ -33,6 +40,10 @@ _INDICATIVE_CVSS: dict[str, float] = {
     "high": 8.0,
     "medium": 5.5,
     "low": 2.5,
+    # CVSS "None" is 0.0 — an informational finding carries no rated severity,
+    # and inventing a non-zero midpoint for it would be the fabrication this
+    # module's whole docstring refuses.
+    "informational": 0.0,
 }
 
 # Print colours per band (used by the severity banner + matrix + histogram).
@@ -41,6 +52,7 @@ _BAND_COLOR: dict[str, str] = {
     "high": "#c2410c",
     "medium": "#b7791f",
     "low": "#2f7d32",
+    "informational": "#4b5563",
 }
 
 # One-line meaning per band for Appendix B.
@@ -49,6 +61,7 @@ _BAND_MEANING: dict[str, str] = {
     "high": "Exposure of credentials or sensitive data, or an action that crosses a privilege boundary. Fix in the current cycle.",
     "medium": "A weakness that needs a further condition or some user interaction to cause harm. Plan a fix soon.",
     "low": "Limited impact on its own, or useful mainly in combination with another issue. Fix as routine maintenance.",
+    "informational": "No direct security impact. Recorded for completeness and situational awareness; no action is required.",
 }
 
 

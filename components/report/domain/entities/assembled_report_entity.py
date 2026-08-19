@@ -25,6 +25,35 @@ class EvidenceBlock:
 
 
 @dataclass(frozen=True)
+class TriageState:
+    """What the board knows about a finding — the "here's what we did about it".
+
+    ``on_board`` is FALSE for a finding that never reached the Kanban board (it
+    fell under the board's severity floor, or its source is deliberately
+    SSOT-only). That is a first-class, rendered fact — **untriaged** — not the
+    absence of a field, because a reader must be able to tell "nobody has looked
+    at this" apart from "we forgot to print the column".
+    """
+
+    on_board: bool = False
+    column: str = ""
+    team: str = ""
+    task_status: str = ""
+    triage_status: str = ""
+    assignees: tuple[str, ...] = ()
+
+    @property
+    def label(self) -> str:
+        """One-line triage state for the matrix + the technical section."""
+        if not self.on_board:
+            return "Untriaged"
+        stage = self.column or self.triage_status or self.task_status or "On board"
+        if self.assignees:
+            return f"{stage} — {', '.join(self.assignees)}"
+        return f"{stage} — unassigned"
+
+
+@dataclass(frozen=True)
 class TechnicalFinding:
     """One finding's full technical section (§4 of the report)."""
 
@@ -36,11 +65,17 @@ class TechnicalFinding:
     description: str
     remediation: tuple[str, ...]  # bullet points
     evidence: EvidenceBlock
-    finding_id: str = ""  # the source Task id (provenance; never rendered)
+    finding_id: str = ""  # the source finding/Task id (provenance; never rendered)
     # How many raw board findings this representative stands for after dedup
     # (1 = unique). Rendered as "observed N times" so a collapsed cluster is
     # honest about its true volume.
     occurrences: int = 1
+    # Board enrichment — the finding's triage state, or "Untriaged".
+    triage: TriageState = field(default_factory=TriageState)
+    # Seeded demo data. Marked per-finding AND stamped on the document, because a
+    # report leaves the building and a demo report that reads as real is worse
+    # than no report at all.
+    is_sample: bool = False
 
     @property
     def cvss(self) -> float:
@@ -56,6 +91,8 @@ class MatrixRow:
     title: str
     severity: Severity
     occurrences: int = 1  # raw findings collapsed into this row (1 = unique)
+    triage: TriageState = field(default_factory=TriageState)
+    is_sample: bool = False
 
     @property
     def cvss(self) -> float:
@@ -115,6 +152,28 @@ class AssembledReport:
     # full §4 technical section (deferred to keep the report curated, not a dump).
     raw_finding_count: int = 0
     deferred_count: int = 0
+    # ── Honesty accounting (never let a report drop findings in silence) ──
+    # Findings that matched the report's scope, whether or not they fit.
+    total_matched: int = 0
+    # Matched but did NOT fit under the scope limit. Non-zero MUST be stated in
+    # the document — a truncated report that reads as complete is a lie.
+    truncated_count: int = 0
+    # In scope but deliberately not listed, per the kind's inclusion policy.
+    excluded_resolved: int = 0
+    excluded_suppressed: int = 0
+    excluded_sample: int = 0
+    # Seeded demo findings among the listed ones — non-zero stamps the document.
+    sample_finding_count: int = 0
+    # Listed findings that never reached the board.
+    untriaged_count: int = 0
+
+    @property
+    def contains_sample_data(self) -> bool:
+        return self.sample_finding_count > 0
+
+    @property
+    def is_truncated(self) -> bool:
+        return self.truncated_count > 0
 
     @property
     def finding_count(self) -> int:

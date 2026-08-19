@@ -29,10 +29,10 @@ class FakeFindingSource:
     def __init__(self, findings):
         self._findings = findings
 
-    def list_findings(
-        self, *, workspace_id, source_type_prefixes, source_types=None, since=None, until=None, limit=500
-    ):
-        return list(self._findings)
+    def list_findings(self, query):
+        from components.report.application.ports.finding_source_port import FindingPage
+
+        return FindingPage(findings=tuple(self._findings), total_matched=len(self._findings))
 
 
 class FakeNarrative:
@@ -78,9 +78,13 @@ def _finding(severity="high", title="Auth failures"):
         "id": "task-1",
         "title": title,
         "description": "",
+        "severity": severity,
+        "source": "logwatch.error",
         "source_type": "ai.log_watch.error",
-        "status": "todo",
+        "status": "open",
         "created_at": datetime(2026, 7, 20, 12, 0, 0),
+        "is_sample": False,
+        "triage": {"on_board": False},
         "metadata": {
             "severity": severity,
             "action_type": "log_watch.error",
@@ -167,3 +171,121 @@ class TestGenerateReportUseCase:
         report.refresh_from_db()
         assert report.status == Report.Status.FAILED
         assert "gotenberg down" in report.error_message
+
+
+class TestTheGeneratedDocumentIsHonest:
+    """End to end against the REAL SSOT adapter — the proof that the change
+    reaches the rendered deliverable, not just the port."""
+
+    def _ssot_use_case(self, renderer):
+        from components.report.infrastructure.repositories.ssot_finding_repository import (
+            SsotFindingRepository,
+        )
+
+        return GenerateReportUseCase(
+            reports=OrmReportRepository(),
+            finding_source=SsotFindingRepository(),
+            narrative=FakeNarrative(),
+            renderer=renderer,
+            storage=RecordingStorage(),
+            workspace_identity=FakeIdentity(),
+        )
+
+    def _finding(self, ws, **overrides):
+        import uuid
+
+        from django.utils import timezone
+
+        from infrastructure.persistence.findings.models import Finding
+
+        now = timezone.now()
+        return Finding.objects.create(
+            workspace=ws,
+            source=overrides.pop("source", "cloud_posture.prowler"),
+            fingerprint=f"fp-{uuid.uuid4()}",
+            asset_urn=overrides.pop("asset_urn", f"arn:aws:s3:::b-{uuid.uuid4()}"),
+            severity=overrides.pop("severity", "medium"),
+            status=overrides.pop("status", "open"),
+            title=overrides.pop("title", "CloudTrail is not multi-region"),
+            description="API activity in secondary regions is invisible.",
+            remediation="Enable a multi-region trail.",
+            first_seen_at=now,
+            last_seen_at=now,
+            **overrides,
+        )
+
+    def test_a_medium_finding_reaches_the_rendered_report(self, workspace_factory):
+        from infrastructure.persistence.report.models import Report
+
+        report, ws_id = _make_report(workspace_factory)
+        ws = report.workspace
+        self._finding(ws, severity="medium", title="CloudTrail is not multi-region")
+
+        renderer = StubRenderer()
+        self._ssot_use_case(renderer).execute(
+            GenerateReportCommand(report_id=str(report.id), workspace_id=ws_id)
+        )
+
+        report.refresh_from_db()
+        assert report.status == Report.Status.GENERATED
+        assert report.finding_count == 1
+        assert report.assembled["histogram"]["medium"] == 1
+        # It is IN THE DOCUMENT, not merely in the assembled JSON.
+        assert "CloudTrail is not multi-region" in renderer.last_html
+        # …and marked untriaged, because it never reached the board.
+        assert "Untriaged" in renderer.last_html
+
+    def test_sample_data_is_stamped_on_the_document(self, workspace_factory):
+        report, ws_id = _make_report(workspace_factory)
+        self._finding(report.workspace, source="sample.cloud_posture", severity="critical", title="Demo bucket")
+
+        renderer = StubRenderer()
+        self._ssot_use_case(renderer).execute(
+            GenerateReportCommand(report_id=str(report.id), workspace_id=ws_id)
+        )
+
+        report.refresh_from_db()
+        assert report.assembled["sample_finding_count"] == 1
+        assert "Contains sample data" in renderer.last_html
+        assert "SAMPLE DATA" in renderer.last_html.upper()
+        assert "Sample</span>" in renderer.last_html, "each sample finding carries its own marker"
+
+    def test_truncation_is_stated_on_the_document(self, workspace_factory):
+        report, ws_id = _make_report(workspace_factory)
+        ws = report.workspace
+        report.scope = {"limit": 2}
+        report.save(update_fields=["scope"])
+        for band in ("critical", "high", "medium", "low"):
+            self._finding(ws, severity=band, title=f"{band} finding")
+
+        renderer = StubRenderer()
+        self._ssot_use_case(renderer).execute(
+            GenerateReportCommand(report_id=str(report.id), workspace_id=ws_id)
+        )
+
+        report.refresh_from_db()
+        assert report.assembled["total_matched"] == 4
+        assert report.assembled["truncated_count"] == 2
+        assert "could not be included" in renderer.last_html
+        assert "4 findings matched" in renderer.last_html
+
+    def test_suppressed_and_resolved_counts_are_stated_not_hidden(self, workspace_factory):
+        from django.utils import timezone
+
+        report, ws_id = _make_report(workspace_factory)
+        ws = report.workspace
+        self._finding(ws, severity="high", title="Open one")
+        self._finding(ws, severity="high", title="Accepted", status="suppressed")
+        self._finding(ws, severity="high", title="Fixed", status="resolved", resolved_at=timezone.now())
+
+        renderer = StubRenderer()
+        self._ssot_use_case(renderer).execute(
+            GenerateReportCommand(report_id=str(report.id), workspace_id=ws_id)
+        )
+
+        report.refresh_from_db()
+        assert report.assembled["excluded_suppressed"] == 1
+        assert report.assembled["excluded_resolved"] == 1
+        assert "suppressed as accepted risk" in renderer.last_html
+        assert "resolved during the period" in renderer.last_html
+        assert "Accepted" not in renderer.last_html.split("Findings Matrix")[-1].split("Appendix")[0]
