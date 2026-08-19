@@ -102,17 +102,26 @@ class IsOrgOwnerOrMember(permissions.BasePermission):
         return self._is_member(user, workspace)
 
     def _is_member(self, user, workspace):
-        Team, TeamMembership = _get_team_models()
-        Workspace, WorkspaceMembership = _get_workspace_models()
+        """Owner, active member, or — only for the un-backfilled legacy shape —
+        a member of one of the workspace's teams.
+
+        The team fallback is gated on ``team_fallback_allowed`` so a REVOKED
+        membership stays revoked: removal soft-flips the row to ``SUSPENDED``
+        and leaves the person on the workspace's teams, which this gate used to
+        read as "no membership row" and re-admit. See
+        ``resolve_workspace_membership_gate``.
+        """
+        from components.membership.api.permissions import resolve_workspace_membership_gate
+
+        Team, _TeamMembership = _get_team_models()
         if str(workspace.workspace_owner_id) == str(user.id):
             return True
 
-        if WorkspaceMembership.objects.filter(
-            workspace=workspace,
-            user=user,
-            status=WorkspaceMembership.Status.ACTIVE,
-        ).exists():
+        membership, team_fallback_allowed = resolve_workspace_membership_gate(user, workspace)
+        if membership is not None:
             return True
+        if not team_fallback_allowed:
+            return False
 
         return Team.objects.filter(
             workspace=workspace,

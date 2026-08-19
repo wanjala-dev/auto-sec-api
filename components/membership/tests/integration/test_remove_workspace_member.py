@@ -249,3 +249,134 @@ class TestRemoveMemberIdempotency:
         assert second.data["already_revoked"] is True
         # No duplicate side effects on the no-op path.
         assert Notification.objects.filter(recipient=target).count() == notifications_after_first
+
+
+class TestRemovedMemberLosesCapabilities:
+    """A revoked membership is an authoritative DENY — the team fallback must never re-grant.
+
+    Regression guard for the privilege-escalation found in the members-rbac QA
+    sweep: removal soft-revokes the ``WorkspaceMembership`` but leaves the user
+    on the workspace's teams, and the capability gate's team-only compatibility
+    fallback then handed the removed user the seeded ``member`` role's
+    permission bundle — which carries ``manage_findings``. Reads (which use a
+    strict ACTIVE-membership check with no fallback) denied, writes allowed.
+    """
+
+    @staticmethod
+    def _finding(workspace):
+        from django.utils import timezone
+
+        from infrastructure.persistence.findings.models import Finding
+
+        now = timezone.now()
+        return Finding.objects.create(
+            workspace=workspace,
+            source="cloud_posture.prowler",
+            fingerprint="removed-member-fp-1",
+            asset_urn="urn:aws:s3:::removed-member-bucket",
+            severity="high",
+            status="open",
+            title="Public S3 bucket",
+            first_seen_at=now,
+            last_seen_at=now,
+        )
+
+    def test_removed_team_member_cannot_suppress_findings(
+        self, api_client, workspace_factory, user_factory, team_factory
+    ):
+        from infrastructure.persistence.workspaces.models import WorkspaceMembership
+
+        owner = user_factory()
+        victim = user_factory()
+        workspace = workspace_factory(owner=owner)
+        _make_membership(workspace, victim, role_slug="member")
+        team_factory(workspace=workspace, created_by=owner, members=[victim])
+
+        finding = self._finding(workspace)
+        status_url = f"/findings/workspaces/{workspace.id}/{finding.id}/status/"
+
+        # Baseline: while ACTIVE the analyst legitimately carries manage_findings.
+        api_client.force_authenticate(user=victim)
+        assert api_client.post(status_url, {"action": "resolve"}, format="json").status_code == 200
+
+        api_client.force_authenticate(user=owner)
+        removal = api_client.delete(_remove_url(workspace, victim))
+        assert removal.status_code == 200, removal.data
+        assert _status_of(workspace, victim) == WorkspaceMembership.Status.SUSPENDED
+
+        # The removed user is still on the team — the state the fallback keyed off.
+        from infrastructure.persistence.team.models import Team
+
+        assert Team.objects.filter(workspace=workspace, members__id=victim.id).exists()
+
+        api_client.force_authenticate(user=victim)
+        response = api_client.post(status_url, {"action": "suppress"}, format="json")
+
+        assert response.status_code == 403, response.data
+        finding.refresh_from_db()
+        assert finding.status == "resolved", "a removed member must not mutate finding state"
+
+    def test_removed_member_is_denied_reads_and_writes_alike(
+        self, api_client, workspace_factory, user_factory, team_factory
+    ):
+        """No read/write asymmetry: both surfaces deny the removed member."""
+        owner = user_factory()
+        victim = user_factory()
+        workspace = workspace_factory(owner=owner)
+        _make_membership(workspace, victim, role_slug="member")
+        team_factory(workspace=workspace, created_by=owner, members=[victim])
+        finding = self._finding(workspace)
+
+        api_client.force_authenticate(user=owner)
+        assert api_client.delete(_remove_url(workspace, victim)).status_code == 200
+
+        api_client.force_authenticate(user=victim)
+        assert api_client.get(f"/findings/workspaces/{workspace.id}/").status_code == 403
+        tags_url = f"/findings/workspaces/{workspace.id}/{finding.id}/tags/"
+        assert api_client.post(tags_url, {"add": ["urgent"]}, format="json").status_code == 403
+
+    def test_team_only_user_with_no_membership_row_keeps_the_fallback(
+        self, api_client, workspace_factory, user_factory, team_factory
+    ):
+        """The pre-Phase-3b fallback still serves its purpose: a user who has an
+        active team membership and NO ``WorkspaceMembership`` row at all (the
+        un-backfilled legacy shape) keeps the seeded ``member`` bundle."""
+        from infrastructure.persistence.workspaces.models import WorkspaceMembership
+
+        owner = user_factory()
+        legacy = user_factory()
+        workspace = workspace_factory(owner=owner)
+        team_factory(workspace=workspace, created_by=owner, members=[legacy])
+        assert not WorkspaceMembership.objects.filter(workspace=workspace, user=legacy).exists()
+
+        finding = self._finding(workspace)
+        api_client.force_authenticate(user=legacy)
+        response = api_client.post(
+            f"/findings/workspaces/{workspace.id}/{finding.id}/status/",
+            {"action": "resolve"},
+            format="json",
+        )
+
+        assert response.status_code == 200, response.data
+
+    def test_revoked_member_fails_the_workspace_membership_floor(
+        self, api_client, workspace_factory, user_factory, team_factory
+    ):
+        """The same fallback lives on ``IsOrgOwnerOrMember`` — the membership
+        floor guarding most workspace-scoped endpoints (and reused directly by
+        ``components/sign_off/api/controller.py``). It must revoke too."""
+        from components.workspace.api.permissions import IsOrgOwnerOrMember
+
+        owner = user_factory()
+        victim = user_factory()
+        workspace = workspace_factory(owner=owner)
+        _make_membership(workspace, victim, role_slug="member")
+        team_factory(workspace=workspace, created_by=owner, members=[victim])
+
+        gate = IsOrgOwnerOrMember()
+        assert gate._is_member(victim, workspace) is True
+
+        api_client.force_authenticate(user=owner)
+        assert api_client.delete(_remove_url(workspace, victim)).status_code == 200
+
+        assert gate._is_member(victim, workspace) is False

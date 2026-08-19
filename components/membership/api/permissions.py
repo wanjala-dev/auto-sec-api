@@ -87,6 +87,42 @@ def user_is_active_workspace_member(user, workspace_id) -> bool:
         return False
 
 
+def resolve_workspace_membership_gate(user, workspace):
+    """Resolve the ``WorkspaceMembership`` half of an authorization decision.
+
+    Returns ``(active_membership, team_fallback_allowed)``:
+
+    - ``active_membership`` — the user's ACTIVE membership row on ``workspace``
+      (a support-impersonation row counts, by design), or ``None``.
+    - ``team_fallback_allowed`` — whether the caller may fall through to the
+      pre-Phase-3b team-only compatibility fallback. ``False`` whenever a
+      membership row EXISTS but is not ACTIVE.
+
+    **A membership row is authoritative.** Revocation (``DELETE
+    /workspaces/<ws>/members/<user>/``) soft-flips the row to ``SUSPENDED`` and
+    deliberately leaves the person on the workspace's teams so re-inviting them
+    restores their history. Before this helper, both capability gates read that
+    as "this user has no membership row" and fell through to the team fallback,
+    which hands any active team member the seeded ``member`` bundle — including
+    ``manage_findings``. A removed member could still suppress findings. The
+    fallback exists for the un-backfilled legacy shape (a team member with NO
+    membership row at all); it must never override an explicit revocation.
+
+    ONE query, shared by every gate so the invariant cannot drift between them.
+    """
+    _, WorkspaceMembership = _get_workspace_models()
+    memberships = list(
+        WorkspaceMembership.objects.filter(workspace=workspace, user=user).select_related("workspace_role")
+    )
+    active = next(
+        (row for row in memberships if row.status == WorkspaceMembership.Status.ACTIVE),
+        None,
+    )
+    if active is not None:
+        return active, False
+    return None, not memberships
+
+
 def is_workspace_owner(user, workspace_id) -> bool:
     """True if ``user`` is the OWNER of ``workspace_id`` (org owner) — stricter than
     membership. Used to gate owner-only actions (e.g. the sample-data-mode toggle)."""
@@ -203,10 +239,13 @@ class _HasWorkspacePermissionBase(permissions.BasePermission):
     2. Workspace owner (structural, pre-RBAC) — allowed.
     3. Active ``WorkspaceMembership`` whose role (or per-user/group grant)
        carries the permission key — allowed.
-    4. Team-only compatibility fallback (pre-Phase-3b) — allowed if the
-       user has an active team membership and the seeded ``member``
-       role carries the key.
-    5. Otherwise — denied.
+    4. A membership row that exists but is NOT active (revoked/suspended,
+       invited, pending approval) — denied outright. An explicit
+       revocation is authoritative; step 5 is never reached.
+    5. Team-only compatibility fallback (pre-Phase-3b) — allowed if the
+       user has NO membership row at all, has an active team membership,
+       and the seeded ``member`` role carries the key.
+    6. Otherwise — denied.
     """
 
     permission_key: str = ""
@@ -255,22 +294,17 @@ class _HasWorkspacePermissionBase(permissions.BasePermission):
         if str(workspace.workspace_owner_id) == str(user.id):
             return True
 
-        _, WorkspaceMembership = _get_workspace_models()
-        membership = (
-            WorkspaceMembership.objects.filter(
-                workspace=workspace,
-                user=user,
-                status=WorkspaceMembership.Status.ACTIVE,
-            )
-            .select_related("workspace_role")
-            .first()
-        )
+        membership, team_fallback_allowed = resolve_workspace_membership_gate(user, workspace)
         if membership is not None:
             from components.membership.application.services.membership_permission_service import (
                 membership_has_permission,
             )
 
             return membership_has_permission(membership, self.permission_key)
+
+        if not team_fallback_allowed:
+            # A revoked/suspended membership is an authoritative DENY.
+            return False
 
         return self._team_member_has_permission_via_member_role(user, workspace)
 
