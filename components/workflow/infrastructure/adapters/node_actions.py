@@ -3,7 +3,7 @@
 Each function handles a specific node type's side effect:
 - message: sends an email (real platform EmailSendingPort) or in-app notification
 - task: creates a project task
-- ai: triggers an AI agent execution
+- ai: queues a real deep run on the workspace's AI agent (async — see ``_execute_ai``)
 - assign: creates an assigned to-do for the contact (real ProjectService task)
 - add_tag / remove_tag: tag the workflow's directory contact
 - update_field: update an allow-listed field on the contact's membership/profile
@@ -42,6 +42,11 @@ from django.utils import timezone
 from components.workflow.domain.errors import WorkflowActionError
 
 logger = logging.getLogger(__name__)
+
+# Which specialist an ``ai`` node runs when its config doesn't name one.
+# ``triage_agent`` is the SOC specialist every shipped finding playbook means by
+# "AI triage"; an author can override with ``config.agent_type``.
+DEFAULT_AI_NODE_AGENT_TYPE = "triage_agent"
 
 # Fields an ``update_field`` node is allowed to write on the contact's
 # UserProfile. Deliberately narrow: it EXCLUDES everything that controls
@@ -495,34 +500,113 @@ def _execute_task(run: Any, node: dict[str, Any], config: dict[str, Any]) -> dic
         raise WorkflowActionError(f"task node failed: {exc}") from exc
 
 
+def _resolve_ai_actor_id(run: Any, config: dict[str, Any]) -> str:
+    """The user id a workflow-triggered AI run is attributed to.
+
+    A deep run persists against a real user (``DeepRun.user`` is a FK), and an
+    automated run has no request user. Resolution order:
+
+    1. ``config.user_id`` — an author who deliberately pinned an actor.
+    2. The workspace's **AI teammate identity** — the same principal the
+       detector cycle and the teammate tool bridge run as, so an automated
+       triage is attributed to the AI, not to a human who didn't ask for it.
+    3. ``workflow.created_by`` — the human who built the workflow.
+
+    Order matters: the starter workflows are provisioned by
+    ``SeedWorkspaceStarterWorkflowsUseCase`` with ``created_by=None``, so the
+    teammate identity (created for every workspace by ``ensure_agents_board``
+    at bootstrap) is what makes the shipped CNAPP playbook work out of the box.
+    """
+    configured = str(config.get("user_id") or "").strip()
+    if configured:
+        return configured
+
+    from components.agents.application.facades.ai_teammate_facade import get_teammate_profile
+
+    profile = get_teammate_profile(str(run.workflow.workspace_id))
+    teammate_user_id = getattr(profile, "user_id", None)
+    if teammate_user_id:
+        return str(teammate_user_id)
+
+    owner_id = getattr(run.workflow, "created_by_id", None)
+    return str(owner_id) if owner_id else ""
+
+
 def _execute_ai(run: Any, node: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
-    """Trigger an AI agent execution."""
-    agent_id = config.get("agent_id")
-    prompt = config.get("prompt", "")
+    """Queue the workspace's AI agent on this run's target.
+
+    **Queued, never executed inline.** A deep run is minutes of LLM wall-clock;
+    holding the workflow worker for it would stall every other run on the
+    queue. The node hands the goal to the agents context, gets a ``plan_id``
+    back, and the graph advances immediately — the run's outcome is followed by
+    ``plan_id`` (the ``agent_run`` WS stream / ``GET /ai/agents/runs/<id>/``).
+
+    Reaches the agents context through its APPLICATION layer only
+    (``AgentsService`` + ``DeepPlanAndRunCommand`` + the teammate facade); a
+    cross-context infrastructure import is forbidden from here.
+
+    ``AiUnavailable`` / ``AiRunLimitExceeded`` are **skips, not failures**: a
+    paused workspace or a spent monthly allowance is a governance decision, and
+    failing the run on one would strand every node behind the ai node — which
+    on the shipped ``CNAPP — Auto-Triage Critical & High`` playbook is the
+    notify leg that tells the SOC about the finding at all.
+    """
+    prompt = (config.get("prompt") or "").strip()
+    agent_type = (config.get("agent_type") or "").strip() or DEFAULT_AI_NODE_AGENT_TYPE
     workspace_id = str(run.workflow.workspace_id)
 
-    if not agent_id and not prompt:
-        return {"status": "skipped", "reason": "no agent_id or prompt configured"}
+    if not prompt:
+        return {"status": "skipped", "reason": "no prompt configured"}
+
+    actor_id = _resolve_ai_actor_id(run, config)
+    if not actor_id:
+        raise WorkflowActionError(
+            "ai node failed: no actor to run as (workspace has no AI teammate identity and the workflow has no owner)"
+        )
+
+    from components.agents.application.commands.deep_run_command import DeepPlanAndRunCommand
+    from components.agents.application.service import AgentsService
+    from components.agents.domain.errors import AiRunLimitExceeded, AiUnavailable
+
+    command = DeepPlanAndRunCommand(
+        goal=f"{prompt}\n\n(Workflow target: {run.target_type} {run.target_id}, trigger: {run.trigger_type}.)",
+        agent_type=agent_type,
+        user_id=actor_id,
+        workspace_id=workspace_id,
+        extra_context={
+            "workflow_id": str(run.workflow_id),
+            "run_id": str(run.id),
+            "target_id": run.target_id,
+            "target_type": run.target_type,
+            "trigger_type": run.trigger_type,
+        },
+    )
 
     try:
-        from components.agents.application.service import AgentService
-
-        result = AgentService().execute_agent(
-            agent_id=agent_id,
-            workspace_id=workspace_id,
-            prompt=prompt or f"Workflow step for target {run.target_id}",
-            context={
-                "workflow_id": str(run.workflow.id),
-                "run_id": str(run.id),
-                "target_id": run.target_id,
-                "target_type": run.target_type,
-                "trigger_type": run.trigger_type,
-            },
+        result = AgentsService().enqueue_deep_plan_and_run(command)
+    except (AiUnavailable, AiRunLimitExceeded) as exc:
+        logger.warning(
+            "workflow_ai_node_skipped run_id=%s node_id=%s workspace_id=%s reason=%s",
+            run.id,
+            node.get("id", ""),
+            workspace_id,
+            type(exc).__name__,
         )
-        return {"status": "executed", "agent_id": agent_id, "result_preview": str(result)[:200]}
+        return {"status": "skipped", "reason": str(exc), "agent_type": agent_type}
     except Exception as exc:
-        logger.exception("workflow_ai_node_failed run_id=%s agent_id=%s", run.id, agent_id)
+        logger.exception("workflow_ai_node_failed run_id=%s agent_type=%s", run.id, agent_type)
         raise WorkflowActionError(f"ai node failed: {exc}") from exc
+
+    plan_id = str(getattr(result, "plan_id", "") or "")
+    logger.info(
+        "workflow_ai_node_queued run_id=%s node_id=%s workspace_id=%s agent_type=%s plan_id=%s",
+        run.id,
+        node.get("id", ""),
+        workspace_id,
+        agent_type,
+        plan_id,
+    )
+    return {"status": "queued", "agent_type": agent_type, "plan_id": plan_id}
 
 
 def _execute_assign(run: Any, node: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
