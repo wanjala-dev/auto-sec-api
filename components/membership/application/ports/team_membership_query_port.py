@@ -58,4 +58,10 @@ class TeamMembershipQueryPort(abc.ABC):
         is_staff: bool = False,
         is_superuser: bool = False,
     ) -> list[dict]:
-        """List pending invitations in a workspace."""
+        """List pending invitations in a workspace.
+
+        Rows carry each invitation's live magic-link token, so implementations
+        MUST require the ``manage_users`` capability (owner / staff / any role
+        or grant carrying it) and raise an authorization error otherwise —
+        plain workspace membership is not sufficient.
+        """

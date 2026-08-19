@@ -9,6 +9,7 @@ from django.core.exceptions import ObjectDoesNotExist
 
 from components.membership.domain.errors import (
     TeamMembershipRequiredError,
+    WorkspaceAdminRequiredError,
     WorkspaceMembershipRequiredError,
 )
 from infrastructure.persistence.team.models import Invitation, Team
@@ -140,7 +141,14 @@ class OrmMembershipQueryRepository:
         return members, team_lookup
 
     def list_workspace_pending_invitations(self, *, workspace_id, actor_id, is_staff=False, is_superuser=False):
-        workspace = self._get_accessible_workspace(
+        # Gated on ``manage_users`` — NOT on plain membership. Each row carries
+        # the invitation's LIVE magic-link token (below), and that token is the
+        # sole credential accepted by the AllowAny
+        # ``POST /membership/invitations/persona/accept/`` endpoint. Anyone who
+        # can read this list can therefore become whatever the invitation
+        # grants, so the read must require the same authority as issuing,
+        # resending, or cancelling an invitation.
+        workspace = self._get_member_administrable_workspace(
             workspace_id=workspace_id, actor_id=actor_id, is_staff=is_staff, is_superuser=is_superuser
         )
         invitations = (
@@ -166,9 +174,11 @@ class OrmMembershipQueryRepository:
                     "invitation_id": invitation.id,
                     "code": invitation.code,
                     # Magic-link token + persona + role surfaced so the
-                    # Directories invitations tab can render copy-link UI for
-                    # admins. The token is single-use and time-bound so it's
-                    # safe to display.
+                    # Directories invitations tab can render copy-link UI when
+                    # email delivery fails. This is a LIVE credential, not a
+                    # reference — it is only ever served to callers that
+                    # cleared the ``manage_users`` gate above, who can already
+                    # mint an equivalent invitation themselves.
                     "token": invitation.token or "",
                     "persona": invitation.persona or "",
                     "role": invitation.role or "",
@@ -213,6 +223,51 @@ class OrmMembershipQueryRepository:
         ):
             return workspace
         raise WorkspaceMembershipRequiredError("You must belong to the organization to perform this action.")
+
+    def _get_member_administrable_workspace(self, *, workspace_id, actor_id, is_staff=False, is_superuser=False):
+        """Return the workspace only when the actor may ADMINISTER its people.
+
+        The stricter sibling of :meth:`_get_accessible_workspace`, for reads
+        that expose member-administration state rather than workspace content.
+        """
+        workspace = self._get_workspace(workspace_id=workspace_id)
+        if self._can_manage_members(
+            workspace=workspace, actor_id=actor_id, is_staff=is_staff, is_superuser=is_superuser
+        ):
+            return workspace
+        raise WorkspaceAdminRequiredError("You must be able to manage members of this organization.")
+
+    @staticmethod
+    def _can_manage_members(*, workspace, actor_id, is_staff=False, is_superuser=False):
+        """Return True when the actor carries ``manage_users`` for the workspace.
+
+        ``manage_users`` is the capability that already governs role
+        reassignment and member removal — an actor who holds it can promote
+        anyone (themselves included) to admin, so serving them an invite token
+        grants no authority they lack. Resolving it through
+        ``membership_has_permission`` — rather than matching the legacy ``role``
+        string, as the invite create / resend / cancel gates still do — means
+        custom roles and direct/group permission grants are honoured here.
+        """
+        if is_staff or is_superuser:
+            return True
+        if str(workspace.workspace_owner_id) == str(actor_id):
+            return True
+
+        from components.membership.application.services.membership_permission_service import (
+            membership_has_permission,
+        )
+
+        membership = (
+            WorkspaceMembership.objects.filter(
+                workspace=workspace,
+                user_id=actor_id,
+                status=WorkspaceMembership.Status.ACTIVE,
+            )
+            .select_related("workspace_role")
+            .first()
+        )
+        return bool(membership_has_permission(membership, "manage_users"))
 
     @staticmethod
     def _can_view_workspace(*, workspace, actor_id, is_staff=False, is_superuser=False):
