@@ -497,6 +497,24 @@ except ValueError:
 if not isinstance(AI_BOARD_MIN_SEVERITY, dict):
     AI_BOARD_MIN_SEVERITY = {}
 
+# Global ceiling on concurrently-running cloud-posture (Prowler) scans, counted
+# from the real source of truth — PENDING/RUNNING ``ScanRun`` rows for the
+# source. The per-account gate (cooldown + one-in-flight per target) bounds ONE
+# account; nothing bounded the total, so a 50-200-account AWS Organization fired
+# 50-200 scanner Jobs at the cluster in a single beat tick — each a ~4Gi pod, all
+# hammering the same AWS API throttle budget. Work over the ceiling is DEFERRED
+# with a retry_after and picked up by the next sweep; it is never dropped.
+#
+# Default 10: ~40Gi peak scanner footprint, which a modest node pool absorbs, and
+# it keeps concurrent STS/Organizations calls well inside AWS's throttle budget.
+# Raise it on a bigger cluster:  CLOUD_POSTURE_MAX_CONCURRENT_SCANS=25
+# A value <= 0 means "no ceiling" (the pre-cap behaviour), so a mis-set env can
+# only restore the old herd — never silently freeze every scan in the fleet.
+try:
+    CLOUD_POSTURE_MAX_CONCURRENT_SCANS = int(os.environ.get("CLOUD_POSTURE_MAX_CONCURRENT_SCANS", "10"))
+except ValueError:
+    CLOUD_POSTURE_MAX_CONCURRENT_SCANS = 10
+
 AUTH_USER_MODEL = "users.CustomUser"
 
 # Password validation

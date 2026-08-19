@@ -13,6 +13,9 @@ import secrets
 from dataclasses import dataclass
 from typing import Any
 
+from components.integrations.application.ports.connection_scan_dispatch_port import (
+    ConnectionScanDispatchPort,
+)
 from components.integrations.application.ports.org_verification_port import (
     OrgVerificationPort,
 )
@@ -30,6 +33,7 @@ class AwsConnectionService:
 
     _repo: Any
     _verifier: OrgVerificationPort
+    _scan_dispatcher: ConnectionScanDispatchPort | None = None
 
     # ── Reads ────────────────────────────────────────────────────────────
 
@@ -92,8 +96,9 @@ class AwsConnectionService:
 
         On failure the connection is marked ERROR (with the message recorded)
         and ``OrgVerificationError`` is raised for the adapter to translate
-        into a 502. On success the connection flips to CONNECTED and every
-        discovered account is upserted as an ``AwsAccountLink``.
+        into a 502. On success the connection flips to CONNECTED, the discovered
+        accounts are reconciled into ``AwsAccountLink`` rows, and the first scan
+        is dispatched automatically — see :meth:`verify_and_scan`.
         """
         try:
             result = self._verifier.verify_and_discover(
@@ -116,4 +121,94 @@ class AwsConnectionService:
             conn,
             organization_id=result.get("organization_id") or "",
             accounts=result.get("accounts") or [],
+            org_walked=bool(result.get("org_walked")),
         )
+
+    def verify_and_scan(self, conn) -> tuple[Any, dict | None]:
+        """Verify, then kick the first scan — the whole point of connecting.
+
+        Verification alone used to leave the account silent: the wizard's last
+        step was a manual "Scan" button, so an operator who connected and closed
+        the tab saw an empty product until the 02:00 beat. No error, no signal —
+        the same silent class as the discovery gap. Connecting a source now
+        starts scanning it.
+
+        Returns ``(connection, scans)``. ``scans`` is ``None`` when there is
+        nothing scannable yet (a legitimate state: verified, no accounts
+        discovered — say so rather than reporting a hollow zero). A dispatch
+        problem never fails the verification; the connection is verified either
+        way and the scheduled sweep is the retry path.
+        """
+        conn = self.verify_connection(conn)
+        if self._scan_dispatcher is None:
+            return conn, None
+
+        outcome = self._scan_dispatcher.dispatch_after_commit(
+            workspace_id=str(conn.workspace_id),
+            connection_id=str(conn.id),
+        )
+        # Only an unsettled result may be trusted as "not yet known"; a settled
+        # result with nothing scannable is a real, reportable state.
+        if outcome.get("settled") and not outcome.get("scannable"):
+            return conn, None
+        return conn, outcome
+
+    # ── Scheduled re-discovery ───────────────────────────────────────────
+
+    def rediscover_accounts(self, conn) -> dict:
+        """Re-walk ONE organization and reconcile its account links.
+
+        Reuses the same ``verify_and_discover`` seam as the operator verify —
+        there is no second ``ListAccounts`` path, and there should not be: you
+        cannot list an organization without assuming the role first, so the
+        coupling the port's name implies is inherent to the AWS API, not an
+        accident of ours. What differs is only what we do with the result:
+        ``clear_failed=False`` (a background read does not get to overrule a
+        health verdict) and no status/error write (a transient Organizations
+        blip must not flip a working connection to ERROR in the operator's HUD).
+        """
+        result = self._verifier.verify_and_discover(
+            management_account_id=conn.management_account_id,
+            role_name=conn.role_name,
+            external_id=conn.external_id,
+            discover=True,
+        )
+        return self._repo.record_rediscovery(
+            conn,
+            accounts=result.get("accounts") or [],
+            org_walked=bool(result.get("org_walked")),
+        )
+
+    def rediscover_all_connections(self) -> dict:
+        """Sweep every CONNECTED org-wide connection in this database.
+
+        ONE customer's broken org must never stop everyone else's re-discovery,
+        so each connection is contained: log the exception with its identifiers,
+        count it, keep going. The return is the operator-facing summary.
+        """
+        totals = {
+            "connections": 0,
+            "failed": 0,
+            "created": 0,
+            "reactivated": 0,
+            "suspended": 0,
+            "protected": 0,
+        }
+
+        for conn in self._repo.list_connected_org_wide():
+            totals["connections"] += 1
+            try:
+                counts = self.rediscover_accounts(conn)
+            except Exception:
+                totals["failed"] += 1
+                logger.exception(
+                    "aws_rediscovery_failed connection_id=%s workspace_id=%s management_account=%s",
+                    conn.id,
+                    conn.workspace_id,
+                    conn.management_account_id,
+                )
+                continue
+            for key in ("created", "reactivated", "suspended", "protected"):
+                totals[key] += counts.get(key, 0)
+
+        return totals

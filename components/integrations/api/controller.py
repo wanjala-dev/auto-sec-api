@@ -157,6 +157,20 @@ class AwsConnectionTemplateView(APIView):
 
 
 class AwsConnectionVerifyView(APIView):
+    """POST → verify the audit role, reconcile the org's accounts, START SCANNING.
+
+    The scan kick is part of verification, not a chore left to the operator.
+    Connecting a source used to leave it silent: the wizard's last step was a
+    manual "Scan" button, so anyone who connected and closed the tab saw an empty
+    product until the 02:00 beat — no error, no signal.
+
+    ``scans`` in the response is what actually happened, so the wizard can
+    confirm rather than ask: ``null`` when there was nothing scannable yet (a
+    legitimate state — verified, no accounts discovered), otherwise the counts.
+    A dispatch problem never fails the verification; the connection is verified
+    either way and the nightly sweep is the retry path.
+    """
+
     permission_classes = (permissions.IsAuthenticated, CanManageIntegrations)
     name = "integrations-aws-verify"
 
@@ -166,13 +180,32 @@ class AwsConnectionVerifyView(APIView):
         if conn is None:
             return Response({"success": False, "error": "Connection not found."}, status=404)
         try:
-            conn = service.verify_connection(conn)
+            conn, scans = service.verify_and_scan(conn)
         except OrgVerificationError as exc:
             return Response(
                 {"success": False, "error": str(exc)},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
-        return Response({"success": True, "data": AwsConnectionResource.from_model(conn).to_dict()})
+        return Response(
+            {
+                "success": True,
+                "data": AwsConnectionResource.from_model(conn).to_dict(),
+                "scans": _scan_summary(scans),
+            }
+        )
+
+
+def _scan_summary(scans: dict | None) -> dict | None:
+    """The operator-facing shape of a fan-out result (``None`` = nothing to scan)."""
+    if not scans:
+        return None
+    return {
+        "scannable": scans.get("scannable", 0),
+        "enqueued": scans.get("enqueued", 0),
+        "deferred": scans.get("deferred", 0),
+        "blocked": scans.get("blocked", 0),
+        "retry_after": scans.get("retry_after"),
+    }
 
 
 class AwsConnectionScanView(APIView):
@@ -215,13 +248,17 @@ class AwsConnectionScanView(APIView):
         )
         if result is None:
             return Response({"success": False, "error": "Connection not found."}, status=404)
-        if result["enqueued"] == 0 and result["blocked"] > 0:
-            # Every account is gated (in-flight or cooling down) — honest 429,
-            # mirroring the code_security scan endpoint's budget rejection.
+        if result["enqueued"] == 0 and (result["blocked"] > 0 or result["deferred"] > 0):
+            # Nothing got out: every account is gated (in-flight or cooling
+            # down) or held behind the global concurrency ceiling. Honest 429
+            # with Retry-After, mirroring the code_security budget rejection —
+            # a 202 reading ``enqueued: 0`` is indistinguishable from success,
+            # which is exactly how a deferral becomes a silent drop.
             body = {
                 "success": False,
-                "error": "scan_gated",
+                "error": "scan_gated" if result["blocked"] else "scan_deferred",
                 "blocked": result["blocked"],
+                "deferred": result["deferred"],
             }
             if result["retry_after"] is not None:
                 body["retry_after"] = result["retry_after"]
@@ -234,8 +271,13 @@ class AwsConnectionScanView(APIView):
                 "success": True,
                 "data": {
                     "status": "scanning",
+                    "scannable": result["scannable"],
                     "enqueued": result["enqueued"],
                     "blocked": result["blocked"],
+                    # Held behind the global ceiling; the next sweep picks them
+                    # up. Reported so "40 scanned, 160 deferred" is readable.
+                    "deferred": result["deferred"],
+                    "retry_after": result["retry_after"],
                 },
             },
             status=status.HTTP_202_ACCEPTED,

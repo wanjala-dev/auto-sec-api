@@ -11,12 +11,19 @@ task; Prowler never runs in the request path.
 from __future__ import annotations
 
 
-def enqueue_connection_scan(*, workspace_id: str, connection_id: str, triggered_by=None) -> dict | None:
-    """Gate + enqueue async scans for a workspace's connection (trigger=manual).
+def enqueue_connection_scan(
+    *, workspace_id: str, connection_id: str, triggered_by=None, trigger: str = "manual"
+) -> dict | None:
+    """Gate + enqueue async scans for a workspace's connection.
 
     ``triggered_by`` is the operator's user id — stamped onto every ``ScanRun``
     the fan-out creates (the provenance the scan-now controller used to drop).
-    Returns ``{"enqueued": n, "blocked": m, "retry_after": seconds-or-None}``,
+    ``trigger`` is the coarse origin: ``manual`` (an operator pressed Scan now,
+    the default), or ``verify`` when a successful connection verification kicked
+    the first scan itself. The beat fan-out passes ``schedule`` through the
+    dispatch service directly.
+
+    Returns ``{"scannable", "enqueued", "blocked", "deferred", "retry_after"}``,
     or ``None`` when no such connection belongs to the workspace (→ 404).
     """
     from components.cloud_posture.infrastructure.services.scan_dispatch_service import (
@@ -26,7 +33,7 @@ def enqueue_connection_scan(*, workspace_id: str, connection_id: str, triggered_
     return dispatch_scans_for_workspace_connection(
         workspace_id=workspace_id,
         connection_id=connection_id,
-        trigger="manual",
+        trigger=trigger,
         triggered_by=triggered_by,
     )
 

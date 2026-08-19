@@ -36,6 +36,15 @@ def release_dispatch_lock(*, workspace_id, source: str, target_ref: str) -> None
     _release(workspace_id=workspace_id, source=source, target_ref=target_ref)
 
 
+def count_in_flight(source: str) -> int:
+    """Fleet-wide count of queued/running scans for ``source`` — the input to a
+    pillar's global concurrency ceiling. Not workspace-scoped on purpose: the
+    scanner cluster and the cloud-provider API budget are shared."""
+    from components.scanning.infrastructure.services.scan_gate import count_in_flight as _count
+
+    return _count(source)
+
+
 def latest_runs_for(workspace_id, source: str, target_refs: list[str]) -> dict[str, dict]:
     from components.scanning.infrastructure.services.scan_gate import latest_runs_for as _latest
 
