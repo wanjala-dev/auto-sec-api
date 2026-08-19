@@ -310,41 +310,49 @@ CELERY_BEAT_SCHEDULE = {
     # Keep this dict in lockstep with api/settings/local.py — a schedule
     # missing HERE silently disables that pipeline in prod.
     "identity_sweep_user_sessions": {
-        "task": "identity.sweep_user_sessions",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "identity.sweep_user_sessions"},
         "schedule": crontab(minute="*/15"),
     },
     # Weekly push/delivery hygiene (idempotent reconciliation).
     "notifications_prune_stale_push_subscriptions": {
-        "task": "notifications.prune_stale_push_subscriptions",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "notifications.prune_stale_push_subscriptions"},
         "schedule": crontab(hour=4, minute=40, day_of_week=0),
     },
     "workflow_run_due_schedules": {
-        "task": "workflow.run_due_schedules",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "workflow.run_due_schedules"},
         "schedule": crontab(minute="*"),
     },
     "sweep_stuck_document_imports": {
-        "task": "sweep_stuck_document_imports",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "sweep_stuck_document_imports"},
         "schedule": crontab(minute="*/10"),
     },
     "signoff_materialize_pending_tasks": {
-        "task": "sign_off.materialize_pending_signoff_tasks",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "sign_off.materialize_pending_signoff_tasks"},
         "schedule": crontab(minute="*/5"),
     },
     # AI-teammate cycle — the detector fan-out that makes the SOC log-watch →
     # triage pipeline autonomous. Self-gating (ai_teammate_enabled flag,
     # feature.ai_kill_switch, dispatch lease).
     "schedule_ai_teammate_runs": {
-        "task": "infrastructure.ai.agents.tasks.schedule_ai_teammate_runs",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "infrastructure.ai.agents.tasks.schedule_ai_teammate_runs"},
         "schedule": crontab(minute="*/5"),
     },
     # Daily AI-action rollup for the governance charts.
     "rollup_ai_action_daily": {
-        "task": "ai.rollup_ai_action_daily",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "ai.rollup_ai_action_daily"},
         "schedule": crontab(minute=20, hour=0),
     },
     # Nightly Prowler CSPM scan — dark until opt-in (feature.cloud_posture).
     "schedule_cloud_posture_scans": {
-        "task": "cloud_posture.schedule_prowler_runs",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "cloud_posture.schedule_prowler_runs"},
         "schedule": crontab(hour=2, minute=0),
     },
     # Hourly AWS Organization re-discovery (task #155) — re-walks
@@ -357,35 +365,41 @@ CELERY_BEAT_SCHEDULE = {
     # hole — this bounds worst-case invisibility to ~1h. Offset off :00 so it
     # does not pile onto the other sweeps. Idempotent; safe to re-run.
     "rediscover_aws_org_accounts": {
-        "task": "integrations.rediscover_aws_org_accounts",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "integrations.rediscover_aws_org_accounts"},
         "schedule": crontab(minute=20),
     },
     # Nightly Vercel posture scan (ADR 0021 D3) — dark until opt-in.
     "schedule_vercel_posture_scans": {
-        "task": "cloud_posture.schedule_vercel_prowler_runs",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "cloud_posture.schedule_vercel_prowler_runs"},
         "schedule": crontab(hour=2, minute=30),
     },
     # Daily Trivy container-SCA rescan — dark until opt-in
     # (feature.container_security). Was MISSING here (fork-drift) while present
     # in local.py — prod would have silently never rescanned images.
     "schedule_container_scans": {
-        "task": "container_security.schedule_container_scans",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "container_security.schedule_container_scans"},
         "schedule": crontab(hour=3, minute=0),
     },
     # Nightly Opengrep SAST rescan (ADR 0019 D3) — dark until opt-in
     # (feature.code_security). Also previously missing here; same drift class.
     "schedule_repo_scans": {
-        "task": "code_security.schedule_repo_scans",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "code_security.schedule_repo_scans"},
         "schedule": crontab(hour=3, minute=30),
     },
     # Daily threat-intel feed refresh (ADR 0013 D2) — EPSS + CISA KEV.
     "vuln_intel_refresh_feeds": {
-        "task": "vuln_intel.refresh_feeds",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "vuln_intel.refresh_feeds", "mode": "shared"},
         "schedule": crontab(hour=1, minute=30),
     },
     # Hourly Remediation Memory capture reconciler (ADR 0012 P4a).
     "reconcile_applied_remediations": {
-        "task": "remediation.reconcile_applied_remediations",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "remediation.reconcile_applied_remediations"},
         "schedule": crontab(minute=15),
     },
     # The draft-PR retry leg: settle PRs the operator closed without merging (which
@@ -394,12 +408,14 @@ CELERY_BEAT_SCHEDULE = {
     # freed slot. Runs after the merge reconciler so a merged PR is resolved by
     # its owner first. Idempotent; bounded per sweep.
     "release_rejected_draft_prs": {
-        "task": "infrastructure.ai.agents.tasks.release_rejected_draft_prs",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "infrastructure.ai.agents.tasks.release_rejected_draft_prs"},
         "schedule": crontab(minute=35),
     },
     # Daily Remediation Memory orphan-recovery sweep (ADR 0012 P6).
     "reindex_remediation_corpus": {
-        "task": "remediation.reindex_remediation_corpus",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "remediation.reindex_remediation_corpus"},
         "schedule": crontab(hour=3, minute=30),
     },
 }

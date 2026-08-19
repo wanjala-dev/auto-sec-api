@@ -1,11 +1,19 @@
 """Database router: the bound tenant selects the connection (ADR 0029).
 
-NOT REGISTERED YET. ``DATABASE_ROUTERS`` is still empty; this class is proven by
-its tests and wired in a later phase. Registering it before every binding
-boundary exists (Celery dispatch, management commands, webhook entry) would make
-every unbound path raise — which is fail-closed working exactly as designed, and
-would take the application down. The wiring order is: bind everywhere, then
-register.
+REGISTERED AND LIVE. ``DATABASE_ROUTERS`` names this class in
+``api/settings/base.py``; the test settings clear it so the suite runs on one
+SQLite database. This docstring claimed "NOT REGISTERED YET" for months after the
+wiring landed, which made the file read as inert scaffolding — and that is
+exactly how the beat binder stayed missing: if the router does not route, an
+unbound scheduled task looks harmless. It is not. Corrected 2026-08-19 after
+confirming on the live cluster that an unbound query raises.
+
+The documented wiring order was "bind everywhere, then register", and it was
+followed for HTTP, WebSockets, Celery *dispatch*, management commands and webhook
+entry — but **Celery Beat was missed**, because beat publishes with nothing
+bound. Its binder is ``shared_platform.run_for_each_tenant``
+(``components/shared_platform/infrastructure/tasks/tenancy_fanout_tasks.py``),
+which dispatches each scheduled task once per tenant scope.
 
 The shape most articles publish is::
 

@@ -348,7 +348,8 @@ CELERY_BEAT_SCHEDULE = {
     # reconciliation — 04:20 UTC keeps it clear of the 03:00-04:00 embedding
     # and demo-cleanup window.
     "identity_sweep_user_sessions": {
-        "task": "identity.sweep_user_sessions",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "identity.sweep_user_sessions"},
         "schedule": crontab(hour=4, minute=20),
     },
     # Weekly push/delivery hygiene: delete PushSubscription rows dead
@@ -357,18 +358,21 @@ CELERY_BEAT_SCHEDULE = {
     # terminal NotificationDelivery ledger rows >
     # NOTIFICATION_DELIVERY_RETENTION_DAYS. Idempotent reconciliation.
     "notifications_prune_stale_push_subscriptions": {
-        "task": "notifications.prune_stale_push_subscriptions",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "notifications.prune_stale_push_subscriptions"},
         "schedule": crontab(hour=4, minute=40, day_of_week=0),
     },
     # Fire due recurring workflow schedules (user-defined daily/weekly/monthly
     # automations). Every minute so a scheduled time is honoured within ~60s;
     # the task is idempotent (advances next_run_at + per-fire idempotency key).
     "workflow_run_due_schedules": {
-        "task": "workflow.run_due_schedules",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "workflow.run_due_schedules"},
         "schedule": crontab(minute="*"),
     },
     "schedule_cloud_posture_scans": {
-        "task": "cloud_posture.schedule_prowler_runs",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "cloud_posture.schedule_prowler_runs"},
         "schedule": crontab(hour=2, minute=0),
     },
     # Hourly AWS Organization re-discovery (task #155) — re-walks
@@ -381,19 +385,22 @@ CELERY_BEAT_SCHEDULE = {
     # hole — this bounds worst-case invisibility to ~1h. Offset off :00 so it
     # does not pile onto the other sweeps. Idempotent; safe to re-run.
     "rediscover_aws_org_accounts": {
-        "task": "integrations.rediscover_aws_org_accounts",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "integrations.rediscover_aws_org_accounts"},
         "schedule": crontab(minute=20),
     },
     # Nightly Vercel posture scan (ADR 0021 D3) — fans out per CONNECTED VercelConnection
     # of opted-in workspaces (feature.vercel_posture). Dark until opt-in; the task
     # self-gates on the flag AND the scanning dispatch gate (cooldown/in-flight).
     "schedule_vercel_posture_scans": {
-        "task": "cloud_posture.schedule_vercel_prowler_runs",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "cloud_posture.schedule_vercel_prowler_runs"},
         "schedule": crontab(hour=2, minute=30),
     },
     # Daily threat-intel feed refresh (ADR 0013 D2) — EPSS + CISA KEV → dated snapshots.
     "vuln_intel_refresh_feeds": {
-        "task": "vuln_intel.refresh_feeds",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "vuln_intel.refresh_feeds", "mode": "shared"},
         "schedule": crontab(hour=1, minute=30),
     },
     # Hourly Remediation Memory capture reconciler (ADR 0012 P4a) — merge-checks
@@ -401,7 +408,8 @@ CELERY_BEAT_SCHEDULE = {
     # offers them to the gated corpus capture. The driver of the capture loop:
     # without a schedule nothing is captured autonomously. Idempotent.
     "reconcile_applied_remediations": {
-        "task": "remediation.reconcile_applied_remediations",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "remediation.reconcile_applied_remediations"},
         "schedule": crontab(minute=15),
     },
     # The draft-PR retry leg: settle PRs the operator closed without merging (which
@@ -410,25 +418,29 @@ CELERY_BEAT_SCHEDULE = {
     # freed slot. Runs after the merge reconciler so a merged PR is resolved by
     # its owner first. Idempotent; bounded per sweep.
     "release_rejected_draft_prs": {
-        "task": "infrastructure.ai.agents.tasks.release_rejected_draft_prs",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "infrastructure.ai.agents.tasks.release_rejected_draft_prs"},
         "schedule": crontab(minute=35),
     },
     # Daily Remediation Memory orphan-recovery sweep (ADR 0012 P6) — re-embeds
     # vetted fixes that cleared the D1 gate but whose after-commit embed never
     # landed (admitted-but-unretrievable) or whose rating changed. Idempotent.
     "reindex_remediation_corpus": {
-        "task": "remediation.reindex_remediation_corpus",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "remediation.reindex_remediation_corpus"},
         "schedule": crontab(hour=3, minute=30),
     },
     "ai_teammate_schedule": {
-        "task": "infrastructure.ai.agents.tasks.schedule_ai_teammate_runs",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "infrastructure.ai.agents.tasks.schedule_ai_teammate_runs"},
         "schedule": timedelta(hours=1),
     },
     # Project pending sign-off items onto each workspace's AI Findings
     # Kanban board (assigned to the owner) + reconcile resolved cards.
     # Idempotent — safe to re-run every 15 min.
     "signoff_materialize_pending_tasks": {
-        "task": "sign_off.materialize_pending_signoff_tasks",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "sign_off.materialize_pending_signoff_tasks"},
         "schedule": crontab(minute="*/15"),
     },
     # Daily AI-action rollup — recomputes yesterday's AiActionDailyRollup
@@ -436,68 +448,81 @@ CELERY_BEAT_SCHEDULE = {
     # governance charts read these rollup rows instead of live-aggregating
     # DeepRun/DeepRunLog on the request path.
     "rollup_ai_action_daily": {
-        "task": "ai.rollup_ai_action_daily",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "ai.rollup_ai_action_daily"},
         "schedule": crontab(minute=20, hour=0),
     },
     "workspace_embeddings_hourly": {
         # Refresh embeddings for AI-enabled workspaces every hour in dev.
         # Only workspaces with ai_teammate_enabled=True are processed.
-        "task": "infrastructure.ai.embeddings.tasks.create_embeddings_for_workspace_content",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "infrastructure.ai.embeddings.tasks.create_embeddings_for_workspace_content"},
         "schedule": timedelta(hours=1),
     },
     "workspace_setup_banner_sync": {
-        "task": "infrastructure.workspaces.tasks.sync_workspace_setup_banners",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "infrastructure.workspaces.tasks.sync_workspace_setup_banners"},
         "schedule": timedelta(minutes=30),
     },
     "workspace_temp_workspace_cleanup": {
-        "task": "infrastructure.workspaces.tasks.prune_temporary_workspaces",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "infrastructure.workspaces.tasks.prune_temporary_workspaces"},
         "schedule": timedelta(hours=1),
     },
     "workspace_index_nightly_refresh": {
         # Re-embed every active workspace into the pgvector store so drift
         # (missed signals, partial saves) gets healed.  Hash-skip inside
         # the adapter means unchanged workspaces cost nothing.
-        "task": "components.knowledge.workspace_index.reindex_all_workspaces",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "components.knowledge.workspace_index.reindex_all_workspaces"},
         "schedule": crontab(hour=3, minute=45),
     },
     "index_freshness_slo_audit": {
         # Tier 3 #14 — see prod.py for the full description.
-        "task": "components.knowledge.index_freshness.audit_index_freshness",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "components.knowledge.index_freshness.audit_index_freshness"},
         "schedule": crontab(minute="*/10"),
     },
     "index_freshness_sample_prune": {
         # Tier 3 #14 — see prod.py for the full description.
-        "task": "components.knowledge.index_freshness.prune_index_freshness_samples",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "components.knowledge.index_freshness.prune_index_freshness_samples"},
         "schedule": crontab(hour=4, minute=0),
     },
     "notification_archival": {
-        "task": "notifications.archive_old_notifications",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "notifications.archive_old_notifications"},
         "schedule": crontab(hour=3, minute=30),  # 3:30 AM UTC daily
     },
     # Recycle bin lifecycle
     "recycle_bin_auto_tombstone": {
-        "task": "recycle_bin.tombstone_expired_trash",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "recycle_bin.tombstone_expired_trash"},
         "schedule": crontab(hour=2, minute=30),  # 2:30 AM UTC daily
     },
     "recycle_bin_auto_purge": {
-        "task": "recycle_bin.purge_expired_tombstones",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "recycle_bin.purge_expired_tombstones"},
         "schedule": crontab(hour=4, minute=0),  # 4:00 AM UTC daily
     },
     # Self-cleaning demo lifecycle — tear down ACTIVE demo accounts whose TTL
     # has expired so the demo DB doesn't accumulate stale workspaces.
     "demo_accounts_cleanup_expired": {
-        "task": "shared_platform.cleanup_expired_demo_accounts",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "shared_platform.cleanup_expired_demo_accounts"},
         "schedule": crontab(hour=3, minute=30),  # 3:30 AM UTC daily
     },
     # AI chat quota windows — daily messages reset at midnight UTC,
     # monthly tokens reset on the 1st. The increment path also handles
     # rollover defensively, so missing one cycle is non-fatal.
     "ai_usage_reset_daily": {
-        "task": "ai.reset_daily_ai_usage_windows",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "ai.reset_daily_ai_usage_windows"},
         "schedule": crontab(hour=0, minute=5),  # 00:05 UTC daily
     },
     "ai_usage_reset_monthly": {
-        "task": "ai.reset_monthly_ai_usage_windows",
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "ai.reset_monthly_ai_usage_windows"},
         "schedule": crontab(hour=0, minute=10, day_of_month=1),  # 00:10 UTC on day 1
     },
 }

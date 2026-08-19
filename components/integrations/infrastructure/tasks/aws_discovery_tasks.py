@@ -34,21 +34,20 @@ logger = logging.getLogger(__name__)
 def rediscover_aws_org_accounts() -> dict[str, Any]:
     """Beat entry: re-walk every CONNECTED org-wide connection and reconcile.
 
-    Binds the pooled console explicitly. A beat-dispatched task arrives with no
-    tenant stamped on it (beat has no request and no host), and the fail-closed
-    router refuses unbound queries — "leave it alone" on a long-lived prefork
-    child means inheriting whatever the previous task bound, which is a
-    cross-tenant read waiting to happen (tenancy skill §3b/§3i).
+    Runs under the tenant the FAN-OUT bound (``shared_platform.run_for_each_tenant``
+    dispatches this once per tenant scope with that tenant stamped on the
+    message). It deliberately binds nothing itself: a ``pooled_scope()`` here —
+    which is what this task shipped with, before the beat boundary had a binder —
+    would override the fan-out's binding and pin the sweep to the pooled console
+    forever, so no dedicated-tier customer's AWS org would ever be re-discovered.
+    Binding belongs at the entry point, once; see
+    ``components/shared_platform/infrastructure/tasks/tenancy_fanout_tasks.py``.
     """
     from components.integrations.application.providers.aws_connection_provider import (
         get_aws_connection_service,
     )
-    from components.shared_platform.application.providers.tenancy_scopes_provider import (
-        pooled_scope,
-    )
 
-    with pooled_scope():
-        totals = get_aws_connection_service().rediscover_all_connections()
+    totals = get_aws_connection_service().rediscover_all_connections()
 
     logger.info(
         "rediscover_aws_org_accounts connections=%d failed=%d created=%d reactivated=%d suspended=%d protected=%d",

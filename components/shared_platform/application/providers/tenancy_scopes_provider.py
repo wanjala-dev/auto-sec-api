@@ -38,6 +38,25 @@ def pooled_scope() -> Iterator[None]:
         yield
 
 
+def scheduled_sweep_scopes() -> list:
+    """Every tenant scope a periodic (beat) sweep must visit — an entry-point seam.
+
+    Beat is a binding boundary in exactly the sense the module docstring above
+    describes: it dispatches with no request, no host and no tenant, so the
+    routing decision has to be made HERE rather than left to each of the ~28
+    scheduled tasks. That is the same reasoning that put the management-command
+    binding in ``manage.py`` instead of in 99 command classes.
+
+    Returns ``TenantScope`` objects, each with a ``bind()`` context manager and a
+    ``label``. This is deliberately NOT the bind-any-tenant primitive the module
+    docstring refuses to offer: the caller cannot name a tenant, it can only
+    iterate the full set that the registry says exists.
+    """
+    from components.shared_platform.infrastructure.tenancy.sweep import sweep_scopes
+
+    return sweep_scopes()
+
+
 @contextmanager
 def integration_callback_scope(db_alias: str) -> Iterator[None]:
     """Bind the tenant that owns ``db_alias`` for an inbound integration callback.
