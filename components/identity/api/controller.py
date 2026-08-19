@@ -751,7 +751,22 @@ class UserViewSet(viewsets.ModelViewSet):
         elif self.action == "retrieve" or self.action == "update" or self.action == "partial_update":
             permission_classes = [IsLoggedInUserOrAdmin]
 
-        elif self.action == "list" or self.action == "destroy":
+        elif self.action == "destroy":
+            # Deleting an account hard-deletes the row that every workspace
+            # membership hangs off, so it is gated like the other object-scoped
+            # actions: self-or-staff.
+            #
+            # IsAuthenticated is NOT redundant next to IsLoggedInUserOrAdmin.
+            # IsLoggedInUserOrAdmin only implements has_object_permission, and
+            # DRF runs object checks solely when the view calls get_object() —
+            # anything that deletes without loading the object first would sail
+            # straight through. The authentication gate is stated explicitly so
+            # the deny does not depend on that indirection.
+            permission_classes = [
+                permissions.IsAuthenticated,
+                IsLoggedInUserOrAdmin,
+            ]
+        elif self.action == "list":
             permission_classes = [
                 IsUnauthenticatedOrAdminOrStaff,
             ]
