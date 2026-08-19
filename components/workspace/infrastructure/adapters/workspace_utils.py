@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import logging
+
 from django.utils import timezone
 
 from infrastructure.persistence.project.models import Column
 from infrastructure.persistence.team.models import Team, TeamMembership
 from infrastructure.persistence.users.models import CustomUser
 from infrastructure.persistence.workspaces.models import Workspace, WorkspaceMembership
+
+logger = logging.getLogger(__name__)
 
 
 def ensure_workspace_scaffolding(
@@ -111,6 +115,72 @@ def ensure_workspace_follower(workspace, user: CustomUser) -> None:
     if not workspace or not user:
         return
     workspace.followers.add(user)
+
+
+def ensure_canonical_subscription_tiers() -> None:
+    """Ensure the canonical Plan rows (Free / Pro / Premium) exist.
+
+    Delegates to ``seed_subscription_tiers``, the ONE seeder for Plan rows —
+    every other bootstrap path is documented to reach it via ``call_command``
+    rather than hard-coding tier titles or limits. Idempotent (upsert keyed on
+    title), and it runs inside whatever tenant is bound, so a dedicated tenant
+    seeds its OWN database (``subscription`` is tenant-routed, not shared).
+    """
+    from django.core.management import call_command
+
+    call_command("seed_subscription_tiers", verbosity=0)
+
+
+def ensure_workspace_default_plan(workspace) -> None:
+    """Bind a plan-less workspace to the default (Free) subscription tier.
+
+    THE canonical binding — every workspace-creation path calls this one
+    function, so the tier a new customer lands on can never drift per path.
+
+    Why this must happen at creation: ``EntitlementsResolver`` treats an
+    absent/NULL plan as UNLIMITED (the documented ``None`` sentinel that makes
+    Premium unlimited). A workspace with ``plan = NULL`` is therefore not
+    "un-tiered", it is *the most generous tier in the product* — Free would
+    out-grant Pro on the metered-AI allowance, and the only enforced paid
+    entitlement would never fire for a real signup.
+
+    Never downgrades: the write is conditional on the plan slot still being
+    empty, so a paid workspace (or a concurrent upgrade) is left untouched.
+    """
+    if workspace is None or getattr(workspace, "plan_id", None):
+        return
+
+    from components.subscription.application.providers.plan_query_provider import (
+        PlanQueryProvider,
+    )
+
+    plan_query = PlanQueryProvider().build_plan_query_port()
+    plan = plan_query.get_default_plan()
+    if plan is None:
+        # First workspace on a database whose tiers were never seeded (a fresh
+        # deploy, a just-provisioned dedicated tenant, a test DB). Seed, retry.
+        ensure_canonical_subscription_tiers()
+        plan = plan_query.get_default_plan()
+    if plan is None:
+        logger.error(
+            "workspace_default_plan_unresolved workspace_id=%s — no default subscription tier "
+            "exists after seeding; workspace stays UNLIMITED until a plan is bound",
+            workspace.id,
+        )
+        return
+
+    # ``all_objects()`` on purpose: the default manager hides non-active rows,
+    # and a workspace is still 'inactive' while it is being bootstrapped.
+    updated = Workspace.objects.all_objects().filter(id=workspace.id, plan__isnull=True).update(plan_id=plan.id)
+    if updated:
+        # Re-read rather than assigning the DTO's stringified id, so the caller's
+        # in-memory instance carries a correctly-typed FK.
+        workspace.refresh_from_db(fields=["plan"])
+        logger.info(
+            "workspace_default_plan_bound workspace_id=%s plan=%s",
+            workspace.id,
+            plan.title,
+        )
 
 
 def _resolve_system_role(role_value: str):

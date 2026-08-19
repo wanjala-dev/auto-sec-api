@@ -11,7 +11,11 @@ from django.utils.text import slugify
 from components.shared_platform.application.providers.core_utils_provider import (
     get_core_utils_provider,
 )
-from components.workspace.application.facades.workspace_facade import ensure_workspace_scaffolding
+from components.workspace.application.facades.workspace_facade import (
+    ensure_canonical_subscription_tiers,
+    ensure_workspace_default_plan,
+    ensure_workspace_scaffolding,
+)
 from components.workspace.application.ports.workspace_bootstrap_port import WorkspaceBootstrapPort
 from infrastructure.persistence.project.models import Project
 from infrastructure.persistence.team.models import Team
@@ -115,9 +119,15 @@ class WorkspaceBootstrapRepository(WorkspaceBootstrapPort):
             workspace.contribution_means.set(matches)
 
     def ensure_subscription_plans(self) -> None:
-        # Subscription/billing plans are not part of the security product's
-        # workspace core. No-op retained to satisfy the bootstrap port contract.
-        return None
+        # This was stubbed to a no-op by the fork strip on the premise that
+        # billing "is not part of the security product". It is: autosec bills
+        # from day one, and with no Plan rows there is nothing for a workspace
+        # to be bound to — which is how every workspace ended up on the
+        # implicit UNLIMITED tier. Delegates to the canonical seeder.
+        ensure_canonical_subscription_tiers()
+
+    def ensure_default_plan(self, *, workspace: Workspace) -> None:
+        ensure_workspace_default_plan(workspace)
 
     def ensure_workspace_scaffolding(
         self,

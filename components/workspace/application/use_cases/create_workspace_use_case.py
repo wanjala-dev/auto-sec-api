@@ -78,6 +78,12 @@ class CreateWorkspaceUseCase:
         them with their own data.
         """
         self._bootstrap.ensure_subscription_plans()
+        # Step 2 — bind the Free tier. This docstring has promised it since the
+        # use case was written; the fork stripped the implementation, so every
+        # workspace landed with plan = NULL, which ``EntitlementsResolver``
+        # reads as UNLIMITED. Restored here so the paywall applies to a real
+        # signup and not just to workspaces that once had a Stripe subscription.
+        self._bootstrap.ensure_default_plan(workspace=workspace)
 
         # Teamspaces get a generic "General" home team ("Contributors" collided
         # with the Contributor persona/role — nav rework). Personal workspaces

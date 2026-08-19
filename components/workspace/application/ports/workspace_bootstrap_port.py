@@ -36,6 +36,15 @@ class WorkspaceBootstrapPort(Protocol):
 
     def ensure_subscription_plans(self) -> None: ...
 
+    def ensure_default_plan(self, *, workspace: Any) -> None:
+        """Bind a plan-less workspace to the default (Free) tier.
+
+        Required, not optional: a NULL plan resolves to UNLIMITED through
+        ``EntitlementsResolver``, so an unbound workspace silently out-grants
+        every paid tier. Implementations must never downgrade a bound plan.
+        """
+        ...
+
     def ensure_workspace_scaffolding(
         self,
         *,

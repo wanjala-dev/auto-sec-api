@@ -13,6 +13,7 @@ from components.workflow.application.facades.ai_findings_workflow_facade import 
     ensure_ai_findings_workflow_binding,
 )
 from components.workspace.application.facades.workspace_facade import (
+    ensure_workspace_default_plan,
     ensure_workspace_follower,
     ensure_workspace_scaffolding,
 )
@@ -160,6 +161,10 @@ def _create_bootstrap_workspace(
             is_active=True,
             privacy=Workspace.PRIVATE if is_personal else Workspace.PUBLIC,
         )
+        # Bind the Free tier BEFORE any scaffolding: an unbound plan reads as
+        # UNLIMITED through EntitlementsResolver, and the team seeding below
+        # copies the default plan onto the Agents team.
+        ensure_workspace_default_plan(workspace)
         team, _ = ensure_workspace_scaffolding(workspace, user, team_title=team_title, include_red_team=include_red)
         ensure_workspace_follower(workspace, user)
         _sync_profile_context(user, workspace, default_team=team, force_workspace=True)
@@ -214,6 +219,7 @@ def ensure_personal_workspace(user) -> Workspace | None:
             is_active=True,
             privacy=Workspace.PRIVATE,
         )
+        ensure_workspace_default_plan(workspace)
         team, _ = ensure_workspace_scaffolding(workspace, user, team_title="Family")
         ensure_workspace_follower(workspace, user)
         _sync_profile_context(user, workspace, default_team=team)
