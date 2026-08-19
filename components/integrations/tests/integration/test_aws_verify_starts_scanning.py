@@ -54,25 +54,27 @@ def _discovery(accounts):
     }
 
 
+def _verify_and_scan(conn, accounts, capture):
+    """Drive the REAL verify → post-commit auto-scan path with STS stubbed out."""
+    from components.integrations.application.providers.aws_connection_provider import (
+        get_aws_connection_service,
+    )
+
+    with (
+        patch(f"{_STS_ADAPTER}.verify_and_discover", return_value=_discovery(accounts)),
+        capture(execute=True),
+    ):
+        return get_aws_connection_service().verify_and_scan(conn)
+
+
 @pytest.mark.integration
 @pytest.mark.django_db
 class TestVerifyDispatchesTheFirstScan:
-    def _verify(self, conn, accounts, capture):
-        from components.integrations.application.providers.aws_connection_provider import (
-            get_aws_connection_service,
-        )
-
-        with (
-            patch(f"{_STS_ADAPTER}.verify_and_discover", return_value=_discovery(accounts)),
-            capture(execute=True),
-        ):
-            return get_aws_connection_service().verify_and_scan(conn)
-
     def test_verifying_scans_every_discovered_account(self, workspace_factory, django_capture_on_commit_callbacks):
         conn = _conn(workspace_factory())
 
         with patch(_DISPATCH) as m_dispatch:
-            _, scans = self._verify(conn, [_MGMT, _MEMBER], django_capture_on_commit_callbacks)
+            _, scans = _verify_and_scan(conn, [_MGMT, _MEMBER], django_capture_on_commit_callbacks)
 
         assert m_dispatch.call_count == 2
         assert {c.kwargs["account_id"] for c in m_dispatch.call_args_list} == {_MGMT, _MEMBER}
@@ -86,7 +88,7 @@ class TestVerifyDispatchesTheFirstScan:
         conn = _conn(workspace_factory())
 
         with patch(_DISPATCH) as m_dispatch:
-            self._verify(conn, [_MGMT], django_capture_on_commit_callbacks)
+            _verify_and_scan(conn, [_MGMT], django_capture_on_commit_callbacks)
 
         assert m_dispatch.call_args.kwargs["trigger"] == "verify"
 
@@ -115,7 +117,7 @@ class TestVerifyDispatchesTheFirstScan:
         conn = _conn(workspace_factory())
 
         with patch(_DISPATCH) as first:
-            self._verify(conn, [_MGMT], django_capture_on_commit_callbacks)
+            _verify_and_scan(conn, [_MGMT], django_capture_on_commit_callbacks)
         # The first dispatch left a PENDING ScanRun; the gate sees it in flight.
         ScanRun.objects.create(
             workspace=conn.workspace,
@@ -125,7 +127,7 @@ class TestVerifyDispatchesTheFirstScan:
         )
 
         with patch(_DISPATCH) as second:
-            _, scans = self._verify(conn, [_MGMT], django_capture_on_commit_callbacks)
+            _, scans = _verify_and_scan(conn, [_MGMT], django_capture_on_commit_callbacks)
 
         assert first.call_count == 1
         assert second.call_count == 0
@@ -140,7 +142,7 @@ class TestVerifyDispatchesTheFirstScan:
         accounts = [f"{i:012d}" for i in range(6)]
 
         with patch(_DISPATCH) as m_dispatch:
-            _, scans = self._verify(conn, accounts, django_capture_on_commit_callbacks)
+            _, scans = _verify_and_scan(conn, accounts, django_capture_on_commit_callbacks)
 
         assert m_dispatch.call_count == 2
         assert scans["enqueued"] == 2
@@ -156,11 +158,111 @@ class TestVerifyDispatchesTheFirstScan:
         conn = _conn(workspace_factory())
 
         with patch(_DISPATCH, side_effect=RuntimeError("broker down")), caplog.at_level(logging.ERROR):
-            verified, _ = self._verify(conn, [_MGMT], django_capture_on_commit_callbacks)
+            verified, _ = _verify_and_scan(conn, [_MGMT], django_capture_on_commit_callbacks)
 
         verified.refresh_from_db()
         assert verified.status == AwsOrganizationConnection.Status.CONNECTED
         assert any("autoscan_dispatch_failed" in r.message for r in caplog.records)
+
+
+def _kill_switch_off(ws):
+    """Globally ON, workspace rule OFF — the real kill-switch shape.
+
+    Deliberately not "no flag row at all": an absent row is off for everyone and
+    would pass even if the capability gate were only reading a global default.
+    This asserts the WORKSPACE's own opt-out is what stops the scan.
+    """
+    from components.shared_platform.infrastructure.services.feature_flags import set_workspace_flag
+    from infrastructure.persistence.core.models import FeatureFlag
+
+    FeatureFlag.objects.update_or_create(key="feature.cloud_posture", defaults={"default_enabled": True})
+    set_workspace_flag("feature.cloud_posture", ws.id, False)
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+@pytest.mark.real_feature_flags
+class TestVerifyHonoursTheCloudPostureKillSwitch:
+    """A workspace that disabled ``feature.cloud_posture`` must not be scanned.
+
+    THE FAILURE STORY: the kill-switch is the only in-product way to say "stop
+    assuming a role into my AWS account". "Scan now" honoured it (409) and the
+    beat fan-out honoured it, but the post-verify auto-dispatch checked nothing —
+    so re-verifying a connection ran Prowler against a customer account for a
+    capability that workspace had explicitly turned off. A control that two of
+    three callers remember to apply is not a control.
+    """
+
+    def test_verifying_does_not_scan_a_workspace_that_disabled_cloud_posture(
+        self, workspace_factory, django_capture_on_commit_callbacks
+    ):
+        ws = workspace_factory()
+        _kill_switch_off(ws)
+        conn = _conn(ws)
+
+        with patch(_DISPATCH) as m_dispatch:
+            _, scans = _verify_and_scan(conn, [_MGMT, _MEMBER], django_capture_on_commit_callbacks)
+
+        assert m_dispatch.call_count == 0, "verify scanned an AWS account for a workspace with CSPM disabled"
+        assert scans["enqueued"] == 0
+        # Silence is the bug next door: say WHY nothing started.
+        assert scans["skipped_reason"] == "cloud_posture_not_enabled"
+
+    def test_re_enabling_the_capability_lets_verify_scan_again(
+        self, workspace_factory, django_capture_on_commit_callbacks
+    ):
+        """The gate is a switch, not a latch — flipping it back on must restore
+        the auto-scan, or "disable" would be a one-way door."""
+        from components.shared_platform.infrastructure.services.feature_flags import set_workspace_flag
+
+        ws = workspace_factory()
+        _kill_switch_off(ws)
+        conn = _conn(ws)
+
+        with patch(_DISPATCH) as while_off:
+            _verify_and_scan(conn, [_MGMT], django_capture_on_commit_callbacks)
+
+        set_workspace_flag("feature.cloud_posture", ws.id, True)
+
+        with patch(_DISPATCH) as while_on:
+            _, scans = _verify_and_scan(conn, [_MGMT], django_capture_on_commit_callbacks)
+
+        assert while_off.call_count == 0
+        assert while_on.call_count == 1
+        assert scans["enqueued"] == 1
+        assert scans["skipped_reason"] is None
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.real_feature_flags
+class TestVerifyResponseExplainsTheKillSwitch:
+    """``transaction=True`` for the same reason as ``TestVerifyReportsWhatItStarted``:
+    only then does the on-commit dispatch settle before the response is built."""
+
+    def test_the_verify_response_says_the_capability_is_off(self, api_client, workspace_factory):
+        ws = workspace_factory()
+        _kill_switch_off(ws)
+        api_client.force_authenticate(ws.workspace_owner)
+        conn = _conn(ws)
+
+        with (
+            patch(f"{_STS_ADAPTER}.verify_and_discover", return_value=_discovery([_MGMT, _MEMBER])),
+            patch(_DISPATCH) as m_dispatch,
+        ):
+            resp = api_client.post(f"/integrations/workspaces/{ws.id}/aws/{conn.id}/verify/")
+
+        # The connection still verifies — the capability gate is about scanning.
+        assert resp.status_code == 200, resp.data
+        assert m_dispatch.call_count == 0
+        assert resp.data["scans"] == {
+            "scannable": 0,
+            "enqueued": 0,
+            "deferred": 0,
+            "blocked": 0,
+            "retry_after": None,
+            "skipped_reason": "cloud_posture_not_enabled",
+        }
 
 
 @pytest.mark.integration

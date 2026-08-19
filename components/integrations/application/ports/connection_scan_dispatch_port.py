@@ -8,7 +8,8 @@ connection service framework-free, per the layer rules.
 
 Deliberately NOT a second dispatch path: the adapter calls the same
 ``dispatch_connection_scans`` seam the on-demand endpoint and the beat scheduler
-call, so the gate, the cooldown and the global in-flight cap apply identically.
+call, so the capability flag, the gate, the cooldown and the global in-flight cap
+apply identically.
 """
 
 from __future__ import annotations

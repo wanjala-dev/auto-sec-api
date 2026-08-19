@@ -4,8 +4,8 @@ The single public seam other contexts use to kick a scan for a connection — th
 integrations "Scan now" endpoint resolves it here rather than importing the
 cloud-posture dispatch service directly. Provider files are the allowed slot for
 own-context infrastructure imports (the composition root). Dispatches are gated
-(cooldown + single-in-flight, audit R1) and enqueued onto the spine's Celery
-task; Prowler never runs in the request path.
+(``feature.cloud_posture`` capability + cooldown + single-in-flight, audit R1) and
+enqueued onto the spine's Celery task; Prowler never runs in the request path.
 """
 
 from __future__ import annotations
@@ -23,8 +23,11 @@ def enqueue_connection_scan(
     the first scan itself. The beat fan-out passes ``schedule`` through the
     dispatch service directly.
 
-    Returns ``{"scannable", "enqueued", "blocked", "deferred", "retry_after"}``,
-    or ``None`` when no such connection belongs to the workspace (→ 404).
+    Returns ``{"scannable", "enqueued", "blocked", "deferred", "retry_after",
+    "skipped_reason"}``, or ``None`` when no such connection belongs to the
+    workspace (→ 404). ``skipped_reason`` is set when the seam refused the whole
+    fan-out — today only ``"cloud_posture_not_enabled"``, which the endpoint
+    renders as a 409.
     """
     from components.cloud_posture.infrastructure.services.scan_dispatch_service import (
         dispatch_scans_for_workspace_connection,
