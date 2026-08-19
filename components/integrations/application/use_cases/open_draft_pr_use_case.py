@@ -325,17 +325,21 @@ class OpenDraftPrUseCase:
         performed_by: str,
         repo: str | None = None,
     ) -> DraftPrResult:
-        connection = self._require_connection(workspace_id)
+        # The finding is read FIRST so its repo fact can pick the connection: a
+        # workspace holds many VcsConnections and only the one allowlisting THIS repo
+        # can serve the PR. Resolving the connection first meant an unrelated newer
+        # row won and every finding refused.
         task = self._require_actionable_finding(workspace_id, task_id)
 
         payload = (task.metadata or {}).get("payload") or {}
+        finding_repo = str(payload.get("repo") or "")
+        connection = self._require_connection(workspace_id, repo=finding_repo or (repo or ""))
         # The finding's OWN repo wins the target resolution — falling back to the
         # allowlist head cross-repo-misdirects a finding scanned from any other
         # repo (the live near-miss: an auto-sec-infra SAST finding would have
         # been patched into api-v0.2.0, the allowlist head, via the monorepo
-        # tree-resolve). Resolved AFTER the finding read so the payload's repo
-        # fact is available.
-        target_repo = self._require_allowlisted_repo(connection, repo, finding_repo=str(payload.get("repo") or ""))
+        # tree-resolve).
+        target_repo = self._require_allowlisted_repo(connection, repo, finding_repo=finding_repo)
         existing = payload.get("draft_pr") or {}
         if existing.get("url"):
             # Idempotent: the PR already exists — return it, zero API calls.
@@ -468,13 +472,16 @@ class OpenDraftPrUseCase:
         PR, and it does NOT bypass the sign-off gate — opening still requires the human
         approval path. It posts the preview to the board as provenance (every AI action
         shows on the card)."""
-        connection = self._require_connection(workspace_id)
+        # Same order as ``execute`` — the finding first, so its repo picks the
+        # connection that actually allowlists it.
         task = self._require_actionable_finding(workspace_id, task_id)
 
         payload = (task.metadata or {}).get("payload") or {}
+        finding_repo = str(payload.get("repo") or "")
+        connection = self._require_connection(workspace_id, repo=finding_repo or (repo or ""))
         # Same repo resolution as ``execute`` — the finding's own repo wins, and
         # a preview can never be generated against a different repository.
-        target_repo = self._require_allowlisted_repo(connection, repo, finding_repo=str(payload.get("repo") or ""))
+        target_repo = self._require_allowlisted_repo(connection, repo, finding_repo=finding_repo)
         existing = payload.get("draft_pr") or {}
         if existing.get("url"):
             # A draft PR already exists — nothing left to preview; surface it.
@@ -813,12 +820,15 @@ class OpenDraftPrUseCase:
 
     # ── Preconditions ─────────────────────────────────────────────────
 
-    def _require_connection(self, workspace_id: str):
+    def _require_connection(self, workspace_id: str, *, repo: str = ""):
         # ADR 0010 Phase 2: resolves the provider-agnostic VcsConnection (seeded from any
         # legacy GitHubConnection by migration 0008) through the injected resolver — the
-        # provider owns the ORM read (most-recent connection wins). A per-repo/provider
-        # resolution refinement lands with the CRUD API (Phase 3).
-        connection = self._resolve_connection_fn()(str(workspace_id))
+        # provider owns the ORM read. ``repo`` is the finding's own repository (or the
+        # explicitly requested one): a workspace legitimately holds MANY connections, so
+        # the row that allowlists THIS repo must win. Without the hint, a newer unrelated
+        # row (a fresh GitHub App install, a failed verify, another repo's connection)
+        # shadowed the healthy one and killed remediation workspace-wide.
+        connection = self._resolve_connection_fn()(str(workspace_id), repo=repo)
         if connection is None:
             raise DraftPrPreconditionError(
                 "no_github_connection",
