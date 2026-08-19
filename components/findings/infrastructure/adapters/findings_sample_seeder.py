@@ -13,8 +13,8 @@ from datetime import datetime
 from uuid import UUID
 
 from components.findings.application.ports.finding_store_port import FindingStorePort
-from components.findings.infrastructure.sample_findings import SAMPLE_SOURCE_PREFIX
 from components.sample_data.application.ports.sample_data_seeder_port import SampleDataSeederPort
+from components.shared_kernel.domain.security import SAMPLE_SOURCE_PREFIX
 
 
 class FindingsSampleSeeder(SampleDataSeederPort):

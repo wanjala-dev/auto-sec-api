@@ -1,5 +1,10 @@
 """Serialize an :class:`AssembledReport` to/from the JSON persisted on
-``Report.assembled``. Mechanical translation only — no logic."""
+``Report.assembled``. Mechanical translation only — no logic.
+
+Round-trips the honesty accounting (truncation / exclusions / sample / triage)
+along with the findings. A field that this mapper forgets is a field the stored
+report silently loses — which is how the curation counts went missing before.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +17,7 @@ from components.report.domain.entities.assembled_report_entity import (
     ReportNarrative,
     SeverityHistogram,
     TechnicalFinding,
+    TriageState,
 )
 from components.report.domain.value_objects.severity import Severity
 
@@ -21,7 +27,16 @@ def assembled_to_dict(a: AssembledReport) -> dict[str, Any]:
         "kind": a.kind,
         "histogram": a.histogram.counts,
         "matrix": [
-            {"fid": r.fid, "category": r.category, "title": r.title, "severity": r.severity.band} for r in a.matrix
+            {
+                "fid": r.fid,
+                "category": r.category,
+                "title": r.title,
+                "severity": r.severity.band,
+                "occurrences": r.occurrences,
+                "is_sample": r.is_sample,
+                "triage": _triage_to_dict(r.triage),
+            }
+            for r in a.matrix
         ],
         "technical_findings": [
             {
@@ -34,6 +49,9 @@ def assembled_to_dict(a: AssembledReport) -> dict[str, Any]:
                 "remediation": list(t.remediation),
                 "evidence": {"lines": list(t.evidence.lines), "caption": t.evidence.caption},
                 "finding_id": t.finding_id,
+                "occurrences": t.occurrences,
+                "is_sample": t.is_sample,
+                "triage": _triage_to_dict(t.triage),
             }
             for t in a.technical_findings
         ],
@@ -49,7 +67,39 @@ def assembled_to_dict(a: AssembledReport) -> dict[str, Any]:
             else None
         ),
         "grounding_texts": list(a.grounding_texts),
+        "raw_finding_count": a.raw_finding_count,
+        "deferred_count": a.deferred_count,
+        "total_matched": a.total_matched,
+        "truncated_count": a.truncated_count,
+        "excluded_resolved": a.excluded_resolved,
+        "excluded_suppressed": a.excluded_suppressed,
+        "excluded_sample": a.excluded_sample,
+        "sample_finding_count": a.sample_finding_count,
+        "untriaged_count": a.untriaged_count,
     }
+
+
+def _triage_to_dict(state: TriageState) -> dict[str, Any]:
+    return {
+        "on_board": state.on_board,
+        "column": state.column,
+        "team": state.team,
+        "task_status": state.task_status,
+        "triage_status": state.triage_status,
+        "assignees": list(state.assignees),
+    }
+
+
+def _triage_from_dict(data: Any) -> TriageState:
+    data = data or {}
+    return TriageState(
+        on_board=bool(data.get("on_board")),
+        column=data.get("column", ""),
+        team=data.get("team", ""),
+        task_status=data.get("task_status", ""),
+        triage_status=data.get("triage_status", ""),
+        assignees=tuple(data.get("assignees") or ()),
+    )
 
 
 def dict_to_assembled(data: dict[str, Any]) -> AssembledReport:
@@ -61,6 +111,9 @@ def dict_to_assembled(data: dict[str, Any]) -> AssembledReport:
             category=row["category"],
             title=row["title"],
             severity=Severity(row["severity"]),
+            occurrences=int(row.get("occurrences") or 1),
+            is_sample=bool(row.get("is_sample")),
+            triage=_triage_from_dict(row.get("triage")),
         )
         for row in data.get("matrix") or []
     )
@@ -78,6 +131,9 @@ def dict_to_assembled(data: dict[str, Any]) -> AssembledReport:
                 caption=(t.get("evidence") or {}).get("caption", ""),
             ),
             finding_id=t.get("finding_id", ""),
+            occurrences=int(t.get("occurrences") or 1),
+            is_sample=bool(t.get("is_sample")),
+            triage=_triage_from_dict(t.get("triage")),
         )
         for t in data.get("technical_findings") or []
     )
@@ -100,4 +156,13 @@ def dict_to_assembled(data: dict[str, Any]) -> AssembledReport:
         technical_findings=technicals,
         narrative=narrative,
         grounding_texts=tuple(data.get("grounding_texts") or ()),
+        raw_finding_count=int(data.get("raw_finding_count") or 0),
+        deferred_count=int(data.get("deferred_count") or 0),
+        total_matched=int(data.get("total_matched") or 0),
+        truncated_count=int(data.get("truncated_count") or 0),
+        excluded_resolved=int(data.get("excluded_resolved") or 0),
+        excluded_suppressed=int(data.get("excluded_suppressed") or 0),
+        excluded_sample=int(data.get("excluded_sample") or 0),
+        sample_finding_count=int(data.get("sample_finding_count") or 0),
+        untriaged_count=int(data.get("untriaged_count") or 0),
     )

@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from components.report.domain.value_objects.severity import Severity, normalize_band
+from components.report.domain.services.finding_section_builder import finding_severity
 
 # The parts that vary between otherwise-identical findings — UUIDs, long hex
 # ids, and digit runs (task ids, line counts, ports) — are normalised out so the
@@ -63,15 +63,26 @@ class CuratedFinding:
 def finding_signature(finding: Mapping[str, Any]) -> str:
     """The dedup key for a finding.
 
-    Two findings share a signature when they are the same *kind* of problem on
-    the same service — same severity band, same detector/action, same service,
-    and the same normalised one-line signal (numbers/ids stripped). The signal
-    is the stable discriminator; the title carries the varying task-id so it is
-    only the last-resort fallback.
+    When the source already carries a **stable identity** (``dedup_key`` — the
+    SSOT's ``source|fingerprint``), that key is used verbatim. The SSOT deduped
+    on it at ingest, so every row is already a distinct issue; running the fuzzy
+    signature on top would merge genuinely different findings (two open security
+    groups, two unrotated keys) and UNDERCOUNT the report — the exact failure the
+    SSOT read was built to end.
+
+    Otherwise — a board finding, which is per-occurrence — two findings share a
+    signature when they are the same *kind* of problem on the same service: same
+    severity band, same detector/action, same service, and the same normalised
+    one-line signal (numbers/ids stripped). The signal is the stable
+    discriminator; the title carries the varying task-id so it is only the
+    last-resort fallback.
     """
+    identity = str(finding.get("dedup_key") or "").strip()
+    if identity:
+        return f"id:{identity}"
     meta = finding.get("metadata") or {}
     payload = meta.get("payload") or {}
-    band = normalize_band(meta.get("severity"))
+    band = finding_severity(finding).band
     action = str(meta.get("action_type") or meta.get("detector") or "").strip().lower()
     service = str(payload.get("service") or "").strip().lower()
     discriminator = payload.get("signal") or payload.get("signature") or finding.get("title") or ""
@@ -85,9 +96,8 @@ def _representative_key(finding: Mapping[str, Any]) -> tuple[int, str]:
     practice this resolves ties by title for a stable, deterministic choice.
     """
     meta = finding.get("metadata") or {}
-    sev = Severity(normalize_band(meta.get("severity")))
     title = str(meta.get("ai_headline") or finding.get("title") or "")
-    return (sev.rank, title.lower())
+    return (finding_severity(finding).rank, title.lower())
 
 
 def dedupe_findings(raw: Sequence[Mapping[str, Any]]) -> tuple[CuratedFinding, ...]:

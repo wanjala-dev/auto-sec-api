@@ -11,8 +11,6 @@ Slack on fake data).
 
 from __future__ import annotations
 
-SAMPLE_SOURCE_PREFIX = "sample."
-
 # compliance["MITRE ATT&CK"] lights up the ATT&CK coverage heatmap; the framework
 # tags feed the compliance bars. Severities are spread so the severity ring/counts
 # read realistically.

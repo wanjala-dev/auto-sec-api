@@ -17,11 +17,19 @@ class ReportProvider:
 
     @staticmethod
     def finding_source():
-        from components.report.infrastructure.repositories.board_finding_repository import (
-            BoardFindingRepository,
+        """The Finding SSOT, with board state joined on as enrichment.
+
+        The board lens (``BoardFindingRepository``) is deliberately NOT the
+        default: it can only see findings that cleared the board's severity floor
+        (ADR 0019 D4 files at ``high``), so every low/medium/informational
+        finding — and every source kept SSOT-only by ADR 0021 D4 — was invisible
+        to reports. The SSOT is the spine; the board contributes triage state.
+        """
+        from components.report.infrastructure.repositories.ssot_finding_repository import (
+            SsotFindingRepository,
         )
 
-        return BoardFindingRepository()
+        return SsotFindingRepository()
 
     @staticmethod
     def storage():

@@ -7,10 +7,8 @@ import pytest
 from django.utils import timezone
 
 from components.findings.application.providers.finding_provider import FindingProvider
-from components.findings.infrastructure.sample_findings import (
-    SAMPLE_FINDINGS,
-    SAMPLE_SOURCE_PREFIX,
-)
+from components.findings.infrastructure.sample_findings import SAMPLE_FINDINGS
+from components.shared_kernel.domain.security import SAMPLE_SOURCE_PREFIX
 from infrastructure.persistence.findings.models import Finding
 
 pytestmark = [pytest.mark.django_db]

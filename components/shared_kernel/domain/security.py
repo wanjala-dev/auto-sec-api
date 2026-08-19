@@ -24,7 +24,23 @@ from dataclasses import dataclass, field
 from enum import Enum
 from functools import total_ordering
 
-__all__ = ["AssetUrn", "FindingStatus", "NormalizedFinding", "RiskBand", "Severity"]
+__all__ = [
+    "SAMPLE_SOURCE_PREFIX",
+    "AssetUrn",
+    "FindingStatus",
+    "NormalizedFinding",
+    "RiskBand",
+    "Severity",
+]
+
+#: Every seeded demo finding's ``source`` starts with this, so sample data is
+#: trivially identifiable, one-click clearable, and — critically — **labellable**
+#: by any lens that renders findings. It lives in the shared kernel rather than in
+#: the ``findings`` context because more than one context has to recognise sample
+#: data: ``findings`` seeds and clears it, and ``report`` must stamp a deliverable
+#: that contains it (a report is an artifact that leaves the building; a demo
+#: report that does not say it is a demo is the worst possible failure mode).
+SAMPLE_SOURCE_PREFIX = "sample."
 
 
 @total_ordering

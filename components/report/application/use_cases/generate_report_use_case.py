@@ -19,7 +19,7 @@ isolated to that call, mirroring how reports render their PDFs.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any
 
@@ -118,15 +118,15 @@ class GenerateReportUseCase:
             engagement_title=report.get("title") or "",
             scope_summary=scope.get("scope_summary") or "",
         )
-        # Re-bind the narrative onto the assembled entity (frozen → rebuild).
-        return AssembledReport(
-            kind=assembled.kind,
-            histogram=assembled.histogram,
-            matrix=assembled.matrix,
-            technical_findings=assembled.technical_findings,
-            narrative=narrative,
-            grounding_texts=assembled.grounding_texts,
-        )
+        # Re-bind the narrative onto the assembled entity (frozen → copy).
+        #
+        # ``replace`` rather than a hand-written reconstruction: the previous
+        # version listed the fields explicitly and therefore silently DROPPED
+        # ``raw_finding_count`` and ``deferred_count`` on every report — the
+        # curation accounting never reached the document, so a curated report
+        # rendered as if it were complete. Any field added to the entity from
+        # here on survives this step by construction.
+        return replace(assembled, narrative=narrative)
 
     def _render_html(self, report: dict[str, Any], assembled: AssembledReport) -> str:
         builder = self._html_builder
