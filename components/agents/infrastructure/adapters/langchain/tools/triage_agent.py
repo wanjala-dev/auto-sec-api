@@ -313,7 +313,10 @@ def open_draft_pr(agent, input_str: str) -> str:
     the approving human principal driving this run.
     """
     from components.integrations.application.providers.vcs_provider import get_open_draft_pr_use_case
-    from components.integrations.application.use_cases.open_draft_pr_use_case import DraftPrPreconditionError
+    from components.integrations.application.use_cases.open_draft_pr_use_case import (
+        APPROVAL_OPERATOR,
+        DraftPrPreconditionError,
+    )
 
     raw = (input_str or "").strip()
     try:
@@ -332,6 +335,9 @@ def open_draft_pr(agent, input_str: str) -> str:
             task_id=task_id,
             performed_by=str(agent.user_id),
             repo=(data.get("repo") or "").strip() or None,
+            # ``irreversible`` tier: the risk gate denied this call unless a human
+            # approved the run, so the PR may say an operator approved the patch.
+            approval=APPROVAL_OPERATOR,
         )
     except DraftPrPreconditionError as exc:
         return f"Cannot open a draft PR ({exc.reason}): {exc}"

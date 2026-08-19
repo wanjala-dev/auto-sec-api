@@ -11,6 +11,10 @@ from django.utils import timezone
 
 from components.agents.infrastructure.services.actions_service import get_ai_action_service
 from components.agents.infrastructure.services.agents_service import get_agent_service
+from components.integrations.application.use_cases.open_draft_pr_use_case import (
+    APPROVAL_AUTOMATIC,
+    APPROVAL_OPERATOR,
+)
 from components.knowledge.application.providers.openai_breaker_provider import (
     OPENAI_CHAT_SLUG,
     OpenAIUnavailableError,
@@ -657,6 +661,10 @@ def auto_draft_pr_for_finding(
         performed_by=performed_by,
         metadata=meta,
         source_type=card.source_type or "",
+        # Nobody pressed anything: this task IS the hand-off, dispatched off the
+        # specialist's own triage write. ``performed_by`` is here for commit
+        # attribution and audit only — the PR must not read it as an approval.
+        approval=APPROVAL_AUTOMATIC,
     )
     logger.info(
         "auto_draft_pr_for_finding completed workspace_id=%s task_id=%s agent=%s outcome=%s",
@@ -799,6 +807,9 @@ def draft_fix_for_finding(
         performed_by=performed_by,
         metadata=meta,
         source_type=source_type,
+        # A permission-checked operator pressed DRAFT FIX PR for this finding
+        # (the endpoint enqueues this task) — a real human authorisation.
+        approval=APPROVAL_OPERATOR,
     )
     logger.info(
         "draft_fix_for_finding completed workspace_id=%s task_id=%s specialist=%s outcome=%s",
@@ -811,12 +822,25 @@ def draft_fix_for_finding(
 
 
 def _open_draft_pr_for_finding(
-    *, workspace_id: str, task_id: str, performed_by: str, metadata: dict, source_type: str = ""
+    *,
+    workspace_id: str,
+    task_id: str,
+    performed_by: str,
+    metadata: dict,
+    source_type: str = "",
+    approval: str,
 ) -> dict:
     """Run the ONE draft-PR engine for a freshly triaged finding, or record WHY not.
 
     Never raises: a blocked PR is a product state the operator must SEE (the whole
     point of this change), not an exception that disappears into a task log.
+
+    ``approval`` says whether a human authorised this patch — the engine writes it
+    into the PR body's provenance line. Required (no default) precisely because
+    both of this helper's callers look identical from here: they pass the same
+    ``performed_by`` for commit attribution, but only ONE of them had a human
+    press a button. A default would let the automatic path silently inherit the
+    operator claim again.
     """
     from components.integrations.application.ports.vcs_port import VcsApiError
     from components.integrations.application.providers.vcs_provider import get_open_draft_pr_use_case
@@ -888,7 +912,10 @@ def _open_draft_pr_for_finding(
 
     try:
         result = get_open_draft_pr_use_case().execute(
-            workspace_id=str(workspace_id), task_id=str(task_id), performed_by=str(performed_by)
+            workspace_id=str(workspace_id),
+            task_id=str(task_id),
+            performed_by=str(performed_by),
+            approval=approval,
         )
     except DraftPrPreconditionError as exc:
         return _record_draft_pr_blocked(workspace_id, task_id, exc.reason, str(exc))

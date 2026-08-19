@@ -244,6 +244,27 @@ class TestAutoDraftPrTask:
             "the board must show the AGENT opened this off its own triage — not that a human asked"
         )
 
+    def test_engine_is_told_the_open_was_automatic_not_operator_approved(self, workspace_factory, team_factory):
+        """The PR the engine writes asserts an approval; this path has none.
+
+        The card's provenance chain already says the agent "requested its own fix
+        draft (automatic)". The engine has to be told the same thing, or its PR
+        body tells the customer's repository that a workspace operator approved a
+        patch no human has seen.
+        """
+        from components.integrations.application.use_cases.open_draft_pr_use_case import APPROVAL_AUTOMATIC
+
+        workspace, owner, team, intake = _board(workspace_factory, team_factory)
+        task = _sast_task(workspace, owner, team, intake)
+
+        with mock.patch(
+            "components.agents.infrastructure.tasks.agent_tasks._open_draft_pr_for_finding",
+            return_value={"pr_url": "https://github.com/o/r/pull/9"},
+        ) as engine:
+            self._run(task)
+
+        assert engine.call_args.kwargs["approval"] == APPROVAL_AUTOMATIC
+
 
 @pytest.mark.django_db
 class TestDesignChangeSkipsPr:
