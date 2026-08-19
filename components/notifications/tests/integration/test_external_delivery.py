@@ -253,6 +253,90 @@ class TestFailureHandling:
         assert ExternalDeliveryRepository().claim(row.id) is True, "a retry must be able to re-claim"
 
 
+class TestConnectionHealthOnFailure:
+    """A failed delivery must show up on the connection, not only in the ledger.
+
+    The ledger has no controller, serializer, or UI — the Settings panel renders the
+    connection row. If a failure never lands there, a revoked webhook keeps reporting
+    CONNECTED while every alert to it is dropped: the silent-success failure this
+    product exists to prevent.
+    """
+
+    def test_permanent_failure_marks_the_connection(self, workspace_factory, monkeypatch):
+        from components.integrations.application.ports.delivery_channel_port import DeliveryResult
+
+        workspace = workspace_factory()
+        connection = _connection(workspace)
+        adapter = _Recorder(DeliveryResult(ok=False, detail="invalid_auth", permanent=True))
+
+        _run(monkeypatch, workspace, adapter=adapter)
+
+        connection.refresh_from_db()
+        assert connection.status == "error"
+        assert connection.last_error == "invalid_auth"
+
+    def test_transient_failure_marks_the_connection(self, workspace_factory, monkeypatch):
+        """A retryable failure is still a failure the operator can see right now —
+        the panel must not claim CONNECTED while the task backs off."""
+        from celery.exceptions import Retry
+
+        from components.integrations.application.ports.delivery_channel_port import DeliveryResult
+
+        workspace = workspace_factory()
+        connection = _connection(workspace)
+        adapter = _Recorder(DeliveryResult(ok=False, detail="upstream 503"))
+
+        # Named, not a blind ``Exception``: the point of this case is that the task
+        # asked Celery to retry, and a bare catch-all would pass just as happily on
+        # an unrelated crash.
+        with pytest.raises(Retry):
+            _run(monkeypatch, workspace, adapter=adapter)
+
+        connection.refresh_from_db()
+        assert connection.status == "error"
+        assert connection.last_error == "upstream 503"
+
+    def test_a_later_success_clears_the_error(self, workspace_factory, monkeypatch):
+        """Health must be the LAST attempt's outcome, never a sticky tombstone —
+        a re-pointed webhook has to be able to go green again on its own."""
+        from components.integrations.application.ports.delivery_channel_port import DeliveryResult
+
+        workspace = workspace_factory()
+        connection = _connection(workspace)
+
+        _run(
+            monkeypatch,
+            workspace,
+            adapter=_Recorder(DeliveryResult(ok=False, detail="invalid_auth", permanent=True)),
+            metadata={"severity": "critical", "finding_id": "f-fail"},
+        )
+        connection.refresh_from_db()
+        assert connection.status == "error"
+
+        _run(
+            monkeypatch,
+            workspace,
+            adapter=_Recorder(),
+            metadata={"severity": "critical", "finding_id": "f-ok"},
+        )
+
+        connection.refresh_from_db()
+        assert connection.status == "connected"
+        assert connection.last_error == ""
+
+    def test_a_skipped_delivery_does_not_mark_the_connection(self, workspace_factory, monkeypatch):
+        """A gate is not a fault — an unsubscribed event must never paint the row red."""
+        workspace = workspace_factory()
+        connection = _connection(workspace, events=[DRAFT_PR_OPENED])
+        adapter = _Recorder()
+
+        _run(monkeypatch, workspace, adapter=adapter)
+
+        connection.refresh_from_db()
+        assert connection.status == "connected"
+        assert connection.last_error == ""
+
+
 class TestLedgerClaim:
     def test_only_one_caller_wins_a_claim(self, workspace_factory):
         """The conditional UPDATE is what stops two workers both posting."""

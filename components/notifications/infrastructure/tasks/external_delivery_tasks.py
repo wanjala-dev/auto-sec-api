@@ -14,6 +14,11 @@ Outcomes per ledger row (mirrors ``email_tasks``):
                 webhook, bad token) stays failed; a transient one re-raises for
                 Celery retry and the retry re-claims the row.
 
+Every send AND every failure also stamps the CONNECTION's health, because the ledger
+is an internal audit trail with no read surface — the Settings panel renders the
+connection row. Health always reflects the last attempt: a failure paints it ERROR
+with the reason, the next success clears it.
+
 Rate limiting is honoured rather than guessed: a 429 carries ``Retry-After`` and the
 retry uses that countdown instead of the exponential backoff.
 
@@ -136,11 +141,20 @@ def deliver_external(self, *, workspace_id, event_key, verb="", metadata=None, l
             delivered += 1
             continue
 
+        detail = result.detail or "external delivery failed"
         ledger.mark_failed(record.id, error=result.detail)
+        # Stamp the connection too. The ledger is an internal audit trail with no
+        # controller and no UI; the Settings panel renders the CONNECTION row. A
+        # failure recorded only on the ledger leaves a revoked webhook showing
+        # CONNECTED while every alert to it is dropped — silent success, the exact
+        # failure mode this product exists to end. mark_error records without
+        # disabling (ADR 0016 D7), and the next success clears it via mark_delivered,
+        # so health always reflects the LAST attempt rather than a sticky tombstone.
+        connection_repo.mark_error(connection.id, detail)
         if result.permanent:
             # A revoked webhook or bad token will never succeed — retrying is noise.
             continue
-        transient_error = result.detail or "external delivery failed"
+        transient_error = detail
         retry_after = result.retry_after_seconds or retry_after
 
     logger.info(
