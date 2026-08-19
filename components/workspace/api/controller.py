@@ -245,9 +245,14 @@ class CategorySubcategoryListView(APIView):
 
 
 class WorkspaceList(APIView):
-    """List all workspaces with optional category filter."""
+    """List the caller's own workspaces, with an optional category filter.
 
-    permission_classes = (IsUnauthenticatedOrAdminOrStaff,)
+    Members only. The payload carries each organization's name, owner email
+    and full member roster, so an unscoped listing is a cross-tenant
+    disclosure — see ``tests/integration/test_workspace_crud_authz.py``.
+    """
+
+    permission_classes = (permissions.IsAuthenticated,)
     name = "workspace-list"
 
     def get(self, request, category=None, **kwargs):
@@ -257,14 +262,18 @@ class WorkspaceList(APIView):
         # money as C1 objects) can never be served to a v0 request, and vice
         # versa — see ``_request_api_version``.
         api_version = _request_api_version(request)
+        # The caller is part of the cache key because the payload is now
+        # per-user. Without this segment the scoping below would be undone by
+        # the cache handing the first caller's organizations to the next one.
         cache_key = (
-            f"workspace:list:{request.get_host()}:{category or 'all'}:{api_version}:v{_workspace_cache_version()}"
+            f"workspace:list:{request.get_host()}:{request.user.id}:"
+            f"{category or 'all'}:{api_version}:v{_workspace_cache_version()}"
         )
         cached_payload = _workspace_cache.get(cache_key)
         if cached_payload is not None:
             return JsonResponse(cached_payload, safe=False)
 
-        base_queryset = workspace_service.get_all_workspaces_with_relations()
+        base_queryset = workspace_service.get_workspaces_visible_to_user(request.user)
 
         if category:
             try:
@@ -495,14 +504,20 @@ class WorkspaceCreateEligibilityView(APIView):
     retrieve=extend_schema(operation_id="workspace_detail_retrieve"),
 )
 class WorkspaceDetail(viewsets.ModelViewSet):
-    """Retrieve, update, or delete a workspace."""
+    """Retrieve, update, or delete a workspace the caller belongs to.
 
-    permission_classes = (IsUnauthenticatedOrAdminOrStaff,)
+    Members only, and scoped by queryset rather than by an object-permission
+    check so a non-member gets 404 rather than 403 — a 403 would confirm the
+    organization exists. The same scoping is what stops an authenticated
+    outsider PATCHing or DELETEing another tenant's organization.
+    """
+
+    permission_classes = (permissions.IsAuthenticated,)
     name = "workspace-detail"
 
     @property
     def queryset(self):
-        return workspace_service.get_all_workspaces_with_relations()
+        return workspace_service.get_workspaces_visible_to_user(self.request.user)
 
     def get_serializer_class(self):
         if self.action in {"update", "partial_update"}:
