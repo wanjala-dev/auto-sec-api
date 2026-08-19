@@ -1170,11 +1170,13 @@ class WorkspaceBillingPlansController(APIView):
         workspace = _resolve_workspace_admin_request(request)
         if isinstance(workspace, Response):
             return workspace
-        from components.team.application.providers.team_models_provider import (
-            get_team_models_provider,
+        # Plan is owned by the SUBSCRIPTION context, not team — see
+        # ``_resolve_billing_plan`` in billing_support.py.
+        from components.subscription.application.providers.subscription_models_provider import (
+            get_subscription_models_provider,
         )
 
-        _pkg_models = get_team_models_provider()
+        _pkg_models = get_subscription_models_provider()
         Plan = _pkg_models.Plan
         plans = Plan.objects.all()
         # v1 wraps each plan's MAJOR-unit ``price`` in a C1 money object; v0
