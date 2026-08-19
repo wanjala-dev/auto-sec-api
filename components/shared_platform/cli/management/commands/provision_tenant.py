@@ -183,7 +183,7 @@ class Command(BaseCommand):
                 self.stdout.write(f"database {dbname} already exists")
                 return
             owner = params.get("USER") or "CURRENT_USER"
-            conn.execute(sql.SQL("CREATE DATABASE {} OWNER {}").format(sql.Identifier(dbname), sql.Identifier(owner)))
+            conn.execute(sql.SQL("CREATE DATABASE {} OWNER {}").format(sql.Identifier(dbname)), [dbname, owner])
             self.stdout.write(self.style.SUCCESS(f"created database {dbname} (owner {owner})"))
 
     @staticmethod
