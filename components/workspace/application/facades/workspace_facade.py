@@ -6,8 +6,10 @@ the infrastructure layer.
 """
 
 from components.workspace.infrastructure.adapters.workspace_utils import (
+    ensure_canonical_subscription_tiers,
     ensure_team_board_columns,
     ensure_team_membership,
+    ensure_workspace_default_plan,
     ensure_workspace_follower,
     ensure_workspace_membership,
     ensure_workspace_scaffolding,
@@ -16,8 +18,10 @@ from components.workspace.infrastructure.adapters.workspace_utils import (
 )
 
 __all__ = [
+    "ensure_canonical_subscription_tiers",
     "ensure_team_board_columns",
     "ensure_team_membership",
+    "ensure_workspace_default_plan",
     "ensure_workspace_follower",
     "ensure_workspace_membership",
     "ensure_workspace_scaffolding",
