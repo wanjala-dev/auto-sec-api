@@ -1,11 +1,12 @@
 """Celery orchestration for the Prowler CSPM scan — spine edition (audit R1).
 
 ``schedule_prowler_runs`` (beat) fans out one gated ``scanning.run_scan``
-dispatch per scannable account of every CONNECTED connection whose workspace
-has opted in (``feature.cloud_posture``); the on-demand "Scan now" endpoint
-reuses the exact same per-connection dispatch seam
-(``scan_dispatch_service.dispatch_connection_scans``), so both paths are
-byte-for-byte identical — only ``trigger``/``triggered_by`` differ.
+dispatch per scannable account of every CONNECTED connection; the on-demand
+"Scan now" endpoint and the post-verify auto-scan reuse the exact same
+per-connection dispatch seam
+(``scan_dispatch_service.dispatch_connection_scans``), so all three paths are
+byte-for-byte identical — only ``trigger``/``triggered_by`` differ. The
+``feature.cloud_posture`` opt-in is enforced by that seam, not by this task.
 
 The pillar's forked ~280-line pipeline (own task, own run table writes, no
 gate, no triggered-by, no failure rows) is GONE: execution, the ``ScanRun``
@@ -87,28 +88,26 @@ def schedule_prowler_runs(wave: int = 0) -> dict[str, Any]:
         DEFER_RETRY_AFTER_SECONDS,
         dispatch_connection_scans,
     )
-    from components.shared_platform.application.providers.feature_flags_provider import (
-        get_feature_flags_provider,
-    )
     from infrastructure.persistence.integrations.models import AwsOrganizationConnection
 
-    flags = get_feature_flags_provider()
     scheduled = 0
     blocked = 0
     deferred = 0
+    skipped = 0
 
     connections = AwsOrganizationConnection.objects.filter(status=AwsOrganizationConnection.Status.CONNECTED).only(
         "id", "workspace", "role_name", "external_id", "regions"
     )
 
     for connection in connections.iterator():
-        try:
-            if not flags.is_feature_enabled("feature.cloud_posture", workspace_id=connection.workspace_id):
-                continue
-        except Exception:
-            logger.exception("cloud_posture flag check failed workspace=%s", connection.workspace_id)
-            continue
+        # The ``feature.cloud_posture`` opt-in is NOT re-checked here: the
+        # dispatch seam enforces it for every trigger (this sweep, "Scan now",
+        # the post-verify auto-scan). It used to be checked in each caller, and
+        # the caller that forgot scanned workspaces that had opted out.
         counts = dispatch_connection_scans(connection, trigger="schedule")
+        if counts["skipped_reason"]:
+            skipped += 1
+            continue
         scheduled += counts["enqueued"]
         blocked += counts["blocked"]
         deferred += counts["deferred"]
@@ -116,11 +115,12 @@ def schedule_prowler_runs(wave: int = 0) -> dict[str, Any]:
     next_wave = _chain_drain_wave(wave=wave, deferred=deferred, countdown=DEFER_RETRY_AFTER_SECONDS)
 
     logger.info(
-        "schedule_cloud_posture_scans wave=%d scheduled=%d blocked=%d deferred=%d next_wave=%s",
+        "schedule_cloud_posture_scans wave=%d scheduled=%d blocked=%d deferred=%d skipped=%d next_wave=%s",
         wave,
         scheduled,
         blocked,
         deferred,
+        skipped,
         next_wave,
     )
     return {
@@ -129,6 +129,9 @@ def schedule_prowler_runs(wave: int = 0) -> dict[str, Any]:
         "scheduled": scheduled,
         "blocked": blocked,
         "deferred": deferred,
+        # Connections whose workspace has the pillar switched off. Counted, not
+        # silently dropped — "we scanned 3 of 40 orgs" needs a why.
+        "skipped": skipped,
         "next_wave_scheduled": next_wave,
     }
 

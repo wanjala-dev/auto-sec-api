@@ -140,6 +140,35 @@ class TestFanOut:
         assert second["enqueued"] is False
         assert second["reason"] == "running"
 
+    @pytest.mark.real_feature_flags
+    def test_the_seam_refuses_a_workspace_that_disabled_cloud_posture(self, workspace_factory):
+        """The capability gate lives on the dispatch seam, not on its callers.
+
+        Every trigger — Scan now, the beat sweep, the post-verify auto-scan and
+        the deprecated per-account shim — funnels through these two functions.
+        Enforcing here is what makes ``feature.cloud_posture`` an actual
+        kill-switch instead of a convention three call sites have to remember.
+        """
+        from components.shared_platform.infrastructure.services.feature_flags import set_workspace_flag
+
+        ws = workspace_factory()
+        FeatureFlag.objects.update_or_create(key="feature.cloud_posture", defaults={"default_enabled": True})
+        set_workspace_flag("feature.cloud_posture", ws.id, False)
+        conn = _conn(ws, connected=True)
+        _link(conn, "863183417583", AwsAccountLink.Status.VERIFIED)
+
+        with patch(_DISPATCH) as m_dispatch:
+            counts = dispatch_connection_scans(conn, trigger="schedule")
+            # The per-account primitive is the shim's entry point — gate it too,
+            # or a stale broker message walks straight past the switch.
+            verdict = dispatch_account_scan(conn, "863183417583", trigger="schedule")
+
+        assert m_dispatch.call_count == 0
+        assert counts["scannable"] == 0
+        assert counts["skipped_reason"] == "cloud_posture_not_enabled"
+        assert verdict["enqueued"] is False
+        assert verdict["reason"] == "cloud_posture_not_enabled"
+
     def test_scheduler_fans_out_discovered_links(self, workspace_factory):
         conn = _conn(workspace_factory(), connected=True)
         _link(conn, "863183417583", AwsAccountLink.Status.DISCOVERED)

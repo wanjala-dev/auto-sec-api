@@ -148,8 +148,11 @@ class AwsConnectionService:
             connection_id=str(conn.id),
         )
         # Only an unsettled result may be trusted as "not yet known"; a settled
-        # result with nothing scannable is a real, reportable state.
-        if outcome.get("settled") and not outcome.get("scannable"):
+        # result with nothing scannable is a real, reportable state. A REFUSED
+        # fan-out (the workspace has the pillar switched off) is reported too —
+        # collapsing it to None would tell the operator "nothing to scan" when
+        # the truth is "we were told not to".
+        if outcome.get("settled") and not outcome.get("scannable") and not outcome.get("skipped_reason"):
             return conn, None
         return conn, outcome
 

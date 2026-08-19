@@ -15,9 +15,10 @@ why this is an adapter rather than inline service code:
 
 It reuses the SAME seam as the "Scan now" endpoint and the beat scheduler
 (``cloud_posture``'s application-layer scan provider — an allowed cross-context
-hop; its infrastructure is not touched), so the cooldown, the one-in-flight
-invariant and the global concurrency cap all apply unchanged. There is exactly
-one dispatch path for CSPM, and this is not a second one.
+hop; its infrastructure is not touched), so the ``feature.cloud_posture``
+capability gate, the cooldown, the one-in-flight invariant and the global
+concurrency cap all apply unchanged. There is exactly one dispatch path for
+CSPM, and this is not a second one.
 """
 
 from __future__ import annotations
@@ -46,6 +47,10 @@ class PostCommitScanDispatchAdapter(ConnectionScanDispatchPort):
             "blocked": 0,
             "deferred": 0,
             "retry_after": None,
+            # Set by the seam when it declined to fan out at all (today: the
+            # workspace has CSPM switched off). Present unconditionally so
+            # callers can read it without knowing whether the callback ran.
+            "skipped_reason": None,
             "settled": False,
         }
 
@@ -79,13 +84,15 @@ class PostCommitScanDispatchAdapter(ConnectionScanDispatchPort):
             outcome.update(counts)
             outcome["settled"] = True
             logger.info(
-                "aws_verify_autoscan workspace_id=%s connection_id=%s scannable=%s enqueued=%s deferred=%s blocked=%s",
+                "aws_verify_autoscan workspace_id=%s connection_id=%s scannable=%s enqueued=%s "
+                "deferred=%s blocked=%s skipped_reason=%s",
                 workspace_id,
                 connection_id,
                 counts.get("scannable"),
                 counts.get("enqueued"),
                 counts.get("deferred"),
                 counts.get("blocked"),
+                counts.get("skipped_reason"),
             )
 
         transaction.on_commit(_dispatch)

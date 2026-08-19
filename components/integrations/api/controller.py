@@ -199,13 +199,19 @@ def _scan_summary(scans: dict | None) -> dict | None:
     """The operator-facing shape of a fan-out result (``None`` = nothing to scan)."""
     if not scans:
         return None
-    return {
+    summary = {
         "scannable": scans.get("scannable", 0),
         "enqueued": scans.get("enqueued", 0),
         "deferred": scans.get("deferred", 0),
         "blocked": scans.get("blocked", 0),
         "retry_after": scans.get("retry_after"),
     }
+    # Only when the fan-out actually declined (today: the workspace has CSPM
+    # switched off). Zeros with no reason would read as "nothing to scan", which
+    # is a different — and much less actionable — state.
+    if scans.get("skipped_reason"):
+        summary["skipped_reason"] = scans["skipped_reason"]
+    return summary
 
 
 class AwsConnectionScanView(APIView):
@@ -225,16 +231,6 @@ class AwsConnectionScanView(APIView):
         if conn is None:
             return Response({"success": False, "error": "Connection not found."}, status=404)
 
-        from components.shared_platform.application.providers.feature_flags_provider import (
-            get_feature_flags_provider,
-        )
-
-        if not get_feature_flags_provider().is_feature_enabled("feature.cloud_posture", workspace_id=str(workspace_id)):
-            return Response(
-                {"success": False, "error": "cloud_posture_not_enabled"},
-                status=status.HTTP_409_CONFLICT,
-            )
-
         from components.cloud_posture.application.providers.scan_provider import (
             enqueue_connection_scan,
         )
@@ -248,6 +244,15 @@ class AwsConnectionScanView(APIView):
         )
         if result is None:
             return Response({"success": False, "error": "Connection not found."}, status=404)
+        if result["skipped_reason"]:
+            # The workspace has CSPM switched off. This used to be a duplicate
+            # flag check here in the controller; the gate now lives on the
+            # dispatch seam (so every trigger honours it) and this only renders
+            # its verdict as HTTP.
+            return Response(
+                {"success": False, "error": result["skipped_reason"]},
+                status=status.HTTP_409_CONFLICT,
+            )
         if result["enqueued"] == 0 and (result["blocked"] > 0 or result["deferred"] > 0):
             # Nothing got out: every account is gated (in-flight or cooling
             # down) or held behind the global concurrency ceiling. Honest 429

@@ -1,8 +1,9 @@
 """Gated dispatch of CSPM scans onto the scanning spine (audit R1).
 
-The pillar's ONE dispatch seam: both the on-demand "Scan now" endpoint and the
-beat scheduler fan out per-account scans through here, so both paths get the
-same anti-spam gate (``check_and_lock_dispatch`` — one scan per account per
+The pillar's ONE dispatch seam: the on-demand "Scan now" endpoint, the beat
+scheduler and the post-verify auto-scan all fan out per-account scans through
+here, so every path gets the same capability gate (``feature.cloud_posture``),
+the same anti-spam gate (``check_and_lock_dispatch`` — one scan per account per
 cooldown, never more than one in flight) and the same provenance
 (``trigger`` / ``triggered_by`` stamped onto the ``ScanRun`` by the shared
 choreography). This replaces the pillar's forked task pipeline — execution,
@@ -18,6 +19,17 @@ import os
 logger = logging.getLogger(__name__)
 
 SOURCE = "cloud_posture.prowler"
+
+#: The workspace's opt-in for this pillar — and, once opted in, its kill-switch.
+#: Turning it off is the only in-product way to say "stop assuming a role into my
+#: AWS account", so it is enforced HERE rather than at each caller: "Scan now"
+#: checked it, the beat sweep checked it, the post-verify auto-dispatch did not,
+#: and a disabled workspace was scanned anyway. A control that every caller has
+#: to remember is not a control.
+CAPABILITY_FLAG = "feature.cloud_posture"
+
+#: The single reason string every refused path reports — the API maps it to a 409.
+NOT_ENABLED = "cloud_posture_not_enabled"
 
 # One user-visible scan per account per hour by default, matching the
 # code_security repo cooldown (Henry, 2026-08-08: budget-gate manual scans so
@@ -57,14 +69,49 @@ def _headroom() -> int | None:
     return max(0, cap - count_in_flight(SOURCE))
 
 
+def capability_enabled(workspace_id) -> bool:
+    """Is this workspace opted in to CSPM scanning?
+
+    **Fails closed.** If the flag cannot be evaluated we do not scan: the action
+    behind this gate is assuming a role into a customer's AWS account, and an
+    unanswerable "may we?" is a no. (The beat sweep already behaved this way; the
+    behaviour now belongs to the seam so every path inherits it.)
+    """
+    from components.shared_platform.application.providers.feature_flags_provider import (
+        get_feature_flags_provider,
+    )
+
+    try:
+        return bool(get_feature_flags_provider().is_feature_enabled(CAPABILITY_FLAG, workspace_id=str(workspace_id)))
+    except Exception:
+        logger.exception("cloud_posture_capability_check_failed workspace_id=%s", workspace_id)
+        return False
+
+
 def dispatch_account_scan(connection, account_id: str, *, trigger: str, triggered_by=None) -> dict:
     """Gate + dispatch ONE per-account scan. Returns the gate verdict:
-    ``{"enqueued": bool, "reason": "", "retry_after": int | None}``."""
+    ``{"enqueued": bool, "reason": "", "retry_after": int | None}``.
+
+    The innermost dispatch primitive — the last place a scan can be stopped
+    before a Prowler Job is enqueued against a customer account. The capability
+    check lives here as well as on the fan-out because this function has its own
+    callers (the deprecated pre-spine per-account shim replays broker messages
+    straight into it), and a gate you can walk around is decoration.
+    """
     from components.scanning.application.providers.scan_dispatch_provider import dispatch_scan
     from components.scanning.application.providers.scan_gate_provider import (
         check_and_lock_dispatch,
         release_dispatch_lock,
     )
+
+    if not capability_enabled(connection.workspace_id):
+        logger.info(
+            "cloud_posture_scan_refused workspace_id=%s account=%s reason=%s",
+            connection.workspace_id,
+            account_id,
+            NOT_ENABLED,
+        )
+        return {"enqueued": False, "reason": NOT_ENABLED, "retry_after": None}
 
     gate = check_and_lock_dispatch(
         workspace_id=str(connection.workspace_id),
@@ -115,11 +162,35 @@ def dispatch_connection_scans(connection, *, trigger: str, triggered_by=None) ->
     "blocked" would be the silent-failure class this gate exists to remove: an
     operator would read "40 of 200 scanned" as a mystery rather than as a queue.
 
-    Returns ``{"scannable", "enqueued", "blocked", "deferred", "retry_after"}``
-    where ``enqueued + blocked + deferred == scannable`` — every account lands in
-    exactly one bucket, so nothing can go missing unnoticed.
+    **Gated by the workspace's capability flag** (``feature.cloud_posture``).
+    A workspace that has turned CSPM off is refused here, before its account
+    links are even read, and the refusal is REPORTED (``skipped_reason``) rather
+    than dressed up as "nothing to scan" — an operator who disabled the pillar
+    and an operator whose org has no accounts must not read the same response.
+
+    Returns ``{"scannable", "enqueued", "blocked", "deferred", "retry_after",
+    "skipped_reason"}`` where ``enqueued + blocked + deferred == scannable`` —
+    every account lands in exactly one bucket, so nothing can go missing
+    unnoticed.
     """
     from infrastructure.persistence.integrations.models import AwsAccountLink
+
+    if not capability_enabled(connection.workspace_id):
+        logger.info(
+            "cloud_posture_fanout_refused workspace_id=%s connection_id=%s trigger=%s reason=%s",
+            connection.workspace_id,
+            connection.id,
+            trigger,
+            NOT_ENABLED,
+        )
+        return {
+            "scannable": 0,
+            "enqueued": 0,
+            "blocked": 0,
+            "deferred": 0,
+            "retry_after": None,
+            "skipped_reason": NOT_ENABLED,
+        }
 
     terminal = [
         AwsAccountLink.Status.FAILED,
@@ -176,6 +247,9 @@ def dispatch_connection_scans(connection, *, trigger: str, triggered_by=None) ->
         "blocked": blocked,
         "deferred": deferred,
         "retry_after": retry_after,
+        # Always present so callers can read it unconditionally; None means the
+        # fan-out ran (whatever the counts), not that it was silently skipped.
+        "skipped_reason": None,
     }
 
 
@@ -185,8 +259,8 @@ def dispatch_scans_for_workspace_connection(
     """Workspace-scoped entry for the on-demand endpoint and the post-verify auto-scan.
 
     Returns the dispatch counts (``scannable`` / ``enqueued`` / ``blocked`` /
-    ``deferred`` / ``retry_after``), or ``None`` when no such connection belongs
-    to the workspace (the endpoint maps that to 404).
+    ``deferred`` / ``retry_after`` / ``skipped_reason``), or ``None`` when no
+    such connection belongs to the workspace (the endpoint maps that to 404).
     """
     from infrastructure.persistence.integrations.models import AwsOrganizationConnection
 
