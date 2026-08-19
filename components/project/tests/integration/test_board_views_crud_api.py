@@ -134,7 +134,11 @@ class TestCreateView:
         response = _post_view(api_client, team, name="Sneaky", filter={"jql": "project = X"})
         assert response.status_code == 400
         assert "jql" in str(response.data)
-        assert BoardView.objects.filter(team=team).count() == 0
+        # Nothing was persisted. Scoped to non-system rows: the team's own
+        # derived system view ("board") is minted at team-create by
+        # ``django_system_board_view_bridge`` and is not this POST's doing.
+        assert not BoardView.objects.filter(team=team, is_system=False).exists()
+        assert not BoardView.objects.filter(team=team, name="Sneaky").exists()
 
     def test_non_dict_filter_is_rejected(self, api_client, board):
         owner, _workspace, team = board

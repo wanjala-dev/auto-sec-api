@@ -16,3 +16,13 @@ class ProjectCLIConfig(AppConfig):
         )
 
         DjangoWorkflowStatusSyncBridge.register()
+
+        # ADR 0030 §2: the derived system views (the team board + one per
+        # project board). Migration 0008 minted them once for the rows that
+        # existed then; this is their runtime counterpart, so a team or
+        # project created afterwards is not born viewless.
+        from components.project.infrastructure.adapters.django_system_board_view_bridge import (
+            DjangoSystemBoardViewBridge,
+        )
+
+        DjangoSystemBoardViewBridge.register()

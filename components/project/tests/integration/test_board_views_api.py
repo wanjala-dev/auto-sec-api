@@ -74,15 +74,27 @@ def _seed_lanes(workspace, team, owner):
 
 
 def _view(workspace, team, *, slug="board", name="Board", filter=None, order=0, is_system=True):
-    return BoardView.objects.create(
+    """Arrange one view — ADOPTING the runtime-minted row when it exists.
+
+    The derived system views ("board", "project-<pk>") are now minted by
+    ``django_system_board_view_bridge`` the moment a team or project is
+    created, so a builder that blindly ``create``d them collided with the
+    real product row. ``update_or_create`` keeps every scenario below
+    arranging exactly the view it asks for, over the real row rather than a
+    fixture double.
+    """
+    view, _created = BoardView.objects.update_or_create(
         workspace=workspace,
         team=team,
-        name=name,
         slug=slug,
-        filter=filter or {},
-        order=order,
-        is_system=is_system,
+        defaults={
+            "name": name,
+            "filter": filter or {},
+            "order": order,
+            "is_system": is_system,
+        },
     )
+    return view
 
 
 def _task(workspace, team, owner, column, *, title="Task", order=0, **kwargs):
