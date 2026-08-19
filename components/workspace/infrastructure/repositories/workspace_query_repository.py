@@ -159,8 +159,9 @@ class WorkspaceQueryRepository:
     def get_all_workspaces_with_relations():
         """Fetch all workspaces with related data.
 
-        UNSCOPED — every caller serving this to a request MUST narrow it with
-        ``scope_to_user`` first.
+        UNSCOPED — every workspace on the deployment. Every caller serving this
+        to a request MUST narrow it with ``scope_to_user`` first; serving it
+        bare is a cross-tenant disclosure.
         """
         from infrastructure.persistence.workspaces.models import Workspace
 

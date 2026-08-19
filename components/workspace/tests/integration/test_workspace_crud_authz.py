@@ -26,6 +26,10 @@ from django.apps import apps as django_apps
 pytestmark = [pytest.mark.django_db]
 
 LIST_URL = "/workspaces/"
+# The SAME view is mounted a second time under a category filter. A gate added
+# to one route and not the other would leave the directory readable here, so
+# the anonymous assertion below is repeated against it deliberately.
+CATEGORY_URL = "/workspaces/category/Education/"
 
 
 def _detail_url(workspace) -> str:
@@ -56,6 +60,17 @@ class TestWorkspaceListAuthz:
             f"anonymous listed the organization directory (HTTP {response.status_code})"
         )
 
+    def test_anonymous_is_refused_on_the_category_route(self, api_client, workspace_factory):
+        """``/workspaces/category/<name>/`` is the same view on a second route.
+
+        Gating only ``/workspaces/`` would leave the directory wide open here.
+        """
+        workspace_factory()
+        response = api_client.get(CATEGORY_URL)
+        assert response.status_code in (401, 403), (
+            f"anonymous listed the organization directory via the category route (HTTP {response.status_code})"
+        )
+
     def test_non_member_does_not_see_another_tenants_workspace(self, api_client, workspace_factory, user_factory):
         victim = workspace_factory()
         outsider = user_factory()
@@ -65,6 +80,23 @@ class TestWorkspaceListAuthz:
 
         assert response.status_code == 200
         assert str(victim.id) not in _ids(response.json())
+
+    def test_another_tenants_owner_email_is_absent_from_the_payload(self, api_client, workspace_factory, user_factory):
+        """Asserts the DISCLOSURE, not just the row id.
+
+        The leak that made this critical was ``workspace_owner.email`` (real
+        personal addresses) riding along in the serialized body. A future
+        serializer change could reintroduce the PII while the id-scoping tests
+        above stayed green, so the address is asserted absent directly.
+        """
+        mine = workspace_factory()
+        theirs = workspace_factory()
+        api_client.force_authenticate(user=mine.workspace_owner)
+
+        response = api_client.get(LIST_URL)
+
+        assert response.status_code == 200
+        assert theirs.workspace_owner.email not in response.content.decode()
 
     def test_owner_sees_only_their_own_workspaces(self, api_client, workspace_factory):
         mine = workspace_factory()

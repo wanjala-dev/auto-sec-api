@@ -247,9 +247,20 @@ class CategorySubcategoryListView(APIView):
 class WorkspaceList(APIView):
     """List the caller's own workspaces, with an optional category filter.
 
-    Members only. The payload carries each organization's name, owner email
-    and full member roster, so an unscoped listing is a cross-tenant
-    disclosure — see ``tests/integration/test_workspace_crud_authz.py``.
+    Members only, and scoped twice over — both halves are load-bearing:
+
+    * ``IsAuthenticated`` — this used to sit on ``IsUnauthenticatedOrAdminOrStaff``,
+      whose ``has_permission()`` returns ``True`` for every safe method, so an
+      anonymous GET walked straight through.
+    * the caller's own workspaces, never ``get_all_workspaces_with_relations()``.
+      The payload names every org and carries ``workspace_owner.email`` plus
+      ``followers[].email``, so an unscoped listing is a cross-tenant customer
+      list with owner PII attached.
+
+    Fixing only the gate leaves a cross-tenant leak; fixing only the queryset
+    leaves an anonymous one. The same view also serves
+    ``/workspaces/category/<name>/`` — both routes are covered in
+    ``tests/integration/test_workspace_crud_authz.py``.
     """
 
     permission_classes = (permissions.IsAuthenticated,)
