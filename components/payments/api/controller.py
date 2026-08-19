@@ -356,11 +356,24 @@ class StripeSubscriptionWebhookController(APIView):
         The transaction opens on the bound tenant's alias, not on ``default``:
         under the tenant router a bare ``atomic()`` transacts the control
         plane while the writes land in the tenant's database.
+
+        THE ALIAS COMES FROM TWO RESOLVERS, not one. The connected-account
+        resolver above answers Connect deliveries. This endpoint, though, is
+        the PLATFORM one — our own SaaS subscription revenue — and a platform
+        event carries no connected account, so that resolver always answered
+        ``None`` here and nothing ever rebound. A dedicated tenant's own
+        subscription event was therefore handled against the pool, where its
+        workspace does not exist: marked "Missing workspace for Stripe
+        webhook" and answered 200. Stripe heard "handled" and never retried.
+        ``resolve_platform_webhook_tenant`` closes that by routing on what a
+        platform event DOES carry — our ``workspace_id`` metadata, the
+        subscription id, the customer id.
         """
         from components.payments.application.providers.payment_runtime_provider import (
             PaymentWebhookIntakeResult,
         )
         from components.payments.application.providers.webhook_tenant_binding_provider import (
+            resolve_platform_webhook_tenant,
             resolve_webhook_tenant_alias,
             webhook_tenant_scope,
             webhook_write_alias,
@@ -392,6 +405,49 @@ class StripeSubscriptionWebhookController(APIView):
                 return HttpResponseBadRequest(str(exc))
 
         db_alias = verification.db_alias or hint_alias
+        if db_alias is None and verification.recordable and verification.provider_slug == "stripe":
+            routing = resolve_platform_webhook_tenant(verification.event)
+            if routing.alias:
+                db_alias = routing.alias
+                logger.info(
+                    "stripe_subscription_webhook_bound event_id=%s event_type=%s db_alias=%s matched_on=%s",
+                    routing.event_id,
+                    routing.event_type,
+                    routing.alias,
+                    routing.matched_on,
+                )
+            elif routing.unresolved:
+                # THE LOUD FAILURE. A money-moving event named a workspace no
+                # configured database claims. Answering 2xx would tell Stripe
+                # "handled" and end the delivery forever — the exact silent
+                # drop this endpoint is being fixed for. 5xx is the honest
+                # answer AND the recoverable one: the scan genuinely cannot
+                # tell "unknown customer" from "that tenant's database was
+                # unreachable just now" (see ``unreachable_aliases``) or from
+                # "the checkout that stamps this customer has not committed
+                # yet", and Stripe's retry schedule heals both. A permanently
+                # unknown customer exhausts the retries and surfaces as a
+                # failed delivery in Stripe — which is the alert we want.
+                logger.error(
+                    "stripe_subscription_webhook_unroutable event_id=%s event_type=%s claims=%s "
+                    "scanned=%s ambiguous=%s unreachable=%s",
+                    routing.event_id,
+                    routing.event_type,
+                    ",".join(f"{rung}={value}" for rung, value in sorted(routing.claims.items())),
+                    ",".join(routing.scanned_aliases),
+                    ",".join(routing.ambiguous_aliases),
+                    ",".join(routing.unreachable_aliases),
+                )
+                return Response(
+                    {
+                        "error": "Event could not be attributed to a tenant database.",
+                        "code": "tenant_unresolved",
+                        "event_id": routing.event_id,
+                    },
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    headers={"Retry-After": "60"},
+                )
+
         with webhook_tenant_scope(db_alias), atomic(using=webhook_write_alias()):
             if verification.recordable:
                 intake = runtime.record_and_claim_webhook_event(
