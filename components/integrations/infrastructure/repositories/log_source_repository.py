@@ -19,26 +19,25 @@ class LogSourceRepository:
         return WorkspaceLogSource.objects.filter(id=source_id, workspace_id=workspace_id).first()
 
     def active_sources_for_connection(self, connection) -> list[WorkspaceLogSource]:
-        """Every ACTIVE log source that reads through this connection — the rows
-        the ingest tick fans out over (ADR 0008 D6), oldest-first for stable
-        ordering. The location lives on these owned rows, so a connection
-        re-verify can no longer blank where logs are read from (the "logs
-        silently stopped" regression).
+        """Every ACTIVE log source that reads through this connection, oldest-first
+        for stable ordering. The location lives on these owned rows, so a connection
+        re-verify can no longer blank where logs are read from (the "logs silently
+        stopped" regression).
 
-        S3 is capped to the single oldest active source: its ingest cursor still
-        bridges through the one per-connection ``IngestCheckpoint`` (which cannot
-        serve two buckets). The cap lifts when the S3 cursor migrates onto the
-        per-source ``cursor`` field (the ADR 0008 "migrate or bridge" follow-up).
+        Data access only — this returns the full ACTIVE set and applies NO ingest
+        policy. Deciding which of these rows a tick actually reads (and announcing
+        the ones it doesn't) belongs to the application layer: see
+        ``log_ingest_service.decide_source_ingest`` / ``active_ingest_sources``.
+        A repository that quietly drops rows is how an ACTIVE source became
+        unreadable with nothing logged anywhere.
         """
-        sources = list(
+        return list(
             WorkspaceLogSource.objects.filter(
                 workspace_id=connection.workspace_id,
                 status=WorkspaceLogSource.Status.ACTIVE,
                 config__aws_connection_id=str(connection.id),
             ).order_by("created_at")
         )
-        first_s3 = next((s for s in sources if s.kind == WorkspaceLogSource.Kind.S3), None)
-        return [s for s in sources if s.kind != WorkspaceLogSource.Kind.S3 or s is first_s3]
 
     def advance_cursor(self, source: WorkspaceLogSource, cursor: str) -> WorkspaceLogSource:
         """Advance a source's per-row ingest cursor (ADR 0008 D3) — the non-S3

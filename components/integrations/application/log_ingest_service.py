@@ -38,6 +38,10 @@ KIND_CLOUDWATCH = "cloudwatch"
 # pre-seed-migration shape with no WorkspaceLogSource row behind it).
 FALLBACK_SOURCE_ID = ""
 
+# Why an ACTIVE log source is nonetheless not read by the ingest tick. Machine
+# readable so an operator can grep one string across every workspace.
+INGEST_SKIP_S3_CHECKPOINT_BRIDGE = "s3_checkpoint_bridge_single_source"
+
 
 @dataclass
 class LogRecord:
@@ -146,6 +150,73 @@ class SourceWindow:
     source: Any = None
 
 
+@dataclass(frozen=True)
+class SourceIngestDecision:
+    """Whether the ingest tick reads one ACTIVE source, and — when it does not —
+    the machine-readable reason. ``source`` is the WorkspaceLogSource row (opaque
+    to this layer)."""
+
+    source: Any
+    ingesting: bool
+    skip_reason: str = ""
+
+
+def decide_source_ingest(active_sources: list) -> list[SourceIngestDecision]:
+    """Which of a connection's ACTIVE sources the ingest tick reads — the ONE
+    place that decision is made, so it can never be made invisibly again.
+
+    S3 is still capped to the single oldest active source: its ingest cursor
+    bridges through the one per-connection ``IngestCheckpoint``, which cannot
+    track two buckets. The cap lifts when the S3 cursor migrates onto the
+    per-source ``WorkspaceLogSource.cursor`` field (the ADR 0008 "migrate or
+    bridge" follow-up). Every other ACTIVE source is read.
+
+    ``active_sources`` must be oldest-first (what ``LogSourceRepository`` returns)
+    — "oldest wins" is the stable choice that keeps a live env reading the bucket
+    it was already reading.
+    """
+    first_s3_id = next((s.id for s in active_sources if s.kind == KIND_S3), None)
+    decisions: list[SourceIngestDecision] = []
+    for source in active_sources:
+        capped = source.kind == KIND_S3 and source.id != first_s3_id
+        decisions.append(
+            SourceIngestDecision(
+                source=source,
+                ingesting=not capped,
+                skip_reason=INGEST_SKIP_S3_CHECKPOINT_BRIDGE if capped else "",
+            )
+        )
+    return decisions
+
+
+def active_ingest_sources(connection) -> list:
+    """The ACTIVE sources this connection's tick reads — with every skipped source
+    logged by id, kind and reason.
+
+    An ACTIVE source the tick does not read still renders ACTIVE on the Settings ▸
+    Log Sources row, so the skip MUST announce itself: silently dropping it is how
+    a customer's second bucket got zero ingestion AND zero signal. The lookup goes
+    through ``LogSourceRepository`` so this service stays ORM-free.
+    """
+    from components.integrations.infrastructure.repositories.log_source_repository import (
+        LogSourceRepository,
+    )
+
+    sources: list = []
+    for decision in decide_source_ingest(LogSourceRepository().active_sources_for_connection(connection)):
+        if decision.ingesting:
+            sources.append(decision.source)
+            continue
+        logger.warning(
+            "log_source_not_ingested connection_id=%s source_id=%s kind=%s reason=%s",
+            connection.id,
+            decision.source.id,
+            decision.source.kind,
+            decision.skip_reason,
+        )
+    return sources
+
+
 def read_source_windows(
     connection,
     *,
@@ -166,8 +237,8 @@ def read_source_windows(
     skipped — never fatal to the other sources. When no source rows exist, falls
     back to the deprecated connection ``trail_s3_*`` fields (pre-seed-migration
     envs; ADR 0008 D7), keyed ``FALLBACK_SOURCE_ID``. ``sources`` lets a caller
-    that already fetched the active rows avoid a second lookup; the lookup goes
-    through ``LogSourceRepository`` so this service stays ORM-free.
+    that already fetched the read set (via ``active_ingest_sources``) avoid a
+    second lookup.
     """
     from components.integrations.application.providers.log_source_provider import (
         UnsupportedLogSourceError,
@@ -176,11 +247,7 @@ def read_source_windows(
 
     provider = get_log_source_provider()
     if sources is None:
-        from components.integrations.infrastructure.repositories.log_source_repository import (
-            LogSourceRepository,
-        )
-
-        sources = LogSourceRepository().active_sources_for_connection(connection)
+        sources = active_ingest_sources(connection)
     since_by_source = since_by_source or {}
 
     windows: list[SourceWindow] = []
@@ -255,7 +322,7 @@ def scan_connection(connection, *, max_objects: int = 20, only_new: bool = True)
     checkpoint_repo = IngestCheckpointRepository()
     source_repo = LogSourceRepository()
     checkpoint = checkpoint_repo.get_or_create_s3_list(connection)
-    sources = source_repo.active_sources_for_connection(connection)
+    sources = active_ingest_sources(connection)
 
     since_by_source: dict[str, str] = {}
     if only_new:

@@ -9,6 +9,7 @@ stopped" regression) can no longer blank where logs are read from.
 from __future__ import annotations
 
 import importlib
+import logging
 from unittest import mock
 
 import pytest
@@ -18,6 +19,7 @@ from components.integrations.application.ports.log_source_port import LogSourceP
 from components.integrations.application.providers.log_source_provider import LogSourceProvider
 
 _PROVIDER_MODULE = "components.integrations.application.providers.log_source_provider"
+_INGEST_LOGGER = "components.integrations.application.log_ingest_service"
 
 
 class _RecordingAdapter(LogSourcePort):
@@ -111,6 +113,22 @@ class TestS3ConfigResolution:
         cfg = _read_s3_config(connection)
         assert cfg["bucket"] == "oldest-bucket"
         assert cfg["source_id"] == str(oldest.id)
+
+    def test_an_active_source_the_tick_does_not_read_is_logged(self, connection, caplog):
+        """The regression proof: a source the ingest tick decides NOT to read is
+        never dropped silently. The row still renders ACTIVE everywhere, so the
+        skip must announce itself — otherwise a customer who adds a second bucket
+        gets zero ingestion AND zero signal."""
+        _make_source(connection, bucket="oldest-bucket")
+        skipped = _make_source(connection, bucket="newest-bucket")
+
+        with caplog.at_level(logging.WARNING, logger=_INGEST_LOGGER):
+            _read_s3_config(connection)
+
+        lines = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+        assert any("log_source_not_ingested" in line and str(skipped.id) in line for line in lines), (
+            f"an ACTIVE log source was excluded from the ingest read with no log line; saw {lines}"
+        )
 
 
 @pytest.mark.django_db
