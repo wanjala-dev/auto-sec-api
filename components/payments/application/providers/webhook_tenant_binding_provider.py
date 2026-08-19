@@ -49,6 +49,31 @@ def resolve_webhook_tenant_alias(account_id: str | None) -> str | None:
     return resolve_db_alias_for_stripe_account(account_id)
 
 
+def resolve_platform_webhook_tenant(event: object):
+    """Which database owns the workspace a PLATFORM billing event is about.
+
+    The sibling of :func:`resolve_webhook_tenant_alias`, for the other half of
+    the problem. That one answers "who owns this connected account?" and is
+    useless for platform events, which carry no account — only a customer, a
+    subscription, and (on checkout) our own ``workspace_id`` metadata. Until
+    this existed, the ONLY mounted Stripe route — the platform subscription
+    webhook — resolved no alias at all, so a dedicated tenant's own billing
+    event was handled against the pool, found no workspace there, and was
+    marked ignored with a 200. Stripe was told "handled"; nothing was.
+
+    Returns a routing verdict rather than a bare alias because "unresolved"
+    has to be actionable: the caller must be able to distinguish an event that
+    names nothing routable (fine, nothing to bind) from a money-moving event
+    whose owner could not be found (a billing outage that must be reported to
+    the provider as retryable, never silently swallowed).
+    """
+    from components.payments.infrastructure.adapters.payment_utils import (
+        resolve_db_alias_for_platform_billing_event,
+    )
+
+    return resolve_db_alias_for_platform_billing_event(event)
+
+
 def webhook_write_alias() -> str:
     """The DB alias the currently-bound tenant writes payment events to.
 
