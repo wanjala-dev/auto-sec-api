@@ -143,8 +143,15 @@ def _resolve_workspace_admin_request(request) -> Workspace | Response:
 
 
 def _resolve_billing_plan(plan_value) -> "Plan | None":
-    from components.team.application.providers.team_models_provider import get_team_models_provider
-    Plan = get_team_models_provider().Plan
+    # Plan is owned by the SUBSCRIPTION context, not team — it was relocated
+    # to infrastructure.persistence.subscription when subscription took over
+    # the tier catalogue. Asking the team provider raised AttributeError and
+    # 500'd every plan endpoint.
+    from components.subscription.application.providers.subscription_models_provider import (
+        get_subscription_models_provider,
+    )
+
+    Plan = get_subscription_models_provider().Plan
 
     if isinstance(plan_value, int):
         return Plan.objects.filter(id=plan_value).first()

@@ -21,6 +21,15 @@ Typical usage in a controller::
 This mirrors the existing dynamic-provider pattern used by other
 bounded contexts (see ``magic_link_provider``,
 ``bank_overview_repository_provider``, ``retrieval_chain_provider``).
+
+NOT here: ``Plan``. The subscription tier model lived in the team app
+historically and was relocated to
+``infrastructure.persistence.subscription`` when the subscription context
+took ownership of the tier catalogue. Ask
+``components.subscription.application.providers.subscription_models_provider``
+for it. Reaching for ``get_team_models_provider().Plan`` raises
+AttributeError at request time — that is exactly how the whole paid-upgrade
+path silently 500'd.
 """
 
 from __future__ import annotations
