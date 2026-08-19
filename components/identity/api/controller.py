@@ -51,6 +51,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
+from components.identity.api.authentication import OtpChallengeJWTAuthentication
 from components.identity.api.permissions import (
     IsLoggedInUserOrAdmin,
     IsTwoFactorEnabledAndVerified,
@@ -1675,8 +1676,14 @@ class TOTPCreateView(views.APIView):
 
 @method_decorator(sensitive_post_parameters("token"), name="dispatch")
 class TOTPVerifyView(views.APIView):
-    """Verify/enable a TOTP device — delegates to VerifyOTPUseCase."""
+    """Verify/enable a TOTP device — delegates to VerifyOTPUseCase.
 
+    One of exactly two endpoints that accept a login's OTP-challenge token
+    (``preauth_token``) — completing the challenge is the only thing that token
+    may do. See ``OtpChallengeJWTAuthentication``.
+    """
+
+    authentication_classes = [OtpChallengeJWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = EmptySerializer
     throttle_classes = [OTPVerifyThrottle]
@@ -1770,8 +1777,13 @@ class StaticCreateView(views.APIView):
 
 @method_decorator(sensitive_post_parameters("token"), name="dispatch")
 class StaticVerifyView(views.APIView):
-    """Verify a static recovery code — delegates to VerifyOTPUseCase with method='static'."""
+    """Verify a static recovery code — delegates to VerifyOTPUseCase with method='static'.
 
+    The recovery-code half of the 2FA login challenge, and therefore the other
+    endpoint that accepts a ``preauth_token``. See ``OtpChallengeJWTAuthentication``.
+    """
+
+    authentication_classes = [OtpChallengeJWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = EmptySerializer
     throttle_classes = [StaticVerifyThrottle]
