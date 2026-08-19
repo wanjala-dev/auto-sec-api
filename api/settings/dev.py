@@ -505,13 +505,11 @@ CELERY_BEAT_SCHEDULE = {
         "kwargs": {"task": "recycle_bin.purge_expired_tombstones"},
         "schedule": crontab(hour=4, minute=0),  # 4:00 AM UTC daily
     },
-    # Self-cleaning demo lifecycle — tear down ACTIVE demo accounts whose TTL
-    # has expired so the demo DB doesn't accumulate stale workspaces.
-    "demo_accounts_cleanup_expired": {
-        "task": "shared_platform.run_for_each_tenant",
-        "kwargs": {"task": "shared_platform.cleanup_expired_demo_accounts"},
-        "schedule": crontab(hour=3, minute=30),  # 3:30 AM UTC daily
-    },
+    # NOTE: the demo-account TTL cleanup that used to be scheduled here was
+    # removed — the service it called (``demo_account_teardown``) was never
+    # ported into this fork, so the task raised ModuleNotFoundError on every
+    # fire. The DemoAccount MODEL is still present; nothing provisions or tears
+    # down rows. See the PR that removed this for what porting it back needs.
     # AI chat quota windows — daily messages reset at midnight UTC,
     # monthly tokens reset on the 1st. The increment path also handles
     # rollover defensively, so missing one cycle is non-fatal.
