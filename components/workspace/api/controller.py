@@ -29,6 +29,7 @@ from components.team.application.facades.serializer_facade import (
 )
 from components.workspace.api.permissions import (
     IsWorkspaceAdmin,
+    IsWorkspaceAdminOfObject,
     IsWorkspaceFollowerOrMember,
 )
 from components.workspace.api.workspace_permissions import (
@@ -517,14 +518,41 @@ class WorkspaceCreateEligibilityView(APIView):
 class WorkspaceDetail(viewsets.ModelViewSet):
     """Retrieve, update, or delete a workspace the caller belongs to.
 
-    Members only, and scoped by queryset rather than by an object-permission
-    check so a non-member gets 404 rather than 403 — a 403 would confirm the
-    organization exists. The same scoping is what stops an authenticated
-    outsider PATCHing or DELETEing another tenant's organization.
+    Two DIFFERENT questions are asked here, and both are load-bearing:
+
+    * *Which tenant?* — answered by the queryset, NOT by a permission class.
+      ``get_workspaces_visible_to_user`` narrows to organizations the caller
+      owns or holds an ACTIVE membership in, so a non-member's ``get_object()``
+      raises 404 rather than 403. The 404 is deliberate: a 403 would confirm the
+      organization exists. This is also what stops an authenticated outsider
+      PATCHing or DELETEing another tenant's organization.
+    * *Which role, within that tenant?* — answered by
+      ``IsWorkspaceAdminOfObject`` on the write actions. Queryset scoping alone
+      admits EVERY active member, so a viewer- or contributor-role member could
+      still rewrite the organization — or hard-delete it: ``Workspace`` is a
+      plain model, so ``destroy`` cascades and leaves no tombstone and no
+      recycle-bin entry.
+
+    The two are complementary, not redundant: the first draws the tenant
+    boundary, the second draws the role boundary inside it. Removing either
+    reopens a hole — drop the scoping and outsiders return, drop the write gate
+    and any viewer can delete the organization.
+
+    The read gate stays ``IsAuthenticated``. It must NOT go back to
+    ``IsUnauthenticatedOrAdminOrStaff``, whose ``has_permission`` returns
+    ``True`` for every SAFE_METHOD — that is the anonymous-read hole closed
+    earlier, and this class defines no object-level check either.
     """
 
     permission_classes = (permissions.IsAuthenticated,)
+    write_permission_classes = (IsWorkspaceAdminOfObject,)
+    write_actions = frozenset({"update", "partial_update", "destroy"})
     name = "workspace-detail"
+
+    def get_permissions(self):
+        if self.action in self.write_actions:
+            return [permission() for permission in self.write_permission_classes]
+        return super().get_permissions()
 
     @property
     def queryset(self):
