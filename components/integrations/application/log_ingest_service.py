@@ -428,7 +428,11 @@ class ErrorFinding:
             "evidence": self.evidence,
             "blast_radius": self.blast_radius,
             "confidence": self.confidence,
-            "fingerprint": self.fingerprint,
+            # The identity is carried ONCE, as ``lookup_key`` — the detector adds
+            # it when it spreads this contract into the board payload, and that
+            # is the key every reader uses. A second ``fingerprint`` copy lived
+            # here and was what made the two-name drift in ADR 0032 §1.3.3 look
+            # survivable. Do not re-add it.
             # Filled in later by the triage agent (LLM-after-detection):
             "probable_cause": "",
             "suggested_fix": "",

@@ -106,7 +106,12 @@ class TestLogPatternAnalyzer:
         # Recommendation left empty for the optimization agent (LLM-after).
         assert contract["recommendation"] == ""
         assert contract["suggested_fix"] == ""
-        assert contract["fingerprint"].startswith("logopt:")
+        # The contract no longer carries a second copy of the identity: the
+        # detector adds it ONCE as ``lookup_key`` when it spreads this dict into
+        # the board payload, and that is the key every reader uses (ADR 0032
+        # §1.3.3 / D6). The identity itself is asserted on the finding.
+        assert "fingerprint" not in contract
+        assert beat.fingerprint.startswith("logopt:")
         assert contract["triage"]["status"] == "pending"
 
     def test_fingerprint_is_signature_stable_across_runs(self, connected_workspace):

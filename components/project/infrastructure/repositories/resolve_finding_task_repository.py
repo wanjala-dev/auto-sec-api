@@ -93,7 +93,13 @@ class OrmResolveFindingTaskRepository(ResolveFindingTaskPort):
                 task.metadata = meta
                 task.save(update_fields=["metadata", "updated_at"])
 
-                fingerprint = str(payload.get("fingerprint") or meta.get("fingerprint") or "")
+                # ``lookup_key`` is the ONE key a card carries its identity
+                # under — every builder in ``_SOURCE_BOARD`` writes it and
+                # ``persist_finding_as_task`` threads it into the task's
+                # idempotency key. Reading ``payload["fingerprint"]`` here (a key
+                # nothing writes) meant ``FindingResolved`` was emitted for
+                # nothing but a handful of log-watch cards. ADR 0032 §1.3.3.
+                fingerprint = str(payload.get("lookup_key") or "")
                 workspace_id = str(task.workspace_id)
 
             # Dispatch AFTER commit — the resolve is the fact, the event is a

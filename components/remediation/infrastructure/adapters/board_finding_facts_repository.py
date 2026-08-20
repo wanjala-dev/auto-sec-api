@@ -24,6 +24,21 @@ What each fact maps to on the board Task (see ADR 0012 grounding):
   event (its ``action``/``at``), so the corpus entry links to the board fact.
 - ``finding_kind`` ← ``source_type`` with the ``ai.`` prefix stripped, matching
   ``persist_finding_as_task``'s ``action_type`` convention.
+- ``finding_fingerprint`` ← ``metadata.payload.lookup_key`` — the board's stable
+  identity for a finding. **This is the only key a card carries it under.** Every
+  builder in ``finding_raised_board_handler._SOURCE_BOARD`` writes it, and
+  ``persist_finding_as_task`` threads the same value into the task's
+  ``idempotency_key`` (``lookup_key:<identity>``), which is what makes it stable
+  across re-detections rather than merely present.
+
+  This adapter used to read ``payload["fingerprint"]``, a key **no** card
+  builder writes. The field was therefore ``""`` for every finding, and the
+  recurrence guard in ``PropagateRemediationOutcomesUseCase`` (``if fp and …``)
+  was unconditionally ``False`` — so a fix that did NOT hold was awarded
+  ``reuse_success`` (+3) instead of ``recurrence`` (−5), inverting the strongest
+  outcome signal Remediation Memory has. Do not reintroduce a
+  ``or payload.get("fingerprint")`` fallback: two live names for one identity is
+  how the drift started (ADR 0032 §1.3.3 / D6, Phase 0.2).
 """
 
 from __future__ import annotations
@@ -92,7 +107,7 @@ class BoardFindingFactsRepository(FindingRemediationFactsPort):
             exists=True,
             source_type=source_type,
             finding_kind=_derive_kind(source_type),
-            finding_fingerprint=str(payload.get("fingerprint") or metadata.get("fingerprint") or ""),
+            finding_fingerprint=str(payload.get("lookup_key") or ""),
             draft_pr_url=(draft_pr.get("url") or None),
             finding_resolved=_is_resolved(metadata),
             provenance_event_ref=_newest_provenance_ref(metadata),

@@ -47,7 +47,7 @@ def _board(workspace_factory, team_factory):
 def _finding_task(workspace, owner, team, column, *, resolved: bool, draft_pr_url: str | None):
     from infrastructure.persistence.project.models import Task
 
-    payload = {"fingerprint": "fp-abc", "triage": {"status": "triaged"}}
+    payload = {"lookup_key": "fp-abc", "triage": {"status": "triaged"}}
     if draft_pr_url:
         payload["draft_pr"] = {"url": draft_pr_url, "repo": "acme/repo", "branch": "fix/x"}
     metadata = {

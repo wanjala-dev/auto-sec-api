@@ -136,7 +136,9 @@ class OptimizationFinding:
             "evidence": self.evidence,
             "blast_radius": self.blast_radius,
             "confidence": self.confidence,
-            "fingerprint": self.fingerprint,
+            # Identity is carried once, as ``lookup_key`` (added by the detector
+            # when it spreads this contract into the board payload) — see the
+            # matching note in ``log_ingest_service.ErrorFinding.as_contract``.
             # Filled by the optimization agent (LLM-after-detection):
             "probable_cause": "",
             "suggested_fix": "",
