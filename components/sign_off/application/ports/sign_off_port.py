@@ -51,6 +51,27 @@ class SignOffPort(ABC):
         queue audit adapter to scope its audit rows.
         """
 
+    def audit_content_type(self) -> str | None:
+        """``"<app_label>.<model>"`` this artifact's rows live under, e.g.
+        ``"content.newsletter"``.
+
+        The audit trail is ``EntityAuditLog``, which is ContentType-backed: a
+        row cannot exist without naming a real Django model. The kernel has no
+        model of its own — ``sign_off`` is a pure orchestrator over other
+        contexts' artifacts — so the adapter is the only thing that knows what
+        to point at, exactly as with ``workspace_id``.
+
+        This used to be a synthetic ``"signoff.<artifact_type>"`` string built
+        inside the kernel. No such model exists, so ContentType resolution
+        returned None and every sign-off decision was written to nowhere,
+        silently. See the audit adapter for the full note.
+
+        Concrete (non-default) is strongly preferred. Returning None means
+        decisions on this artifact type are NOT auditable; the adapter logs
+        that at ERROR rather than dropping it quietly.
+        """
+        return None
+
     # ── Unified queue surface (Phase 6a) ─────────────────────────────────────
 
     @abstractmethod
@@ -65,23 +86,17 @@ class SignOffPort(ABC):
         """
 
     @abstractmethod
-    def approve(
-        self, artifact_id: str, *, actor_id: str, override_reason: str | None = None
-    ) -> None:
+    def approve(self, artifact_id: str, *, actor_id: str, override_reason: str | None = None) -> None:
         """Perform the context's real approve action — send / publish / dispatch
         / resume — delegating to that context's EXISTING use case. The kernel
         has already enforced the RED-band override-reason gate before calling."""
 
     @abstractmethod
-    def request_changes(
-        self, artifact_id: str, *, actor_id: str, codes: tuple[str, ...] = (), note: str = ""
-    ) -> None:
+    def request_changes(self, artifact_id: str, *, actor_id: str, codes: tuple[str, ...] = (), note: str = "") -> None:
         """Send the artifact back for changes (context-specific effect)."""
 
     @abstractmethod
-    def reject(
-        self, artifact_id: str, *, actor_id: str, codes: tuple[str, ...] = (), note: str = ""
-    ) -> None:
+    def reject(self, artifact_id: str, *, actor_id: str, codes: tuple[str, ...] = (), note: str = "") -> None:
         """Reject the artifact (context-specific effect — archive / fail)."""
 
     # ── Feedback → eval capture (Phase 6c) ───────────────────────────────────

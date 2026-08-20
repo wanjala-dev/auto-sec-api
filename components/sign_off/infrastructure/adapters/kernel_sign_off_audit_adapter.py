@@ -5,10 +5,29 @@ decision (approved / changes-requested / rejected) to the shared, append-only
 ``EntityAuditLog`` — the same table the recycle bin, field-edit history, and the
 reports sign-off audit already use (reused, not forked — the "one ledger" rule).
 
-Rows are recorded under ``entity_type = "signoff.<artifact_type>"``, which is
-DISTINCT from any context's own field-history entity_type (e.g. the reports
-context audits under ``reports.financialreport``). So this is a complementary
-queue-decision trail, not a duplicate of a context's own audit.
+Rows are recorded against the ARTIFACT's own content type (e.g.
+``content.newsletter``), supplied by the registered adapter via
+``audit_content_type()``, with ``field_name = "review_state"``. The field name
+is what keeps this a complementary queue-decision trail rather than a
+duplicate of a context's own field history — and it has the added benefit that
+a sign-off decision now shows up on the artifact's audit trail, where someone
+investigating that artifact will actually look.
+
+WHY THIS CHANGED — it was writing to nowhere
+--------------------------------------------
+Rows were previously recorded under a SYNTHETIC ``"signoff.<artifact_type>"``.
+``EntityAuditLog`` is ContentType-backed, and the repository resolves that
+string as ``app_label.model``. There is no Django app ``signoff`` and no model
+``newsletter`` inside one, so ContentType resolution returned None, the
+repository returned None, and the write was dropped. Not an exception — the
+adapter's ``except Exception`` never even fired. Every sign-off decision this
+product ever recorded went nowhere, silently, while the API returned 200.
+
+It was invisible because the only tests of the trail asserted against an
+in-memory fake audit sink, which faithfully recorded calls the production
+adapter then discarded. See
+``components/sign_off/tests/integration/test_kernel_audit_adapter_writes.py``,
+which drives the real adapter against a real database.
 
 The artifact's workspace is resolved through the sign-off registry adapter
 (``adapter.workspace_id``) — the kernel never touches a foreign context's ORM
@@ -46,10 +65,24 @@ class KernelSignOffAuditAdapter(SignOffAuditPort):
     ) -> None:
         detail = detail or {}
         try:
+            entity_type = self._entity_type(artifact_type)
+            if not entity_type:
+                # Loud, not silent. An unauditable approval gate is a product
+                # defect, and the previous behaviour — dropping the row with
+                # no signal at all — is precisely what hid this for so long.
+                logger.error(
+                    "sign_off.queue_audit_unauditable artifact_type=%s artifact_id=%s event=%s "
+                    "reason=adapter_declared_no_audit_content_type",
+                    artifact_type,
+                    artifact_id,
+                    event,
+                )
+                return
+
             reason = detail.get("override_reason") or detail.get("note") or ""
-            self._repository().record(
+            entry = self._repository().record(
                 workspace_id=self._workspace_id(artifact_type, artifact_id),
-                entity_type=f"signoff.{artifact_type}",
+                entity_type=entity_type,
                 entity_id=str(artifact_id),
                 field_name=_FIELD_NAME,
                 previous_value=None,
@@ -57,6 +90,18 @@ class KernelSignOffAuditAdapter(SignOffAuditPort):
                 actor_id=str(actor_id) if actor_id is not None else None,
                 reason=reason,
             )
+            if entry is None:
+                # The repository returns None when the content type cannot be
+                # resolved. That is the exact failure mode that made this a
+                # no-op; it must never be quiet again.
+                logger.error(
+                    "sign_off.queue_audit_write_dropped artifact_type=%s artifact_id=%s event=%s "
+                    "entity_type=%s reason=content_type_unresolvable",
+                    artifact_type,
+                    artifact_id,
+                    event,
+                    entity_type,
+                )
         except Exception:
             # Audit failure must never break the sign-off decision itself.
             logger.exception(
@@ -79,3 +124,8 @@ class KernelSignOffAuditAdapter(SignOffAuditPort):
     def _workspace_id(artifact_type: str, artifact_id: str) -> str | None:
         adapter = get_sign_off_registry().get_adapter(artifact_type)
         return adapter.workspace_id(str(artifact_id))
+
+    @staticmethod
+    def _entity_type(artifact_type: str) -> str | None:
+        adapter = get_sign_off_registry().get_adapter(artifact_type)
+        return adapter.audit_content_type()

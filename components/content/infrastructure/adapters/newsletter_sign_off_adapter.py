@@ -105,6 +105,19 @@ class NewsletterSignOffAdapter(SignOffPort):
         # Newsletters go out to subscribers — always an external audience.
         return SignOffTarget(audience=Audience.EXTERNAL)
 
+    def audit_content_type(self) -> str:
+        """Sign-off decisions are audited against the Newsletter row itself.
+
+        ``EntityAuditLog`` is ContentType-backed, so the trail needs a real
+        model. The kernel has none of its own — it used to synthesise
+        ``"signoff.<artifact_type>"``, which resolved to nothing and silently
+        dropped every decision. Anchoring on the artifact also puts the
+        approval where an investigator looking at this row will find it;
+        ``field_name="review_state"`` keeps it distinct from this context's
+        own field history.
+        """
+        return "content.newsletter"
+
     def workspace_id(self, artifact_id: str) -> str | None:
         from infrastructure.persistence.content.models import Newsletter
 
