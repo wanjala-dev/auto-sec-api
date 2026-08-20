@@ -57,13 +57,19 @@ class TestRefusal:
 
 class TestResolveToolRisk:
     def test_explicit_decorator_arg_wins(self):
-        # A tool the registry marks irreversible can be overridden by an explicit
-        # decorator tier (new tools own their classification).
-        assert resolve_tool_risk("cancel_sponsorship", ToolRisk.READ) == ToolRisk.READ
+        # The registry classifies ``delete_task`` reversible_write; an explicit
+        # decorator tier overrides it, so new tools own their classification.
+        assert resolve_tool_risk("delete_task", ToolRisk.IRREVERSIBLE) == ToolRisk.IRREVERSIBLE
+        assert resolve_tool_risk("delete_task", ToolRisk.READ) == ToolRisk.READ
 
-    def test_registry_classifies_money_tools_irreversible(self):
-        assert resolve_tool_risk("manage_sponsorship_payments") == ToolRisk.IRREVERSIBLE
-        assert resolve_tool_risk("delete_transaction") == ToolRisk.IRREVERSIBLE
+    def test_registry_classifies_the_live_soft_deletes_reversible(self):
+        # These two are the whole map since ADR 0031 Phase 0 removed the eight
+        # nonprofit names this fork deleted. No tool is registry-classified
+        # ``irreversible`` any more — the live irreversible tool
+        # (``open_draft_pr``) declares its tier on the ``@tool`` decorator, which
+        # is where every new tool declares it.
+        assert resolve_tool_risk("delete_task") == ToolRisk.REVERSIBLE_WRITE
+        assert resolve_tool_risk("delete_project_milestone") == ToolRisk.REVERSIBLE_WRITE
 
     def test_unlisted_tool_defaults_to_read(self):
-        assert resolve_tool_risk("list_recipients") == ToolRisk.READ
+        assert resolve_tool_risk("list_open_findings") == ToolRisk.READ

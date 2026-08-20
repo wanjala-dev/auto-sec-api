@@ -94,14 +94,14 @@ class TestComputeAiActivity:
         assert calls["by_risk_tier"] == {"read": 2, "reversible_write": 1, "irreversible": 1}
 
     def test_missing_risk_falls_back_to_central_registry(self):
-        # ``delete_transaction`` is irreversible in the central registry;
+        # ``delete_task`` is reversible_write in the central registry;
         # an unknown tool defaults to read (the registry's safe default).
         tools = [
-            {"agent_type": "X", "tool_name": "delete_transaction", "risk": None},
+            {"agent_type": "X", "tool_name": "delete_task", "risk": None},
             {"agent_type": "X", "tool_name": "totally_unknown_tool", "risk": None},
         ]
         out = compute_ai_activity([], tools, now=NOW, window_days=7)
-        assert out["tool_calls"]["by_risk_tier"] == {"irreversible": 1, "read": 1}
+        assert out["tool_calls"]["by_risk_tier"] == {"reversible_write": 1, "read": 1}
 
     def test_empty_is_no_data_not_zero_activity_claim(self):
         out = compute_ai_activity([], [], now=NOW, window_days=7)
