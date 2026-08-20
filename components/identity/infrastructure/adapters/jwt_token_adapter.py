@@ -71,12 +71,42 @@ class JWTTokenAdapter(TokenPort):
             requires_otp=True,
         )
 
-    def decode_token(self, token: str) -> UUID | None:
-        import jwt
-        from django.conf import settings
+    def issue_email_verification_token(self, user_id: UUID) -> str:
+        """Mint the confirmation-link token — a distinct type, not a session.
+
+        ``Token.for_user`` stamps ``token_type`` and the class ``lifetime``, so
+        the emailed credential is short-lived and undecodable by
+        ``JWTAuthentication`` by construction. See ``email_verification_token.py``
+        for the incident this replaced.
+        """
+        from components.identity.infrastructure.adapters.email_verification_token import (
+            EmailVerificationToken,
+        )
+        from infrastructure.persistence.users.models import CustomUser
+
+        user = CustomUser.objects.get(id=user_id)
+        return str(EmailVerificationToken.for_user(user))
+
+    def decode_email_verification_token(self, token: str) -> UUID | None:
+        """Decode a confirmation-link token, rejecting every other token type.
+
+        ``EmailVerificationToken(raw)`` runs SimpleJWT's ``verify()``, which
+        checks signature, expiry AND ``token_type`` — so an access, refresh, or
+        OTP-challenge token cannot stand in as proof of inbox control.
+
+        The user-id claim is read through SimpleJWT's own ``USER_ID_CLAIM``
+        setting, the same source ``for_user`` writes it from, so mint and
+        decode cannot drift apart if that setting is ever changed.
+        """
+        from rest_framework_simplejwt.exceptions import TokenError
+        from rest_framework_simplejwt.settings import api_settings
+
+        from components.identity.infrastructure.adapters.email_verification_token import (
+            EmailVerificationToken,
+        )
 
         try:
-            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
-            return UUID(str(payload["user_id"]))
-        except (jwt.ExpiredSignatureError, jwt.exceptions.DecodeError, KeyError, ValueError):
+            payload = EmailVerificationToken(token)
+            return UUID(str(payload[api_settings.USER_ID_CLAIM]))
+        except (TokenError, KeyError, ValueError):
             return None

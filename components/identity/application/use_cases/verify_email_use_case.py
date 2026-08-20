@@ -12,10 +12,10 @@ from components.identity.application.commands.verify_email_command import (
     VerifyEmailFailure,
     VerifyEmailResult,
 )
-from components.identity.domain.enums import AuthEventCode
 from components.identity.application.ports.auth_audit_port import AuthAuditPort
 from components.identity.application.ports.token_port import TokenPort
 from components.identity.application.ports.user_repository_port import UserRepositoryPort
+from components.identity.domain.enums import AuthEventCode
 
 
 class VerifyEmailUseCase:
@@ -36,8 +36,10 @@ class VerifyEmailUseCase:
         """Execute the email verification flow."""
         context = command.context
 
-        # 1. Decode the verification token
-        user_id = self._tokens.decode_token(command.token)
+        # 1. Decode the verification token. Type-checked: only a token minted
+        #    for THIS purpose counts as proof of inbox control — a session
+        #    credential signed with the same key must not verify an address.
+        user_id = self._tokens.decode_email_verification_token(command.token)
         if user_id is None:
             self._audit.record_event(
                 event_code=AuthEventCode.EMAIL_VERIFY,
