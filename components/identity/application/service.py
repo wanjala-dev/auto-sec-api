@@ -150,8 +150,21 @@ class IdentityService:
         return self.user_query_port.find_by_email_and_username(email, username)
 
     def get_user_queryset(self):
-        """Return the base user queryset with profile pre-fetched."""
+        """Return the base user queryset with profile pre-fetched.
+
+        Unscoped. Do not serve this to a caller — use
+        ``get_users_visible_to`` so the tenant boundary is applied.
+        """
         return self.user_query_port.get_queryset()
+
+    def get_users_visible_to(self, actor):
+        """Return the users ``actor`` is allowed to see.
+
+        The tenant boundary for user data: users sharing an active workspace
+        membership with the actor, plus the actor themselves. Staff and
+        superusers see the whole installation.
+        """
+        return self.user_query_port.get_queryset_visible_to(actor)
 
     def get_user_profile(self, user_id) -> Any:
         """Get user profile by user ID."""
