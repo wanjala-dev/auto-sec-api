@@ -164,13 +164,14 @@ def test_the_token_minted_after_otp_verification_is_a_normal_access_token(api_cl
     assert response.status_code == 200
 
 
-def test_access_token_still_verifies_a_new_device_on_the_same_endpoint(api_client, user_factory):
+def test_access_token_still_verifies_a_new_device_on_the_same_endpoint(api_client, user_factory, authenticate_as):
     """``otp/verify/`` doubles as first-time 2FA enrolment for a logged-in user."""
     user = user_factory()
     device = TOTPDevice.objects.create(user=user, confirmed=False)
-    tokens = user_utils.issue_tokens(user, otp_verified=False, include_refresh=False)
+    # A real logged-in session: ``include_refresh=False`` stamps no ``sid``, so
+    # it was never a credential a logged-in user could actually hold.
+    authenticate_as(api_client, user)
 
-    api_client.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens['access']}")
     response = api_client.post(
         reverse("totp-verify"),
         {"token": _totp_code(device)},

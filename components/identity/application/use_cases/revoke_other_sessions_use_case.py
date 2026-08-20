@@ -14,6 +14,7 @@ from uuid import UUID
 from components.identity.application.ports.auth_audit_port import AuthAuditPort
 from components.identity.application.ports.session_registry_port import SessionRegistryPort
 from components.identity.application.ports.token_revocation_port import TokenRevocationPort
+from components.identity.application.use_cases._session_revocation import revoke_sessions_for_user
 from components.identity.domain.enums import AuthEventCode
 from components.identity.domain.errors import MissingSessionClaimError
 from components.identity.domain.value_objects.auth_tokens import RequestContext
@@ -49,13 +50,12 @@ class RevokeOtherSessionsUseCase:
                 "This access token carries no session claim; log in again before revoking other sessions."
             )
 
-        # Blacklist each other active session's refresh token, then flip
-        # the registry rows in one write.
-        jtis = self._sessions.list_active_jtis_for_user(user_id=user_id, except_jti=current_sid)
-        for jti in jtis:
-            self._revocation.revoke_by_jti(jti=jti)
-
-        revoked = self._sessions.revoke_all_for_user(
+        # Blacklist each other active session's refresh token, then flip the
+        # registry rows. Shared with the password change/reset paths so the two
+        # writes can never drift apart — see ``_session_revocation``.
+        revoked = revoke_sessions_for_user(
+            sessions=self._sessions,
+            token_revocation=self._revocation,
             user_id=user_id,
             reason=REVOKE_REASON,
             except_jti=current_sid,

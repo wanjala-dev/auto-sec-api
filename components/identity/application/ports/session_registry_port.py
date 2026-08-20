@@ -50,6 +50,20 @@ class SessionRegistryPort(ABC):
         """
 
     @abstractmethod
+    def is_active(self, *, refresh_jti: str) -> bool:
+        """Is the session behind ``refresh_jti`` still usable?
+
+        ``False`` for revoked, expired, and UNKNOWN jtis — this is the read the
+        authentication path makes on every request, so it fails closed: a token
+        whose session was never registered is a token nothing can revoke.
+
+        Registering a session is best-effort (``create_session`` never raises),
+        but READING one is authoritative. That asymmetry is deliberate: a
+        registry failure must not break a login, yet a session the registry has
+        no record of must not authenticate.
+        """
+
+    @abstractmethod
     def revoke(self, *, refresh_jti: str, reason: str) -> None:
         """Mark one session revoked (idempotent — already-revoked rows keep
         their original ``revoked_at``/``revoked_reason``)."""

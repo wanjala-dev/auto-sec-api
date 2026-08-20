@@ -40,8 +40,10 @@ def _clear_otp_cache():
     cache.clear()
 
 
-def _authenticate(api_client, user):
-    api_client.credentials(HTTP_AUTHORIZATION=f"Bearer {user.tokens()['access']}")
+def _authenticate(api_client, user, authenticate_as):
+    """Sign in the way login does — a bare token registers no session, and
+    authentication now checks the registry."""
+    authenticate_as(api_client, user)
     return api_client
 
 
@@ -68,15 +70,15 @@ def static_user(db, user_factory):
 @pytest.mark.integration
 @pytest.mark.django_db
 class TestWrongCodesAreRejected:
-    def test_wrong_totp_code_is_rejected_without_tokens(self, api_client, totp_user):
-        client = _authenticate(api_client, totp_user)
+    def test_wrong_totp_code_is_rejected_without_tokens(self, api_client, totp_user, authenticate_as):
+        client = _authenticate(api_client, totp_user, authenticate_as)
         response = client.post(reverse("totp-verify"), {"token": _WRONG_CODE}, format="json")
 
         assert response.status_code == 400, response.data
         assert "tokens" not in response.data
 
-    def test_missing_token_is_400(self, api_client, totp_user):
-        client = _authenticate(api_client, totp_user)
+    def test_missing_token_is_400(self, api_client, totp_user, authenticate_as):
+        client = _authenticate(api_client, totp_user, authenticate_as)
         response = client.post(reverse("totp-verify"), {}, format="json")
         assert response.status_code == 400
 
@@ -86,8 +88,8 @@ class TestWrongCodesAreRejected:
 class TestRecoveryCodeGuessingIsThrottled:
     """StaticVerifyThrottle is 5/min — it fires well before the lockout at 10."""
 
-    def test_sixth_attempt_in_a_minute_is_throttled(self, api_client, static_user):
-        client = _authenticate(api_client, static_user)
+    def test_sixth_attempt_in_a_minute_is_throttled(self, api_client, static_user, authenticate_as):
+        client = _authenticate(api_client, static_user, authenticate_as)
         url = reverse("static-verify")
 
         responses = [client.post(url, {"token": f"WRONG{i:04d}"}, format="json") for i in range(6)]
@@ -95,9 +97,9 @@ class TestRecoveryCodeGuessingIsThrottled:
         assert all(r.status_code == 400 for r in responses[:5]), [r.status_code for r in responses]
         assert responses[5].status_code == 429
 
-    def test_rotating_forwarded_for_does_not_buy_more_attempts(self, api_client, static_user):
+    def test_rotating_forwarded_for_does_not_buy_more_attempts(self, api_client, static_user, authenticate_as):
         """The cap is per-principal; a forged origin must not reset it."""
-        client = _authenticate(api_client, static_user)
+        client = _authenticate(api_client, static_user, authenticate_as)
         url = reverse("static-verify")
 
         responses = [
@@ -112,8 +114,8 @@ class TestRecoveryCodeGuessingIsThrottled:
 
         assert responses[5].status_code == 429, "Recovery-code guessing was unthrottled while rotating X-Forwarded-For."
 
-    def test_a_valid_recovery_code_is_single_use(self, api_client, static_user):
-        client = _authenticate(api_client, static_user)
+    def test_a_valid_recovery_code_is_single_use(self, api_client, static_user, authenticate_as):
+        client = _authenticate(api_client, static_user, authenticate_as)
         url = reverse("static-verify")
 
         first = client.post(url, {"token": "RECOVERY01"}, format="json")
@@ -142,8 +144,8 @@ class TestOtpLockoutEngages:
             {**SimpleRateThrottle.THROTTLE_RATES, "otp_verify": "1000/min"},
         )
 
-    def test_repeated_totp_failures_lock_the_principal_out(self, api_client, totp_user):
-        client = _authenticate(api_client, totp_user)
+    def test_repeated_totp_failures_lock_the_principal_out(self, api_client, totp_user, authenticate_as):
+        client = _authenticate(api_client, totp_user, authenticate_as)
         url = reverse("totp-verify")
 
         for _ in range(LOCKOUT_THRESHOLD):

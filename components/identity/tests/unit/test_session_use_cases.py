@@ -79,6 +79,9 @@ class FakeSessionRegistry(SessionRegistryPort):
     def touch(self, *, refresh_jti, min_interval_seconds=300):
         raise AssertionError("not used here")
 
+    def is_active(self, *, refresh_jti):
+        return any(r.refresh_jti == refresh_jti and r.revoked_at is None for r in self.records)
+
     def revoke(self, *, refresh_jti, reason):
         self.revoked.append((refresh_jti, reason))
         self.records = [

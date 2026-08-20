@@ -601,7 +601,13 @@ REST_FRAMEWORK = {
     "NON_FIELD_ERRORS_KEY": "error",
     "DEFAULT_FILTER_BACKENDS": ["django_filters.rest_framework.DjangoFilterBackend"],
     "DEFAULT_AUTHENTICATION_CLASSES": (
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
+        # Stock JWTAuthentication + a session-registry check, so a revoked
+        # session is actually revoked. Do NOT swap this back to
+        # `rest_framework_simplejwt.authentication.JWTAuthentication`: that
+        # restores stateless access tokens that outlive logout, revoke-session,
+        # revoke-others, password change and password reset by up to the full
+        # ACCESS_TOKEN_LIFETIME. See components/identity/api/authentication.py.
+        "components.identity.api.authentication.SessionAwareJWTAuthentication",
         #'rest_framework.authentication.TokenAuthentication',
         #'rest_framework.authentication.SessionAuthentication', #enable rest auth use for dev
         #'rest_framework.authentication.BasicAuthentication',

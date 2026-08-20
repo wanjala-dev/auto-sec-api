@@ -31,19 +31,32 @@ def _resolve_user_from_token_sync(raw_token: str):
     it without going through ``async_to_sync`` (which trips on the
     test DB connection lifecycle)."""
     try:
-        from rest_framework_simplejwt.authentication import JWTAuthentication
-        from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
+        from rest_framework_simplejwt.exceptions import AuthenticationFailed, InvalidToken, TokenError
+
+        # The SAME authentication class the HTTP path uses, so a revoked
+        # session cannot open a socket after it has stopped answering requests.
+        # Stock JWTAuthentication here would have left the WebSocket as the one
+        # door revocation never reached.
+        from components.identity.api.authentication import SessionAwareJWTAuthentication
     except ImportError:
         return AnonymousUser()
 
-    auth = JWTAuthentication()
+    auth = SessionAwareJWTAuthentication()
     try:
         validated = auth.get_validated_token(raw_token)
         user = auth.get_user(validated)
-    except (InvalidToken, TokenError) as exc:
-        logger.info("ws_jwt_invalid token=%s reason=%s", raw_token[:8], exc)
+    except AuthenticationFailed as exc:
+        # Revoked / unregistered session — the routine outcome after a logout
+        # or a password reset, not an error. Handled explicitly so it doesn't
+        # fall through to the traceback-logging branch below.
+        logger.info("ws_session_not_active reason=%s", exc.detail)
         return AnonymousUser()
-    except Exception:  # noqa: BLE001
+    except (InvalidToken, TokenError) as exc:
+        # No token material in the log line — a prefix of a signed credential is
+        # still credential material (.claude/rules/logging.md §4).
+        logger.info("ws_jwt_invalid reason=%s", exc)
+        return AnonymousUser()
+    except Exception:
         # Don't leak details — anonymous user fails the consumer's
         # authenticated guard the same way an invalid token does.
         logger.exception("ws_jwt_decode_failed")
