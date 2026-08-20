@@ -55,10 +55,36 @@ class RequiresFeatureFlag(permissions.BasePermission):
     """
     Require a named feature flag to be enabled for this request.
 
-    Usage (CBV):
+    **This is a FEATURE gate, NOT an authentication or authorization gate.**
+    It answers "is this capability switched on?", never "is this caller allowed
+    to touch this object?". It MUST always be composed with a real auth class
+    (and, for object endpoints, an object-level class):
+
       class MyView(APIView):
           permission_classes = [IsAuthenticated, RequiresFeatureFlag]
           feature_flag_key = "ai.orchestrator"
+
+    Listing it ALONE is a security defect, for three compounding reasons:
+
+    1. It defines no ``has_object_permission``, so DRF's object-permission
+       check passes by default — every object on the endpoint is reachable.
+    2. ``resolve_workspace_id_from_request`` honours a caller-supplied
+       ``?workspace_id=`` / ``?workspace=`` query param, so an UNAUTHENTICATED
+       caller chooses which workspace the flag is evaluated against and can
+       point it at any workspace that has the flag on.
+    3. Declaring ``permission_classes`` at all REPLACES the project default
+       (``DEFAULT_PERMISSION_CLASSES`` in ``api/settings/base.py``), so the
+       usual IsAuthenticated backstop is gone.
+
+    This is not hypothetical: ``PostDetail`` at ``/social/<pk>/`` shipped with
+    ``permission_classes = (RequiresFeatureFlag,)`` and was live-exploitable as
+    an unauthenticated cross-tenant update and hard-delete of any user's post.
+
+    The invariant is enforced by
+    ``tests/architecture/test_feature_flag_not_sole_permission.py``, which fails
+    the build if any view lists this class alone. Deliberate public endpoints
+    opt out there with a documented justification — never by quietly dropping
+    the auth class.
 
     Notes:
     - If a view does not define `feature_flag_key` or `feature_flag_keys`, this

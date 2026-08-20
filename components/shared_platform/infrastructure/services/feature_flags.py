@@ -101,6 +101,21 @@ def resolve_workspace_id_from_request(request, view=None) -> str | None:
     """
     Best-effort workspace resolution for feature flag evaluation.
 
+    **The returned workspace is CALLER-INFLUENCED and therefore UNTRUSTED.**
+    Priority 2 below reads a ``?workspace_id=`` / ``?workspace=`` query param,
+    which ranks ABOVE the authenticated user's own active workspace (4) and is
+    read before any authentication has been considered. This function answers
+    "which workspace is this request about?" — never "may this caller act on
+    that workspace?". Callers that let the answer influence access MUST gate the
+    param themselves; see ``FeatureFlagsView`` / ``FeatureFlagStatusView`` in
+    ``components/shared_platform/api/controller.py``, which pair it with
+    ``HasWorkspaceMembership`` for exactly this reason (ADR 0028: autosec is
+    single-DB, so an unchecked workspace param IS the cross-tenant boundary).
+
+    Composing ``RequiresFeatureFlag`` with a real auth class is what keeps an
+    anonymous caller from choosing the evaluation workspace — enforced by
+    ``tests/architecture/test_feature_flag_not_sole_permission.py``.
+
     Priority:
     1) view.kwargs (`workspace_id` / `workspace`)
     2) query params (`workspace_id` / `workspace`)

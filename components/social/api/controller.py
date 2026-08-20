@@ -140,10 +140,18 @@ class ListFollowers(RetrieveAPIView):
 
 
 class PostList(generics.ListCreateAPIView):
+    """List / create posts.
+
+    ``IsAuthenticated``, not ``IsAuthenticatedOrReadOnly``: "read only" is not
+    safe over a queryset with no tenant filter. An anonymous GET here returned
+    every post on the deployment — the same hole ``PostDetail`` had, minus the
+    write. These are workspace posts, not a public blog.
+    """
+
     serializer_class = PostSerializer
     name = "post-list"
     permission_classes = (
-        permissions.IsAuthenticatedOrReadOnly,
+        permissions.IsAuthenticated,
         IsOwnerOrReadOnly,
         RequiresFeatureFlag,
     )
@@ -162,7 +170,14 @@ class PostList(generics.ListCreateAPIView):
     ordering_fields = ("id", "created_on")
 
     def get_queryset(self):
-        return _social_service.get_post_queryset()
+        """Tenant-scoped, reusing the predicate ``PostDetail`` already uses.
+
+        Authentication alone only stops anonymous callers; ``get_post_queryset()``
+        is still every post on the deployment, so a signed-in member of workspace
+        B would list workspace A's feed. autosec is single-database (ADR 0028) —
+        that filter IS the tenant boundary. One predicate serves both views.
+        """
+        return _social_service.get_posts_visible_to(self.request.user)
 
 
 class PostDetail(generics.RetrieveUpdateDestroyAPIView):
@@ -266,8 +281,11 @@ class AddDislike(generics.ListCreateAPIView):
 class CommentList(generics.ListCreateAPIView):
     serializer_class = CommentSerializer
     name = "comment-list"
+    # IsAuthenticated for the same reason as PostList — the comment queryset is
+    # workspace-unscoped, so anonymous "read-only" access dumped every tenant's
+    # comments.
     permission_classes = (
-        permissions.IsAuthenticatedOrReadOnly,
+        permissions.IsAuthenticated,
         IsOwnerOrReadOnly,
         RequiresFeatureFlag,
     )
@@ -293,7 +311,7 @@ class CommentDetail(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = CommentSerializer
     name = "comment-detail"
     permission_classes = (
-        permissions.IsAuthenticatedOrReadOnly,
+        permissions.IsAuthenticated,
         IsOwnerOrReadOnly,
         RequiresFeatureFlag,
     )
