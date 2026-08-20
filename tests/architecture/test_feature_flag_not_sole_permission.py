@@ -161,23 +161,26 @@ def _declared_permissions(rel_path: str, class_name: str) -> list[str]:
     "class_name",
     ["PostList", "PostDetail", "CommentList", "CommentDetail"],
 )
-def test_legacy_social_crud_surface_requires_authentication(class_name):
+def test_legacy_social_crud_surface_stays_retired(class_name):
     """Regression pin for the views that were anonymously reachable.
 
     ``PostDetail`` was the unauthenticated cross-tenant write; the other three
     carried ``IsAuthenticatedOrReadOnly`` over a workspace-unscoped queryset,
     which served every tenant's posts and comments to an anonymous GET.
 
+    They were first hardened (#426, #429) and then RETIRED outright on
+    2026-08-19, because no client called them — hardening a surface nobody uses
+    leaves the attack surface standing. This test used to assert the hardened
+    permission tuple; it now asserts the classes are GONE, which is the stronger
+    property. Re-introducing one of these names should fail here and send the
+    author to ``components/social/api/controller.py`` for the history.
+
+    The routes' absence is pinned separately (and behaviourally) by
+    ``components/social/tests/integration/test_legacy_social_crud_retired.py``.
+
     Kept as an AST check (not an import) because this package's conftest
     documents architecture tests as pure source scanners with ORM access
     blocked — importing the controller runs its module-level provider wiring.
     """
-    names = _declared_permissions("components/social/api/controller.py", class_name)
-
-    assert "IsAuthenticated" in names, f"{class_name} must require authentication; got {names}"
-    assert "IsAuthenticatedOrReadOnly" not in names, (
-        f"{class_name} serves a workspace-unscoped queryset — 'or read only' means "
-        f"anonymous cross-tenant reads; got {names}"
-    )
-    assert "IsOwnerOrReadOnly" in names, f"{class_name} must enforce object ownership; got {names}"
-    assert FLAG_PERMISSION in names, f"{class_name} must keep its feature gate; got {names}"
+    with pytest.raises(AssertionError, match="not found"):
+        _declared_permissions("components/social/api/controller.py", class_name)
