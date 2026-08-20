@@ -196,6 +196,32 @@ class OrmGoogleAuthAdapter(GoogleAuthPort):
             issue_tokens,
         )
 
+        # A verified Google identity is ONE factor. If the account has an
+        # enforceable second factor, mint nothing — the use case raises an OTP
+        # challenge and VerifyOTPUseCase issues the real pair, exactly as on the
+        # password login. This response used to hardcode ``otp_required: False``.
+        from components.identity.infrastructure.adapters.second_factor_lookup import (
+            second_factor_required_for,
+        )
+
+        if second_factor_required_for(user):
+            logger.info(
+                "google_auth_otp_required user_id=%s created_user=%s",
+                user.id,
+                created_user,
+            )
+            return VerifiedGoogleSession(
+                user_id=str(user.id),
+                email=user.email,
+                username=user.username,
+                is_onboard_complete=bool(getattr(user, "is_onboard_complete", False)),
+                is_contributor=bool(getattr(user, "is_contributor", False)),
+                access_token="",
+                refresh_token="",
+                created_user=created_user,
+                two_factor_required=True,
+            )
+
         tokens = issue_tokens(user, otp_verified=False, device=None, include_refresh=True)
         logger.info(
             "google_auth_ok email=%s user_id=%s created_user=%s",

@@ -1923,6 +1923,7 @@ class GoogleSocialAuthView(GenericAPIView):
         )
         from components.identity.application.use_cases.authenticate_with_google_use_case import (
             AuthenticateWithGoogleUseCase,
+            GoogleAuthChallenge,
         )
 
         serializer = self.serializer_class(data=request.data)
@@ -1938,6 +1939,7 @@ class GoogleSocialAuthView(GenericAPIView):
             verifier=provider.verifier(),
             google_auth=provider.store(),
             session_registry=IdentityProvider.build_session_registry(),
+            tokens=IdentityProvider.build_token_adapter(),
         )
         result = use_case.execute(
             raw_token=raw_token,
@@ -1948,6 +1950,26 @@ class GoogleSocialAuthView(GenericAPIView):
             return Response(
                 {"error": result.message, "code": result.code},
                 status=result.status,
+            )
+
+        if isinstance(result, GoogleAuthChallenge):
+            # Same wire shape as a 2FA password login, so the frontend's
+            # existing OTP step handles a Google sign-in unchanged. No workspace
+            # bootstrap or "logged in" audit event here — nobody has logged in
+            # yet; both happen on the OTP-completion path.
+            return Response(
+                {
+                    "pk": result.user_id,
+                    "user_id": result.user_id,
+                    "email": result.email,
+                    "username": result.username,
+                    "auth_provider": "google",
+                    "created_user": result.created_user,
+                    "tokens": {},
+                    "otp_required": True,
+                    "preauth_token": result.preauth_token,
+                },
+                status=status.HTTP_200_OK,
             )
 
         # Success — mirror LoginAPIView's post-auth side effects + shape.
@@ -2133,6 +2155,7 @@ class MagicLinkVerifyView(views.APIView):
             get_magic_link_provider,
         )
         from components.identity.application.use_cases.verify_magic_link_use_case import (
+            VerifyMagicLinkChallenge,
             VerifyMagicLinkError,
             VerifyMagicLinkUseCase,
         )
@@ -2143,6 +2166,7 @@ class MagicLinkVerifyView(views.APIView):
         result = VerifyMagicLinkUseCase(
             magic_link=OrmMagicLinkAdapter(),
             session_registry=IdentityProvider.build_session_registry(),
+            tokens=IdentityProvider.build_token_adapter(),
         ).execute(
             token_value=token_value,
             context=build_request_context(request),
@@ -2151,6 +2175,22 @@ class MagicLinkVerifyView(views.APIView):
             return Response(
                 {"error": result.message, "code": result.code},
                 status=result.status,
+            )
+        if isinstance(result, VerifyMagicLinkChallenge):
+            # Same wire shape as a 2FA password login, so the frontend's
+            # existing OTP step handles a magic-link sign-in unchanged.
+            return Response(
+                {
+                    "pk": result.user_id,
+                    "user_id": result.user_id,
+                    "email": result.email,
+                    "username": result.username,
+                    "tokens": {},
+                    "otp_required": True,
+                    "preauth_token": result.preauth_token,
+                    "next_url": result.next_url,
+                },
+                status=status.HTTP_200_OK,
             )
         return Response(
             {
@@ -2161,6 +2201,8 @@ class MagicLinkVerifyView(views.APIView):
                 "is_onboard_complete": result.is_onboard_complete,
                 "is_contributor": result.is_contributor,
                 "tokens": result.tokens,
+                "otp_required": False,
+                "preauth_token": None,
                 "next_url": result.next_url,
                 "created_user": result.created_user,
             },
