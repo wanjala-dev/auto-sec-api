@@ -10,15 +10,14 @@ from components.membership.api.controller import (
     InvitationView,
     MembersView,
     PendingInvitationsView,
-    PersonaInviteView,
     PersonaInviteAcceptView,
     PersonaInviteInfoView,
     PersonaInviteManageView,
+    PersonaInviteView,
     WorkspaceUserSearchView,
 )
 from components.membership.api.join_controller import (
     JoinContextController,
-    JoinRegisterController,
     JoinRelationshipController,
     WorkspacePublicProfileController,
 )
@@ -89,11 +88,12 @@ urlpatterns = [
         JoinContextController.as_view(),
         name="join-context-info",
     ),
-    path(
-        "join/register/",
-        JoinRegisterController.as_view(),
-        name="join-register",
-    ),
+    # NOTE: there is deliberately no unauthenticated ``join/register/`` route.
+    # It created the account AND signed the caller in from an anonymous POST,
+    # duplicating /identity/register/ and /identity/login/ without the password
+    # policy, email verification, 2FA, lockout or login-activity trail either of
+    # them enforces. Account creation belongs to identity; the route below
+    # attaches an already-authenticated user to a workspace.
     # Authenticated self-service relationship join (onboarding "support an org").
     path(
         "join/relationship/",

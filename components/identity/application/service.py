@@ -24,10 +24,10 @@ class IdentityService:
     user_context_provider: UserContextProvider = field(default_factory=UserContextProvider)
     user_query_port: UserQueryPort = field(default_factory=lambda: IdentityProvider.build_user_query_repository())
 
-    def register_user(self, command) -> Any:
-        """Register a new user."""
-        use_case = self.identity_provider.build_register_user_use_case()
-        return use_case.execute(command)
+    # NOTE: no ``register_user`` here. ``RegisterView`` creates the user via
+    # ``RegisterSerializer`` (which enforces the password policy) and then calls
+    # ``queue_verification_email``; the use case this method used to reach had
+    # no caller and built the confirmation link from a plain access token.
 
     def login(self, command) -> Any:
         """Log in a user."""
