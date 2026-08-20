@@ -57,27 +57,77 @@ def _is_aware(value):
 logger = logging.getLogger(__name__)
 
 
+# Detector modules whose detectors run on the UNATTENDED scheduled cycle.
+#
+# Exactly the six the old hand-maintained import list contained, so this change
+# is behaviour-preserving by construction: before, the registry held only these
+# and the default branch ran all of it. Detectors outside this set are
+# registered and addressable by slug — an automation can name them — they just
+# do not fire on their own.
+#
+# `tasks` and `projects` are deliberately absent. They are project-management
+# detectors (milestone reminders, task stagnation, deadline slip) inherited
+# from the fork, and switching them on for every security workspace is a
+# product decision, not a side effect of fixing registration. Several look
+# genuinely useful against a findings board — a finding sitting untouched is an
+# SLA breach — but that is a call to make deliberately.
+_DEFAULT_CYCLE_MODULES = frozenset(
+    {
+        "cloud_graph_attack_paths",
+        "cloud_graph_sync",
+        "logwatch",
+        "posture_report",
+        "provenance",
+        "run_quality",
+    }
+)
+
+
 def _get_detector_modules():
     from components.agents.domain.detectors import base as detector_base
-
-    # Import the concrete detector modules so their module-level
-    # ``registry.register(...)`` calls run and populate the registry. Detectors
-    # register at import time; without an import site the registry stays empty
-    # (which it was in the fork). The security-relevant LogWatch detector is
-    # wired here; add other detector modules to this list to activate them.
-    from components.agents.infrastructure.adapters.actions.detectors import (  # noqa: F401
-        cloud_graph_attack_paths,
-        cloud_graph_sync,
-        logwatch,
-        posture_report,
-        provenance,
-        run_quality,
-    )
     from components.agents.infrastructure.adapters.actions.detectors import (
         registry as detector_registry,
     )
 
+    # Detectors register at import time, so the registry only ever contained
+    # what something imported. This was a HAND-MAINTAINED import list, and it
+    # omitted `tasks` and `projects` — 7 detector classes that could never be
+    # created by slug, because `registry.create()` raises KeyError for anything
+    # unregistered. Nothing said so: `_build_detectors` catches that KeyError
+    # and logs it per-entry, so a cycle configured with a missing detector just
+    # quietly ran the others.
+    #
+    # Discovery replaces the list. A detector module that exists is a detector
+    # the registry knows about; there is no second place to remember to edit.
+    _import_all_detector_modules()
+
     return detector_base, detector_registry
+
+
+def _import_all_detector_modules() -> None:
+    """Import every module in the detectors package so it self-registers.
+
+    Import failures are logged at ERROR and skipped rather than raised: one
+    broken detector module must not take down the whole teammate cycle. But it
+    is never silent — a detector that vanishes from the registry because its
+    module stopped importing is exactly the kind of thing this codebase has
+    shipped before.
+    """
+    import importlib
+    import pkgutil
+
+    from components.agents.infrastructure.adapters.actions import detectors as detectors_pkg
+
+    for module_info in pkgutil.iter_modules(detectors_pkg.__path__):
+        if module_info.name == "registry":
+            continue
+        try:
+            importlib.import_module(f"{detectors_pkg.__name__}.{module_info.name}")
+        except Exception:
+            logger.exception(
+                "detector_module_import_failed module=%s — its detectors will not be registered",
+                module_info.name,
+            )
 
 
 def _build_detectors(detector_entries: list[Any] | None) -> list:
@@ -94,7 +144,19 @@ def _build_detectors(detector_entries: list[Any] | None) -> list:
             except Exception as exc:
                 logger.exception("Failed to register detector %s: %s", slug, exc)
     else:
+        # No explicit list = the scheduled default cycle, which is how the
+        # teammate cron actually calls this (agent_tasks.run_ai_teammate_cycle
+        # passes no detector_entries). "Everything registered" was safe only
+        # while registration was an accident of which modules got imported.
+        #
+        # Now that the registry is complete, that default would silently
+        # ACTIVATE the 7 task/project detectors on every workspace's cycle —
+        # turning a registry fix into unrequested behaviour change and a wave
+        # of new cards for every customer. Registration makes a detector
+        # AVAILABLE by slug; this set decides what runs unattended.
         for detector_cls in det_registry.all_detectors():
+            if detector_cls.__module__.rsplit(".", 1)[-1] not in _DEFAULT_CYCLE_MODULES:
+                continue
             try:
                 detectors.append(detector_cls())
             except Exception as exc:
