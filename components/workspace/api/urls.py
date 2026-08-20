@@ -217,7 +217,13 @@ urlpatterns = [
         WorkspaceDetail.as_view(
             {"get": "retrieve", "patch": "partial_update", "put": "update", "delete": "destroy", "options": "options"}
         ),
-        name=WorkspaceDetail.name,
+        # Literal, NOT ``WorkspaceDetail.name``: DRF's ``ViewSetMixin.as_view()``
+        # sets ``cls.name = None`` as a side effect, and Python evaluates the
+        # ``as_view(...)`` argument before the ``name=`` keyword — so this route
+        # was registered unnamed and ``reverse("workspace-detail")`` raised
+        # NoReverseMatch. Only ViewSet routes are affected (APIView keeps its
+        # ``name``), which is why the sibling routes here are fine.
+        name="workspace-detail",
     ),
     # ========================================================================
     # Workspace Comments

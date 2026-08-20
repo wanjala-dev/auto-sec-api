@@ -299,6 +299,31 @@ class IsWorkspaceAdmin(IsOrgOwnerOrMember):
         ).exists()
 
 
+class IsWorkspaceAdminOfObject(IsWorkspaceAdmin):
+    """Org-admin gate for a detail route whose URL kwarg IS the workspace pk.
+
+    ``IsWorkspaceAdmin.has_permission`` *guesses* which workspace a request
+    is about — from ``workspace_id``-ish lookup keys, then from related
+    objects, then from the caller's ``active_team``/``active_workspace``.
+    On ``/workspaces/<pk>/`` none of those keys exist, so the guess lands on
+    whatever the caller happens to have active. That is wrong in both
+    directions: it can admit a caller who is admin *somewhere else*, and it
+    can deny an owner whose active workspace is a different org.
+
+    The addressed object is the workspace, so the decision belongs in
+    ``has_object_permission`` — against the row DRF actually loaded, not an
+    inferred one. The view-level check is therefore only "are you logged
+    in", and the inherited ``_is_member`` (owner, or ACTIVE owner/admin
+    membership) makes the real call.
+    """
+
+    message = "You must be an organization admin to modify this organization."
+
+    def has_permission(self, request, view):
+        user = getattr(request, "user", None)
+        return bool(user and user.is_authenticated)
+
+
 class IsTeamLead(permissions.BasePermission):
     """Allow team leads (or workspace admins) to manage team-scoped settings."""
 
