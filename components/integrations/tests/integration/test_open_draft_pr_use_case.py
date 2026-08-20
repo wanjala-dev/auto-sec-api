@@ -246,6 +246,52 @@ class TestOpenDraftPrHappyPath:
         assert TaskComment.objects.filter(task=task).count() == 0  # no duplicate side effects
 
 
+def _pr_body(fake: _FakeGitHub) -> str:
+    """The body actually SENT to GitHub for the draft PR."""
+    return next(body for m, u, body in fake.bodies if m == "POST" and u.endswith("/pulls"))["body"]
+
+
+@pytest.mark.django_db
+class TestOpenDraftPrApprovalProvenance:
+    """The PR body may only assert an approval that actually happened.
+
+    Every automatically-opened PR used to end "patch approved by a workspace
+    operator" — a hardcoded string on BOTH body branches, so a PR the specialist
+    opened off its own triage (``auto_draft_pr_for_finding``, ~30s after the card
+    is filed, nobody having seen the diff) asserted a human approval to the
+    customer's repository. Provenance is the product: the claim now comes from
+    the caller, and the DEFAULT is the honest weak one.
+    """
+
+    def _open(self, workspace_factory, team_factory, **kwargs):
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _triaged_finding(workspace, owner, team, column)
+        _connection(workspace, owner)
+        _capability_agent(workspace, owner)
+        fake = _FakeGitHub()
+        with mock.patch(_REQUESTS_PATH, new=fake), mock.patch(_PROPOSE_PATH, return_value=_PATCH):
+            _use_case().execute(
+                workspace_id=str(workspace.id), task_id=str(task.id), performed_by=str(owner.id), **kwargs
+            )
+        return _pr_body(fake)
+
+    def test_automatic_open_does_not_claim_a_human_approved_it(self, workspace_factory, team_factory):
+        """The default (no ``approval`` argument) is the automatic, unapproved claim."""
+        body = self._open(workspace_factory, team_factory)
+
+        assert "approved by a workspace operator" not in body
+        assert "no human has approved this patch" in body.lower()
+        assert "opened automatically by" in body.lower()
+
+    def test_operator_open_says_an_operator_approved_it(self, workspace_factory, team_factory):
+        from components.integrations.application.use_cases.open_draft_pr_use_case import APPROVAL_OPERATOR
+
+        body = self._open(workspace_factory, team_factory, approval=APPROVAL_OPERATOR)
+
+        assert "patch approved by a workspace operator" in body
+        assert "no human has approved" not in body.lower()
+
+
 class _BodyCapturingGitHub(_FakeGitHub):
     """Like ``_FakeGitHub`` but also records the PUT-contents commit body so a test
     can assert whether ``author``/``committer`` were sent."""

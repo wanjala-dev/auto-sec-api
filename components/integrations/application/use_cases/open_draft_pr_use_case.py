@@ -54,8 +54,13 @@ existing PR without touching the GitHub API. Failures raise
 :class:`DraftPrPreconditionError` with a machine-readable ``reason`` — never
 silent. VCS provider API failures propagate as ``VcsApiError``.
 
-Rung 1 (HITL): ``performed_by`` is the approving human's user id; the tool's
-``irreversible`` risk tier denies autonomous runs before this code is reached.
+Rung 1 (HITL): ``performed_by`` is the acting user id — the identity the commit
+and the audit trail hang off. It is NOT proof anyone approved the patch: the
+automatic trigger (``auto_draft_pr_for_finding``) passes the same id for
+attribution while no human is in the loop at all. Whether a human authorised the
+diff is a separate, explicit fact the caller states via ``approval``
+(``APPROVAL_OPERATOR`` / ``APPROVAL_AUTOMATIC``), and it is the only input to the
+PR body's approval line. Provenance, not a gate.
 """
 
 from __future__ import annotations
@@ -104,6 +109,21 @@ _PATCH_ORIGIN_NOTE = {
 #: Fallback attribution for a card that names no specialist. The real actor is
 #: read off the card (``metadata.agent_type``) — see :func:`_acting_agent_for`.
 _ACTING_AGENT = "triage_agent"
+
+#: How this PR was AUTHORISED — the one input the PR body's approval claim may
+#: come from. ``operator`` = a human explicitly asked for this patch (the HITL
+#: endpoint, the approval-gated ``open_draft_pr`` agent tool, the operator-pressed
+#: DRAFT FIX PR). ``automatic`` = the specialist opened it off its own triage and
+#: NO human has seen the diff.
+#:
+#: The default is ``automatic`` on purpose. The claim used to be a hardcoded
+#: string on both body branches, so every automatically-opened PR told the
+#: customer's repository that a workspace operator had approved it — provenance
+#: the card's own chain contradicted one line away ("requested its own fix draft
+#: (automatic)"). Defaulting to the weaker claim means a caller that forgets to
+#: say can only ever under-claim, never fabricate an approval.
+APPROVAL_OPERATOR = "operator"
+APPROVAL_AUTOMATIC = "automatic"
 
 
 def _acting_agent_for(task) -> str:
@@ -324,7 +344,14 @@ class OpenDraftPrUseCase:
         task_id: str,
         performed_by: str,
         repo: str | None = None,
+        approval: str = APPROVAL_AUTOMATIC,
     ) -> DraftPrResult:
+        """``approval`` is the caller's assertion about WHO authorised this patch
+        (``APPROVAL_OPERATOR`` / ``APPROVAL_AUTOMATIC``) and the only thing the PR
+        body's approval line is built from. It is provenance, never a gate — an
+        automatic open still runs every precondition and still opens its PR;
+        it simply must not claim a human approved the diff. Defaults to
+        ``APPROVAL_AUTOMATIC`` so a caller that says nothing under-claims."""
         # The finding is read FIRST so its repo fact can pick the connection: a
         # workspace holds many VcsConnections and only the one allowlisting THIS repo
         # can serve the PR. Resolving the connection first meant an unrelated newer
@@ -403,6 +430,8 @@ class OpenDraftPrUseCase:
                 verification=verification,
                 verification_gap=verification_gap,
                 patch_origin=prepared.patch_origin,
+                approval=approval,
+                acting_agent=_acting_agent_for(task),
             ),
         )
 
@@ -1091,6 +1120,21 @@ class OpenDraftPrUseCase:
     # ── Output ────────────────────────────────────────────────────────
 
     @staticmethod
+    def _approval_note(approval: str, acting_agent: str) -> str:
+        """The provenance sentence about WHO authorised this patch.
+
+        One place, both body branches. An automatic open names the specialist that
+        opened it and says plainly that no human has approved the diff — the same
+        fact the card's provenance chain records, so the two can never disagree.
+        """
+        if approval == APPROVAL_OPERATOR:
+            return "patch approved by a workspace operator."
+        return (
+            f"opened automatically by `{acting_agent or _ACTING_AGENT}` off its own triage — "
+            "no human has approved this patch."
+        )
+
+    @staticmethod
     def _build_pr_body(
         task,
         payload: dict,
@@ -1099,7 +1143,10 @@ class OpenDraftPrUseCase:
         verification: str = "",
         verification_gap: str = "",
         patch_origin: str = "generated",
+        approval: str = APPROVAL_AUTOMATIC,
+        acting_agent: str = "",
     ) -> str:
+        approval_note = OpenDraftPrUseCase._approval_note(approval, acting_agent)
         warning = ""
         if verification == "unverified":
             warning = (
@@ -1126,7 +1173,7 @@ class OpenDraftPrUseCase:
                 f"## Suggested fix\n{payload.get('suggested_fix') or '(see change)'}\n\n"
                 f"## Change\n{proposal.change_summary or 'Minimal fix for the finding above.'}\n\n"
                 f"---\nProvenance: Auto-Sec finding `{task.id}` — {_PATCH_ORIGIN_NOTE.get(patch_origin, '')}"
-                f"patch approved by a workspace operator. "
+                f"{approval_note} "
                 f"This is a DRAFT; review and merge remain human decisions.\n"
             )
         evidence_lines = []
@@ -1144,6 +1191,6 @@ class OpenDraftPrUseCase:
             f"## Probable cause\n{payload.get('probable_cause') or '(not determined)'}\n\n"
             f"## Suggested fix\n{payload.get('suggested_fix') or '(see change)'}\n\n"
             f"## Change\n{proposal.change_summary or 'Minimal fix for the error above.'}\n\n"
-            f"---\nProvenance: Auto-Sec finding `{task.id}` — patch approved by a workspace operator. "
+            f"---\nProvenance: Auto-Sec finding `{task.id}` — {approval_note} "
             f"This is a DRAFT; review and merge remain human decisions.\n"
         )

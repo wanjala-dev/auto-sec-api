@@ -344,6 +344,7 @@ class FindingOpenDraftPrView(APIView):
             get_open_draft_pr_use_case,
         )
         from components.integrations.application.use_cases.open_draft_pr_use_case import (
+            APPROVAL_OPERATOR,
             DraftPrPreconditionError,
         )
 
@@ -354,6 +355,9 @@ class FindingOpenDraftPrView(APIView):
                 task_id=str(task_id),
                 performed_by=str(request.user.id),
                 repo=req.repo,
+                # A permission-checked human just pressed the button — the one
+                # path that may claim operator approval on the PR.
+                approval=APPROVAL_OPERATOR,
             )
         except DraftPrPreconditionError as exc:
             return Response(

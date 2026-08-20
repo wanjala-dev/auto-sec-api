@@ -277,6 +277,46 @@ class _PrCapture(_FakeGitHub):
 
 
 @pytest.mark.django_db
+class TestSastPrApprovalProvenance:
+    """The SAST body branch — the one that shipped the false claim live.
+
+    ``auto_draft_pr_for_finding`` opens a repo finding's PR ~30s after the card is
+    filed, with no human in the loop. The SAST body branch nonetheless ended
+    "patch approved by a workspace operator" on every one of them (a hardcoded
+    string, no caller could change it). The claim must now come from the caller,
+    and the default must be the honest one.
+    """
+
+    def _open(self, workspace_factory, team_factory, **kwargs):
+        workspace, owner, team, column = _board(workspace_factory, team_factory)
+        task = _sast_finding(workspace, owner, team, column)
+        _connection(workspace, owner)
+        _capability(workspace, owner)
+        fake = _PrCapture()
+        with mock.patch(_REQUESTS_PATH, new=fake), mock.patch(_SAST_PROPOSE, return_value=_PATCH):
+            _use_case().execute(
+                workspace_id=str(workspace.id), task_id=str(task.id), performed_by=str(owner.id), **kwargs
+            )
+        return fake.pr_bodies[0]["body"]
+
+    def test_automatic_open_does_not_claim_a_human_approved_it(self, workspace_factory, team_factory):
+        body = self._open(workspace_factory, team_factory)
+
+        assert "approved by a workspace operator" not in body
+        assert "no human has approved this patch" in body.lower()
+        # The acting specialist is named, matching the card's provenance chain.
+        assert "code_security_agent" in body
+
+    def test_operator_open_says_an_operator_approved_it(self, workspace_factory, team_factory):
+        from components.integrations.application.use_cases.open_draft_pr_use_case import APPROVAL_OPERATOR
+
+        body = self._open(workspace_factory, team_factory, approval=APPROVAL_OPERATOR)
+
+        assert "patch approved by a workspace operator" in body
+        assert "no human has approved" not in body.lower()
+
+
+@pytest.mark.django_db
 class TestSastGates:
     def test_low_confidence_opens_a_labeled_pr_not_a_refusal(self, workspace_factory, team_factory):
         """Gate → labeler: the honest-but-unsure tier gets its artifact too, with
