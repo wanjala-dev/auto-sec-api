@@ -50,13 +50,12 @@ class SendVerificationEmailUseCase:
         if user.is_verified:
             return "skipped_verified"
 
-        token_pair = self._tokens.issue_tokens(
-            user.id,
-            otp_verified=False,
-            device_id=None,
-            include_refresh=False,
-        )
-        verification_url = f"{confirmation_base_url}?token={token_pair.access}"
+        # A single-purpose, short-lived token — NOT an access token. This link
+        # travels by plaintext email and then sits in an inbox; an access token
+        # here made the confirmation link a full-privilege session on an
+        # account that had not yet passed the verification gate.
+        verification_token = self._tokens.issue_email_verification_token(user.id)
+        verification_url = f"{confirmation_base_url}?token={verification_token}"
 
         self._email.send_verification_email(
             user_id=user.id,

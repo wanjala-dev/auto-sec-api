@@ -33,6 +33,28 @@ class TokenPort(ABC):
         ...
 
     @abstractmethod
-    def decode_token(self, token: str) -> UUID | None:
-        """Decode a JWT token and return the user_id, or None if invalid/expired."""
+    def issue_email_verification_token(self, user_id: UUID) -> str:
+        """Issue the single-purpose token carried by a confirmation link.
+
+        NOT an access token: it must be powerless as a credential, because it
+        travels by plaintext email and then sits in an inbox. See
+        ``email_verification_token.py``.
+        """
         ...
+
+    @abstractmethod
+    def decode_email_verification_token(self, token: str) -> UUID | None:
+        """Decode a confirmation-link token, or None if it is not one.
+
+        Scope cuts both ways: a session credential must not be accepted here as
+        proof of inbox control, so the token's type is checked, not just its
+        signature.
+        """
+        ...
+
+    # NOTE: there is deliberately no general-purpose ``decode_token`` here.
+    # The one that used to exist decoded ANY token signed with the app key and
+    # returned its ``user_id`` without inspecting ``token_type`` — which is how
+    # a plain access token could be presented as proof of inbox control. Decode
+    # methods on this port are scoped to one token type each; add a new scoped
+    # method rather than reviving an unscoped one.
