@@ -33,6 +33,7 @@ from components.payments.api.billing_support import (
     _resolve_billing_plan,
     _resolve_frontend_url,
     _resolve_workspace_admin_request,
+    billing_error_response,
     logger,
 )
 from components.payments.application.service import (
@@ -174,11 +175,11 @@ class WorkspacePlanCheckoutController(APIView):
                 cancel_url=cancel_url,
                 proration_behavior=checkout_request.proration_behavior,
             )
+        except (SubscriptionError, PaymentConfigurationError) as exc:
+            return billing_error_response(exc)
         except ValueError as exc:
             logger.warning("Plan checkout failed for workspace %s: %s", workspace.id, exc)
             return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        except (SubscriptionError, PaymentConfigurationError) as exc:
-            return Response({"error": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
 
         return Response(payload, status=status_code)
 
@@ -194,10 +195,10 @@ class WorkspacePlanCancelController(APIView):
             return workspace
         try:
             plan = team_plan_billing_service.cancel_team_plan(workspace=workspace)
+        except (SubscriptionError, PaymentConfigurationError) as exc:
+            return billing_error_response(exc)
         except ValueError as exc:
             return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        except (SubscriptionError, PaymentConfigurationError) as exc:
-            return Response({"error": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
 
         return Response(
             {
@@ -237,11 +238,11 @@ class WorkspacePlanChangeController(APIView):
                 plan=plan,
                 proration_behavior=proration_behavior,
             )
+        except (SubscriptionError, PaymentConfigurationError) as exc:
+            return billing_error_response(exc)
         except ValueError as exc:
             logger.warning("Plan change failed for workspace %s: %s", workspace.id, exc)
             return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        except (SubscriptionError, PaymentConfigurationError) as exc:
-            return Response({"error": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
 
         return Response(
             {
@@ -267,10 +268,10 @@ class WorkspaceSetupIntentController(APIView):
             return workspace
         try:
             payload = workspace_billing_service.create_setup_intent(workspace=workspace)
+        except (PaymentConfigurationError, SubscriptionError) as exc:
+            return billing_error_response(exc)
         except ValueError as exc:
             return Response({"error": str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        except (PaymentConfigurationError, SubscriptionError) as exc:
-            return Response({"error": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
         return Response(payload, status=status.HTTP_200_OK)
 
 
@@ -288,10 +289,10 @@ class WorkspacePaymentMethodDefaultController(APIView):
                 workspace=workspace,
                 payment_method_id=pm_id,
             )
+        except (PaymentConfigurationError, SubscriptionError) as exc:
+            return billing_error_response(exc)
         except ValueError as exc:
             return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        except (PaymentConfigurationError, SubscriptionError) as exc:
-            return Response({"error": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
         return Response(payload)
 
 
@@ -309,10 +310,10 @@ class WorkspacePaymentMethodDetailController(APIView):
                 workspace=workspace,
                 payment_method_id=pm_id,
             )
+        except (PaymentConfigurationError, SubscriptionError) as exc:
+            return billing_error_response(exc)
         except ValueError as exc:
             return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        except (PaymentConfigurationError, SubscriptionError) as exc:
-            return Response({"error": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
         return Response(payload, status=status.HTTP_200_OK)
 
 
@@ -543,17 +544,22 @@ class WorkspacePaymentMethodViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         from django.db.models import Prefetch
 
-        from components.workspace.application.providers.workspaces_models_provider import (
-            get_workspaces_models_provider,
+        from components.payments.application.providers.payments_models_provider import (
+            get_payments_models_provider,
         )
 
-        _pkg_models = get_workspaces_models_provider()
+        _pkg_models = get_payments_models_provider()
         WorkspacePaymentMethod = _pkg_models.WorkspacePaymentMethod
         PaymentPlan = _pkg_models.PaymentPlan
         workspace = self.get_workspace()
         return (
             WorkspacePaymentMethod.objects.filter(workspace=workspace, is_deleted=False)
-            .select_related("provider", "workspace", "tenant", "contribution_means")
+            # No ``tenant`` here: the FK was dropped in the auto-sec fork
+            # (single-DB, no tenants app) — see the model. Keeping it in
+            # select_related raised FieldError on every list read; it was
+            # invisible only because the provider AttributeError above fired
+            # first.
+            .select_related("provider", "workspace", "contribution_means")
             # ``WorkspacePaymentMethodSerializer.get_plans`` renders the active
             # plans per method row — prefetch the exact filtered/ordered set so
             # the serializer reads it without one plans-query per method.
@@ -588,11 +594,11 @@ class WorkspacePaymentMethodViewSet(viewsets.ModelViewSet):
     def check_object_permissions(self, request, obj):
         if request.method in permissions.SAFE_METHODS:
             return
-        from components.workspace.application.providers.workspaces_models_provider import (
-            get_workspaces_models_provider,
+        from components.payments.application.providers.payments_models_provider import (
+            get_payments_models_provider,
         )
 
-        _pkg_models = get_workspaces_models_provider()
+        _pkg_models = get_payments_models_provider()
         WorkspacePaymentMethod = _pkg_models.WorkspacePaymentMethod
 
         workspace = obj.workspace if isinstance(obj, WorkspacePaymentMethod) else obj
@@ -600,11 +606,10 @@ class WorkspacePaymentMethodViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         workspace = self.get_workspace()
-        tenant = getattr(workspace, "tenant", None)
+        # ``tenant=`` dropped with the FK (auto-sec fork is single-DB).
         user_id = self.request.user.id if self.request.user.is_authenticated else None
         method = serializer.save(
             workspace=workspace,
-            tenant=tenant,
             created_by=self.request.user if self.request.user.is_authenticated else None,
             updated_by=self.request.user if self.request.user.is_authenticated else None,
         )
@@ -780,11 +785,11 @@ class WorkspacePaymentMethodViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"], url_path="webhooks")
     def upsert_webhook(self, request, workspace_id: str, id: str = None, **kwargs):
-        from components.workspace.application.providers.workspaces_models_provider import (
-            get_workspaces_models_provider,
+        from components.payments.application.providers.payments_models_provider import (
+            get_payments_models_provider,
         )
 
-        _pkg_models = get_workspaces_models_provider()
+        _pkg_models = get_payments_models_provider()
         PaymentWebhookEndpoint = _pkg_models.PaymentWebhookEndpoint
         method = self.get_object()
         name = (request.data.get("name") or "default").strip()
@@ -1087,10 +1092,10 @@ class WorkspacePlanPreviewController(APIView):
                 workspace=workspace,
                 plan=plan,
             )
+        except (SubscriptionError, PaymentConfigurationError) as exc:
+            return billing_error_response(exc)
         except ValueError as exc:
             return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        except (SubscriptionError, PaymentConfigurationError) as exc:
-            return Response({"error": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
         if not invoice:
             return Response(
                 {"error": "Unable to preview plan change."},
@@ -1122,10 +1127,10 @@ class WorkspaceBillingOverviewController(APIView):
             return workspace
         try:
             overview = workspace_billing_service.get_overview(workspace=workspace)
+        except (PaymentConfigurationError, SubscriptionError) as exc:
+            return billing_error_response(exc)
         except ValueError as exc:
             return Response({"error": str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        except (PaymentConfigurationError, SubscriptionError) as exc:
-            return Response({"error": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
         subscription = overview["subscription"]
 
         plan = workspace.plan
@@ -1222,10 +1227,10 @@ class WorkspaceBillingHistoryController(APIView):
                 starting_after=starting_after,
                 ending_before=ending_before,
             )
+        except (PaymentConfigurationError, SubscriptionError) as exc:
+            return billing_error_response(exc)
         except ValueError as exc:
             return Response({"error": str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        except (PaymentConfigurationError, SubscriptionError) as exc:
-            return Response({"error": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
         context = history["context"]
 
         history_payload = {
@@ -1254,7 +1259,9 @@ class WorkspacePaymentMethodListController(APIView):
             return workspace
         try:
             payment_methods = workspace_billing_service.list_payment_methods(workspace=workspace)
-        except (ValueError, PaymentConfigurationError, SubscriptionError) as exc:
+        except (PaymentConfigurationError, SubscriptionError) as exc:
+            return billing_error_response(exc)
+        except ValueError as exc:
             return Response({"error": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
         return Response(payment_methods, status=status.HTTP_200_OK)
 
@@ -1264,11 +1271,11 @@ class PaymentProviderViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = (permissions.AllowAny,)
 
     def get_queryset(self):
-        from components.workspace.application.providers.workspaces_models_provider import (
-            get_workspaces_models_provider,
+        from components.payments.application.providers.payments_models_provider import (
+            get_payments_models_provider,
         )
 
-        _pkg_models = get_workspaces_models_provider()
+        _pkg_models = get_payments_models_provider()
         PaymentProvider = _pkg_models.PaymentProvider
         qs = PaymentProvider.objects.filter(is_active=True)
         if not self.request.user.is_authenticated:
@@ -1305,11 +1312,11 @@ class PublicWorkspacePaymentMethodView(APIView):
         Q = _django_orm.Q
         Prefetch = _django_orm.Prefetch
 
-        from components.workspace.application.providers.workspaces_models_provider import (
-            get_workspaces_models_provider,
+        from components.payments.application.providers.payments_models_provider import (
+            get_payments_models_provider,
         )
 
-        _pkg_models = get_workspaces_models_provider()
+        _pkg_models = get_payments_models_provider()
         PaymentProvider = _pkg_models.PaymentProvider
         WorkspacePaymentMethod = _pkg_models.WorkspacePaymentMethod
         PaymentPlan = _pkg_models.PaymentPlan
