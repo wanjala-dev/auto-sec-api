@@ -69,6 +69,15 @@ class IdentityProvider:
         return OrmUserRepository()
 
     @staticmethod
+    def build_auth_audit_repository() -> OrmAuthAuditRepository:
+        """The auth audit trail sink.
+
+        Exposed as a builder so primary adapters can wire a use case that needs
+        it without importing the concrete repository (manifesto Rule 10).
+        """
+        return OrmAuthAuditRepository()
+
+    @staticmethod
     def build_session_registry() -> OrmUserSessionRepository:
         return OrmUserSessionRepository()
 

@@ -11,11 +11,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID
 
+from components.identity.application.ports.auth_audit_port import AuthAuditPort
 from components.identity.application.ports.magic_link_port import (
     MagicLinkPort,
 )
 from components.identity.application.ports.session_registry_port import SessionRegistryPort
 from components.identity.application.ports.token_port import TokenPort
+from components.identity.domain.enums import AuthEventCode
 from components.identity.domain.value_objects.auth_tokens import RequestContext
 
 
@@ -72,10 +74,12 @@ class VerifyMagicLinkUseCase:
         magic_link: MagicLinkPort,
         session_registry: SessionRegistryPort,
         tokens: TokenPort,
+        audit_port: AuthAuditPort,
     ):
         self._magic_link = magic_link
         self._sessions = session_registry
         self._tokens = tokens
+        self._audit = audit_port
 
     def execute(
         self,
@@ -119,6 +123,25 @@ class VerifyMagicLinkUseCase:
                 context=context,
                 login_method="magic_link",
             )
+        # A sign-in is a sign-in however the door opened. Without this the
+        # session existed but /identity/me/login-activity/ and the org-level
+        # login-activity view showed nothing — a feed that claims to list
+        # sign-ins and silently omits a whole category reads as "nobody else
+        # signed in" when someone did. `login_method` is recorded because a
+        # magic-link sign-in and a password sign-in are not equally interesting
+        # after a mailbox compromise.
+        self._audit.record_event(
+            event_code=AuthEventCode.LOGIN,
+            user_id=UUID(str(session.user_id)),
+            email=session.email,
+            success=True,
+            context=context,
+            metadata={
+                "login_method": "magic_link",
+                "session_jti": session.refresh_jti,
+                "created_user": session.created_user,
+            },
+        )
         return VerifyMagicLinkResult(
             user_id=session.user_id,
             email=session.email,
