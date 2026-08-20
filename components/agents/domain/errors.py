@@ -53,6 +53,16 @@ class InvalidShareScopeError(DomainError, ValidationError):
     """Raised when an invalid share scope is provided."""
 
 
+class InvalidToolDeclarationError(DomainError, ValidationError):
+    """Raised when a ``@tool`` declaration carries a value outside its vocabulary.
+
+    ADR 0031 D1/D5. Deliberately raised at *declaration* time — class-definition
+    time, not call time — so a typo in ``scope=`` or ``provenance=`` fails on
+    import rather than shipping a tool whose governance metadata reads correct
+    and means nothing.
+    """
+
+
 class AiRunLimitExceeded(DomainError):
     """Raised when a workspace has used its monthly metered-AI allowance.
 

@@ -22,11 +22,18 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 from langchain_core.tools import StructuredTool, Tool
 from langchain_core.tools.base import BaseTool
 
+from components.agents.application.policies.tool_risk import ToolRisk as _ToolRisk
+from components.agents.application.policies.tool_spec import Failure as _Failure
+from components.agents.application.policies.tool_spec import Provenance as _Provenance
+from components.agents.application.policies.tool_spec import Scope as _Scope
 from components.agents.application.ports.llm_provider_port import LLMProviderPort
 from components.agents.application.ports.tracing_port import NullTracingAdapter, TracingPort
 from components.agents.infrastructure.adapters.langchain.graph_agent import build_graph_executor
 from components.agents.infrastructure.adapters.langchain.memory_service import (
     get_agent_memory_service,
+)
+from components.agents.infrastructure.adapters.langchain.middleware.tool_governance import (
+    ToolCallObservationBuffer,
 )
 
 logger = logging.getLogger(__name__)
@@ -75,6 +82,13 @@ def tool(
     description: str | None = None,
     args_schema: type | None = None,
     risk: str | None = None,
+    *,
+    scope: str | None = None,
+    provenance: str | None = None,
+    failure_mode: str | None = None,
+    handles: tuple[str, ...] | list[str] | None = None,
+    since: str | None = None,
+    superseded_by: str | None = None,
 ):
     """Mark a method on a `BaseAgent` subclass as an LLM-invocable tool.
 
@@ -85,7 +99,27 @@ def tool(
     Defaults: `name` falls back to the method name, `description` falls
     back to the method's docstring. `args_schema` is an optional Pydantic
     model that gives the LLM a typed argument list.
+
+    ADR 0031 Phase 1 adds the declaration — `scope`, `provenance`,
+    `failure_mode`, `handles`, `since`, `superseded_by` — alongside the
+    existing `risk`. **Every one of them is optional and every default is
+    `None`.** A tool that declares nothing gets
+    `tool_spec.UNDECLARED`, which asserts nothing and gates nothing: the risk
+    tier still resolves through `resolve_tool_risk(name, risk)` exactly as it
+    did before this argument list grew. The declaration becomes mandatory in
+    Phase 3 (fitness function F1), never silently.
     """
+    from components.agents.application.policies.tool_spec import build_tool_spec
+
+    spec = build_tool_spec(
+        scope=scope,
+        risk=risk,
+        provenance=provenance,
+        failure_mode=failure_mode,
+        handles=handles,
+        since=since,
+        superseded_by=superseded_by,
+    )
 
     def decorator(func):
         func._agent_tool_meta = {
@@ -93,7 +127,11 @@ def tool(
             "description": description or (func.__doc__ or "").strip() or func.__name__,
             "args_schema": args_schema,
             # SEE-203 — risk tier (None normalizes to "read" at the gate).
+            # Kept as a top-level key, byte-identical to its pre-ADR-0031
+            # shape, because the promotion loop reads it directly.
             "risk": risk,
+            # ADR 0031 — the declaration. `UNDECLARED` when nothing was given.
+            "spec": spec,
         }
         return func
 
@@ -293,6 +331,10 @@ class _GraphExecutorHandle:
                     tool=name,
                     tool_input=args,
                     log=f"Invoking {name} with {args}",
+                    # ADR 0031 — carried so ``_persist_tool_observations`` can
+                    # join this step onto the governance middleware's
+                    # observation for the same call and stamp its outcome.
+                    tool_call_id=call_id,
                 )
                 steps.append((action, observations.get(call_id, "")))
         return steps
@@ -496,6 +538,30 @@ def _risk_gated(func, tool_name, explicit_risk, agent):
     return wrapper
 
 
+def _governance_observation_for(agent: Any, action: Any):
+    """The governance middleware's observation for *action*, or ``None``.
+
+    Matched on ``tool_call_id`` — the id the model assigned to the call — so a
+    turn that calls the same tool twice attributes each outcome to the right
+    step. Returns ``None`` when there is no governed run behind the step: a
+    scripted test stub, an agent whose executor was replaced, or an action
+    reconstructed by something that does not carry the call id.
+
+    A module-level function rather than a method because
+    ``_persist_tool_observations`` is deliberately callable against a minimal
+    stand-in object (see its unit tests) — it must not start requiring a wider
+    surface on ``self`` than it did before ADR 0031.
+    """
+    buffer = getattr(agent, "_tool_call_observations", None)
+    if buffer is None:
+        return None
+    try:
+        return buffer.get(getattr(action, "tool_call_id", None))
+    except Exception:  # pragma: no cover — observability never breaks a run
+        logger.debug("governance observation lookup failed", exc_info=True)
+        return None
+
+
 def _serialize_tool_result(func):
     """Honor the ``ToolResult`` contract: a tool that returns a ``ToolResult`` gets it
     ``.serialize()``-d to the string the LLM reads (see the ``ToolResult`` docstring).
@@ -622,7 +688,194 @@ class AgentState:
         }
 
 
-class BaseAgent(ABC):
+# ── The universal retrieval tool (ADR 0031 D4 / Phase 2) ─────────────────
+#
+# ``retrieve_workspace_context`` used to be constructed directly with
+# ``StructuredTool.from_function`` inside ``_setup_tools``, which meant it never
+# entered the ``for`` loop over ``_decorated_tools`` where ``_risk_gated`` and
+# ``_serialize_tool_result`` are applied. It is read-only, so there was no live
+# exposure — the *structure* was the defect, and it would have repeated for the
+# next tool built that way. Declaring it as a ``@tool`` on a mixin puts it on
+# the one registration path (D4 Path 1) and gives it a declaration.
+#
+# ``__init_subclass__`` skips ``BaseAgent`` itself when walking the MRO, so the
+# method has to live on a mixin ``BaseAgent`` inherits rather than on
+# ``BaseAgent``. The mixin sits last in every agent's MRO, which is why the
+# promoted tool still lands last in ``self.tools`` — the same position the old
+# unconditional append gave it.
+
+
+def _build_workspace_retrieval_args_schema():
+    """The args schema for ``retrieve_workspace_context``.
+
+    ``StructuredTool.from_function`` inferred ``{"query": str}`` with the tool
+    name as the schema title. The promotion loop always passes an explicit
+    ``args_schema``, so the inference no longer happens and the schema has to
+    be stated. Built with ``create_model`` under the tool's own name so the
+    JSON schema the model sees is byte-identical to the pre-conversion one —
+    asserted by ``test_retrieval_tool_schema_is_unchanged_by_conversion``.
+    """
+    from pydantic import create_model
+
+    return create_model("retrieve_workspace_context", query=(str, ...))
+
+
+_WORKSPACE_RETRIEVAL_ARGS_SCHEMA = _build_workspace_retrieval_args_schema()
+
+
+class WorkspaceRetrievalMixin:
+    """Gives every agent the universal ``retrieve_workspace_context`` tool.
+
+    Inherited by ``BaseAgent``, so no agent has to opt in and the behaviour
+    ("every agent can ground answers in the indexed workspace snapshot") is
+    unchanged. A subclass that declares its own tool of the same name still
+    wins — leftmost-MRO-wins in the decorator collector.
+    """
+
+    @tool(
+        name="retrieve_workspace_context",
+        description=(
+            "Retrieve authoritative facts about the current workspace "
+            "(name, mission, story, sector, categories, team size, "
+            "operations, etc.) by semantic search over its indexed "
+            "snapshot. Input: a short natural-language query like "
+            "'mission and story' or 'team size'. Output: ranked "
+            "snippets from the workspace, or an explicit 'no indexed "
+            "context' message. ALWAYS call this before answering any "
+            "factual question about the workspace — do not guess."
+        ),
+        args_schema=_WORKSPACE_RETRIEVAL_ARGS_SCHEMA,
+        # ── ADR 0031 declaration ──
+        # Reference conversion. `risk=read` resolves to exactly what
+        # `resolve_tool_risk("retrieve_workspace_context", None)` already
+        # returned, so the gate's decision is unchanged.
+        risk=_ToolRisk.READ,
+        scope=_Scope.WORKSPACE_BOUND,
+        provenance=_Provenance.NONE,
+        failure_mode=_Failure.UPSTREAM_UNAVAILABLE,
+        since="2026-08-20",
+    )
+    def retrieve_workspace_context(self, query: str) -> str:
+        """Semantic search over the workspace's indexed snapshot."""
+        from components.agents.application.services.deep_run_context import (
+            noop_context,
+        )
+        from components.knowledge.application.providers.workspace_retrieval_provider import (
+            workspace_retrieval,
+        )
+
+        TOOL_NAME = "retrieve_workspace_context"
+
+        # When this tool runs inside a deep agent run, ``self`` has
+        # the run's DeepRunContext stashed; outside a run it's
+        # None. Falling back to the no-op context means tool code
+        # below is uniform — every emit goes somewhere.
+        ctx = getattr(self, "_active_deep_run_context", None) or noop_context()
+
+        query_text = (query or "").strip()
+        if not query_text:
+            return (
+                "retrieve_workspace_context requires a non-empty query — "
+                "pass a short natural-language description of what you need."
+            )
+        ctx.info(
+            f"Searching workspace knowledge for: {query_text!r}",
+            tool_name=TOOL_NAME,
+        )
+        ctx.report_progress(20, 100, tool_name=TOOL_NAME)
+        # Tier 3 #9 — rewrite the query before search.  Short
+        # queries like "tldr" land closer to the snapshot chunks
+        # when expanded into mission / activity keywords.  The
+        # rewriter caches per (workspace_id, query) and falls
+        # back to the raw query on any error.
+        try:
+            from components.knowledge.application.use_cases.rewrite_query_for_retrieval_use_case import (
+                RewriteQueryForRetrievalUseCase,
+            )
+
+            search_query = RewriteQueryForRetrievalUseCase().rewrite(
+                workspace_id=str(self.workspace_id),
+                query=query_text,
+            )
+        except Exception:  # pylint: disable=broad-except
+            logger.warning(
+                "retrieve_workspace_context: rewriter failed, using raw query",
+                exc_info=True,
+            )
+            search_query = query_text
+        # Tier 3 #10 — over-fetch then rerank.  Ask pgvector for
+        # k * 4 candidates under cosine, then a cross-encoder
+        # reranker re-scores them against the original query_text
+        # (not the rewritten one) and returns the best k.
+        # Reranker errors fall back to original cosine order
+        # truncated to k.
+        try:
+            from components.knowledge.application.use_cases.rerank_retrieved_chunks_use_case import (
+                DEFAULT_FETCH_MULTIPLIER,
+                RerankRetrievedChunksUseCase,
+            )
+
+            candidates = workspace_retrieval().search(
+                workspace_id=str(self.workspace_id),
+                query=search_query,
+                k=5 * DEFAULT_FETCH_MULTIPLIER,
+                # SEE-199 — scope retrieval to what the invoking actor's
+                # role may read, so a member can't pull owner/admin-only
+                # rollups through the agent's broad retrieval.
+                viewer_role=resolve_workspace_role(
+                    getattr(self, "user_id", None),
+                    self.workspace_id,
+                ),
+            )
+            chunks = RerankRetrievedChunksUseCase().rerank(
+                query=query_text,
+                chunks=candidates,
+                top_k=5,
+            )
+        except Exception:
+            logger.exception(
+                "retrieve_workspace_context failed for workspace %s",
+                self.workspace_id,
+            )
+            ctx.warn(
+                "Retrieval backend unavailable — answering without indexed context.",
+                tool_name=TOOL_NAME,
+            )
+            return (
+                "retrieve_workspace_context: retrieval backend "
+                "unavailable — answer from other tools or say you "
+                "don't know."
+            )
+
+        if not chunks:
+            ctx.warn(
+                "No indexed context for this workspace yet.",
+                tool_name=TOOL_NAME,
+            )
+            ctx.report_progress(100, 100, tool_name=TOOL_NAME)
+            return (
+                "retrieve_workspace_context: no indexed context for "
+                "this workspace yet. Answer from other tools or say "
+                "you don't have that information."
+            )
+
+        total_chars = sum(len((chunk.content or "").strip()) for chunk in chunks)
+        ctx.info(
+            f"Retrieved {len(chunks)} chunks ({total_chars:,} characters)",
+            tool_name=TOOL_NAME,
+            payload={"chunks": len(chunks), "characters": total_chars},
+        )
+        ctx.report_progress(100, 100, tool_name=TOOL_NAME)
+
+        lines: list[str] = []
+        for index, chunk in enumerate(chunks, 1):
+            metadata = chunk.metadata or {}
+            section_title = metadata.get("section_title") or metadata.get("section") or "workspace"
+            lines.append(f"[{index}] ({section_title})\n{chunk.content.strip()}")
+        return "\n\n".join(lines)
+
+
+class BaseAgent(WorkspaceRetrievalMixin, ABC):
     """
     Base class for all AI agents
 
@@ -730,6 +983,11 @@ class BaseAgent(ABC):
         self._tracing_port: TracingPort = tracing_port or _default_tracing_port()
         self._llm_provider: LLMProviderPort | None = llm_provider
         self._telemetry_callback_factory = telemetry_callback_factory
+        # ADR 0031 — per-turn tool-call observations. Owned by the agent, not
+        # by the middleware instance, because `_apply_tool_policy` rebuilds the
+        # executor (and therefore the middleware) mid-`execute()`; a buffer on
+        # the middleware would be discarded before the run could read it.
+        self._tool_call_observations = ToolCallObservationBuffer()
 
         # Persist incoming configuration for downstream use
         self.config: dict[str, Any] = dict(kwargs)
@@ -899,139 +1157,27 @@ class BaseAgent(ABC):
             self.tools.append(self._build_workspace_retrieval_tool())
 
     def _build_workspace_retrieval_tool(self) -> Tool:
-        """Return the ``retrieve_workspace_context`` tool bound to this agent."""
+        """Return the ``retrieve_workspace_context`` tool bound to this agent.
 
-        TOOL_NAME = "retrieve_workspace_context"
-
-        def _retrieve(query: str) -> str:
-            from components.agents.application.services.deep_run_context import (
-                noop_context,
-            )
-            from components.knowledge.application.providers.workspace_retrieval_provider import (
-                workspace_retrieval,
-            )
-
-            # When this tool runs inside a deep agent run, ``self`` has
-            # the run's DeepRunContext stashed; outside a run it's
-            # None. Falling back to the no-op context means tool code
-            # below is uniform — every emit goes somewhere.
-            ctx = getattr(self, "_active_deep_run_context", None) or noop_context()
-
-            query_text = (query or "").strip()
-            if not query_text:
-                return (
-                    "retrieve_workspace_context requires a non-empty query — "
-                    "pass a short natural-language description of what you need."
-                )
-            ctx.info(
-                f"Searching workspace knowledge for: {query_text!r}",
-                tool_name=TOOL_NAME,
-            )
-            ctx.report_progress(20, 100, tool_name=TOOL_NAME)
-            # Tier 3 #9 — rewrite the query before search.  Short
-            # queries like "tldr" land closer to the snapshot chunks
-            # when expanded into mission / activity keywords.  The
-            # rewriter caches per (workspace_id, query) and falls
-            # back to the raw query on any error.
-            try:
-                from components.knowledge.application.use_cases.rewrite_query_for_retrieval_use_case import (
-                    RewriteQueryForRetrievalUseCase,
-                )
-
-                search_query = RewriteQueryForRetrievalUseCase().rewrite(
-                    workspace_id=str(self.workspace_id),
-                    query=query_text,
-                )
-            except Exception:  # pylint: disable=broad-except
-                logger.warning(
-                    "retrieve_workspace_context: rewriter failed, using raw query",
-                    exc_info=True,
-                )
-                search_query = query_text
-            # Tier 3 #10 — over-fetch then rerank.  Ask pgvector for
-            # k * 4 candidates under cosine, then a cross-encoder
-            # reranker re-scores them against the original query_text
-            # (not the rewritten one) and returns the best k.
-            # Reranker errors fall back to original cosine order
-            # truncated to k.
-            try:
-                from components.knowledge.application.use_cases.rerank_retrieved_chunks_use_case import (
-                    DEFAULT_FETCH_MULTIPLIER,
-                    RerankRetrievedChunksUseCase,
-                )
-
-                candidates = workspace_retrieval().search(
-                    workspace_id=str(self.workspace_id),
-                    query=search_query,
-                    k=5 * DEFAULT_FETCH_MULTIPLIER,
-                    # SEE-199 — scope retrieval to what the invoking actor's
-                    # role may read, so a member can't pull owner/admin-only
-                    # rollups through the agent's broad retrieval.
-                    viewer_role=resolve_workspace_role(
-                        getattr(self, "user_id", None),
-                        self.workspace_id,
-                    ),
-                )
-                chunks = RerankRetrievedChunksUseCase().rerank(
-                    query=query_text,
-                    chunks=candidates,
-                    top_k=5,
-                )
-            except Exception:
-                logger.exception(
-                    "retrieve_workspace_context failed for workspace %s",
-                    self.workspace_id,
-                )
-                ctx.warn(
-                    "Retrieval backend unavailable — answering without indexed context.",
-                    tool_name=TOOL_NAME,
-                )
-                return (
-                    "retrieve_workspace_context: retrieval backend "
-                    "unavailable — answer from other tools or say you "
-                    "don't know."
-                )
-
-            if not chunks:
-                ctx.warn(
-                    "No indexed context for this workspace yet.",
-                    tool_name=TOOL_NAME,
-                )
-                ctx.report_progress(100, 100, tool_name=TOOL_NAME)
-                return (
-                    "retrieve_workspace_context: no indexed context for "
-                    "this workspace yet. Answer from other tools or say "
-                    "you don't have that information."
-                )
-
-            total_chars = sum(len((chunk.content or "").strip()) for chunk in chunks)
-            ctx.info(
-                f"Retrieved {len(chunks)} chunks ({total_chars:,} characters)",
-                tool_name=TOOL_NAME,
-                payload={"chunks": len(chunks), "characters": total_chars},
-            )
-            ctx.report_progress(100, 100, tool_name=TOOL_NAME)
-
-            lines: list[str] = []
-            for index, chunk in enumerate(chunks, 1):
-                metadata = chunk.metadata or {}
-                section_title = metadata.get("section_title") or metadata.get("section") or "workspace"
-                lines.append(f"[{index}] ({section_title})\n{chunk.content.strip()}")
-            return "\n\n".join(lines)
-
+        ADR 0031 Phase 2 moved the tool body onto
+        ``WorkspaceRetrievalMixin.retrieve_workspace_context`` so it is a
+        declared ``@tool`` that enters the promotion loop like every other
+        tool. This method survives as the fallback for the one path that
+        skips promotion — a subclass that populated ``self.tools`` before
+        ``super().__init__`` ran — and as the seam the tool's own unit tests
+        build against. Both shapes produce the same ``StructuredTool``.
+        """
+        bound = getattr(self, "retrieve_workspace_context", None)
+        if not callable(bound):
+            # ``self`` is not a real agent (a test double, typically). Bind the
+            # mixin implementation to it so the tool still builds.
+            bound = WorkspaceRetrievalMixin.retrieve_workspace_context.__get__(self)
+        meta = WorkspaceRetrievalMixin.retrieve_workspace_context._agent_tool_meta
         return StructuredTool.from_function(
-            func=_retrieve,
-            name="retrieve_workspace_context",
-            description=(
-                "Retrieve authoritative facts about the current workspace "
-                "(name, mission, story, sector, categories, team size, "
-                "operations, etc.) by semantic search over its indexed "
-                "snapshot. Input: a short natural-language query like "
-                "'mission and story' or 'team size'. Output: ranked "
-                "snippets from the workspace, or an explicit 'no indexed "
-                "context' message. ALWAYS call this before answering any "
-                "factual question about the workspace — do not guess."
-            ),
+            func=bound,
+            name=meta["name"],
+            description=meta["description"],
+            args_schema=meta["args_schema"],
         )
 
     def _create_agent_executor(self):
@@ -1168,14 +1314,43 @@ class BaseAgent(ABC):
     def _build_agent_middleware(self) -> list:
         """Middleware for ``create_agent`` (LangChain 1.x cross-cutting hooks).
 
-        Empty by default. ``deepagents.RubricMiddleware`` is attached for
-        critic-enabled worker types when the global setting
-        ``DEEP_RUBRIC_MIDDLEWARE_ENABLED`` or the agent config opts in — see
+        Carries ``ToolGovernanceMiddleware`` (ADR 0031 D3) for every agent, in
+        **observe-only** mode: it classifies each tool call's outcome, measures
+        its latency, and records both. It gates nothing and changes nothing
+        about what the tool returns or what the run reports. Removing the one
+        ``middleware.append`` below reverts Phase 1 entirely.
+
+        ``deepagents.RubricMiddleware`` is attached after it for critic-enabled
+        worker types when the global setting ``DEEP_RUBRIC_MIDDLEWARE_ENABLED``
+        or the agent config opts in — see
         ``components.agents.infrastructure.adapters.langchain.deep.rubric``.
         The hand-rolled ``deep/critic.py`` loop remains the fallback while the
         flag is off.
         """
         middleware: list = []
+
+        # ADR 0031 Phase 1 — observe-only tool governance. Built first so its
+        # timing brackets every other middleware's tool-call handling.
+        self._tool_governance_middleware = None
+        try:
+            from components.agents.infrastructure.adapters.langchain.middleware.tool_governance import (
+                ToolGovernanceMiddleware,
+            )
+
+            buffer = getattr(self, "_tool_call_observations", None)
+            if buffer is None:
+                buffer = ToolCallObservationBuffer()
+                self._tool_call_observations = buffer
+            governance = ToolGovernanceMiddleware(agent=self, buffer=buffer)
+            middleware.append(governance)
+            self._tool_governance_middleware = governance
+        except Exception:
+            # Observability is never a gate that can block agent construction.
+            logger.exception(
+                "tool governance middleware unavailable for agent %s; continuing without",
+                self.agent_id,
+            )
+
         self._rubric_middleware_attached = False
         rubric_cfg = self.config.get("rubric_middleware")
         if not rubric_cfg:
@@ -1723,6 +1898,11 @@ class BaseAgent(ABC):
         # PDF doesn't bleed into the next assistant message. Tools call
         # ``self.collect_artifact(...)`` during execution; we harvest below.
         self._pending_artifacts = []
+        # ADR 0031 — same reset for the turn's tool-call observations, so a
+        # previous turn's failures can't be attributed to this one.
+        if getattr(self, "_tool_call_observations", None) is None:
+            self._tool_call_observations = ToolCallObservationBuffer()
+        self._tool_call_observations.clear()
         try:
             requested_run_context = None
             if context and isinstance(context, dict):
@@ -1864,6 +2044,15 @@ class BaseAgent(ABC):
             # before clearing to keep the collector clean for follow-on
             # calls without contaminating this one.
             collected_artifacts = list(self._pending_artifacts)
+
+            # ADR 0031 Phase 1 — observe-only. ``success=True`` below is
+            # unconditional: a turn whose every tool call failed still records
+            # ``status=completed`` at all four layers, which is how an
+            # LLM-provider outage produces "reviewed; no confident fix" across
+            # every finding with nothing anywhere saying it went wrong. Phase 1
+            # does not change the reported status — that is Phase 3 (D2) — but
+            # it stops the contradiction being invisible.
+            self._warn_on_success_over_tool_failures()
 
             # Record execution in memory service
             execution = self.memory_service.record_execution(
@@ -2166,7 +2355,52 @@ class BaseAgent(ABC):
         telemetry = self._get_telemetry_snapshot()
         if telemetry:
             state["telemetry"] = telemetry
+        tool_outcomes = self._tool_outcome_summary()
+        if tool_outcomes:
+            state["tool_outcomes"] = tool_outcomes
         return state
+
+    def _tool_outcome_summary(self) -> dict[str, Any]:
+        """Aggregate tool-call outcomes for this turn (ADR 0031 Phase 1).
+
+        Empty when the governance middleware never ran — a scripted test stub
+        or an agent whose executor was replaced. Never raises.
+        """
+        buffer = getattr(self, "_tool_call_observations", None)
+        if buffer is None:
+            return {}
+        try:
+            return buffer.summary()
+        except Exception:  # pragma: no cover — observability never breaks a run
+            logger.debug("tool outcome summary failed for agent %s", self.agent_id, exc_info=True)
+            return {}
+
+    def _warn_on_success_over_tool_failures(self) -> None:
+        """Log loudly when a turn reports success over failed tool calls.
+
+        The contradiction this surfaces is the ADR 0031 D2 defect class:
+        ``ToolResult.ok`` is flattened to a string before anything reads it, so
+        a run whose tools all failed still reports ``success``. Observe-only —
+        this changes no status, it only makes the disagreement grep-able.
+        """
+        try:
+            buffer = getattr(self, "_tool_call_observations", None)
+            if buffer is None:
+                return
+            failures = buffer.failures()
+            if not failures:
+                return
+            logger.warning(
+                "agent_run_reported_success_with_tool_failures agent_id=%s workspace_id=%s "
+                "failed_calls=%s total_calls=%s failed_tools=%s",
+                self.agent_id,
+                self.workspace_id,
+                len(failures),
+                len(buffer.all()),
+                sorted({obs.tool_name for obs in failures}),
+            )
+        except Exception:  # pragma: no cover — observability never breaks a run
+            logger.debug("tool-failure warning failed for agent %s", self.agent_id, exc_info=True)
 
     # Max characters persisted per (tool_input, tool_output) on a
     # tool_observation log row. 4000 covers ~all realistic agent tool
@@ -2250,17 +2484,31 @@ class BaseAgent(ABC):
                 raw_input_str = "" if raw_input is None else str(raw_input)
             raw_output_str = "" if observation is None else str(observation)
 
+            payload: dict[str, Any] = {
+                "tool_input": raw_input_str[:max_chars],
+                "tool_output": raw_output_str[:max_chars],
+                "truncated_input": len(raw_input_str) > max_chars,
+                "truncated_output": len(raw_output_str) > max_chars,
+            }
+
+            # ADR 0031 Phase 1 — join the governance middleware's observation
+            # for this same call. ``DeepRunLog.status`` has existed since the
+            # model was written (``gateways/deep/logging.py``) and was never
+            # passed; per-tool latency was measured and discarded. Both land
+            # here, on the row that already exists, rather than as a second row.
+            status = ""
+            governance = _governance_observation_for(self, action)
+            if governance is not None:
+                status = governance.outcome
+                payload["governance"] = governance.as_payload()
+
             log_deep_event(
                 thread_id,
                 "tool_observation",
+                status=status,
                 agent_type=self.__class__.__name__,
                 tool_name=tool_name,
-                payload={
-                    "tool_input": raw_input_str[:max_chars],
-                    "tool_output": raw_output_str[:max_chars],
-                    "truncated_input": len(raw_input_str) > max_chars,
-                    "truncated_output": len(raw_output_str) > max_chars,
-                },
+                payload=payload,
             )
 
     def _maybe_log_run_telemetry(
