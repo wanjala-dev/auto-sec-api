@@ -329,21 +329,56 @@ No big-bang. The two shapes coexist for as long as it takes.
 **Phase 0 (hours).** F6 — delete the 8 dead `_TOOL_RISK` keys and add the test that stops the map
 rotting. Independently valuable, zero risk, no dependency on anything below.
 
-**Phase 1 (~1 day).** Add `ToolSpec` as **optional** metadata on `@tool` (defaults preserve today's
-behaviour exactly) and add `ToolGovernanceMiddleware` to `_build_agent_middleware` in
-**observe-only** mode: it classifies and records, and enforces nothing. This alone fixes the
-observability gaps in §3.9 — per-tool latency, outcome, and `DeepRunLog.status` — and it produces the
-data to size the rest. Reversible: remove one line from a list.
+**Phase 1 (~1 day). — LANDED 2026-08-20.** Add `ToolSpec` as **optional** metadata on `@tool`
+(defaults preserve today's behaviour exactly) and add `ToolGovernanceMiddleware` to
+`_build_agent_middleware` in **observe-only** mode: it classifies and records, and enforces nothing.
+This alone fixes the observability gaps in §3.9 — per-tool latency, outcome, and
+`DeepRunLog.status` — and it produces the data to size the rest. Reversible: remove one line from a
+list.
 
-**Phase 2 — the reference tool.** Convert **`retrieve_workspace_context`** first. It is the right
-first conversion for four independent reasons: it is the single tool every agent has, so one
-conversion proves the seam across the whole fleet; it is the concrete instance of the D4 bypass, so
-converting it removes a real structural hole; it is read-only, so a mistake cannot corrupt anything;
-and it is *already* the only tool that emits `DeepRunContext` events, so it exercises the
-observability path end to end. Ship it with its declaration, prove middleware fires for it, and stop.
+*As shipped.* `components/agents/application/policies/tool_spec.py` holds the declaration
+(`Scope`/`Provenance`/`Failure`/`ToolSpec`, every field optional, `UNDECLARED` the shared default);
+`.../langchain/middleware/tool_governance.py` holds the middleware. Observations join onto the
+**existing** `tool_observation` row rather than emitting a second row — `_reconstruct_intermediate_steps`
+now carries `tool_call_id`, which is the join key — so `DeepRunLog.status` is finally written and
+`payload["governance"]` carries `outcome`, `latency_ms`, `declared`, and the declaration. The
+run-success contradiction is logged as `agent_run_reported_success_with_tool_failures`; the reported
+status is deliberately **unchanged** (that is D2, Phase 3).
+
+One thing the ADR did not anticipate: the flattened `ToolResult.ok` bit has to be recovered from the
+`"Error: "` prefix `serialize()` renders, because `_serialize_tool_result` destroys it before any
+middleware can see it. That is ugly on purpose — it is the measurement that sizes D2, not a fix for it.
+
+**Phase 2 — the reference tool. — LANDED 2026-08-20.** Convert **`retrieve_workspace_context`**
+first. It is the right first conversion for four independent reasons: it is the single tool every
+agent has, so one conversion proves the seam across the whole fleet; it is the concrete instance of
+the D4 bypass, so converting it removes a real structural hole; it is read-only, so a mistake cannot
+corrupt anything; and it is *already* the only tool that emits `DeepRunContext` events, so it
+exercises the observability path end to end. Ship it with its declaration, prove middleware fires for
+it, and stop.
+
+*As shipped.* The body moved onto `WorkspaceRetrievalMixin`, which `BaseAgent` inherits, as a `@tool`
+carrying a complete declaration. It now enters the promotion loop like every other tool and picks up
+`_risk_gated` + `_serialize_tool_result`, which it never had. Two details worth recording:
+`__init_subclass__` skips `BaseAgent` when walking the MRO, so the method has to live on a mixin
+rather than on `BaseAgent` itself; and the promotion loop always passes an explicit `args_schema`, so
+the schema `from_function` used to *infer* had to be restated exactly — including its title — or the
+tool definition the model reads would have changed. Both are pinned by tests.
+`_build_workspace_retrieval_tool` survives as the builder for the one path that skips promotion (a
+subclass that pre-populated `self.tools`).
 
 **Phase 3 — enforce per concern, not per tool.** Turn on F3 (tenancy) first, because that is where
-the live exposure is, with `_resolve_org_id`'s ten call sites as the explicit remediation list. Then
+the live exposure is, with `_resolve_org_id`'s ten call sites as the explicit remediation list.
+
+*F3 landed in WARN mode alongside Phase 2* (`tests/architecture/test_tool_payload_tenancy.py`),
+per the mitigation this ADR names against itself below. It prints and warns the **14** outstanding
+entries on every run — `_resolve_org_id` + `_extract_identifier`, their eleven call sites, and
+`project_agent.check_project_permissions`, which does
+`Workspace.objects.get(id=data["workspace_id"])` with no fallback and no comparison to
+`agent.workspace_id` at all. It is a **ratchet**, not a mute: a *new* violation fails the build
+today. Flipping it to fail outright means fixing those 14, which is the Phase 3 work.
+
+Then
 F4 (failure), then F1 (full declaration) once enough tools carry one that the allowlist is short.
 Each is one test flipped from warn to fail, and each is independently revertible.
 
