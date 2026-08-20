@@ -687,7 +687,11 @@ class AgentViewSet(viewsets.GenericViewSet):
                 return Response({"error": "config must be a JSON object"}, status=status.HTTP_400_BAD_REQUEST)
             existing_dict.update(incoming)
             updated_config = WorkspaceAIConfig.from_dict(existing_dict)
-            port.save(str(workspace_id), updated_config)
+            # ``changed_by_id`` attributes a model switch to its operator: the
+            # adapter appends an AIModelChangeEvent when preferred/fallback
+            # actually moves, which is what puts the "model switched here"
+            # marker on the quality series (ADR 0032 D7.4).
+            port.save(str(workspace_id), updated_config, changed_by_id=str(request.user.id))
             return Response(
                 {"workspace_id": workspace_id, "config": updated_config.to_dict()}, status=status.HTTP_200_OK
             )
@@ -732,6 +736,43 @@ class AgentViewSet(viewsets.GenericViewSet):
             return Response({"models": models_list, "total": len(models_list)}, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"error": f"Failed to list AI models: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @_schema()
+    @action(detail=False, methods=["get"], url_path="ai-config/switch-cost")
+    def ai_model_switch_cost(self, request):
+        """What switching to a candidate model costs in MEASURED trust (ADR 0032 D7.3).
+
+        Read-only preview, meant to be rendered next to the model picker BEFORE
+        the switch. Evidence is measured against one model and does not transfer
+        to another (``fix_confidence``: *"measurements do not transfer between
+        models"*), so a switch silently revokes every tier earned under the old
+        one. Discovering that afterwards is the same defect class as a report
+        that reads clean because nothing was scanned.
+
+        Takes both models as explicit query params — ``from`` (the workspace's
+        current model, which the caller already holds from ``GET ai-config``)
+        and ``to`` (the candidate). Deliberately no ``workspace_id``: the
+        answer is a function of the two model names and the GLOBAL evidence
+        corpus only, so this endpoint reads no tenant data and opens no
+        cross-tenant surface.
+
+        This is information, never a gate — the switch remains the operator's
+        decision.
+        """
+        candidate = (request.query_params.get("to") or "").strip()
+        if not candidate:
+            return Response(
+                {"error": "'to' (the candidate model) is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        current = (request.query_params.get("from") or "").strip()
+        from components.agents.application.providers.ai_provider import AIProvider
+
+        view = AIProvider.build_model_switch_cost_query().execute(
+            current_model=current,
+            candidate_model=candidate,
+        )
+        return Response(view.as_dict(), status=status.HTTP_200_OK)
 
     @_schema()
     @action(detail=False, methods=["get"], url_path="graph")

@@ -1,9 +1,9 @@
 """Helpers for logging deep-run events."""
+
 from __future__ import annotations
 
-from typing import Any, Optional
-
 import logging
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -12,12 +12,20 @@ def log_deep_event(
     thread_id: str,
     event_type: str,
     *,
-    status: Optional[str] = None,
-    agent_type: Optional[str] = None,
-    tool_name: Optional[str] = None,
-    payload: Optional[dict[str, Any]] = None,
+    status: str | None = None,
+    agent_type: str | None = None,
+    tool_name: str | None = None,
+    payload: dict[str, Any] | None = None,
+    prompt_id: str | None = None,
+    prompt_version: str | None = None,
 ):
-    """Create a DeepRunLog entry if the DeepRun exists."""
+    """Create a DeepRunLog entry if the DeepRun exists.
+
+    ``prompt_id`` / ``prompt_version`` carry the prompt half of the ADR 0032 D1
+    configuration tuple. Optional and blank-by-default: a caller that cannot say
+    which prompt version produced the row leaves it unattributed rather than
+    guessing, and no existing caller has to change.
+    """
     from infrastructure.persistence.ai.agents import models
 
     if not thread_id:
@@ -33,6 +41,8 @@ def log_deep_event(
             agent_type=agent_type or "",
             tool_name=tool_name or "",
             payload=payload or {},
+            prompt_id=prompt_id or "",
+            prompt_version=prompt_version or "",
         )
     except Exception:
         logger.warning("Skipping deep-run log event for thread %s", thread_id, exc_info=True)

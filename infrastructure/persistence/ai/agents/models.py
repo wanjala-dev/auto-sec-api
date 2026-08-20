@@ -381,11 +381,11 @@ class DeepRunLog(models.Model):
     """Event log entries for deep-agent runs.
 
     Includes optional LLM-call observability fields (system_prompt,
-    user_prompt, llm_response, model_used, prompt_tokens,
-    completion_tokens, latency_ms, cost_usd) so prompt-engineering
-    iteration has the data it needs. The fields are populated by
-    instrumented call sites such as ``llm_planner.plan_with_llm``;
-    event-only rows leave them blank.
+    user_prompt, llm_response, model_used, prompt_id, prompt_version,
+    prompt_tokens, completion_tokens, latency_ms, cost_usd) so
+    prompt-engineering iteration has the data it needs. The fields are
+    populated by instrumented call sites such as
+    ``llm_planner.plan_with_llm``; event-only rows leave them blank.
     """
 
     deep_run = models.ForeignKey(DeepRun, on_delete=models.CASCADE, related_name="logs")
@@ -400,6 +400,15 @@ class DeepRunLog(models.Model):
     user_prompt = models.TextField(blank=True, default="")
     llm_response = models.TextField(blank=True, default="")
     model_used = models.CharField(max_length=100, blank=True, default="")
+    # ── Configuration tuple (ADR 0032 D1) ───────────────────────────
+    # ``(agent_type, prompt_version, model_used)`` is the unit a quality
+    # measurement can honestly be attributed to. ``agent_type`` and
+    # ``model_used`` were already here; the prompt identity was not, so two
+    # runs on different prompt versions were distinguishable only by diffing
+    # the stored prompt BLOBS. Blank means "not attributable" — an honest
+    # state, and never inferred from the raw text.
+    prompt_id = models.CharField(max_length=100, blank=True, default="")
+    prompt_version = models.CharField(max_length=32, blank=True, default="")
     prompt_tokens = models.PositiveIntegerField(null=True, blank=True)
     completion_tokens = models.PositiveIntegerField(null=True, blank=True)
     latency_ms = models.PositiveIntegerField(null=True, blank=True)

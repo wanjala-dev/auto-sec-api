@@ -32,8 +32,23 @@ logger = logging.getLogger(__name__)
 # the YAML without code changes. The SYSTEM_PROMPT_TEMPLATE name is
 # retained for the test suite that still monkeypatches it.
 from components.agents.infrastructure.prompts.registry import PromptRegistry as _PromptRegistry
+from components.agents.infrastructure.prompts.stamp import prompt_stamp as _prompt_stamp
 
-SYSTEM_PROMPT_TEMPLATE = _PromptRegistry.get("planner.system")
+#: The registry id of the planner's system prompt. Named once so the thing
+#: that RENDERS it and the thing that RECORDS which version was rendered
+#: (ADR 0032 D1) cannot drift apart.
+PLANNER_SYSTEM_PROMPT_ID = "planner.system"
+
+SYSTEM_PROMPT_TEMPLATE = _PromptRegistry.get(PLANNER_SYSTEM_PROMPT_ID)
+
+#: The version SYSTEM_PROMPT_TEMPLATE was resolved from, stamped onto every
+#: llm_call row (ADR 0032 D1). It is a MODULE GLOBAL for the same reason the
+#: template is: ``run_planner_eval`` pins an older version by reassigning them,
+#: and a version stamp that kept saying "v12" while a v11 template was running
+#: would be worse than no stamp at all — it would make the eval's own rows lie
+#: about which configuration produced them. Anything that swaps the template
+#: MUST swap this too; ``_pin_prompt_version`` does.
+SYSTEM_PROMPT_VERSION = _prompt_stamp(PLANNER_SYSTEM_PROMPT_ID)[1]
 
 
 def _build_agent_catalog() -> str:
@@ -168,6 +183,8 @@ def _log_llm_call(
     prompt_tokens: Optional[int],
     completion_tokens: Optional[int],
     latency_ms: int,
+    prompt_id: str = "",
+    prompt_version: str = "",
 ) -> None:
     """Persist a DeepRunLog row recording one planner LLM invocation.
 
@@ -217,6 +234,8 @@ def _log_llm_call(
             user_prompt=user_prompt,
             llm_response=response_text,
             model_used=model_used or "",
+            prompt_id=prompt_id or "",
+            prompt_version=prompt_version or "",
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             latency_ms=latency_ms,
@@ -350,6 +369,12 @@ def plan_with_llm(
     # (added after the module first imported) joins the catalog without
     # a process restart.
     system_prompt = _build_system_prompt()
+    # ADR 0032 D1 — record WHICH prompt version produced this plan. Without it
+    # a regression is attributed to the model by default, even when the real
+    # change was planner.system v11 -> v12. Read from the module global so a
+    # pinned eval run stamps the version it actually ran.
+    prompt_version = SYSTEM_PROMPT_VERSION
+    prompt_id = PLANNER_SYSTEM_PROMPT_ID if prompt_version else ""
 
     def _call(extra_system: str = "") -> List[Dict[str, Any]]:
         full_system_prompt = (
@@ -377,6 +402,8 @@ def plan_with_llm(
                 prompt_tokens=None,
                 completion_tokens=None,
                 latency_ms=latency_ms,
+                prompt_id=prompt_id,
+                prompt_version=prompt_version,
             )
             raise
         latency_ms = int((time.perf_counter() - started_at) * 1000)
@@ -391,6 +418,8 @@ def plan_with_llm(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             latency_ms=latency_ms,
+            prompt_id=prompt_id,
+            prompt_version=prompt_version,
         )
         try:
             parsed = json.loads(text)

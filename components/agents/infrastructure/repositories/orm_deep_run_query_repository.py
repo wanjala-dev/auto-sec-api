@@ -177,8 +177,23 @@ def _eval_fields(state: dict, run) -> dict:
     ``rubric_verdicts`` is reduced to two COUNTS on purpose: a verdict is the
     grader's prose about the agent's output and can quote a finding's code, so it
     stays behind the owner-only reads.
+
+    Those two counts were BOTH WRONG until 2026-08-20: this reader looked for a
+    boolean under ``"satisfied"`` / ``"passed"``, while the writer has always
+    stamped a tri-state STRING under ``"verdict"``
+    (``deep/rubric.py::summarize_rubric_evaluations``). Nothing matched, so
+    ``rubric_pass_count`` was 0 for every run ever graded and ``rubric_fail_count``
+    equalled the verdict count — our only judge reporting 100% failure, invisibly,
+    because zero is a plausible-looking number (ADR 0032 §1.3.2 / D12). The
+    vocabulary now lives in ONE place
+    (``domain/value_objects/rubric_verdict.py``) so writer and reader cannot
+    disagree again.
     """
     from components.agents.domain.services.llm_pricing import price_run
+    from components.agents.domain.value_objects.rubric_verdict import (
+        is_rubric_graded,
+        is_rubric_pass,
+    )
 
     meta = state.get("run_metadata") if isinstance(state, dict) else None
     meta = meta if isinstance(meta, dict) else {}
@@ -208,12 +223,14 @@ def _eval_fields(state: dict, run) -> dict:
     for v in verdicts:
         if not isinstance(v, dict):
             continue
-        ok = v.get("satisfied")
-        if ok is None:
-            ok = v.get("passed")
-        # Anything not EXPLICITLY satisfied counts as a fail, so a future shape
-        # change under-reports quality rather than overstating it.
-        if ok is True:
+        verdict = v.get("verdict")
+        if not is_rubric_graded(verdict):
+            # UNGRADED is not a failure. A stamp that carries no verdict string
+            # (a middleware error, a shape we don't know) counts toward neither
+            # side — absence is its own state, and the way to see it is that
+            # pass + fail is less than the number of stamps (ADR 0032 D4).
+            continue
+        if is_rubric_pass(verdict):
             passed += 1
         else:
             failed += 1

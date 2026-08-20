@@ -60,7 +60,6 @@ of :mod:`remediation_guidance` — loud on a malformed corpus, graceful on a mis
 from __future__ import annotations
 
 import logging
-import math
 from dataclasses import dataclass
 from datetime import date
 from functools import lru_cache
@@ -68,14 +67,18 @@ from pathlib import Path
 
 import yaml
 
+from components.shared_kernel.domain.measured_rate import (
+    TIER_MEASURED_WEAK,
+    TIER_PROVEN,
+    TIER_UNPROVEN,
+    wilson_lower_bound,
+)
+
 logger = logging.getLogger(__name__)
 
 #: Public so the eval harness command can WRITE evidence to the one true
 #: location instead of hardcoding a second copy of this path.
 EVIDENCE_FILE = Path(__file__).resolve().parents[1] / "rules" / "remediation" / "fix_confidence.yaml"
-
-#: One-sided 95% normal quantile, for the Wilson lower bound.
-_Z = 1.6448536269514722
 
 #: A rule must clear this lower bound before unattended auto-fix is considered.
 #: 0.85 is not a rounded-off guess: with a clean run it is reached at ~20 trials
@@ -93,12 +96,34 @@ AUTOFIX_MIN_TRIALS = 10
 #: becomes a claim about a system that no longer exists.
 EVIDENCE_MAX_AGE_DAYS = 90
 
-#: Tiers. Deliberately three, not a boolean: "never measured" and "measured and
-#: found wanting" are different facts about a rule and lead to different work
-#: (go measure it / go fix the guidance).
-TIER_PROVEN = "proven"
-TIER_MEASURED_WEAK = "measured_weak"
-TIER_UNPROVEN = "unproven"
+# TIERS + THE WILSON BOUND NOW LIVE IN THE SHARED KERNEL (ADR 0032 D3).
+# Deliberately three tiers, not a boolean: "never measured" and "measured and
+# found wanting" are different facts about a rule and lead to different work
+# (go measure it / go fix the guidance). That ladder and the statistic under it
+# are domain-neutral, and agent/model measurement needs the same ones — so they
+# were lifted into ``shared_kernel.domain.measured_rate`` rather than copied.
+# What stays HERE is everything specific to SAST: the rule-corpus loader, the
+# autofix threshold, the trials floor, the expiry, and the model binding.
+#
+# ``__all__`` names what this module's callers import, including the two
+# re-exported shared names — ``tests/architecture/test_single_confidence_statistic.py``
+# fails if a second Wilson is ever defined instead.
+__all__ = [
+    "AUTOFIX_LOWER_BOUND",
+    "AUTOFIX_MIN_TRIALS",
+    "EVIDENCE_FILE",
+    "EVIDENCE_MAX_AGE_DAYS",
+    "TIER_MEASURED_WEAK",
+    "TIER_PROVEN",
+    "TIER_UNPROVEN",
+    "FixConfidence",
+    "FixConfidenceError",
+    "FixEvidence",
+    "confidence_for",
+    "corpus_digest",
+    "measured_rules",
+    "wilson_lower_bound",
+]
 
 
 class FixConfidenceError(RuntimeError):
@@ -143,24 +168,6 @@ class FixConfidence:
             "passes": self.passes,
             "lower_bound": round(self.lower_bound, 3),
         }
-
-
-def wilson_lower_bound(passes: int, trials: int) -> float:
-    """One-sided 95% Wilson lower bound on the success rate.
-
-    Wilson rather than the normal approximation because at our n the normal
-    interval is not merely wide but wrong — for a clean run it collapses to
-    [1.0, 1.0], reporting certainty from two observations. Wilson stays inside
-    [0, 1] and keeps a perfect small sample honest: 2/2 → 0.43, 20/20 → 0.88.
-    """
-    if trials <= 0:
-        return 0.0
-    passes = max(0, min(passes, trials))
-    p = passes / trials
-    denominator = 1 + (_Z**2) / trials
-    centre = (p + (_Z**2) / (2 * trials)) / denominator
-    margin = (_Z / denominator) * math.sqrt((p * (1 - p) / trials) + (_Z**2) / (4 * trials**2))
-    return max(0.0, centre - margin)
 
 
 @lru_cache(maxsize=1)

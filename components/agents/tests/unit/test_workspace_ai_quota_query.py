@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from components.agents.application.queries.workspace_ai_quota_query import (
-    build_workspace_ai_quota_snapshot,
-)
 from components.agents.application.ports.workspace_ai_config_port import (
     WorkspaceAIConfigPort,
+)
+from components.agents.application.queries.workspace_ai_quota_query import (
+    build_workspace_ai_quota_snapshot,
 )
 from components.agents.domain.value_objects.workspace_ai_config import (
     WorkspaceAIConfig,
@@ -31,7 +31,7 @@ class _StubPort(WorkspaceAIConfigPort):
     def load(self, workspace_id):
         return self._config
 
-    def save(self, workspace_id, config):
+    def save(self, workspace_id, config, *, changed_by_id=None):
         self._config = config
 
     def get_messages_used_today(self, workspace_id, user_id):
@@ -63,9 +63,7 @@ class TestBuildWorkspaceAIQuotaSnapshot:
             workspace_messages_today=42,
             workspace_tokens_this_month=250_000,
         )
-        snapshot = build_workspace_ai_quota_snapshot(
-            "ws-1", ai_config_port=port
-        )
+        snapshot = build_workspace_ai_quota_snapshot("ws-1", ai_config_port=port)
         assert snapshot["ai_enabled"] is True
         assert snapshot["daily_message_budget"] == 100
         assert snapshot["daily_messages_used"] == 42

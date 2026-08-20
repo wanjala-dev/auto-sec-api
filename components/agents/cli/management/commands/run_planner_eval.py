@@ -326,6 +326,10 @@ class Command(BaseCommand):
 
         resolved = PromptRegistry.active_version(prompt_id) if version == "active" else version
         llm_planner.SYSTEM_PROMPT_TEMPLATE = PromptRegistry.get(prompt_id, version=resolved)
+        # The version stamp travels WITH the template (ADR 0032 D1). Pinning
+        # v11's text while every DeepRunLog row still said "v12" would make the
+        # eval's own telemetry misattribute its results to the active prompt.
+        llm_planner.SYSTEM_PROMPT_VERSION = resolved
         self.stdout.write(self.style.SUCCESS(f"Pinned {prompt_id}@{resolved} as the planner prompt for this eval run."))
 
     @staticmethod

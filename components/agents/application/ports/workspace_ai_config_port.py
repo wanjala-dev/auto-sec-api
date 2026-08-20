@@ -24,8 +24,23 @@ class WorkspaceAIConfigPort(ABC):
         ...
 
     @abstractmethod
-    def save(self, workspace_id: str, config: WorkspaceAIConfig) -> None:
-        """Persist AI config for a workspace."""
+    def save(
+        self,
+        workspace_id: str,
+        config: WorkspaceAIConfig,
+        *,
+        changed_by_id: str | None = None,
+    ) -> None:
+        """Persist AI config for a workspace.
+
+        ``changed_by_id`` attributes a model switch to the operator who made
+        it. Implementations MUST record a model-change event whenever the
+        stored ``preferred_model`` / ``fallback_model`` actually changes
+        (ADR 0032 D7.4) — without that annotation, "did the switch help?" is
+        unanswerable, which is the entire point of the feature. Optional so a
+        non-interactive writer (a migration, a seeder) is not forced to invent
+        an actor; the event is still recorded, with no attribution.
+        """
         ...
 
     # ── Per-user usage (legacy — drives the PersonaAILimits cap) ─────

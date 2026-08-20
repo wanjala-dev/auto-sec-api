@@ -52,7 +52,13 @@ class OrmWorkspaceAIConfigAdapter(WorkspaceAIConfigPort):
         raw = profile.config.get(_CONFIG_KEY)
         return WorkspaceAIConfig.from_dict(raw)
 
-    def save(self, workspace_id: str, config: WorkspaceAIConfig) -> None:
+    def save(
+        self,
+        workspace_id: str,
+        config: WorkspaceAIConfig,
+        *,
+        changed_by_id: str | None = None,
+    ) -> None:
         from infrastructure.persistence.ai.models import AITeammateProfile
 
         profile = AITeammateProfile.objects.filter(workspace_id=workspace_id).first()
@@ -62,9 +68,76 @@ class OrmWorkspaceAIConfigAdapter(WorkspaceAIConfigPort):
                 workspace_id,
             )
             return
+        previous = self.load(str(workspace_id))
         profile.config = profile.config or {}
         profile.config[_CONFIG_KEY] = config.to_dict()
         profile.save(update_fields=["config", "updated_at"])
+        self._record_model_changes(
+            workspace_id=str(workspace_id),
+            previous=previous,
+            current=config,
+            changed_by_id=changed_by_id,
+        )
+
+    @staticmethod
+    def _record_model_changes(
+        *,
+        workspace_id: str,
+        previous: WorkspaceAIConfig,
+        current: WorkspaceAIConfig,
+        changed_by_id: str | None,
+    ) -> None:
+        """Append an ``AIModelChangeEvent`` per model field that actually moved.
+
+        ADR 0032 D7.4. ``AIModelChangeEvent`` was defined, indexed, and READ by
+        ``ai_analytics_repository`` — and had no writer anywhere in the repo, so
+        the model-change annotation on the quality series was permanently empty.
+        The model's own docstring named this adapter as its writer; it simply
+        never became one. This is that writer.
+
+        Only real changes are recorded: re-saving the same config must not
+        litter the series with markers that would read as switch churn. Writes
+        are append-only and never raise — a failed annotation must not roll back
+        a config the operator has already been told was saved (the config write
+        is the durable fact; the marker is telemetry about it).
+        """
+        pairs = (
+            ("preferred_model", previous.preferred_model, current.preferred_model),
+            ("fallback_model", previous.fallback_model, current.fallback_model),
+        )
+        changed = [(field, old, new) for field, old, new in pairs if (old or "") != (new or "")]
+        if not changed:
+            return
+        try:
+            from infrastructure.persistence.ai.aggregations.models import AIModelChangeEvent
+
+            AIModelChangeEvent.objects.bulk_create(
+                [
+                    AIModelChangeEvent(
+                        workspace_id=workspace_id,
+                        changed_by_id=changed_by_id or None,
+                        field=field,
+                        old_value=old or "",
+                        new_value=new or "",
+                    )
+                    for field, old, new in changed
+                ]
+            )
+            for field, old, new in changed:
+                logger.info(
+                    "ai_model_changed workspace_id=%s field=%s old=%s new=%s changed_by=%s",
+                    workspace_id,
+                    field,
+                    old or "(unset)",
+                    new,
+                    changed_by_id or "(unattributed)",
+                )
+        except Exception:
+            logger.exception(
+                "ai_model_change_event write failed workspace_id=%s fields=%s",
+                workspace_id,
+                [field for field, _, _ in changed],
+            )
 
     # ── Per-user usage (legacy — drives PersonaAILimits cap) ─────────
 
@@ -77,9 +150,7 @@ class OrmWorkspaceAIConfigAdapter(WorkspaceAIConfigPort):
             ConversationMessage,
         )
 
-        today_start = timezone.now().replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
+        today_start = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
         return ConversationMessage.objects.filter(
             conversation__metadata__workspace_id=workspace_id,
             conversation__user_id=user_id,

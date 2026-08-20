@@ -1135,6 +1135,42 @@ class OpenDraftPrUseCase:
         )
 
     @staticmethod
+    def _fix_confidence_section(payload: dict) -> str:
+        """The MEASURED per-rule confidence, on the artifact (ADR 0032 D11 A).
+
+        ``code_security_agent`` stamps ``payload["fix_confidence"]`` — a tier
+        plus the counts behind it — and until now nothing rendered it anywhere.
+        The reviewer of this PR is exactly the person the number is for: it says
+        how the advisor has historically SCORED on this rule against the frozen
+        corpus, which is the only one of the three labels on this finding that
+        could have caught the failure that started #117 (a patch that was
+        grounded, in scope, syntactically valid — and semantically wrong).
+
+        Rendered as a bound WITH its trial count, never a bare percentage:
+        "2/2 correct" is not a 100% success rate. ``""`` when the stamp is
+        absent (older findings) — silence is honest; inventing "unproven" for a
+        card that predates the measurement is not.
+        """
+        label = payload.get("fix_confidence")
+        if not isinstance(label, dict) or not label.get("tier"):
+            return ""
+        tier = str(label.get("tier"))
+        reason = str(label.get("reason") or "")
+        trials = label.get("trials") or 0
+        passes = label.get("passes") or 0
+        bound = label.get("lower_bound")
+        counts = f"{passes}/{trials} measured" if trials else "never measured"
+        bound_text = f", 95% lower bound {bound:.2f}" if isinstance(bound, (int, float)) and trials else ""
+        return (
+            f"## Measured confidence for this rule\n"
+            f"**{tier.replace('_', ' ')}** — {counts}{bound_text}.\n\n"
+            f"> {reason}\n\n"
+            "This grades the RULE's history against a frozen corpus, not this "
+            "patch. It is a label, never a gate — the draft opens either way, "
+            "because a draft PR cannot merge itself.\n\n"
+        )
+
+    @staticmethod
     def _build_pr_body(
         task,
         payload: dict,
@@ -1171,6 +1207,7 @@ class OpenDraftPrUseCase:
                 f"**Location:** `{location}` (scanned at `{commit or 'unknown'}`)\n\n"
                 f"## Why it matters\n{payload.get('probable_cause') or '(not determined)'}\n\n"
                 f"## Suggested fix\n{payload.get('suggested_fix') or '(see change)'}\n\n"
+                f"{OpenDraftPrUseCase._fix_confidence_section(payload)}"
                 f"## Change\n{proposal.change_summary or 'Minimal fix for the finding above.'}\n\n"
                 f"---\nProvenance: Auto-Sec finding `{task.id}` — {_PATCH_ORIGIN_NOTE.get(patch_origin, '')}"
                 f"{approval_note} "
