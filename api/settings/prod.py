@@ -349,6 +349,20 @@ CELERY_BEAT_SCHEDULE = {
         "kwargs": {"task": "ai.rollup_ai_action_daily"},
         "schedule": crontab(minute=20, hour=0),
     },
+    # Hourly AI-quality rollup (ADR 0032 D12) — the ONLY producer of the
+    # AIModelDailyMetric / AIWorkspaceDailyMetric tables that
+    # GET /ai/agents/runs/analytics/overview/ reads. Unscheduled since it was
+    # written, so the endpoint returned a fully-formed payload of ZEROS: a
+    # dashboard that reads "no failures, no cost" because nothing ever
+    # computed the numbers, which is the #415 defect (an empty report reading
+    # clean) in the AI surface. Recompute-not-increment, so hourly re-runs of
+    # the trailing 2-day window are idempotent and absorb late feedback; :50
+    # keeps it off the :15/:20/:35 sweeps.
+    "rollup_ai_quality_daily": {
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "ai.rollup_ai_quality_daily"},
+        "schedule": crontab(minute=50),
+    },
     # Nightly Prowler CSPM scan — dark until opt-in (feature.cloud_posture).
     "schedule_cloud_posture_scans": {
         "task": "shared_platform.run_for_each_tenant",

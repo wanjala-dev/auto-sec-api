@@ -18,6 +18,7 @@ from components.agents.application.ports.ai_analytics_port import (
     AIAnalyticsQueryPort,
     AIQualityOverviewView,
     DayMetricView,
+    ExclusionsView,
     ModelChangeEventView,
     ModelDayMetricView,
 )
@@ -101,4 +102,28 @@ class OrmAIAnalyticsRepository(AIAnalyticsQueryPort):
             window_days=days,
             series=tuple(series),
             model_changes=change_events,
+            exclusions=self._exclusions(window_start),
         )
+
+    @staticmethod
+    def _exclusions(window_start) -> ExclusionsView:
+        """Count what the rollup could not attribute (ADR 0032 D8.3).
+
+        ``_rollup_workspace_metrics_for_day`` does ``.exclude(workspace_id=None)``
+        — correct, because a run with no workspace belongs to no tenant's
+        numbers — but that exclusion was silent, so the panel under-counted with
+        no way to tell. These rows belong to NO workspace, so surfacing the
+        count on a tenant endpoint discloses nothing about another tenant.
+
+        Sample data: no sample-data seeder produces AI telemetry today (they
+        seed ``Finding`` and cloud-graph rows only), so the count is a truthful
+        0 rather than an unimplemented filter. ``test_ai_quality_excludes_sample_and_unattributed``
+        fails the day that stops being true.
+        """
+        from infrastructure.persistence.ai.agents.models import DeepRun
+
+        unattributed = DeepRun.objects.filter(
+            workspace_id=None,
+            created_at__date__gte=window_start,
+        ).count()
+        return ExclusionsView(unattributed_runs=unattributed, sample_rows=0)

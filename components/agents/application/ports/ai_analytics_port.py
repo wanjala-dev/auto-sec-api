@@ -54,6 +54,24 @@ class ModelChangeEventView:
 
 
 @dataclass(frozen=True)
+class ExclusionsView:
+    """What the aggregate could NOT count, as a number (ADR 0032 D8.3/D8.4).
+
+    An aggregate that quietly drops rows is an aggregate that under-reports
+    while looking complete. ``DeepRun.workspace`` is nullable
+    (``on_delete=SET_NULL``), so a run whose workspace was deleted — or that was
+    never attributed — is invisible to EVERY workspace rollup. The panel states
+    the number rather than absorbing it.
+
+    ``unattributed_runs`` counts rows belonging to no workspace at all, which is
+    why reporting it on a tenant endpoint discloses no other tenant's data.
+    """
+
+    unattributed_runs: int = 0
+    sample_rows: int = 0
+
+
+@dataclass(frozen=True)
 class AIQualityOverviewView:
     """The full dashboard payload for one workspace + window."""
 
@@ -61,6 +79,7 @@ class AIQualityOverviewView:
     window_days: int
     series: tuple[DayMetricView, ...] = ()
     model_changes: tuple[ModelChangeEventView, ...] = field(default=())
+    exclusions: ExclusionsView = field(default_factory=ExclusionsView)
 
 
 class AIAnalyticsQueryPort(ABC):

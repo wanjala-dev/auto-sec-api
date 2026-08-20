@@ -1848,14 +1848,14 @@ class BaseAgent(WorkspaceRetrievalMixin, ABC):
         ``_build_system_message`` directly; the registry convention is the static
         default, not a cage.
         """
-        slug = getattr(self, "_canonical_agent_name", None)
-        if not slug:
+        prompt_id = self._specialist_prompt_id()
+        if not prompt_id:
             return ""
-        prompt_id = f"{slug}.system"
         try:
             from components.agents.infrastructure.prompts.registry import PromptRegistry
+            from components.agents.infrastructure.prompts.stamp import is_registered
 
-            if prompt_id in PromptRegistry.all_prompt_ids():
+            if is_registered(prompt_id):
                 return "\n\n" + PromptRegistry.get(prompt_id)
         except Exception:
             logger.warning(
@@ -1864,6 +1864,19 @@ class BaseAgent(WorkspaceRetrievalMixin, ABC):
                 exc_info=True,
             )
         return ""
+
+    def _specialist_prompt_id(self) -> str:
+        """This agent's registry prompt id, or ``""``.
+
+        Computed through ``prompts.stamp`` so the code that RENDERS the
+        specialist prompt and the code that RECORDS which prompt version was
+        rendered (ADR 0032 D1) derive the id the same way. Two independent
+        ``f"{slug}.system"`` expressions is exactly the drift that made the
+        rubric verdict key unreadable for months.
+        """
+        from components.agents.infrastructure.prompts.stamp import specialist_prompt_id
+
+        return specialist_prompt_id(getattr(self, "_canonical_agent_name", None))
 
     # NOTE (LangChain 1.x migration, 2026-07-18): ``_create_chat_prompt_template``
     # and the legacy ReAct ``_create_prompt_template`` were DELETED. ``create_agent``
@@ -2680,6 +2693,18 @@ class BaseAgent(WorkspaceRetrievalMixin, ABC):
 
         max_chars = self._TOOL_OBSERVATION_MAX_CHARS
 
+        # ADR 0032 D1 — the prompt half of the configuration tuple, resolved
+        # ONCE per persist (a registry read, not per-step work). Blank when the
+        # specialist has no registered prompt, which is honest rather than
+        # inferred.
+        try:
+            from components.agents.infrastructure.prompts.stamp import specialist_prompt_stamp
+
+            prompt_id, prompt_version = specialist_prompt_stamp(getattr(self, "_canonical_agent_name", None))
+        except Exception:  # pylint: disable=broad-except
+            logger.debug("prompt stamp resolution failed; rows stay unattributed", exc_info=True)
+            prompt_id = prompt_version = ""
+
         for step in intermediate_steps:
             try:
                 action, observation = step[0], step[1]
@@ -2727,6 +2752,8 @@ class BaseAgent(WorkspaceRetrievalMixin, ABC):
                 agent_type=self.__class__.__name__,
                 tool_name=tool_name,
                 payload=payload,
+                prompt_id=prompt_id,
+                prompt_version=prompt_version,
             )
 
     def _maybe_log_run_telemetry(

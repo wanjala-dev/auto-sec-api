@@ -37,6 +37,9 @@ from datetime import timedelta
 from typing import Any
 
 from components.agents.domain.detectors.base import BaseDetector, DetectorContext, DetectorResult
+from components.agents.domain.value_objects.rubric_verdict import (
+    RUBRIC_TERMINAL_FAIL_VERDICTS,
+)
 from components.agents.infrastructure.adapters.actions.detectors import registry
 
 logger = logging.getLogger(__name__)
@@ -50,7 +53,10 @@ METRIC_RETRY = "retry_rate"
 METRIC_BUDGET_TRIPS = "budget_trips"
 
 # Rubric verdicts that mean the answer did NOT pass on the first attempt.
-_RUBRIC_FAIL_VERDICTS = frozenset({"failed", "max_iterations_reached"})
+# The vocabulary is owned by the domain value object so this detector, the
+# stamp writer and the deep-run stats reader can never disagree about what
+# "passed" means (ADR 0032 D12 — they did, for months).
+_RUBRIC_FAIL_VERDICTS = RUBRIC_TERMINAL_FAIL_VERDICTS
 
 
 def _rubric_first_pass_failed(verdict: Any) -> bool | None:
