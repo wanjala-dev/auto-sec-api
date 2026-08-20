@@ -26,7 +26,12 @@ from rest_framework.decorators import action, throttle_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from components.agents.api.permissions import AiKillSwitchPermission, PostureDashboardPermission
+from components.agents.api.permissions import (
+    AiKillSwitchPermission,
+    CanManageWorkspaceAgents,
+    CanViewWorkspaceAgents,
+    PostureDashboardPermission,
+)
 from components.agents.api.resources.agent_chat_resource import (
     AgentChatErrorResource,
     AgentChatResource,
@@ -652,47 +657,66 @@ class AgentViewSet(viewsets.GenericViewSet):
     # ── Workspace AI Configuration ──────────────────────────────────────
 
     @_schema()
-    @action(detail=False, methods=["get"], url_path="ai-config")
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path="ai-config",
+        permission_classes=[IsAuthenticated, CanViewWorkspaceAgents],
+    )
     def ai_config(self, request):
-        """Get workspace AI configuration (model selection, persona limits, toggles)."""
-        workspace_id = request.query_params.get("workspace_id")
-        if not workspace_id:
-            return Response({"error": "workspace_id is required"}, status=status.HTTP_400_BAD_REQUEST)
-        try:
-            from components.agents.application.providers.ai_provider import AIProvider
+        """Get workspace AI configuration (model selection, persona limits, toggles).
 
-            port = AIProvider.build_workspace_ai_config_port()
-            config = port.load(str(workspace_id))
-            return Response({"workspace_id": workspace_id, "config": config.to_dict()}, status=status.HTTP_200_OK)
-        except Exception as e:
-            return Response({"error": f"Failed to load AI config: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        Membership-gated on ``view_agents`` — the same read gate as the
+        kill-switch status, and carried by every seeded role. The
+        document holds the workspace's model, its spend caps and its
+        system-prompt addendum; it is tenant data, not a public setting.
+        """
+        from components.agents.application.providers.ai_provider import AIProvider
+
+        workspace_id = str(ensure_uuid(request.query_params.get("workspace_id"), field_name="workspace_id"))
+        config = AIProvider.build_workspace_ai_config_port().load(workspace_id)
+        return Response({"workspace_id": workspace_id, "config": config.to_dict()}, status=status.HTTP_200_OK)
 
     @_schema(request_body=True)
-    @action(detail=False, methods=["patch"], url_path="ai-config/update")
+    @action(
+        detail=False,
+        methods=["patch"],
+        url_path="ai-config/update",
+        permission_classes=[IsAuthenticated, CanManageWorkspaceAgents],
+    )
     def update_ai_config(self, request):
-        """Update workspace AI configuration. Only workspace owner/admin can change."""
-        workspace_id = request.data.get("workspace_id")
-        if not workspace_id:
-            return Response({"error": "workspace_id is required"}, status=status.HTTP_400_BAD_REQUEST)
-        try:
-            from components.agents.application.providers.ai_provider import AIProvider
-            from components.agents.domain.value_objects.workspace_ai_config import WorkspaceAIConfig
+        """Update workspace AI configuration — ``manage_agents`` only.
 
-            port = AIProvider.build_workspace_ai_config_port()
-            # Load existing, merge with incoming changes
-            existing = port.load(str(workspace_id))
-            existing_dict = existing.to_dict()
-            incoming = request.data.get("config", {})
-            if not isinstance(incoming, dict):
-                return Response({"error": "config must be a JSON object"}, status=status.HTTP_400_BAD_REQUEST)
-            existing_dict.update(incoming)
-            updated_config = WorkspaceAIConfig.from_dict(existing_dict)
-            port.save(str(workspace_id), updated_config)
-            return Response(
-                {"workspace_id": workspace_id, "config": updated_config.to_dict()}, status=status.HTTP_200_OK
-            )
-        except Exception as e:
-            return Response({"error": f"Failed to update AI config: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        The docstring used to promise owner/admin while the action
+        carried no permission override at all, so any authenticated user
+        of any tenant could rewrite another workspace's model, spend caps
+        and ``custom_system_prompt_addendum`` — the last of which the
+        planner appends to its system prompt (ADR 0032 §1.3.5, Phase
+        0.1). ``manage_agents`` is the kill switch's gate, the closest
+        analogue in blast radius; ``seed_workspace_roles`` gives it to
+        ``owner`` and ``admin`` only.
+
+        The workspace named in the body is the workspace the permission
+        gate resolved — ``_resolve_workspace`` fails closed on an
+        identifier it cannot resolve rather than substituting the
+        caller's own workspace.
+        """
+        from components.agents.application.providers.ai_provider import AIProvider
+
+        workspace_id = str(ensure_uuid(request.data.get("workspace_id"), field_name="workspace_id"))
+        port = AIProvider.build_workspace_ai_config_port()
+        try:
+            updated_config = port.load(workspace_id).merged_with(request.data.get("config", {}))
+        except ValueError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        port.save(workspace_id, updated_config)
+        logger.info(
+            "workspace_ai_config_updated workspace_id=%s actor_id=%s model=%s",
+            workspace_id,
+            request.user.id,
+            updated_config.preferred_model,
+        )
+        return Response({"workspace_id": workspace_id, "config": updated_config.to_dict()}, status=status.HTTP_200_OK)
 
     @_schema()
     @action(detail=False, methods=["get"], url_path="ai-models")
