@@ -31,6 +31,11 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from components.agents.domain.value_objects.rubric_verdict import (
+    is_rubric_graded,
+    is_rubric_pass,
+)
+
 logger = logging.getLogger(__name__)
 
 # Industry response-time bands per severity, in hours — MTTR-by-severity
@@ -295,12 +300,12 @@ def compute_fleet_health(
     passed = 0
     for row in handled_rows:
         verdict = row.get("rubric_verdict")
-        if not verdict:
+        if not is_rubric_graded(verdict):
             continue
         graded += 1
         verdict = str(verdict)
         verdict_counts[verdict] = verdict_counts.get(verdict, 0) + 1
-        if verdict == "satisfied":
+        if is_rubric_pass(verdict):
             passed += 1
 
     by_agent: dict[str, int] = {}

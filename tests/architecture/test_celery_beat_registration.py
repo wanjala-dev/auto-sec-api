@@ -167,6 +167,54 @@ def test_every_beat_task_is_registered():
     )
 
 
+#: Tasks that are the SOLE producer of a table an API endpoint reads.
+#:
+#: A third failure mode, distinct from classes A and B above and worse than
+#: both: the task IS registered and its name IS correct — it is simply in no
+#: schedule. Nothing errors. No log line appears. The endpoint keeps returning
+#: a fully-formed, well-typed payload of zeros, and the only way to notice is
+#: to ask why a dashboard has been flat since launch.
+#:
+#: Found 2026-08-20 (ADR 0032 §1.3.2): ``ai.rollup_ai_quality_daily`` had been
+#: written, registered in ``api/celery.py`` and read by
+#: ``GET /ai/agents/runs/analytics/overview/`` — and scheduled nowhere. Every
+#: per-model cost, latency percentile, failure rate and feedback count that
+#: endpoint served was 0. That reads as "the AI never failed and never cost
+#: anything", which is #415's lesson ("an empty report must not read as a
+#: clean one") in the AI surface.
+#:
+#: Adding a read model whose producer is a beat task means adding it here.
+_SOLE_PRODUCER_TASKS = {
+    "ai.rollup_ai_quality_daily": (
+        "sole producer of AIModelDailyMetric / AIWorkspaceDailyMetric, which "
+        "GET /ai/agents/runs/analytics/overview/ reads exclusively — unscheduled, "
+        "that endpoint serves zeros forever"
+    ),
+    "ai.rollup_ai_action_daily": (
+        "sole producer of AiActionDailyRollup, which the posture dashboard's "
+        "governance charts read instead of live-aggregating DeepRun/DeepRunLog"
+    ),
+}
+
+
+def test_read_model_producers_are_actually_scheduled():
+    """Registered + correctly named + never scheduled is still dead code."""
+    missing: list[str] = []
+    for settings_name in _SETTINGS:
+        scheduled = set(_beat_task_names(settings_name))
+        for task, why in _SOLE_PRODUCER_TASKS.items():
+            if task not in scheduled:
+                missing.append(f"  - {settings_name}.py is missing '{task}' — {why}")
+
+    assert not missing, (
+        "A task that is the ONLY writer of a table an endpoint reads is in no "
+        "beat schedule. Nothing will error; the endpoint will serve zeros:\n"
+        + "\n".join(missing)
+        + "\n\nFix: add a CELERY_BEAT_SCHEDULE entry routed through "
+        f"'{_FANOUT_TASK}' (see the entries beside it)."
+    )
+
+
 # Wanjala-fork leftovers that used to fire from beat (or the persisted
 # celerybeat-schedule shelve) with no registered task behind them. The
 # recommendations projection sweep crashed with an ImportError on every fire

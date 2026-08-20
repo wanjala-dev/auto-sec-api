@@ -40,6 +40,11 @@ from __future__ import annotations
 import json
 import logging
 
+from components.agents.domain.value_objects.rubric_verdict import (
+    RUBRIC_VERDICT_MAX_ITERATIONS_REACHED,
+    RUBRIC_VERDICT_NEEDS_REVISION,
+)
+
 from .critic import CRITIC_ENABLED_AGENTS, RUBRICS
 
 logger = logging.getLogger(__name__)
@@ -270,8 +275,8 @@ def summarize_rubric_evaluations(evaluations, *, max_iterations: int, grader_mod
     iterations = len(run_evaluations)
 
     verdict = str(last.get("result") or "")
-    if verdict == "needs_revision" and iterations >= max_iterations:
-        verdict = "max_iterations_reached"
+    if verdict == RUBRIC_VERDICT_NEEDS_REVISION and iterations >= max_iterations:
+        verdict = RUBRIC_VERDICT_MAX_ITERATIONS_REACHED
 
     feedback = str(last.get("explanation") or "")
     gaps = [

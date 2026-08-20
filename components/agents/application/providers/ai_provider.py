@@ -300,6 +300,18 @@ class AIProvider:
         return FetchAIQualityOverviewQuery(port=OrmAIAnalyticsRepository())
 
     @staticmethod
+    def build_model_switch_cost_query():
+        """ADR 0032 D7.3 — what a candidate model costs in measured trust."""
+        from components.agents.application.queries.model_switch_cost_query import (
+            FetchModelSwitchCostQuery,
+        )
+        from components.agents.infrastructure.adapters.fix_confidence_evidence_adapter import (
+            FixConfidenceEvidenceAdapter,
+        )
+
+        return FetchModelSwitchCostQuery(port=FixConfidenceEvidenceAdapter())
+
+    @staticmethod
     def build_create_agent_use_case() -> CreateAgentUseCase:
         return CreateAgentUseCase(agent_service=AgentServiceAdapter())
 

@@ -590,6 +590,22 @@ class TaskSerializer(WritableNestedModelSerializer, serializers.ModelSerializer)
                     "fix_before": payload.get("fix_before") or "",
                     "fix_after": payload.get("fix_after") or "",
                     "suggested_fix_language": payload.get("language") or "",
+                    # MEASURED per-rule confidence (ADR 0032 D11 Surface A).
+                    # ``code_security_agent`` has been computing this since #117
+                    # step 3 and writing it to the payload — and NO backend
+                    # reader rendered it, so the one honest, statistically
+                    # grounded number in the product was invisible to the
+                    # operator who needed it. It is a different fact from the
+                    # two labels beside it: ``confidence`` is the model grading
+                    # itself, ``verification`` is this patch grounded against
+                    # this finding, and this is how the advisor has HISTORICALLY
+                    # scored on this rule against the frozen corpus. Shape:
+                    # {tier, reason, trials, passes, lower_bound} — a tier and
+                    # the numbers behind it, never a bare percentage.
+                    # ``None`` on older cards triaged before the stamp shipped:
+                    # absent is not the same as unproven, and the HUD must not
+                    # render it as either.
+                    "fix_confidence": payload.get("fix_confidence") or None,
                 }
             )
         if source_type == "ai.container_security":
