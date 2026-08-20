@@ -147,7 +147,17 @@ Raw SQL is only acceptable in management commands for schema operations. Everyth
 - Live in `infrastructure/persistence/<app>/migrations/`
 - Create after any model change: `python manage.py makemigrations`
 - Pytest skips migrations (`django_db_use_migrations = False`)
-- Multi-database routing via `tenants.router.TenantRouter` — know which database your model lives on (default, workspace, art, linkthegap)
+- **Multi-database routing via `components.shared_platform.infrastructure.tenancy.router.TenantRouter`.**
+  Aliases are `default` (pooled) plus one `tenant_<subdomain>` per dedicated tenant — NOT the
+  nonprofit fork's `default/workspace/art/linkthegap`, which no longer exist. Know which database a
+  write lands on: unbound ORM access raises `UnboundTenantError` by design, and
+  `from django.db import connection` is **always** `default` regardless of the bound tenant, so raw
+  SQL through it silently targets the wrong database. Use `db_alias_for()` and
+  `transaction.atomic(using=alias)`. See `.claude/rules/django-conventions.md` "Tenancy", the
+  `/tenancy` skill, and ADR 0028.
+- **Migrating a dedicated tenant needs an explicit binding** — every management command binds
+  *pooled* by default. Pass `--tenant <subdomain>` / `--all-tenants` (see `run_management_command`);
+  an unknown subdomain fails closed rather than falling back to pooled.
 - Always test migrations locally before pushing: `python manage.py migrate`
 
 ## Signal Bridges (Model Lifecycle)

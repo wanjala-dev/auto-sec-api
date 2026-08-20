@@ -238,25 +238,54 @@ class Transaction(StandardMetadata):
 | Linting | ruff | (Black-compatible, line-length 120) |
 | Testing | pytest, pytest-django | |
 
-## Tenancy — single database, application-enforced isolation
+## Tenancy — TWO TIERS: a pooled database plus per-tenant databases
 
-**autosec is SINGLE-DATABASE.** `DATABASE_ROUTERS = []` (`api/settings/base.py`), one `DATABASES`
-alias (`default`). There is no tenant router, no per-tenant database, no schema switching.
+**Verified against the running pod on 2026-08-20. Re-verify before relying on it.**
 
-Tenant isolation is enforced **in application code** by filtering on `workspace_id`. That means a
-missing filter IS a cross-tenant data leak — there is no database boundary behind it to catch you.
-Every queryset that touches workspace-scoped data must be scoped, and every new read seam needs an
-isolation test (see `components/*/tests/**/test_*isolation*`).
+```python
+# api/settings/base.py:305
+DATABASE_ROUTERS = ["components.shared_platform.infrastructure.tenancy.router.TenantRouter"]
+# DATABASES aliases, live: default, tenant_acme, tenant_faura, tenant_wanjala
+```
 
-See ADR 0028 for the tenancy model, the RLS hardening plan, and why the enterprise "run my own
-tenant" answer is a dedicated deployment rather than database routing.
+autosec is **not** single-database. It runs the two-tier model in ADR 0028 / the `/tenancy` skill:
 
-> **This section previously claimed "4 PostgreSQL databases routed by `tenants.router.TenantRouter`."**
-> That was fork-drift copied from the wanjala nonprofit codebase — the router was stripped when this
-> fork was created, and CLAUDE.md has always said single-DB. The stale text survived in an
-> authoritative-looking rules file for months and on 2026-08-13 it caused a genuine false belief that
-> autosec had database-level tenant isolation, moments before that claim would have been made to a
-> prospective customer. Do not restate an architecture here without checking `settings`.
+- **Pooled tier** — tenants share the `default` database. Isolation is enforced **in application
+  code** by filtering on `workspace_id`. A missing filter **is** the tenant boundary; there is no
+  database boundary behind it to catch you. Every queryset over workspace-scoped data must be
+  scoped, and every new read seam needs an isolation test
+  (`components/*/tests/**/test_*isolation*`).
+- **Dedicated tier** — a tenant gets its own database (`tenant_<subdomain>`), selected by
+  `TenantRouter` from the bound tenant context. Here the database *is* the boundary.
+
+Two consequences that have already bitten this codebase:
+
+1. **Unbound ORM access raises `UnboundTenantError`.** That is deliberate — a silent fallback to
+   `default` would be a cross-tenant read. Bind explicitly (`pooled_context()` / `tenant_context()`)
+   rather than working around the error.
+2. **`from django.db import connection` is ALWAYS the `default` connection**, whatever tenant is
+   bound. Raw SQL through it silently targets the wrong database on a dedicated tenant — the ORM
+   writes to `tenant_x` while the raw statement hits `default`, matches zero rows, and raises
+   nothing. This shipped: it left every dedicated tenant's embeddings NULL while the command
+   reported success (fixed 2026-08-20, PR #423). Use `db_alias_for()` and pin
+   `transaction.atomic(using=alias)`.
+
+**Tests do not exercise routing.** `api/settings/test.py:118` sets `DATABASE_ROUTERS = []`, so the
+suite runs unrouted against one database. A green test run says nothing about tenant routing — that
+gap is why the bug above reached a live tenant.
+
+> **This section has now been wrong in BOTH directions, which is the real lesson.** It originally
+> claimed "4 PostgreSQL databases routed by `tenants.router.TenantRouter`" — nonprofit fork-drift,
+> since the router genuinely was stripped at fork time. On 2026-08-13 that stale text produced a
+> false belief that autosec had database-level isolation, moments before the claim would have been
+> made to a prospective customer, and the section was rewritten to say SINGLE-DATABASE. Then the
+> dedicated tier was actually built, and the correction became the new falsehood — asserting no
+> router existed while `TenantRouter` routed four aliases in production.
+>
+> A doc that is confidently wrong is worse than one that is missing, and "we already corrected this
+> once" is not evidence that it is correct now. **Read `settings` and, where it matters, the running
+> pod, before restating an architecture here** — and when you change the architecture, change this
+> section in the same PR.
 
 ## Naming Conventions
 
