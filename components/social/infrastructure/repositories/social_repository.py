@@ -13,9 +13,41 @@ class SocialRepository:
     def get_post_queryset(self) -> QuerySet:
         from infrastructure.persistence.social.models import Post
 
-        return Post.objects.select_related("author", "shared_user").prefetch_related(
-            "likes", "dislikes", "image"
-        )
+        return Post.objects.select_related("author", "shared_user").prefetch_related("likes", "dislikes", "image")
+
+    def get_posts_visible_to(self, user) -> QuerySet:
+        """Posts ``user`` may address by pk.
+
+        Visible == authored by the caller, OR living in a workspace the caller
+        owns or holds an ACTIVE ``WorkspaceMembership`` in. The author leg is
+        load-bearing, not belt-and-braces: pre-feed posts have
+        ``workspace = NULL`` and would otherwise become unreachable to the
+        person who wrote them.
+
+        Mirrors ``WorkspaceQueryRepository.scope_to_user`` — the same predicate
+        expressed over ``Post`` instead of ``Workspace``. It is restated rather
+        than imported because reaching into another bounded context's
+        infrastructure is forbidden (``architecture-manifesto.md`` Rule 3); the
+        two must be changed together.
+
+        Anonymous callers get ``none()`` — never a fall-through to the table.
+        """
+        from django.db.models import Q
+
+        from infrastructure.persistence.workspaces.models import WorkspaceMembership
+
+        queryset = self.get_post_queryset()
+        if not getattr(user, "is_authenticated", False):
+            return queryset.none()
+
+        return queryset.filter(
+            Q(author_id=user.id)
+            | Q(workspace__workspace_owner_id=user.id)
+            | Q(
+                workspace__memberships__user_id=user.id,
+                workspace__memberships__status=WorkspaceMembership.Status.ACTIVE,
+            )
+        ).distinct()
 
     def get_post_by_id(self, post_id):
         from infrastructure.persistence.social.models import Post

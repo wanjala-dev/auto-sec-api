@@ -169,6 +169,14 @@ class WorkspaceService:
         """Fetch all workspace comments."""
         return self.query_repository.get_all_workspace_comments()
 
+    def get_workspace_comments_visible_to(self, user):
+        """The scoped front door for the cross-workspace comment list.
+
+        ``get_all_workspace_comments`` is unscoped and must not be handed to a
+        response on its own.
+        """
+        return self.query_repository.get_workspace_comments_visible_to(user)
+
     def get_workspace_comments_by_workspace(self, workspace_id):
         """Fetch comments for a workspace."""
         return self.query_repository.get_workspace_comments_by_workspace(workspace_id)
