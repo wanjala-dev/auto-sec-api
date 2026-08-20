@@ -56,6 +56,11 @@ class VerifiedGoogleSession:
     # refresh rotation is off). None when issuance didn't expose them.
     refresh_jti: str | None = None
     refresh_expires_at: datetime | None = None
+    # True when the account has an enforceable second factor, in which case NO
+    # tokens were minted. A verified Google identity is one factor; the account
+    # asked for two. The use case turns this into an OTP challenge. See
+    # ``domain/policies/otp_verification_policy.second_factor_required``.
+    two_factor_required: bool = False
 
 
 @dataclass(frozen=True)

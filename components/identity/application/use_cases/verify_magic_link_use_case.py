@@ -15,6 +15,7 @@ from components.identity.application.ports.magic_link_port import (
     MagicLinkPort,
 )
 from components.identity.application.ports.session_registry_port import SessionRegistryPort
+from components.identity.application.ports.token_port import TokenPort
 from components.identity.domain.value_objects.auth_tokens import RequestContext
 
 
@@ -28,6 +29,22 @@ class VerifyMagicLinkResult:
     tokens: dict
     next_url: str
     created_user: bool
+
+
+@dataclass(frozen=True)
+class VerifyMagicLinkChallenge:
+    """The link checked out, but the account still owes a second factor.
+
+    Same two-step shape the password login uses: no session yet, just a
+    short-lived ``preauth_token`` that can do nothing except complete the OTP
+    challenge on ``/identity/otp/verify/``.
+    """
+
+    user_id: str
+    email: str
+    username: str
+    preauth_token: str
+    next_url: str
 
 
 @dataclass(frozen=True)
@@ -45,14 +62,20 @@ _INVALID_OR_EXPIRED = VerifyMagicLinkError(
 
 
 class VerifyMagicLinkUseCase:
+    #: How long the OTP challenge handed back to a 2FA account stays usable.
+    #: Same budget the password login gives it.
+    PREAUTH_LIFETIME_MINUTES = 5
+
     def __init__(
         self,
         *,
         magic_link: MagicLinkPort,
         session_registry: SessionRegistryPort,
+        tokens: TokenPort,
     ):
         self._magic_link = magic_link
         self._sessions = session_registry
+        self._tokens = tokens
 
     def execute(
         self,
@@ -71,6 +94,21 @@ class VerifyMagicLinkUseCase:
         )
         if session is None:
             return _INVALID_OR_EXPIRED
+        if session.two_factor_required:
+            # No session is registered and no pair was minted: the link proved
+            # inbox control, which is one factor. The second one is still owed,
+            # so this returns the same challenge a password login would.
+            preauth = self._tokens.issue_preauth_token(
+                UUID(str(session.user_id)),
+                lifetime_minutes=self.PREAUTH_LIFETIME_MINUTES,
+            )
+            return VerifyMagicLinkChallenge(
+                user_id=session.user_id,
+                email=session.email,
+                username=session.username,
+                preauth_token=preauth.access,
+                next_url=session.next_url,
+            )
         # Register the login session (never breaks sign-in — the adapter
         # logs + continues on failure).
         if session.refresh_jti and session.refresh_expires_at:

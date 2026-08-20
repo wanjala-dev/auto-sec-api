@@ -98,6 +98,9 @@ class OrmMagicLinkAdapter(MagicLinkPort):
         from django.db import IntegrityError
         from django.utils import timezone
 
+        from components.identity.infrastructure.adapters.second_factor_lookup import (
+            second_factor_required_for,
+        )
         from components.identity.infrastructure.adapters.user_utils import (
             issue_tokens,
         )
@@ -179,6 +182,30 @@ class OrmMagicLinkAdapter(MagicLinkPort):
         # Back-link the user FK on the consumed row.
         MagicLinkToken.objects.filter(pk=token_row.pk).update(user=user)
         token_row.user = user
+
+        # Inbox control is ONE factor. If the account has an enforceable second
+        # factor, mint nothing here — the use case raises an OTP challenge and
+        # the real pair is issued by VerifyOTPUseCase, exactly as on the
+        # password login. Minting a pair we intend to discard would leave a
+        # valid, unissued credential in flight for no reason.
+        if second_factor_required_for(user):
+            logger.info(
+                "magic_link_verify_otp_required user_id=%s created_user=%s",
+                user.id,
+                created_user,
+            )
+            return VerifiedMagicLinkSession(
+                user_id=str(user.id),
+                email=user.email,
+                username=user.username,
+                is_onboard_complete=bool(getattr(user, "is_onboard_complete", False)),
+                is_contributor=bool(getattr(user, "is_contributor", False)),
+                access_token="",
+                refresh_token="",
+                next_url=token_row.next_url or "",
+                created_user=created_user,
+                two_factor_required=True,
+            )
 
         tokens = issue_tokens(
             user,
