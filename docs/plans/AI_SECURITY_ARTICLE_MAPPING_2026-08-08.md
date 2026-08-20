@@ -39,7 +39,7 @@ worked example), `docs/product/STATE_AND_VISION.md`.
 
 | # | Article idea | Lens A (our own AI) | Lens B (product) |
 |---|---|---|---|
-| 1a | Adversarial probe catalogue (injection, jailbreak, encoding evasion, leakage) run repeatably | **Have (partial)** — `red_team_v1` corpus, 16 cases, 5 categories | — |
+| 1a | Adversarial probe catalogue (injection, jailbreak, encoding evasion, leakage) run repeatably | **Have (partial)** — `red_team_v1` corpus, 17 cases, 5 categories | — |
 | 1b | External scanner (Garak/PyRIT/Promptfoo) against the deployed app | **Net-new — ADOPT #1** | **Net-new — the AI-SPM scanner pillar (roadmap)** |
 | 1c | Planted fake secret as the attack objective (canary) | **Net-new — ADOPT #3** | Feeds the same pillar |
 | 1d | Wire tests into CI, rerun on model/prompt/guardrail change | **Have (partial)** — eval harness runs; scan-regression is always-on, LLM-judge is env-gated | — |
@@ -100,11 +100,15 @@ extraction, encoding evasion); findings mapped to OWASP LLM01/02/07; tests wired
 rerun when the model/prompt/guardrails change.
 
 **Lens A — what we have.** The *catalogue* and the *CI rerun* halves exist: `red_team_v1` is a
-versioned 16-case corpus across the article's exact categories, each case naming the defence layer
+versioned 17-case corpus across the article's exact categories, each case naming the defence layer
 that should stop it; the deterministic half (does `is_injection_suspected` flag it?) runs always-on
 as a regression net, and the LLM-judge pass runs env-gated like the other quality evals. Prompt
 changes ride the PromptRegistry version discipline (`planner.system` v8 cited in the corpus), so
-"rerun when the prompt changes" is structurally true.
+"rerun when the prompt changes" is structurally true. Schema 2 (2026-08-20) added the half that was
+missing: a case now names the **tools** its scenario must reach and the **risk tier** they carry,
+and the suite checks both against the live `AgentRegistry` + `resolve_tool_risk` — so a case can no
+longer describe a scenario this product cannot perform. It could before: one case spent months
+citing `cancel_sponsorship`, a tool the fork deleted with the nonprofit domain.
 
 **Lens A — the gap (the sharpest insight in the whole article).** Everything we have tests the
 **defence function** or the **planner in isolation**. Nothing attacks the **assembled, deployed
