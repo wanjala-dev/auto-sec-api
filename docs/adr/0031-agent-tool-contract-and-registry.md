@@ -470,7 +470,25 @@ D2 supplies the mechanism to report it, and converting them is its own change.
 **Phase 4 — the CRUD backlog.** `task_agent` / `project_agent` / `workspace_agent` / `user_agent` are
 46 of the 101 tools, carry 0 risk declarations, and are inherited nonprofit-shaped CRUD. Convert them
 last, or reconsider whether a SOC product needs 25 task-management tools reachable from chat at all.
-**Not decided here — OQ4.**
+~~**Not decided here — OQ4.**~~
+
+> **DONE, 2026-08-20 — and OQ4 is answered: convert, don't delete.** Henry: *"these will be needed."*
+> All 53 (the real count; "46 of 101" measured a slightly different surface) now declare
+> `scope`/`risk`/`provenance`/`failure_mode` (#446), proven to move no model-visible byte. The
+> measurement behind the decision is in `docs/architecture/AGENT_TOOL_USAGE_EVIDENCE_2026-08-20.md`
+> (#445); the declined trim is `AGENT_TOOL_DELETION_PROPOSAL_2026-08-20.md` (#447).
+>
+> **What the counts actually showed, and why they did not mean "delete":** 79 of 98 registered tools
+> were never recorded, including all 53 CRUD tools. But the observation history covers a single
+> 24-day window on a cluster that ran essentially one workload, so a zero measures *which surfaces
+> were exercised*, not *which tools have value* — **29 of the never-recorded tools are on the security
+> agents**, `open_draft_pr` among them. And `tools/task_agent.py` carries **874 recorded calls**,
+> because TriageAgent re-exports five of its tools.
+>
+> **The conversion found a live defect that justified it independently:** `resolve_tool_risk` falls
+> back to `read`, and none of the 53 declared a tier — so **25 state-changing tools were gated as
+> reads**, including `create_organization`, which creates a new tenant from chat with `privacy`
+> defaulting to `"public"`. Now `IRREVERSIBLE` + `CROSS_WORKSPACE`. F4's ratchet fell 63 → 54.
 
 At every phase both shapes work, nothing is deleted before its replacement is proven, and any phase
 can be reverted by flipping one flag or removing one middleware entry.
@@ -505,9 +523,14 @@ deferred.
 3. **OQ3 — provenance scope.** Does "every AI action posts to the board" bind every state-changing
    tool, or only board-acting specialists? Determines how strict F-provenance is, and how noisy the
    board gets.
-4. **OQ4 — the CRUD fleet.** `task_agent` (25 tools) and `project_agent` (18) are inherited
-   nonprofit-shaped CRUD, both above the tool-count band in D9. Convert them, trim them, or leave
-   them?
+4. ~~**OQ4 — the CRUD fleet.**~~ **ANSWERED 2026-08-20 — convert, don't delete.** Henry: *"these
+   will be needed."* All 53 now carry declarations (#446). The call-count evidence (#445) showed
+   every one of them unused over a 24-day, single-workload window — and that is precisely why it
+   does not license deletion: the same rule would retire `open_draft_pr`. Being above D9's
+   tool-count band remains true and remains a reason to keep chat-reachable surface under review;
+   it is not a reason to remove capability the product will need. The declined trim, with the two
+   items in it that are **wiring bugs rather than dead code** (7 detector classes that never
+   register), is recorded in `AGENT_TOOL_DELETION_PROPOSAL_2026-08-20.md`.
 5. **OQ5 — sequencing.** This is craft work, not customer work. Phase 0 and Phase 1 are cheap and
    pay for themselves in observability; Phases 3–4 are real effort. Does any of it clear the "does
    this move Tom/Isaac/Sephora forward?" bar right now, or does it wait?
