@@ -24,13 +24,28 @@ security sweep lived on them and nothing consumed them:
 * ``PostList`` / ``CommentList`` / ``CommentDetail`` served anonymous
   cross-tenant reads over a workspace-unscoped queryset. (#429)
 
-The #429 fix escalated the untenanted COMMENT queryset rather than fixing it,
-because no comment carries a workspace. Deleting the only two views that read
-it settles that: the feed's comment routes below are addressed per-post, and
-``list_post_comments`` is reachable only through a post the caller resolved.
+Tenant-scoped 2026-08-20 — the feed interaction surface
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Retiring the CRUD routes removed two readers of the untenanted queryset #429
+escalated, but it did NOT settle the underlying defect, and the retirement PR
+was wrong to imply it did. The three LIVE interaction seams below resolved a
+post by integer ``pk`` alone, so any authenticated user could read another
+tenant's comments and write likes/comments onto another tenant's post:
 
-The productized feed surface below is unaffected and stays: it is the only
-social surface any client calls.
+* ``GET  /social/posts/<pk>/comments/`` — cross-tenant read
+* ``POST /social/posts/<pk>/comments/`` — cross-tenant write
+* ``POST /social/posts/<pk>/like/``     — cross-tenant write
+
+All three now resolve through ``SocialRepository._posts_visible_to()``, and a
+post outside the caller's workspaces is reported as **404, never 403** — a 403
+would confirm the row exists and turn the endpoint into a cross-tenant
+existence oracle (tenancy skill §6, ADR 0028).
+
+``WorkspaceFeedPostDetail`` (PATCH/DELETE) was already safe: its use cases
+authorize on ``post.author_id == actor_id`` (edit) and author-or-workspace-owner
+(delete) before touching anything.
+
+The productized feed surface below is the only social surface any client calls.
 """
 
 from __future__ import annotations
@@ -287,12 +302,14 @@ class WorkspaceFeedPostCommentsView(APIView):
         }
 
     def get(self, request, pk):
-        if not _social_service.post_exists(pk):
+        comments = _social_service.list_post_comments(post_id=pk, viewer=request.user, limit=100)
+        if comments is None:
+            # Absent, soft-deleted, or another tenant's post — one response for
+            # all three, so this cannot be used as a cross-tenant existence oracle.
             return Response(
                 {"success": False, "error": "Post not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        comments = _social_service.list_post_comments(pk, limit=100)
         return Response({"success": True, "data": [self._serialize(c) for c in comments]})
 
     def post(self, request, pk):
