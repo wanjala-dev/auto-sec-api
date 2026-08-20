@@ -913,9 +913,16 @@ class ActionWorkspaceAll(RetrieveAPIView):
 
 
 class WorkspacePreferencesView(APIView):
-    """Manage workspace preferences."""
+    """Manage workspace preferences — members of THIS workspace only.
 
-    permission_classes = (IsUnauthenticatedOrAdminOrStaff,)
+    ``IsActiveWorkspaceMember`` resolves the workspace from the URL kwarg. It
+    is also what fails the unscoped ``/workspaces/preferences/`` collection
+    closed: with no workspace kwarg it resolves ``None`` and denies, which is
+    correct — that route returned every organization's row (and therefore
+    every organization id) to anyone.
+    """
+
+    permission_classes = (permissions.IsAuthenticated, IsActiveWorkspaceMember)
 
     def _get_or_create_preference(self, workspace_id):
         workspace = get_object_or_404(Workspace, id=workspace_id)
@@ -940,16 +947,24 @@ class WorkspacePreferencesView(APIView):
             return Response({"status": "error", "data": serializer.errors})
 
     def get(self, request, workspace=None):
-        if workspace:
-            preference = self._get_or_create_preference(workspace)
-            serializer = WorkspacePreferenceSerializer(preference)
-            return Response({"status": "success", "data": serializer.data}, status=status.HTTP_200_OK)
-        preference = workspace_service.get_all_workspace_preferences()
-        serializer = WorkspacePreferenceSerializer(preference, many=True)
+        # No unscoped branch. ``get_all_workspace_preferences()`` used to serve
+        # every organization's row here; the membership gate now denies the
+        # workspace-less route, so keeping the branch would only leave a
+        # cross-tenant dump one permission regression away from being live.
+        preference = self._get_or_create_preference(workspace)
+        serializer = WorkspacePreferenceSerializer(preference)
         return Response({"status": "success", "data": serializer.data}, status=status.HTTP_200_OK)
 
     def delete(self, request, workspace=None):
-        preference = get_object_or_404(Workspace, id=workspace)
+        """Delete the PREFERENCE row — never the organization.
+
+        This used to be ``get_object_or_404(Workspace, id=workspace).delete()``,
+        i.e. a cascading hard delete of the whole tenant from a route named
+        "preferences". Deleting an organization is
+        ``DELETE /workspaces/<id>/`` (``WorkspaceDetail.destroy``), which is
+        gated by ``IsWorkspaceAdminOfObject``.
+        """
+        preference = self._get_or_create_preference(workspace)
         preference.delete()
         return Response({"status": "success", "data": "Item Deleted"})
 
@@ -972,9 +987,14 @@ class WorkspacePreferencesByWorkspaceView(WorkspacePreferencesView):
 
 
 class WorkspaceOperationsView(APIView):
-    """Manage workspace operations."""
+    """Manage workspace operations — members of THIS workspace only.
 
-    permission_classes = (IsUnauthenticatedOrAdminOrStaff,)
+    Same gate, and for the same reason, as ``WorkspacePreferencesView``: the
+    rows are workspace-scoped, and on the pooled tier the workspace id in the
+    URL is the only boundary there is.
+    """
+
+    permission_classes = (permissions.IsAuthenticated, IsActiveWorkspaceMember)
 
     def post(self, request):
         serializer = WorkspaceOperationsSerializer(data=request.data)
@@ -984,10 +1004,13 @@ class WorkspaceOperationsView(APIView):
         else:
             return Response({"status": "error", "data": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
 
-    def put(self, request, *args, **kwargs):
+    def put(self, request, workspace=None, *args, **kwargs):
+        # ``workspace`` is threaded into the repository so the update can only
+        # touch rows this organization is linked to — it used to be a bare
+        # ``filter(id__in=ids)`` over the whole table.
         for each_item in request.data:
             ids = each_item["id"]
-            workspace_service.bulk_update_workspace_operations([ids], each_item["checked"])
+            workspace_service.bulk_update_workspace_operations([ids], each_item["checked"], workspace=workspace)
         return Response({"status": "success"})
 
     def patch(self, request, workspace=None, id=None):
@@ -1000,13 +1023,10 @@ class WorkspaceOperationsView(APIView):
             return Response({"status": "error", "data": serializer.errors})
 
     def get(self, request, workspace=None):
-        if workspace is not None:
-            operations = workspace_service.get_workspace_operations_by_workspace(workspace)
-            serializer = WorkspaceOperationsSerializer(instance=operations, many=True, context={"request": request})
-            return Response({"data": serializer.data}, status=status.HTTP_200_OK)
-        operations = workspace_service.get_all_workspace_operations()
-        serializer = WorkspaceOperationsSerializer(operations, many=True)
-        return Response({"status": "success", "data": serializer.data}, status=status.HTTP_200_OK)
+        # No unscoped branch — same reason as WorkspacePreferencesView.get.
+        operations = workspace_service.get_workspace_operations_by_workspace(workspace)
+        serializer = WorkspaceOperationsSerializer(instance=operations, many=True, context={"request": request})
+        return Response({"data": serializer.data}, status=status.HTTP_200_OK)
 
     def delete(self, request, workspace=None, id=None):
         operations = get_object_or_404(WorkspaceOperations, workspace_followers=workspace, id=id)
@@ -1046,9 +1066,24 @@ class WorkspaceOperationsDetailView(WorkspaceOperationsView):
 
 
 class WorkspaceCardView(APIView):
-    """Manage workspace cards."""
+    """Manage workspace cards — members of THIS workspace only.
 
-    permission_classes = (IsUnauthenticatedOrAdminOrStaff,)
+    Same gate, and for the same reason, as ``WorkspacePreferencesView``.
+    """
+
+    permission_classes = (permissions.IsAuthenticated, IsActiveWorkspaceMember)
+
+    def _get_card(self, workspace_id):
+        """The card for ``workspace_id``, or a 404.
+
+        The repository calls ``WorkspaceCard.objects.get(...)``, so a workspace
+        that has never had a card raised ``WorkspaceCard.DoesNotExist`` and the
+        route answered **500** — including for its own owner, which is how the
+        sweep found it. Absent is a 404, not a server error.
+        """
+        from infrastructure.persistence.workspaces.models import WorkspaceCard
+
+        return get_object_or_404(WorkspaceCard, workspace_id=workspace_id)
 
     def post(self, request):
         serializer = WorkspaceCardSerializer(data=request.data)
@@ -1059,8 +1094,8 @@ class WorkspaceCardView(APIView):
             return Response({"status": "error", "data": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
 
     def patch(self, request, workspace=None):
-        preference = workspace_service.get_workspace_card_by_workspace(workspace)
-        serializer = WorkspaceCardSerializer(preference, data=request.data, partial=True)
+        card = self._get_card(workspace)
+        serializer = WorkspaceCardSerializer(card, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
             return Response({"status": "success", "data": serializer.data})
@@ -1068,17 +1103,18 @@ class WorkspaceCardView(APIView):
             return Response({"status": "error", "data": serializer.errors})
 
     def get(self, request, workspace=None):
-        if workspace:
-            preference = workspace_service.get_workspace_card_by_workspace(workspace)
-            serializer = WorkspaceCardSerializer(preference)
-            return Response({"status": "success", "data": serializer.data}, status=status.HTTP_200_OK)
-        preference = workspace_service.get_all_workspace_cards()
-        serializer = WorkspaceCardSerializer(preference, many=True)
+        card = self._get_card(workspace)
+        serializer = WorkspaceCardSerializer(card)
         return Response({"status": "success", "data": serializer.data}, status=status.HTTP_200_OK)
 
     def delete(self, request, workspace=None):
-        preference = get_object_or_404(Workspace, id=workspace)
-        preference.delete()
+        """Delete the CARD row — never the organization.
+
+        This used to be ``get_object_or_404(Workspace, id=workspace).delete()``
+        — see ``WorkspacePreferencesView.delete`` for why that was the whole
+        tenant going away from a settings route.
+        """
+        self._get_card(workspace).delete()
         return Response({"status": "success", "data": "Item Deleted"})
 
 

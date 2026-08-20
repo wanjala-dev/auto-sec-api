@@ -8,14 +8,22 @@ from infrastructure.persistence.notifications.userpreferences.models import (
     WorkspacePreference,
 )
 
-
 pytestmark = pytest.mark.django_db
 
 
 def test_workspace_preferences_get_creates_default(api_client, workspace_factory):
-    """GET should create missing workspace preferences with defaults."""
+    """GET should create missing workspace preferences with defaults.
+
+    Authenticates as the owner. This test used to call the endpoint
+    ANONYMOUSLY and assert 200 — it was pinning the tenant-isolation hole
+    (``IsUnauthenticatedOrAdminOrStaff`` let every safe method through for
+    anyone) rather than the create-on-read behaviour it is named for. The
+    behaviour under test is unchanged; only the caller is now a legitimate
+    one. See ``test_workspace_settings_surface_authz.py``.
+    """
     workspace = workspace_factory()
 
+    api_client.force_authenticate(user=workspace.workspace_owner)
     response = api_client.get(f"/workspaces/{workspace.id}/preferences/")
 
     assert response.status_code == 200
