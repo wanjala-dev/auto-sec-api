@@ -20,7 +20,11 @@ def main():
     # and no URL, so without this every one of the ~99 of them would be an
     # unbound path once the router is registered. Binding here rather than in a
     # base class each command must remember to inherit means there is nothing
-    # to forget. The WORKSPACE is deliberately left unbound — see
+    # to forget. The WORKSPACE is deliberately left unbound.
+    #
+    # Pooled stays the DEFAULT; `--tenant <subdomain>` / `--all-tenants` are
+    # consumed here (never by the command) to reach a dedicated tenant's own
+    # database — see
     # components/shared_platform/infrastructure/tenancy/management.py.
     from components.shared_platform.infrastructure.tenancy.management import (
         run_management_command,

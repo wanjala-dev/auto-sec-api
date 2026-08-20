@@ -267,7 +267,7 @@ shared app). The complete map:
 | HTTP | `TenantHostMiddleware` (`MIDDLEWARE` position 3) |
 | WebSocket | `TenantBindWebsocketMiddleware` — wraps the OUTSIDE of the WS stack in `api/asgi.py`, because auth inside it already needs the DB |
 | Celery tasks | `infrastructure/celery/tenancy_signals.py` (headers + prerun/postrun) |
-| Management commands | `run_management_command()` in `manage.py` |
+| Management commands | `run_management_command()` in `manage.py` — pooled by default, `--tenant` / `--all-tenants` to reach the rest (§8a) |
 | Inbound webhooks | resolved from the payload (§3d), bound by the handler |
 
 Adding a new transport (gRPC, SSE endpoint, a second ASGI app, a cron that
@@ -394,6 +394,52 @@ Standing facts:
   before N is large.
 - Cross-tenant reporting requires explicit fan-out; there is no single query
   across tenants.
+
+### 8a. Running a management command against a tenant
+
+`manage.py` binds **pooled** by default and that is still the default — every
+command behaves as it always has with no flag. Two global flags, consumed by
+`run_management_command()` before Django parses argv, reach the rest:
+
+```bash
+python manage.py reindex_workspaces --all --sync --tenant faura   # one tenant
+python manage.py reindex_workspaces --all --sync --all-tenants    # every database
+```
+
+- `--tenant <subdomain>` resolves through the **registry**. Unknown, deactivated,
+  or an alias missing from `settings.DATABASES` → exits non-zero and the command
+  **never runs**. There is no branch that falls back to pooled: "I couldn't find
+  the tenant so I used the shared database" is a cross-tenant write.
+- `--tenant` on a **pooled** tenant also binds the workspace its registry row
+  pins, because on the shared database the workspace *is* the isolation. A
+  pooled tenant with no workspace pin is refused rather than silently widened to
+  the whole pool. A **dedicated** tenant binds no workspace — there the database
+  is the isolation and the run covers the whole tenant.
+- `--all-tenants` reuses `sweep_scopes()` — the same enumeration Celery Beat
+  fans out over, so a command and a scheduled sweep can never disagree about
+  which tenants exist. Each scope is fully bound and unbound around its own run.
+- `provision_tenant` does **not** use this: it *creates* the registry row that
+  `--tenant` resolves through, so its in-handler binding is the bootstrap case,
+  not a duplicate.
+
+**Why this exists** (2026-08-19): with pooled as the only option, a dedicated
+tenant's database was unreachable by every management command — no backfill, no
+seed, no data fix, ever. `reindex_workspaces --all --sync --force` took the pool
+to 0 NULL embeddings of 88 while `tenant_faura` and `tenant_wanjala` stayed
+100% NULL and the command reported success. Their RAG returned zero hits and
+raised nothing.
+
+**The trap it exposed, which is the more general lesson: raw SQL does not follow
+the router.** `from django.db import connection` is the `default` connection,
+always. `PgVectorWorkspaceIndexAdapter._attach_vectors` attached embeddings
+through a raw cursor while the ORM inserted the rows into the tenant database —
+so the `UPDATE ... SET embedding` ran against `default`, matched **zero rows**,
+raised nothing, and left NULL embeddings after billing a real OpenAI call. It
+is invisible on the pool, where the alias and the connection coincide. Any raw
+cursor, `transaction.atomic()`, or advisory lock touching tenant-routed rows
+must pin the alias — `db_alias_for(Model)` from
+`shared_kernel.application.transactional`, then `connections[alias]` /
+`atomic(using=alias)`. Same family as the `RunPython` pin above.
 
 ## 9. Local testing with subdomains
 
