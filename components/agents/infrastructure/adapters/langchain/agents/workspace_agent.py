@@ -15,7 +15,8 @@ Keyword-routing short-circuits (`_maybe_handle_direct`,
 track — the deep planner + `retrieve_workspace_context` tool replace
 them with honest grounded answers.
 """
-from components.agents.application.policies.tool_spec import Scope
+from components.agents.application.policies.tool_risk import ToolRisk
+from components.agents.application.policies.tool_spec import Failure, Provenance, Scope
 from components.agents.infrastructure.adapters.langchain.base import (
     BaseAgent,
     register_agent,
@@ -59,9 +60,33 @@ class WorkspaceAgent(BaseAgent):
     # `_setup_tools` registrations so DB-stored
     # `custom_profile.tool_whitelist` configs keep working. ──
 
+    # ── ADR 0031 Phase 4 — the declaration ────────────────────────────────
+    # Every tool below carries `scope` / `risk` / `provenance` /
+    # `failure_mode`. Two of those values deserve a word, because they look
+    # like placeholders and are not:
+    #
+    # `provenance=Provenance.NONE` — not one tool here posts to the board,
+    #   including the ones that write. That is today's behaviour stated
+    #   exactly; it deliberately does not pre-empt ADR 0031 OQ3 (whether
+    #   "every AI action posts to the board" binds every state-changing tool).
+    #
+    # `failure_mode=Failure.INTERNAL` — this is the honest declaration for a
+    #   body that still catches `Exception` and returns a string: the tool
+    #   CANNOT tell you why it failed, and `INTERNAL` is what "we don't know"
+    #   is called. It is not a default nobody chose — it is the F4 remediation
+    #   list, restated where the tool is defined. A body converted to narrow
+    #   excepts + `ToolResult` declares a real reason instead, and
+    #   `tests/architecture/test_tool_blanket_exception.py` names every one
+    #   still outstanding.
+    # ──────────────────────────────────────────────────────────────────────
+
     @tool(
         name="create_organization",
         description="Create a new organization/workspace. Input: organization data (name, story, category, privacy). Output: organization details.",
+        scope=Scope.CROSS_WORKSPACE,
+        risk=ToolRisk.IRREVERSIBLE,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def create_organization(self, input_str: str) -> str:
         return workspace_tools.create_organization(self, input_str)
@@ -77,6 +102,9 @@ class WorkspaceAgent(BaseAgent):
             "describes the current workspace. Output: name, "
             "story, sector, team size, member counts, creation date."
         ),
+        risk=ToolRisk.READ,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def get_organization_info(self, input_str: str) -> str:
         return workspace_tools.get_organization_info(self, input_str)
@@ -90,6 +118,9 @@ class WorkspaceAgent(BaseAgent):
             "organization info. The organization is always the current "
             "workspace and cannot be chosen."
         ),
+        risk=ToolRisk.REVERSIBLE_WRITE,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def update_organization(self, input_str: str) -> str:
         return workspace_tools.update_organization(self, input_str)
@@ -103,6 +134,9 @@ class WorkspaceAgent(BaseAgent):
             "organization is always the current workspace and cannot be "
             "chosen."
         ),
+        risk=ToolRisk.REVERSIBLE_WRITE,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def manage_organization_team(self, input_str: str) -> str:
         return workspace_tools.manage_organization_team(self, input_str)
@@ -117,6 +151,9 @@ class WorkspaceAgent(BaseAgent):
             "style question. Takes no input — the analytics are always "
             "for the current workspace. Output: aggregate analytics data."
         ),
+        risk=ToolRisk.READ,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def get_organization_analytics(self, input_str: str) -> str:
         return workspace_tools.get_organization_analytics(self, input_str)
@@ -130,6 +167,9 @@ class WorkspaceAgent(BaseAgent):
             "category management result. The organization is always the "
             "current workspace and cannot be chosen."
         ),
+        risk=ToolRisk.REVERSIBLE_WRITE,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def manage_organization_categories(self, input_str: str) -> str:
         return workspace_tools.manage_organization_categories(self, input_str)
@@ -143,6 +183,9 @@ class WorkspaceAgent(BaseAgent):
             "organization is always the current workspace and cannot be "
             "chosen."
         ),
+        risk=ToolRisk.REVERSIBLE_WRITE,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def manage_organization_tags(self, input_str: str) -> str:
         return workspace_tools.manage_organization_tags(self, input_str)
@@ -157,6 +200,9 @@ class WorkspaceAgent(BaseAgent):
             "Takes no input — the followers are always the current "
             "workspace's. Output: followers list and aggregate stats."
         ),
+        risk=ToolRisk.READ,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def get_organization_followers(self, input_str: str) -> str:
         return workspace_tools.get_organization_followers(self, input_str)
@@ -170,6 +216,9 @@ class WorkspaceAgent(BaseAgent):
             "result. The organization is always the current workspace "
             "and cannot be chosen."
         ),
+        risk=ToolRisk.REVERSIBLE_WRITE,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def manage_organization_privacy(self, input_str: str) -> str:
         return workspace_tools.manage_organization_privacy(self, input_str)
@@ -181,6 +230,9 @@ class WorkspaceAgent(BaseAgent):
             "Get the CURRENT workspace's operations and activities. "
             "Takes no input. Output: operations list."
         ),
+        risk=ToolRisk.READ,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def get_organization_operations(self, input_str: str) -> str:
         return workspace_tools.get_organization_operations(self, input_str)
@@ -194,6 +246,9 @@ class WorkspaceAgent(BaseAgent):
             "result. The organization is always the current workspace "
             "and cannot be chosen."
         ),
+        risk=ToolRisk.REVERSIBLE_WRITE,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def manage_organization_operations(self, input_str: str) -> str:
         return workspace_tools.manage_organization_operations(self, input_str)
@@ -207,6 +262,9 @@ class WorkspaceAgent(BaseAgent):
             "status. The organization is always the current workspace "
             "and cannot be chosen."
         ),
+        risk=ToolRisk.READ,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def check_organization_permissions(self, input_str: str) -> str:
         return workspace_tools.check_organization_permissions(self, input_str)
