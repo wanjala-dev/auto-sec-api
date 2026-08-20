@@ -1,23 +1,25 @@
 """User Agent tool implementations.
 
 All tools are scoped to the agent's current workspace — never cross-workspace
-reads. ``search_workspace_members`` is the agent-friendly counterpart to the
-global ``UserSearch`` REST endpoint; restricting it to workspace members
-prevents an email-enumeration leak through chat.
+reads. ``search_workspace_members`` restricts person lookup to the agent's own
+workspace, which prevents an email-enumeration leak through chat. There is no
+global user-directory endpoint to fall back to: identity's ``UserSearch`` was
+removed for the same reason.
 
 ``list_user_activity`` is the only privileged tool here — it reads the
 ``EntityAuditLog`` actor index for a single user and is gated with
 ``@requires_role("owner", "admin")`` on the agent class.
 """
+
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import UUID
 
 
-def _coerce_payload(payload: Any) -> Dict[str, Any]:
+def _coerce_payload(payload: Any) -> dict[str, Any]:
     """Coerce tool input into a dict. Accepts None, dict, JSON string, or raw text."""
     if payload in (None, "", {}):
         return {}
@@ -38,7 +40,7 @@ def _maybe_uuid(value: Any) -> UUID | None:
         return None
 
 
-def _parse_iso(value: Any) -> Optional[datetime]:
+def _parse_iso(value: Any) -> datetime | None:
     if isinstance(value, datetime):
         return value
     if isinstance(value, str) and value.strip():
@@ -59,10 +61,7 @@ def _format_member(membership, user) -> str:
     role = membership.role or "viewer"
     persona = membership.persona or "guest"
     status = membership.status or "—"
-    return (
-        f"• {_full_name(user)} <{user.email or '—'}>\n"
-        f"  Role: {role}  Persona: {persona}  Status: {status}\n"
-    )
+    return f"• {_full_name(user)} <{user.email or '—'}>\n  Role: {role}  Persona: {persona}  Status: {status}\n"
 
 
 def list_workspace_members(agent, params: Any) -> str:
@@ -78,8 +77,7 @@ def list_workspace_members(agent, params: Any) -> str:
         data = _coerce_payload(params)
         if not getattr(agent, "workspace_id", None):
             return (
-                "No workspace context available for this agent. "
-                "Assign the agent to a workspace before listing members."
+                "No workspace context available for this agent. Assign the agent to a workspace before listing members."
             )
 
         status_filter = (data.get("status") or "active").strip().lower()
@@ -122,9 +120,13 @@ def list_workspace_members(agent, params: Any) -> str:
 def search_workspace_members(agent, params: Any) -> str:
     """Search workspace members by name or email substring.
 
-    Scoped to the current workspace deliberately — the global ``UserSearch``
-    endpoint is admin-only because it enumerates every user across the
-    platform, which is not safe to expose through chat.
+    Scoped to the current workspace deliberately. There is no platform-wide
+    user search to fall back to: identity's ``UserSearch`` endpoint was
+    removed once a caller inventory found nothing using it, precisely because
+    a global directory reachable from a chat tool is a cross-tenant
+    enumeration surface. (It was never "admin-only", as this docstring used to
+    claim — it shipped unauthenticated, which is what #414 fixed.) Keep this
+    query pinned to ``agent.workspace_id``.
     """
     from django.db.models import Q
 
@@ -222,15 +224,9 @@ def get_user_profile(agent, params: Any) -> str:
             .first()
         )
         if membership is None:
-            return (
-                f"{_full_name(user)} <{user.email}> is not a member of this workspace."
-            )
+            return f"{_full_name(user)} <{user.email}> is not a member of this workspace."
 
-        joined = (
-            membership.created_at.strftime("%Y-%m-%d")
-            if getattr(membership, "created_at", None)
-            else "unknown"
-        )
+        joined = membership.created_at.strftime("%Y-%m-%d") if getattr(membership, "created_at", None) else "unknown"
         return (
             f"{_full_name(user)} <{user.email}>\n"
             f"  Role: {membership.role or 'viewer'}  "
@@ -281,7 +277,7 @@ def list_user_activity(agent, params: Any) -> str:
         since = _parse_iso(data.get("since"))
         if since is None:
             # Default: last 30 days. Keeps the output bounded.
-            since = datetime.now(timezone.utc) - timedelta(days=30)
+            since = datetime.now(UTC) - timedelta(days=30)
 
         limit_raw = data.get("limit")
         if isinstance(limit_raw, int) and limit_raw > 0:
@@ -300,10 +296,7 @@ def list_user_activity(agent, params: Any) -> str:
         )
         rows = list(qs[:limit])
         if not rows:
-            return (
-                f"No audit activity for user {user_id} in this workspace since "
-                f"{since.strftime('%Y-%m-%d')}."
-            )
+            return f"No audit activity for user {user_id} in this workspace since {since.strftime('%Y-%m-%d')}."
 
         header = (
             f"Audit activity for user {user_id} since {since.strftime('%Y-%m-%d')} "
@@ -311,18 +304,11 @@ def list_user_activity(agent, params: Any) -> str:
         )
         lines = [header]
         for row in rows:
-            entity = (
-                f"{row.content_type.app_label}.{row.content_type.model}"
-                if row.content_type_id
-                else "unknown"
-            )
+            entity = f"{row.content_type.app_label}.{row.content_type.model}" if row.content_type_id else "unknown"
             when = row.created_at.strftime("%Y-%m-%d %H:%M")
             old = _short(row.previous_value)
             new = _short(row.new_value)
-            lines.append(
-                f"• {when}  {entity}[{row.object_id}].{row.field_name}\n"
-                f"    {old} → {new}\n"
-            )
+            lines.append(f"• {when}  {entity}[{row.object_id}].{row.field_name}\n    {old} → {new}\n")
         return "".join(lines)
     except Exception as exc:  # pylint: disable=broad-except
         return f"Error listing user activity: {exc}"

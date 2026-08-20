@@ -1,4 +1,4 @@
-from django.urls import include, path, re_path
+from django.urls import include, path
 from rest_framework import routers
 
 from components.identity.api.controller import (
@@ -31,8 +31,6 @@ from components.identity.api.controller import (
     UserDetails,
     UserInvitationDetails,
     UserPatchView,
-    UserSearch,
-    UserSearchByQuery,
     UserSummaryView,
     UserViewSet,
     VerifyEmail,
@@ -132,8 +130,24 @@ urlpatterns = [
         name=WorkspaceAuditLogSettingsView.name,
     ),
     path("workspaces/<str:pk>/", ListWorkspaces.as_view(), name="workspace-list"),
-    path("search/", UserSearch.as_view(), name="profile-search-query"),
-    re_path(r"^search/(?P<query>\w{0,50})/$", UserSearchByQuery.as_view(), name="profile-search"),
+    # There is deliberately NO user-directory route on identity.
+    #
+    # ``search/`` (UserSearch) and ``search/<query>/`` (UserSearchByQuery) used
+    # to live here, alongside the router's ``users/`` list. #414 found all of
+    # them answering 200 with no credentials — an anonymous, cross-tenant
+    # account-existence oracle — and shut them with auth + tenant scoping. A
+    # caller inventory across both repos then found nothing calling either one:
+    # the frontend's ``USERS_URL`` is defined and never imported, and its
+    # ``userSearch`` chain dead-ends in the profile context with no consumer.
+    #
+    # So they are gone rather than merely gated. Person lookup has ONE home,
+    # and it is the membership context, which is where the tenancy predicate
+    # and the live people-pickers already are:
+    #   * ``/membership/members/``      — the workspace roster
+    #   * ``/membership/users/search/`` — the typeahead
+    # Both are authenticated and scoped through
+    # ``IdentityService.get_users_visible_to``. Route a new people surface at
+    # those; do not resurrect an identity-side directory.
     # Social auth
     path("google/", GoogleSocialAuthView.as_view()),
 ]

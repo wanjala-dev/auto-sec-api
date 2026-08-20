@@ -71,6 +71,11 @@ def user_is_active_workspace_member(user, workspace_id) -> bool:
     Object-level helper for published, workspace-wide content reads (e.g.
     a SENT newsletter) where membership itself — any role, sponsor/viewer
     included — is the gate, not a permission-bundle key.
+
+    Owner-or-ACTIVE-membership is the platform's one tenancy predicate. Its
+    queryset counterparts are ``WorkspaceQueryRepository.scope_to_user``
+    (workspaces) and ``OrmUserQueryRepository.get_queryset_visible_to``
+    (users). The three MUST agree — change one, change all three.
     """
     if not getattr(user, "is_authenticated", False) or not workspace_id:
         return False
