@@ -24,7 +24,6 @@ from components.identity.application.use_cases.login_use_case import LoginUseCas
 from components.identity.application.use_cases.logout_use_case import LogoutUseCase
 from components.identity.application.use_cases.record_audit_event_use_case import RecordAuditEventUseCase
 from components.identity.application.use_cases.record_auth_failure_use_case import RecordAuthFailureUseCase
-from components.identity.application.use_cases.register_user_use_case import RegisterUserUseCase
 from components.identity.application.use_cases.request_password_reset_use_case import RequestPasswordResetUseCase
 from components.identity.application.use_cases.revoke_other_sessions_use_case import RevokeOtherSessionsUseCase
 from components.identity.application.use_cases.revoke_session_use_case import RevokeSessionUseCase
@@ -143,13 +142,12 @@ class IdentityProvider:
             session_registry=OrmUserSessionRepository(),
         )
 
-    @staticmethod
-    def build_register_user_use_case() -> RegisterUserUseCase:
-        return RegisterUserUseCase(
-            user_repo=OrmUserRepository(),
-            token_port=JWTTokenAdapter(),
-            email_port=DjangoEmailVerificationAdapter(),
-        )
+    # NOTE: there is deliberately no ``build_register_user_use_case``. The use
+    # case it built had no caller — ``RegisterView`` creates the user through
+    # the serializer and then queues ``SendVerificationEmailUseCase`` — and it
+    # built the confirmation link out of a plain access token, the ten-day
+    # full-privilege session #418 removed from the live path. Verification
+    # links are minted below, once, through ``issue_email_verification_token``.
 
     @staticmethod
     def build_send_verification_email_use_case():

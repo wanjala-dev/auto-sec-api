@@ -1,13 +1,20 @@
 """Mint the email-verification token for a QA E2E account.
 
 The registration flow emails the user a link of the form
-``<frontend>/EmailConfirmed/?token=<jwt>`` where the token is simply
-``RefreshToken.for_user(user).access_token`` (see
-``components/identity/api/controller.py::RegisterView``). In an automated
-E2E run there is no inbox to read, so this command mints the exact same
-token the email would have carried and prints it as JSON. The test then
-drives the REAL frontend confirm page + ``/identity/email-verify/``
-endpoint — automation replaces reading the email, never the product path.
+``<frontend>/EmailConfirmed/?token=<jwt>``. In an automated E2E run there
+is no inbox to read, so this command mints the exact same token the email
+would have carried and prints it as JSON. The test then drives the REAL
+frontend confirm page + ``/identity/email-verify/`` endpoint — automation
+replaces reading the email, never the product path.
+
+"The exact same token" is load-bearing and has to be obtained the way the
+worker obtains it: through ``TokenPort.issue_email_verification_token``.
+This command used to mint ``RefreshToken.for_user(user).access_token``,
+which was accurate until #418 gave the confirmation link its own scoped
+``email_verify`` token class. After that it printed a full-privilege
+access token that ``/identity/email-verify/`` correctly refuses — so the
+harness was both broken and handing out a credential, which is the pair of
+properties #418 existed to separate.
 
 Guard rails: refuses to run unless ``settings.DEBUG`` is true or the
 operator explicitly sets ``QA_E2E_ALLOW=1`` in the environment, and only
@@ -49,8 +56,9 @@ class Command(BaseCommand):
         if not qa_commands_allowed():
             raise CommandError("qa_email_token is disabled outside DEBUG (set QA_E2E_ALLOW=1 to override).")
 
-        from rest_framework_simplejwt.tokens import RefreshToken
-
+        from components.identity.application.providers.identity_provider import (
+            IdentityProvider,
+        )
         from infrastructure.persistence.users.models import CustomUser
 
         email = options["email"].strip().lower()
@@ -62,7 +70,7 @@ class Command(BaseCommand):
         if user is None:
             raise CommandError(f"no user with email {email}")
 
-        token = str(RefreshToken.for_user(user).access_token)
+        token = IdentityProvider.build_token_adapter().issue_email_verification_token(user.id)
         confirm_path = getattr(settings, "EMAIL_CONFIRMATION_REDIRECT_PATH", "/EmailConfirmed/")
         self.stdout.write(
             json.dumps(
