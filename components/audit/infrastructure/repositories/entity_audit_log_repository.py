@@ -7,10 +7,13 @@ on ``AuditLogPort`` and receive this adapter via the provider.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from components.audit.application.ports.audit_log_port import AuditLogPort
 from components.audit.domain.entities.audit_entry_entity import AuditEntry
+
+logger = logging.getLogger(__name__)
 
 
 def _entry_to_domain(row) -> AuditEntry:
@@ -69,6 +72,18 @@ class EntityAuditLogRepository(AuditLogPort):
         else:
             ct = ContentType.objects.filter(app_label=app_label, model=model_name).first()
         if ct is None:
+            # Returning None here is a DROPPED AUDIT WRITE. It is kept
+            # non-raising so an audit failure can never break the user-facing
+            # action it describes — but it must be loud. A silent return is
+            # what let every sign_off decision write to nowhere for the life
+            # of that feature: the caller passed "signoff.<artifact_type>",
+            # no such model existed, and nothing anywhere said so.
+            logger.error(
+                "entity_audit_log.write_dropped entity_type=%s entity_id=%s field=%s reason=content_type_unresolvable",
+                entity_type,
+                entity_id,
+                field_name,
+            )
             return None
 
         row = EntityAuditLog.objects.create(
