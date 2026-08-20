@@ -38,7 +38,14 @@ magic link, OTP/2FA, JWT, password reset, sessions, login activity), `workspace`
 **Removed** (nonprofit domain — do NOT re-add without cause): sponsorship, budgeting, grants,
 commerce/marketplace, contacts, content, social, campaigns, events, donation_forms, reports,
 receipts, recommendations, messaging, admin_verification, sharing, templates, landing, sectors, faq,
-elasticsearch/search, and the multi-DB tenant router (autosec is **single-DB**).
+elasticsearch/search, and the nonprofit multi-DB tenant router.
+
+> **Note on that last one:** the *nonprofit* router (`tenants.router.TenantRouter`, aliases
+> `default/workspace/art/linkthegap`) was stripped at fork time. autosec later built its **own**
+> two-tier tenancy, so it is emphatically **not** single-DB today — `DATABASE_ROUTERS` points at
+> `components.shared_platform.infrastructure.tenancy.router.TenantRouter` and there are dedicated
+> per-tenant databases alongside the pooled one. See `.claude/rules/django-conventions.md`
+> "Tenancy", the `/tenancy` skill, and ADR 0028.
 
 **Security posture is first-class** (this will be probed by hackers): audit logging, notifications
 for security events, recycle-bin tombstoning, sign-off approvals, JWT + DRF throttles, account
@@ -163,7 +170,10 @@ Never `Co-Authored-By: Claude` on autosec commits. See `.claude/rules/branching-
 
 - `components/` — bounded contexts (business logic; the list above).
 - `infrastructure/` — persistence (`infrastructure/persistence/<app>/`), Celery, API infra, storage.
-- `api/` — Django project (settings, urls, celery, wsgi/asgi). Single-DB; `DATABASE_ROUTERS = []`.
+- `api/` — Django project (settings, urls, celery, wsgi/asgi). **Two-tier tenancy:** a pooled
+  `default` database plus a dedicated `tenant_<subdomain>` database per dedicated tenant, selected by
+  `DATABASE_ROUTERS = [".../tenancy/router.TenantRouter"]` (`api/settings/base.py`). Note
+  `api/settings/test.py` sets `DATABASE_ROUTERS = []`, so **the suite does not exercise routing**.
 - `tests/architecture/` — import-boundary enforcement.
 - `.claude/` — rules, hooks, commands, agents (autosec-scoped; some source rules were trimmed).
 
