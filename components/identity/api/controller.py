@@ -1,6 +1,6 @@
 import logging
 
-from rest_framework import viewsets
+from rest_framework import mixins, viewsets
 from rest_framework.permissions import AllowAny
 
 from components.identity.application.service import IdentityService
@@ -38,7 +38,7 @@ from django.utils.decorators import method_decorator
 from django.utils.encoding import DjangoUnicodeDecodeError, smart_str
 from django.utils.http import urlsafe_base64_decode
 from django.views.decorators.debug import sensitive_post_parameters
-from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
+from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import generics, permissions, status, views
 
 # Social models removed — social views live in social_controller.py
@@ -733,7 +733,42 @@ class ResendVerificationEmailView(views.APIView):
         )
 
 
-class UserViewSet(viewsets.ModelViewSet):
+class UserViewSet(
+    mixins.CreateModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.UpdateModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
+    """Object-scoped account operations. **There is deliberately no ``list``.**
+
+    This was a ``ModelViewSet``, so it published ``GET /identity/users/`` — a
+    whole-installation user directory. #414 found it answering **200 with no
+    credentials** (``IsUnauthenticatedOrAdminOrStaff``, every branch of which
+    returns ``True``) and serving every tenant's email, names, username and
+    workspaces: a cross-tenant PII dump and a user-enumeration oracle, and
+    enumeration was step 1 of the repro for the unauthenticated DELETE fixed
+    in #402. #414 shut it with ``IsAuthenticated`` + tenant scoping.
+
+    That was the right emergency fix. It is not the right resting state: a
+    caller inventory across both repos found **zero** callers of the list —
+    the frontend's ``USERS_URL`` constant is defined and never imported, no
+    management command, agent tool, test or doc reads it. Keeping an
+    authenticated directory endpoint that nothing calls buys no capability and
+    keeps live one of the two seams that just leaked. Removing the action
+    removes the route: ``GET /identity/users/`` now has no handler at all
+    (405), which is strictly stronger than a 401 and cannot regress into a
+    dump if a future permission edit slips. #414 deleted the sibling
+    ``UserList`` view for exactly this reason ("one URL entry away from
+    reopening this leak"); this is the same argument one step further.
+
+    "People in my org" is already served — correctly, and more completely —
+    by ``/membership/members/`` and ``/membership/users/search/``. A real
+    platform-admin directory, if ever wanted, deserves a deliberate
+    staff-gated surface with its own audit trail, not a resurrected legacy
+    route. Do not re-add ``ListModelMixin`` here.
+    """
+
     serializer_class = UserSerializer
 
     def get_queryset(self):
@@ -741,30 +776,52 @@ class UserViewSet(viewsets.ModelViewSet):
         Load one-to-one profile data up front to avoid N+1s when serializing
         nested user payloads.
 
-        ``list`` is tenant-scoped: it may only ever return users the caller
-        shares an active workspace with (staff see all). autosec is
-        single-database with application-enforced isolation, so this filter is
-        the tenant boundary — there is no database boundary behind it.
-
-        The object-scoped actions deliberately keep the unscoped queryset.
-        They are already gated by ``IsLoggedInUserOrAdmin``'s self-or-staff
-        object check, and narrowing the lookup here would turn their 403 into
-        a 404 — which the frontend's api client treats as "session is gone"
-        and force-logs the operator out (``apiClient.ts`` 404 interceptor on
+        Unscoped on purpose. Every remaining action on this viewset is
+        object-scoped and gated by ``IsLoggedInUserOrAdmin``'s self-or-staff
+        object check; narrowing the lookup here would turn their 403 into a
+        404 — which the frontend's api client treats as "session is gone" and
+        force-logs the operator out (``apiClient.ts`` 404 interceptor on
         ``/identity/users/``). Same denial, worse blast radius.
+
+        There is no collection read on this viewset, so this queryset is never
+        serialized as a list. If one is ever added it MUST scope through
+        ``IdentityService.get_users_visible_to`` — see the class docstring
+        first, because the answer is very probably "use the membership seam".
         """
-        service = IdentityService()
-        if self.action == "list":
-            return service.get_users_visible_to(self.request.user)
-        return service.get_user_queryset()
+        return IdentityService().get_user_queryset()
 
     # User permissions
     def get_permissions(self):
-        permission_classes = []
+        # Fail CLOSED. The default used to be an empty list — i.e. AllowAny —
+        # so any action not named below (including one added later, or a
+        # request whose method maps to no action at all) was public by
+        # omission. That is precisely the shape of the bug #414 fixed. An
+        # unknown action now requires authentication.
+        permission_classes = [permissions.IsAuthenticated]
         if self.action == "create":
             permission_classes = [AllowAny]
         elif self.action == "retrieve" or self.action == "update" or self.action == "partial_update":
-            permission_classes = [IsLoggedInUserOrAdmin]
+            # IsAuthenticated is NOT redundant next to IsLoggedInUserOrAdmin —
+            # for the same reason spelled out under ``destroy`` below, and it
+            # was observably missing here.
+            #
+            # ``IsLoggedInUserOrAdmin`` implements only has_object_permission,
+            # which DRF evaluates *after* ``get_object()`` has run its lookup.
+            # So an anonymous GET/PATCH of a real id was denied (403) while the
+            # same request for an id that does not exist 404'd — two different
+            # answers, no credentials required. That difference is a user
+            # enumeration oracle on the very viewset #414 de-enumerated, and
+            # enumeration was step 1 of the repro for the unauthenticated
+            # DELETE fixed in #402. Authenticating first collapses both cases
+            # to 401 before any row is loaded.
+            #
+            # An *authenticated* caller asking for a missing id still gets 404,
+            # so the frontend's "session is gone" 404 interceptor on
+            # ``/identity/users/`` behaves exactly as before.
+            permission_classes = [
+                permissions.IsAuthenticated,
+                IsLoggedInUserOrAdmin,
+            ]
 
         elif self.action == "destroy":
             # Deleting an account hard-deletes the row that every workspace
@@ -781,18 +838,6 @@ class UserViewSet(viewsets.ModelViewSet):
                 permissions.IsAuthenticated,
                 IsLoggedInUserOrAdmin,
             ]
-        elif self.action == "list":
-            # Was IsUnauthenticatedOrAdminOrStaff, every branch of which
-            # returns True — so this answered 200 with no credentials and
-            # served every user on the installation: email, names, username
-            # and workspaces, for every tenant. That is a cross-tenant PII
-            # dump and a user-enumeration oracle, and enumeration was step 1
-            # of the repro for the unauthenticated DELETE fixed in #402.
-            #
-            # Authentication is only half the fix: a signed-in tenant must
-            # still not see another tenant's people. The scoping lives in
-            # get_queryset() above.
-            permission_classes = [permissions.IsAuthenticated]
         return [permission() for permission in permission_classes]
 
 
@@ -1546,72 +1591,6 @@ class LogoutAPIView(generics.GenericAPIView):
         # Lets the frontend log a precise outcome without ever blocking on it.
         response["X-Token-Revoked"] = "1" if token_revoked else "0"
         return response
-
-
-class UserSearch(generics.ListAPIView):
-    """Search users by username or email using a query param or path value.
-
-    Read-only and authenticated, scoped to the caller's own tenancy.
-
-    Three defects were fixed here at once, all of them the same shape — input
-    reaching the ORM before anything checked who was asking:
-
-    * it answered 200 with no credentials, so it was an anonymous
-      account-existence oracle across every tenant;
-    * a missing ``query`` reached ``icontains=None`` and raised
-      ``ValueError: Cannot use None as a query value`` — an unauthenticated
-      500 on a search endpoint;
-    * it subclassed ``ListCreateAPIView`` with ``UserSerializer``, whose
-      ``create()`` is fully functional, so ``POST`` here was a second,
-      unauthenticated way to mint accounts alongside the real (gated)
-      registration endpoints. ``ListAPIView`` removes the write verb.
-
-    A blank query is also an empty result, never "match everything":
-    ``icontains=""`` matches every row, which would have made a one-character
-    typo a directory dump.
-    """
-
-    permission_classes = (permissions.IsAuthenticated,)
-    serializer_class = UserSerializer
-
-    MIN_QUERY_LEN = 2
-    MAX_RESULTS = 25
-
-    def get(self, request, *args, **kwargs):
-        # Path value first (the ``search/<query>/`` route), then ``query``
-        # (what the frontend sends), then ``q`` (the convention every other
-        # search endpoint in the codebase uses — accepted so the two spellings
-        # stop producing different behaviour).
-        raw = kwargs.get("query") or request.query_params.get("query") or request.query_params.get("q") or ""
-        query = raw.strip()
-
-        if len(query) < self.MIN_QUERY_LEN:
-            return Response({"data": []}, status=status.HTTP_200_OK)
-
-        service = IdentityService()
-        from components.shared_kernel.application.providers.django_orm_provider import (
-            get_django_orm_provider as _get_django_orm_provider,
-        )
-
-        _django_orm = _get_django_orm_provider()
-        Q = _django_orm.Q
-        # Tenant boundary — same rule the list action and the membership
-        # typeahead use: you can only find people you already share a
-        # workspace with.
-        queryset = service.get_users_visible_to(request.user)
-        profile_list = queryset.filter(Q(username__icontains=query) | Q(email__icontains=query))[: self.MAX_RESULTS]
-        serializer = UserSerializer(instance=profile_list, many=True, context={"request": request, "service": service})
-        return Response({"data": serializer.data}, status=status.HTTP_200_OK)
-
-
-@extend_schema_view(
-    get=extend_schema(operation_id="users_search_by_query_list"),
-    post=extend_schema(operation_id="users_search_by_query_create"),
-)
-class UserSearchByQuery(UserSearch):
-    """Path-based user search for unique schema operation IDs."""
-
-    name = "user-search-by-query"
 
 
 @method_decorator(

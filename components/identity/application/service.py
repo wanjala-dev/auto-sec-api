@@ -160,9 +160,10 @@ class IdentityService:
     def get_users_visible_to(self, actor):
         """Return the users ``actor`` is allowed to see.
 
-        The tenant boundary for user data: users sharing an active workspace
-        membership with the actor, plus the actor themselves. Staff and
-        superusers see the whole installation.
+        The tenant boundary for user data: users sharing a workspace with the
+        actor — owned or actively joined, the same predicate the workspace and
+        membership seams use — plus the actor themselves. Staff and superusers
+        see the whole installation.
         """
         return self.user_query_port.get_queryset_visible_to(actor)
 

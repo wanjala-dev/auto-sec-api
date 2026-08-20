@@ -133,7 +133,10 @@ class WorkspaceQueryRepository:
         Visible == the user OWNS the workspace, or holds an ACTIVE
         ``WorkspaceMembership`` in it. This is the queryset counterpart of
         ``components.membership.api.permissions.user_is_active_workspace_member``
-        — the two MUST agree, so a change to one belongs in both.
+        and of
+        ``components.identity.infrastructure.repositories.orm_user_query_repository.OrmUserQueryRepository.get_queryset_visible_to``
+        (the same predicate, projected onto users instead of workspaces).
+        The three MUST agree, so a change to one belongs in all three.
 
         autosec is single-database (ADR 0028): there is no database boundary
         behind this filter, so an unscoped workspace queryset IS a cross-tenant

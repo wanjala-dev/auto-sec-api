@@ -58,10 +58,13 @@ class UserQueryPort(ABC):
     def get_queryset_visible_to(self, actor):
         """Return the user queryset a given actor is allowed to see.
 
-        The tenant boundary for user data: users who share at least one
-        *active* workspace membership with ``actor``, plus the actor. Staff and
-        superusers are already trusted with system-wide administration and get
-        the unscoped queryset.
+        The tenant boundary for user data: users who share a workspace with
+        ``actor``, plus the actor. "Shares a workspace" means the same
+        predicate the workspace and membership seams use — **owns the
+        workspace, or holds an ACTIVE ``WorkspaceMembership`` in it**. Nothing
+        wider: pending/revoked memberships and followers do not grant
+        visibility. Staff and superusers are already trusted with system-wide
+        administration and get the unscoped queryset.
 
         Returns an empty queryset for an anonymous or missing actor.
         """

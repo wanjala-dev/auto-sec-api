@@ -6,14 +6,15 @@ DB:
 * ``list_workspace_members`` returns active members of the current workspace
   only — never leaks across workspaces.
 * ``search_workspace_members`` substring-matches on username, email, first,
-  and last name and is workspace-scoped (the global ``UserSearch`` REST
-  endpoint is admin-only for exactly this reason).
+  and last name and is workspace-scoped — there is no global user-directory
+  REST endpoint to fall back to, and this tool must not become one.
 * ``get_user_profile`` resolves a user by UUID or email and returns the
   membership-scoped profile, refusing if the user is not a member of the
   active workspace.
 * ``list_user_activity`` reads ``EntityAuditLog`` actor-scoped, and the
   ``@requires_role("owner", "admin")`` gate refuses non-admins.
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -27,7 +28,6 @@ from components.agents.infrastructure.adapters.langchain.agents.user_agent impor
 from components.agents.infrastructure.adapters.langchain.tools import user_agent as user_tools
 from infrastructure.persistence.audit.models import EntityAuditLog
 from infrastructure.persistence.workspaces.models import WorkspaceMembership
-
 
 REFUSAL = "You don't have permission to perform this action."
 
@@ -81,9 +81,7 @@ class TestListWorkspaceMembers:
         assert "Role: admin" in result
         assert "Role: member" in result
 
-    def test_does_not_leak_members_from_other_workspaces(
-        self, user_factory, workspace_factory
-    ):
+    def test_does_not_leak_members_from_other_workspaces(self, user_factory, workspace_factory):
         owner_a = user_factory()
         workspace_a = workspace_factory(owner=owner_a)
         owner_b = user_factory()
@@ -185,9 +183,7 @@ class TestGetUserProfile:
         stranger = user_factory(email="stranger@elsewhere.test")
 
         agent = _actor(owner, workspace)
-        result = user_tools.get_user_profile(
-            agent, '{"email": "stranger@elsewhere.test"}'
-        )
+        result = user_tools.get_user_profile(agent, '{"email": "stranger@elsewhere.test"}')
 
         assert "not a member of this workspace" in result
 
@@ -202,9 +198,7 @@ class TestGetUserProfile:
 
 @pytest.mark.django_db
 class TestListUserActivity:
-    def test_returns_actor_scoped_audit_entries(
-        self, user_factory, workspace_factory
-    ):
+    def test_returns_actor_scoped_audit_entries(self, user_factory, workspace_factory):
         owner = user_factory()
         workspace = workspace_factory(owner=owner)
         editor = user_factory(email="editor@example.com")
@@ -243,9 +237,7 @@ class TestListUserActivity:
         )
 
         agent = _actor(owner, workspace)
-        result = user_tools.list_user_activity(
-            agent, '{"email": "editor@example.com", "since": "2020-01-01"}'
-        )
+        result = user_tools.list_user_activity(agent, '{"email": "editor@example.com", "since": "2020-01-01"}')
 
         assert "workspace_name" in result
         assert "status" in result
@@ -258,9 +250,7 @@ class TestListUserActivity:
         _add_member(workspace, editor, role="member")
 
         agent = _actor(owner, workspace)
-        result = user_tools.list_user_activity(
-            agent, '{"email": "quiet@example.com", "since": "2020-01-01"}'
-        )
+        result = user_tools.list_user_activity(agent, '{"email": "quiet@example.com", "since": "2020-01-01"}')
         assert "No audit activity" in result
 
 
@@ -271,9 +261,7 @@ class TestRoleGateOnListUserActivity:
     ``SimpleNamespace`` actor — that's what the decorator reads.
     """
 
-    def test_owner_passes_without_explicit_membership_row(
-        self, user_factory, workspace_factory
-    ):
+    def test_owner_passes_without_explicit_membership_row(self, user_factory, workspace_factory):
         owner = user_factory()
         workspace = workspace_factory(owner=owner)
         actor = _actor(owner, workspace)
@@ -327,9 +315,7 @@ class TestAgentRegistration:
             "identity",
             "members",
         ):
-            assert slug in registered, (
-                f"user_agent slug/alias '{slug}' missing from registry"
-            )
+            assert slug in registered, f"user_agent slug/alias '{slug}' missing from registry"
 
     def test_user_agent_maps_to_identity_domain(self):
         from components.agents.domain.agent_domain_map import resolve_source_domain
