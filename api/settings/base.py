@@ -776,7 +776,12 @@ AUTHENTICATION_BACKENDS = (
 LOGIN_RESPONSE_MODE = "legacy"
 SECURITY_EVENTS_ASYNC = True
 
-LOGIN_REDIRECT_URL = "post-list"
+# Django/allauth resolve this after a session login (admin, allauth flows). It
+# pointed at "post-list" — the legacy /social/ post-list route, retired
+# 2026-08-19. A named route that no longer reverses makes resolve_url() raise
+# NoReverseMatch mid-login, so this is a path, not a view name. The API itself
+# is JWT (REST_USE_JWT), so nothing in the token flow reads this.
+LOGIN_REDIRECT_URL = "/"
 ACCOUNT_EMAIL_REQUIRED = True
 REST_SESSION_LOGIN = False
 REST_USE_JWT = True

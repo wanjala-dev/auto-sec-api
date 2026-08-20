@@ -36,9 +36,24 @@ magic link, OTP/2FA, JWT, password reset, sessions, login activity), `workspace`
 `payments` (Stripe, org/team-plan billing, payment methods, payment plans, webhooks).
 
 **Removed** (nonprofit domain — do NOT re-add without cause): sponsorship, budgeting, grants,
-commerce/marketplace, contacts, content, social, campaigns, events, donation_forms, reports,
-receipts, recommendations, messaging, admin_verification, sharing, templates, landing, sectors, faq,
-elasticsearch/search, and the nonprofit multi-DB tenant router.
+commerce/marketplace, contacts, campaigns, events, donation_forms, reports, receipts,
+recommendations, admin_verification, sharing, landing, sectors, faq, the **Elasticsearch** search
+backend, and the nonprofit multi-DB tenant router.
+
+> **This list previously also named `content`, `social`, `messaging`, `templates` and `search`.**
+> All five are **present and routed** in `api/urls.py` — `social` and `messaging` back the HUD's
+> operator feed and DMs, `templates` is the Template Kernel that has its own local skill this very
+> file names two sections down, and `search` survived the loss of its Elasticsearch backend. The
+> entry was stale in the same way the tenancy paragraph below was, and cost a 2026-08-19 retirement
+> agent real time re-deriving that `social` exists. **Before adding a context to this list, check
+> `components/` and `api/urls.py`** — "removed" here has to mean gone, or the list is worse than
+> having no list.
+
+**Collaboration surfaces that are live:** `social` serves the per-workspace **operator feed** only
+(`/social/workspaces/<ws>/feed/`, `/social/posts/<id>/…`), gated by `feature.social_feed`;
+`messaging` serves DMs at `/messaging/`. The legacy generic `/social/` post/comment CRUD was
+**retired 2026-08-19** — it had no client and carried the sweep's whole social defect class. Don't
+re-add generic social CRUD.
 
 > **Note on that last one:** the *nonprofit* router (`tenants.router.TenantRouter`, aliases
 > `default/workspace/art/linkthegap`) was stripped at fork time. autosec later built its **own**
