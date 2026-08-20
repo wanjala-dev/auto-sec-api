@@ -41,26 +41,33 @@ class SocialService:
     # ── Feed post interactions ───────────────────────────────────────────
 
     def toggle_feed_post_like(self, post_id, user):
-        """Toggle a like on an active feed post.
+        """Toggle a like on an active feed post ``user`` can actually see.
 
-        Returns ``(liked, like_count)`` or ``None`` when the post doesn't
-        exist / is soft-deleted.
+        Returns ``(liked, like_count)``, or ``None`` when the post doesn't
+        exist, is soft-deleted, or lives outside ``user``'s workspaces. The
+        caller renders all three as 404 — a cross-tenant probe must not be
+        able to distinguish them.
         """
-        post = self._repo.get_active_post(post_id)
+        post = self._repo.get_visible_active_post(post_id, user)
         if post is None:
             return None
         liked = self._repo.toggle_like(post, user)
         return liked, self._repo.like_count(post)
 
-    def post_exists(self, post_id) -> bool:
-        return self._repo.post_exists(post_id)
+    def list_post_comments(self, *, post_id, viewer, limit: int = 100):
+        """Comments on a post ``viewer`` can see. ``None`` when they cannot.
 
-    def list_post_comments(self, post_id, limit: int = 100):
-        return self._repo.list_post_comments(post_id, limit=limit)
+        ``None`` (not visible / absent) is distinct from ``[]`` (visible, no
+        comments) so the controller can 404 the first and 200 the second.
+        """
+        post = self._repo.get_visible_active_post(post_id, viewer)
+        if post is None:
+            return None
+        return self._repo.list_post_comments(post.pk, limit=limit)
 
     def add_post_comment(self, *, post_id, author, body: str):
-        """Add a comment to an active post. Returns ``None`` if the post is gone."""
-        post = self._repo.get_active_post(post_id)
+        """Comment on an active post ``author`` can see. ``None`` if they cannot."""
+        post = self._repo.get_visible_active_post(post_id, author)
         if post is None:
             return None
         return self._repo.add_post_comment(post=post, author=author, body=body)

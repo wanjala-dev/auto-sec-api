@@ -6,9 +6,23 @@ methods and the dislike toggle were deleted with the legacy ``/social/`` CRUD
 views that were their only callers (retired 2026-08-19 — see
 ``components/social/api/controller.py``).
 
-Feed reads/writes do NOT come through here: they go through
+Feed LISTING does not come through here: it goes through
 ``feed_post_repository.FeedPostRepository``, which implements ``PostStorePort``
-and scopes every query to a workspace.
+and filters on ``workspace_id``.
+
+Tenant scoping (2026-08-20)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Every by-pk lookup in this file goes through ``_posts_visible_to()``. It did
+not, and that was a live cross-tenant hole: ``get_active_post`` /
+``post_exists`` / ``list_post_comments`` filtered on ``pk`` alone, so any
+authenticated user could read another tenant's comments and write likes and
+comments onto another tenant's post by walking sequential integer pks. The
+legacy ``/social/`` CRUD retirement removed two readers of the same unscoped
+pattern but left these three, which are LIVE and called by the HUD.
+
+autosec's pooled tier is one shared database scoped by ``workspace_id``
+(ADR 0028) — application-level filtering IS the tenant boundary here, with no
+database boundary behind it to catch a missing predicate.
 """
 
 from __future__ import annotations
@@ -19,15 +33,49 @@ class SocialRepository:
 
     # ── Feed posts ───────────────────────────────────────────────────────
 
-    def get_active_post(self, post_id):
+    def _posts_visible_to(self, viewer):
+        """Posts ``viewer`` may address by pk — THE tenant boundary for this file.
+
+        Visible == authored by the caller, OR living in a workspace the caller
+        owns or holds an ACTIVE ``WorkspaceMembership`` in. The author leg is
+        load-bearing, not belt-and-braces: pre-feed posts have
+        ``workspace = NULL`` and would otherwise become unreachable to the
+        person who wrote them.
+
+        Mirrors ``WorkspaceQueryRepository.scope_to_user`` — the same predicate
+        expressed over ``Post`` instead of ``Workspace``. It is restated rather
+        than imported because reaching into another bounded context's
+        infrastructure is forbidden (``architecture-manifesto.md`` Rule 3); the
+        two must be changed together.
+
+        Anonymous callers get ``none()`` — never a fall-through to the table.
+        Defined ONCE and used by every by-pk lookup below, so a future seam
+        cannot pick up an unscoped queryset by accident.
+        """
+        from django.db.models import Q
+
         from infrastructure.persistence.social.models import Post
+        from infrastructure.persistence.workspaces.models import WorkspaceMembership
 
-        return Post.objects.filter(pk=post_id, is_deleted=False).first()
+        queryset = Post.objects.filter(is_deleted=False)
+        if not getattr(viewer, "is_authenticated", False):
+            return queryset.none()
 
-    def post_exists(self, post_id) -> bool:
-        from infrastructure.persistence.social.models import Post
+        return queryset.filter(
+            Q(author_id=viewer.id)
+            | Q(workspace__workspace_owner_id=viewer.id)
+            | Q(
+                workspace__memberships__user_id=viewer.id,
+                workspace__memberships__status=WorkspaceMembership.Status.ACTIVE,
+            )
+        ).distinct()
 
-        return Post.objects.filter(pk=post_id).exists()
+    def get_visible_active_post(self, post_id, viewer):
+        """The ONLY by-pk post lookup on this repository. ``None`` when the post
+        does not exist, is soft-deleted, or is outside ``viewer``'s workspaces —
+        the caller cannot tell which, which is the point (no existence oracle).
+        """
+        return self._posts_visible_to(viewer).filter(pk=post_id).first()
 
     def liked_post_ids(self, post_ids, user) -> set:
         """IDs (subset of ``post_ids``) the user has liked — one query."""
