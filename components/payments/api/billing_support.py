@@ -11,15 +11,68 @@ from rest_framework.response import Response
 from components.payments.api.requests.team_plan_checkout_request import (
     TeamPlanCheckoutRequest,
 )
+from components.payments.domain.errors import (
+    PaymentConfigurationError,
+    SubscriptionError,
+)
 from components.workspace.application.facades.workspace_facade import user_is_workspace_member
 
 logger = logging.getLogger(__name__)
+
+
+def billing_error_response(exc: PaymentConfigurationError | SubscriptionError) -> Response:
+    """Map a billing domain error onto its canonical HTTP response.
+
+    ONE mapping for the whole billing surface — every controller routes its
+    ``except (PaymentConfigurationError, SubscriptionError)`` branch through
+    here so the status can never drift per-endpoint again.
+
+    ``PaymentConfigurationError`` -> **409 Conflict.**
+        Billing is not provisioned on this deployment (no Stripe
+        ``PaymentProvider`` row, or no ``STRIPE_SECRET_KEY``). An optional
+        integration being unwired is *not* a server fault, so it must not be a
+        5xx: the frontend's ``apiClient`` counts any ``status >= 500`` as
+        "backend unhealthy" and trips the app-wide offline overlay after just
+        ``OFFLINE_THRESHOLD = 2`` consecutive failures — and the billing screen
+        fires overview + payment-methods back to back, so a 5xx here blacks out
+        the whole HUD. 409 is the honest read (RFC 9110 §15.5.10: the request
+        conflicts with the current state of the target resource, and the
+        operator can resolve it and resubmit), it fails closed, and it carries a
+        machine-readable ``error_code`` so the HUD can render "billing isn't set
+        up" instead of an error boundary. Same reasoning that already forced
+        ``PaymentAccountUnavailableError`` to a 4xx — see its docstring.
+
+    ``SubscriptionError`` -> **502 Bad Gateway.**
+        Stripe *is* configured but the upstream call failed or returned
+        something unusable. That genuinely is a bad response from an upstream
+        dependency, and it genuinely should read as backend-unhealthy.
+
+    Note this restores behaviour the code always intended but never executed:
+    both errors subclass ``shared_kernel.ValidationError``, which subclasses
+    ``ValueError``, so every ``except ValueError`` branch placed *above* the
+    domain-error branch silently swallowed them first. Keep the domain-error
+    ``except`` ABOVE any ``except ValueError`` at every call site.
+    """
+    if isinstance(exc, PaymentConfigurationError):
+        return Response(
+            {
+                "error": str(exc),
+                "error_code": "PaymentConfigurationError",
+                "detail": "Billing is not configured for this deployment.",
+            },
+            status=status.HTTP_409_CONFLICT,
+        )
+    return Response(
+        {"error": str(exc), "error_code": type(exc).__name__},
+        status=status.HTTP_502_BAD_GATEWAY,
+    )
 
 
 def _get_team_plan_billing_service():
     from components.payments.application.providers.team_plan_billing_provider import (
         TeamPlanBillingProvider,
     )
+
     return TeamPlanBillingProvider().build_service()
 
 
@@ -27,6 +80,7 @@ def _get_team_plan_webhook_service():
     from components.payments.application.providers.team_plan_webhook_provider import (
         TeamPlanWebhookProvider,
     )
+
     return TeamPlanWebhookProvider().build_service()
 
 
@@ -34,18 +88,18 @@ def _get_workspace_billing_service():
     from components.payments.application.providers.workspace_billing_provider import (
         WorkspaceBillingProvider,
     )
+
     return WorkspaceBillingProvider().build_service()
 
 
 def _require_workspace_member(request, workspace: Workspace) -> None:
     if not user_is_workspace_member(request.user, workspace):
-        raise PermissionDenied(
-            "You must belong to the organization to perform this action."
-        )
+        raise PermissionDenied("You must belong to the organization to perform this action.")
 
 
 def _require_workspace_admin(request, workspace: Workspace) -> None:
     from components.workspace.application.providers.workspaces_models_provider import get_workspaces_models_provider
+
     WorkspaceMembership = get_workspaces_models_provider().WorkspaceMembership
 
     if getattr(request.user, "is_staff", False) or getattr(request.user, "is_superuser", False):
@@ -74,6 +128,7 @@ def _refuse_during_impersonation(request, workspace: Workspace) -> None:
     privilege grant. See SupportImpersonationSession.
     """
     from components.workspace.application.providers.workspaces_models_provider import get_workspaces_models_provider
+
     WorkspaceMembership = get_workspaces_models_provider().WorkspaceMembership
 
     impersonating = WorkspaceMembership.objects.filter(
@@ -122,8 +177,10 @@ def _require_team_member(request, team: Team) -> None:
 
 def _resolve_workspace_admin_request(request) -> Workspace | Response:
     from components.identity.application.providers.users_models_provider import get_users_models_provider
+
     UserProfile = get_users_models_provider().UserProfile
     from components.workspace.application.providers.workspaces_models_provider import get_workspaces_models_provider
+
     Workspace = get_workspaces_models_provider().Workspace
 
     workspace_id = request.data.get("workspace") or request.query_params.get("workspace")
@@ -142,7 +199,7 @@ def _resolve_workspace_admin_request(request) -> Workspace | Response:
     return workspace
 
 
-def _resolve_billing_plan(plan_value) -> "Plan | None":
+def _resolve_billing_plan(plan_value) -> Plan | None:
     # Plan is owned by the SUBSCRIPTION context, not team — it was relocated
     # to infrastructure.persistence.subscription when subscription took over
     # the tier catalogue. Asking the team provider raised AttributeError and

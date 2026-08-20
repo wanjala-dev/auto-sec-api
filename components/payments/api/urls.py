@@ -58,6 +58,17 @@ payment_method_plan_detail = WorkspacePaymentMethodViewSet.as_view(
 # ── Main Payments URLs (mounted at /workspaces/<ws>/payments/) ──
 
 urlpatterns = [
+    # MUST precede the router include. ``router.register(r"providers", …)``
+    # generates a catch-all detail route ``providers/<pk>/``, which matched
+    # ``providers/health/`` first and dispatched it to
+    # ``PaymentProviderViewSet.retrieve(pk="health")`` — so this admin-only
+    # health endpoint was unreachable and 500'd instead of serving (or 403ing).
+    # Explicit path before catch-all.
+    path(
+        "providers/health/",
+        ProviderHealthController.as_view(),
+        name="payment-provider-health",
+    ),
     path("", include(router.urls)),
     path(
         "workspaces/<uuid:workspace_id>/methods/",
@@ -108,11 +119,6 @@ urlpatterns = [
         "stripe/connect/callback/",
         StripeConnectCallbackView.as_view(),
         name="workspace-payments-stripe-callback",
-    ),
-    path(
-        "providers/health/",
-        ProviderHealthController.as_view(),
-        name="payment-provider-health",
     ),
 ]
 

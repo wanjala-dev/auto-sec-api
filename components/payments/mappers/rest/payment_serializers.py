@@ -112,7 +112,6 @@ class WorkspacePaymentMethodSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "workspace",
-            "tenant",
             "provider",
             "display_name",
             "status",
@@ -141,7 +140,6 @@ class WorkspacePaymentMethodSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
             "workspace",
-            "tenant",
             "is_deleted",
             "deleted_at",
             "credentials_updated_at",
