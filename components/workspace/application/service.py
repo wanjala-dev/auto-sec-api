@@ -193,9 +193,9 @@ class WorkspaceService:
         """Fetch a workspace operation."""
         return self.query_repository.get_workspace_operation_by_id(operation_id, workspace)
 
-    def bulk_update_workspace_operations(self, ids: list, checked: bool):
-        """Bulk update workspace operations."""
-        return self.query_repository.bulk_update_workspace_operations(ids, checked)
+    def bulk_update_workspace_operations(self, ids: list, checked: bool, workspace=None):
+        """Bulk update workspace operations, narrowed to ``workspace``'s rows."""
+        return self.query_repository.bulk_update_workspace_operations(ids, checked, workspace=workspace)
 
     def get_or_create_workspace_preference(self, workspace):
         """Get or create workspace preference."""

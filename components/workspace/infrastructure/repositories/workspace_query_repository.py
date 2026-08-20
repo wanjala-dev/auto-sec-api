@@ -291,11 +291,26 @@ class WorkspaceQueryRepository:
         return WorkspaceOperations.objects.get(id=operation_id, workspace_followers=workspace)
 
     @staticmethod
-    def bulk_update_workspace_operations(ids: list, checked: bool):
-        """Bulk update workspace operations checked status."""
+    def bulk_update_workspace_operations(ids: list, checked: bool, workspace=None):
+        """Bulk update workspace operations checked status.
+
+        ``workspace`` narrows the update to rows that workspace is actually
+        linked to. Without it this was ``filter(id__in=ids)`` over the whole
+        table, so any id in the request body was writable regardless of which
+        organization the caller belonged to.
+
+        NOTE: ``WorkspaceOperations`` has no tenant column — it is a shared
+        table reached through the ``Workspace.operations`` M2M, so ``checked``
+        is still a value shared by every workspace linked to the same row.
+        This narrowing removes the arbitrary-id write; it does not make the
+        flag per-workspace. See the PR that added this note.
+        """
         from infrastructure.persistence.workspaces.models import WorkspaceOperations
 
-        return WorkspaceOperations.objects.filter(id__in=ids).update(checked=checked)
+        queryset = WorkspaceOperations.objects.filter(id__in=ids)
+        if workspace is not None:
+            queryset = queryset.filter(workspace_followers=workspace)
+        return queryset.update(checked=checked)
 
     # ========================================================================
     # WorkspacePreference Queries
