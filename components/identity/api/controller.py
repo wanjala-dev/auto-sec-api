@@ -839,7 +839,15 @@ class UserInvitationDetails(APIView):
 class UserDetails(APIView):
     """Return user details; supports ?mode=summary for a lightweight payload."""
 
-    permission_classes = (IsUnauthenticatedOrAdminOrStaff,)
+    # Was IsUnauthenticatedOrAdminOrStaff, every branch of whose
+    # has_permission returns True and which defines no has_object_permission —
+    # so this answered 200 with no credentials and returned any user's email,
+    # names and workspaces by id: a cross-tenant PII read and enumeration
+    # oracle (the same class of hole as #414/#402). Self-or-staff mirrors
+    # UserViewSet.retrieve. IsAuthenticated is stated explicitly because
+    # IsLoggedInUserOrAdmin only implements has_object_permission, which DRF
+    # runs solely when the view calls check_object_permissions() below.
+    permission_classes = (IsAuthenticated, IsLoggedInUserOrAdmin)
     name = "legacy-user-detail"
     serializer_class = UserSerializer
 
@@ -852,6 +860,7 @@ class UserDetails(APIView):
                 {"detail": "User not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
+        self.check_object_permissions(request, user)
         response_mode = request.query_params.get("mode")
         if response_mode and response_mode.lower() == "summary":
             data = _build_user_summary_payload(user, request)
@@ -1181,7 +1190,11 @@ class SupportImpersonationSessionEndView(APIView):
 
 
 class ProfileEditView(APIView):
-    permission_classes = (IsUnauthenticatedOrAdminOrStaff,)
+    # Was IsUnauthenticatedOrAdminOrStaff (every branch returns True) — so
+    # this rewrote any user's profile (name, bio, address, dob …) with no
+    # credentials. Self-or-staff, enforced against the profile's owning user
+    # via check_object_permissions() below.
+    permission_classes = (IsAuthenticated, IsLoggedInUserOrAdmin)
     serializer_class = UserProfileSerializer
 
     def patch(self, request, uuid=None):
@@ -1191,6 +1204,7 @@ class ProfileEditView(APIView):
             return Response(
                 {"status": "error", "data": {"detail": "User profile not found."}}, status=status.HTTP_404_NOT_FOUND
             )
+        self.check_object_permissions(request, profile.user)
         serializer = UserProfileSerializer(
             profile, data=request.data, partial=True, context={"request": request, "service": service}
         )
@@ -1202,7 +1216,12 @@ class ProfileEditView(APIView):
 
 
 class UserPatchView(APIView):
-    permission_classes = (IsUnauthenticatedOrAdminOrStaff,)
+    # Was IsUnauthenticatedOrAdminOrStaff (every branch returns True) — so
+    # this rewrote any account's email/username/first_name/last_name with no
+    # credentials: a one-request, unauthenticated account-takeover primitive
+    # (flip the victim's email, then drive password-reset to an inbox you
+    # control). Self-or-staff, enforced via check_object_permissions() below.
+    permission_classes = (IsAuthenticated, IsLoggedInUserOrAdmin)
     serializer_class = UserPatchSerializer
 
     def patch(self, request, uuid=None):
@@ -1212,6 +1231,7 @@ class UserPatchView(APIView):
             return Response(
                 {"status": "error", "data": {"detail": "User not found."}}, status=status.HTTP_404_NOT_FOUND
             )
+        self.check_object_permissions(request, preference)
         was_onboarded = getattr(preference, "is_onboard_complete", False)
         serializer = UserPatchSerializer(
             preference, data=request.data, partial=True, context={"request": request, "service": service}
@@ -1661,7 +1681,10 @@ class ChangePasswordView(UpdateAPIView):
 
 
 class ListWorkspaces(RetrieveAPIView):
-    permission_classes = (IsUnauthenticatedOrAdminOrStaff,)
+    # Was IsUnauthenticatedOrAdminOrStaff (every branch returns True) — so
+    # this returned any user's workspace list with no credentials. Self-or-
+    # staff, enforced via check_object_permissions() below.
+    permission_classes = (IsAuthenticated, IsLoggedInUserOrAdmin)
 
     def get_serializer_class(self):
         return _workspace_serializer()
@@ -1679,6 +1702,7 @@ class ListWorkspaces(RetrieveAPIView):
         user = service.get_user_by_id(user_id)
         if user is None:
             return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+        self.check_object_permissions(request, user)
 
         from components.identity.application.providers.workspace_bootstrap_provider import (
             get_workspace_bootstrap_provider,

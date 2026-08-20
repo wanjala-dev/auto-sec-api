@@ -9,7 +9,12 @@ from infrastructure.persistence.workspaces.models import Workspace
 pytestmark = pytest.mark.django_db
 
 
-def test_list_workspaces_rejects_non_uuid_identifier(api_client):
+def test_list_workspaces_rejects_non_uuid_identifier(api_client, user_factory):
+    # The endpoint is self-or-staff; authenticate so we exercise the
+    # identifier-validation branch rather than the (correct) 401 that now
+    # fires for an anonymous caller — the unauth deny is pinned in
+    # test_user_object_authz.
+    api_client.force_authenticate(user=user_factory())
     response = api_client.get("/identity/workspaces/1/")
 
     assert response.status_code == 400
