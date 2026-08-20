@@ -182,12 +182,15 @@ class TestSchemaIsUnchangedByTheConversion:
 class TestMiddlewareFiresForTheConvertedTool:
     """The D3 claim, tested against the real graph rather than our plumbing."""
 
-    def _run_one_tool_call(self, agent, *, tool_returns: str):
-        # Swap the promoted tool's body so the run is deterministic and never
-        # touches pgvector. The promotion wrappers and the middleware are
-        # untouched — they are what is under test.
-        promoted = next(t for t in agent.tools if t.name == TOOL_NAME)
-        promoted.func = lambda query="", **_kw: tool_returns
+    def _run_one_tool_call(self, agent, *, tool_returns):
+        # Swap the tool BODY so the run is deterministic and never touches
+        # pgvector, then re-promote. Substituting ``promoted.func`` directly
+        # would replace the promotion wrappers too — since ADR 0031 D2 they are
+        # what puts the outcome on the artifact, so a test that patched over
+        # them would be exercising a pipeline production does not have.
+        agent.retrieve_workspace_context = lambda query="", **_kw: tool_returns
+        agent.tools = []
+        agent._setup_tools()
         agent._create_agent_executor()
         return agent.agent_executor.invoke({"input": "what is this workspace"})
 
@@ -226,31 +229,35 @@ class TestMiddlewareFiresForTheConvertedTool:
         assert observed.as_payload()["scope"] == Scope.WORKSPACE_BOUND
 
     def test_the_middleware_classifies_a_failed_retrieval(self):
-        """A ``ToolResult(ok=False)`` is flattened to ``"Error: ..."`` by
-        ``_serialize_tool_result`` before anything downstream can read the
-        ``ok`` bit. The middleware recovers it — this is the observation that
-        makes an LLM/provider outage visible instead of silent."""
+        """The failed-retrieval observation, now carrying the tool's *declared*
+        failure mode rather than a blanket ``INTERNAL``.
+
+        Phase 1 could only recover "something failed" from the ``"Error: "``
+        prefix, because ``_serialize_tool_result`` destroyed the ``ok`` bit.
+        Under D2 the outcome rides the artifact and the reason survives — and
+        ``retrieve_workspace_context`` declares
+        ``failure_mode=UPSTREAM_UNAVAILABLE``, which is exactly what a
+        retrieval-backend outage is.
+        """
         from components.agents.infrastructure.adapters.langchain.base import ToolResult
 
         agent = self._agent_with_script("failure")
-        rendered = ToolResult(ok=False, error="retrieval backend unavailable").serialize()
-        self._run_one_tool_call(agent, tool_returns=rendered)
+        self._run_one_tool_call(agent, tool_returns=ToolResult(ok=False, error="retrieval backend unavailable"))
 
         observed = agent._tool_call_observations.all()[0]
         assert observed.outcome == ToolOutcome.FAILURE
-        assert observed.failure == Failure.INTERNAL
+        assert observed.failure == Failure.UPSTREAM_UNAVAILABLE
+        assert observed.expected is True
 
-    def test_a_failing_turn_still_reports_success_but_says_so_loudly(self, caplog):
-        """Observe-only: Phase 1 changes no status. It only stops the
-        contradiction being invisible. When D2 lands in Phase 3 this warning
-        becomes a real failed status and this assertion changes with it."""
+    def test_a_failing_turn_says_so_loudly(self, caplog):
+        """The Phase 1 warning survives D2 — the status moves too now, but this
+        is still the grep-able per-turn breadcrumb an operator reaches for."""
         import logging
 
         from components.agents.infrastructure.adapters.langchain.base import ToolResult
 
         agent = self._agent_with_script("failure")
-        rendered = ToolResult(ok=False, error="provider 503").serialize()
-        self._run_one_tool_call(agent, tool_returns=rendered)
+        self._run_one_tool_call(agent, tool_returns=ToolResult(ok=False, error="provider 503"))
 
         with caplog.at_level(logging.WARNING):
             agent._warn_on_success_over_tool_failures()
@@ -352,8 +359,10 @@ class TestDeepRunLogStatusIsWritten:
             )
         )
         agent = _make_agent(model=model)
-        promoted = next(t for t in agent.tools if t.name == TOOL_NAME)
-        promoted.func = lambda query="", **_kw: "[1] (mission)\nsome context"
+        # Swap the body and re-promote — see ``_run_one_tool_call``.
+        agent.retrieve_workspace_context = lambda query="", **_kw: "[1] (mission)\nsome context"
+        agent.tools = []
+        agent._setup_tools()
         agent._create_agent_executor()
 
         result = agent.agent_executor.invoke({"input": "q"})

@@ -23,10 +23,12 @@ from langchain_core.messages import ToolMessage
 
 from components.agents.application.policies.tool_risk import ToolRisk
 from components.agents.application.policies.tool_spec import (
+    SUCCESS_ENVELOPE,
     Failure,
     Provenance,
     Scope,
     ToolOutcome,
+    ToolOutcomeEnvelope,
     build_tool_spec,
 )
 from components.agents.infrastructure.adapters.langchain.middleware.tool_governance import (
@@ -164,31 +166,93 @@ class TestObserveOnlyEnforcesNothing:
 
 
 class TestFailureClassification:
+    """Three signals, in precedence order — see ``classify_tool_message``."""
+
     def test_success_message_classifies_as_success(self):
-        assert classify_tool_message(_ok_message()) == (ToolOutcome.SUCCESS, None)
+        envelope = classify_tool_message(_ok_message())
+        assert (envelope.outcome, envelope.failure) == (ToolOutcome.SUCCESS, None)
+
+    def test_the_carried_artifact_wins_over_every_other_signal(self):
+        """ADR 0031 D2 — the outcome the tool reported, carried out-of-band.
+
+        The content here says ``"Error: ..."`` (which the prefix fallback would
+        read as ``INTERNAL``) while the artifact says ``NOT_FOUND``. The
+        artifact must win, or D2 has bought nothing over Phase 1.
+        """
+        envelope = ToolOutcomeEnvelope(
+            outcome=ToolOutcome.FAILURE,
+            failure=Failure.NOT_FOUND,
+            expected=True,
+        )
+        message = ToolMessage(
+            content="Error: no such finding",
+            tool_call_id="c",
+            artifact=envelope.as_artifact(),
+        )
+        classified = classify_tool_message(message)
+        assert classified.failure == Failure.NOT_FOUND
+        assert classified.expected is True
+
+    def test_a_success_artifact_is_believed_over_a_misleading_prefix(self):
+        """The inverse, which is the real risk of a prefix heuristic: a tool
+        whose legitimate output happens to begin with ``"Error:"`` (a log line,
+        a grep result) was previously misreported as a failure."""
+        message = ToolMessage(
+            content="Error: NullPointerException at Foo.java:12 — 3 occurrences",
+            tool_call_id="c",
+            artifact=SUCCESS_ENVELOPE.as_artifact(),
+        )
+        assert classify_tool_message(message).outcome == ToolOutcome.SUCCESS
+
+    def test_a_foreign_artifact_is_ignored_rather_than_misread(self):
+        message = ToolMessage(content="fine", tool_call_id="c", artifact={"document_id": "doc_123"})
+        assert classify_tool_message(message).outcome == ToolOutcome.SUCCESS
 
     def test_langchain_error_status_classifies_as_failure(self):
         message = ToolMessage(content="blew up", tool_call_id="c", status="error")
-        assert classify_tool_message(message) == (ToolOutcome.FAILURE, Failure.INTERNAL)
+        classified = classify_tool_message(message)
+        assert (classified.outcome, classified.failure) == (ToolOutcome.FAILURE, Failure.INTERNAL)
+        assert classified.expected is False, "nothing declared this — it was inferred"
 
-    def test_flattened_tool_result_failure_is_recovered_from_the_string(self):
-        """``ToolResult(ok=False, error=...)`` reaches the model as
-        ``"Error: ..."`` because ``_serialize_tool_result`` throws the ``ok``
-        bit away. Recovering it here is exactly the observation Phase 1 exists
-        to produce — without it the failure is invisible at every layer."""
-        from components.agents.infrastructure.adapters.langchain.base import ToolResult
+    def test_the_prefix_fallback_still_applies_when_no_artifact_is_carried(self):
+        """A tool that carries no outcome falls through to the prefix check.
 
-        rendered = ToolResult(ok=False, error="upstream 503").serialize()
-        message = ToolMessage(content=rendered, tool_call_id="c")
-        outcome, failure = classify_tool_message(message)
-        assert outcome == ToolOutcome.FAILURE
-        assert failure == Failure.INTERNAL
+        ``INTERNAL`` + ``expected=False`` is the honest reading: something
+        failed and we do not know what.
+        """
+        message = ToolMessage(content="Error: something went wrong", tool_call_id="c")
+        classified = classify_tool_message(message)
+        assert classified.outcome == ToolOutcome.FAILURE
+        assert classified.failure == Failure.INTERNAL
+        assert classified.expected is False
+
+    def test_the_prefix_fallback_does_not_reach_the_hand_rolled_house_style(self):
+        """Measured, not assumed — and the reason F4 matters more than it looked.
+
+        The ~49 tools that swallow into a string do not write ``"Error: ..."``.
+        Every one of them writes ``f"Error <verb>ing X: {exc}"`` — no colon after
+        "Error". So the Phase 1 prefix heuristic, which reads as though it
+        covered the hand-rolled population, in fact only ever matched
+        ``ToolResult.serialize()`` output. **Those failures were invisible then
+        and are invisible now**; the only fix is converting the bodies, which is
+        exactly what F4 (``tests/architecture/test_tool_blanket_exception.py``)
+        ratchets toward.
+
+        This test pins the gap so it stays a known, stated limitation rather
+        than a comfortable assumption. When the bodies are converted it can go.
+        """
+        message = ToolMessage(content="Error listing tasks: boom", tool_call_id="c")
+        assert classify_tool_message(message).outcome == ToolOutcome.SUCCESS, (
+            "if this now classifies as a failure the prefix heuristic was broadened — "
+            "check that it does not also flag legitimate output that merely mentions an error"
+        )
 
     def test_a_successful_tool_result_is_not_misread_as_a_failure(self):
         from components.agents.infrastructure.adapters.langchain.base import ToolResult
 
         message = ToolMessage(content=ToolResult(ok=True, message="12 findings").serialize(), tool_call_id="c")
-        assert classify_tool_message(message) == (ToolOutcome.SUCCESS, None)
+        classified = classify_tool_message(message)
+        assert (classified.outcome, classified.failure) == (ToolOutcome.SUCCESS, None)
 
     def test_a_raised_exception_is_classified_before_it_propagates(self, middleware):
         def handler(_request):

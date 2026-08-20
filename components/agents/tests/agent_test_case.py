@@ -29,10 +29,12 @@ queue multiple selections.
 from __future__ import annotations
 
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 from django.test import TestCase
+
+from components.agents.tests._helpers.tool_output import model_visible_output
 
 
 class _ScriptedExecutor:
@@ -49,7 +51,7 @@ class _ScriptedExecutor:
         self._script = list(script)
         self._captured = captured_calls
 
-    def invoke(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+    def invoke(self, inputs: dict[str, Any]) -> dict[str, Any]:
         query = inputs.get("input", "")
         if not self._script:
             return {"input": query, "output": "(no scripted tool call)"}
@@ -57,10 +59,14 @@ class _ScriptedExecutor:
         tool = self._tools_by_name.get(tool_name)
         if tool is None:
             raise AssertionError(
-                f"Scripted tool '{tool_name}' not found on agent. "
-                f"Available: {sorted(self._tools_by_name)}"
+                f"Scripted tool '{tool_name}' not found on agent. Available: {sorted(self._tools_by_name)}"
             )
         result = tool.func(tool_input) if tool_input is not None else tool.func()
+        # ADR 0031 D2 — a promoted tool's ``.func`` returns
+        # ``(content, artifact)``. Calling ``.func`` directly bypasses the split
+        # ``BaseTool.run`` does, so the scripted executor does it here; without
+        # this, scripted tests would see a tuple where production sees a string.
+        result = model_visible_output(tool, result)
         self._captured.append((tool_name, tool_input, result))
         return {"input": query, "output": str(result)}
 
@@ -75,11 +81,11 @@ class AgentTestCase(TestCase):
     the LLM's tool selections.
     """
 
-    def setUp(self) -> None:  # noqa: D401
+    def setUp(self) -> None:
         super().setUp()
-        self._tool_returns: Dict[str, Any] = {}
-        self._scripted_calls: List[Tuple[str, Optional[str]]] = []
-        self._captured_calls: List[Tuple[str, Optional[str], Any]] = []
+        self._tool_returns: dict[str, Any] = {}
+        self._scripted_calls: list[tuple[str, str | None]] = []
+        self._captured_calls: list[tuple[str, str | None, Any]] = []
 
     # ── Construction ───────────────────────────────────────────────
 
@@ -87,9 +93,9 @@ class AgentTestCase(TestCase):
         self,
         agent_cls,
         *,
-        agent_id: Optional[str] = None,
-        user_id: Optional[str] = None,
-        workspace_id: Optional[str] = None,
+        agent_id: str | None = None,
+        user_id: str | None = None,
+        workspace_id: str | None = None,
         **overrides,
     ):
         """Build an instance of `agent_cls` with the LLM + executor faked.
@@ -128,15 +134,18 @@ class AgentTestCase(TestCase):
         fake_memory_service.get_memory = MagicMock(return_value=MagicMock())
         fake_memory_service.get_conversation_id = MagicMock(return_value=None)
 
-        with patch.object(
-            base_module,
-            "get_agent_memory_service",
-            return_value=fake_memory_service,
-        ), patch.object(
-            agent_cls,
-            "_create_agent_executor",
-            lambda self_inner: None,
-            create=False,
+        with (
+            patch.object(
+                base_module,
+                "get_agent_memory_service",
+                return_value=fake_memory_service,
+            ),
+            patch.object(
+                agent_cls,
+                "_create_agent_executor",
+                lambda self_inner: None,
+                create=False,
+            ),
         ):
             agent = agent_cls(
                 agent_id=agent_id,
@@ -171,14 +180,14 @@ class AgentTestCase(TestCase):
         """
         self._tool_returns[tool_name] = return_value
 
-    def mock_llm_chooses(self, tool_name: str, tool_input: Optional[str] = None) -> None:
+    def mock_llm_chooses(self, tool_name: str, tool_input: str | None = None) -> None:
         """Queue one scripted tool selection. Equivalent to
         `script_tool_calls([(tool_name, tool_input)])` but additive — call
         multiple times to queue a sequence.
         """
         self._scripted_calls.append((tool_name, tool_input))
 
-    def script_tool_calls(self, calls: List[Tuple[str, Optional[str]]]) -> None:
+    def script_tool_calls(self, calls: list[tuple[str, str | None]]) -> None:
         """Replace the script with a sequence of (tool_name, input) tuples."""
         self._scripted_calls.clear()
         self._scripted_calls.extend(calls)
@@ -198,15 +207,12 @@ class AgentTestCase(TestCase):
             if name == tool_name and tool_input == expected_input:
                 return
         raise AssertionError(
-            f"Expected tool '{tool_name}' called with '{expected_input}'. "
-            f"Captured: {self._captured_calls}"
+            f"Expected tool '{tool_name}' called with '{expected_input}'. Captured: {self._captured_calls}"
         )
 
     def assert_no_tools_called(self) -> None:
         if self._captured_calls:
-            raise AssertionError(
-                f"Expected no tool calls. Captured: {self._captured_calls}"
-            )
+            raise AssertionError(f"Expected no tool calls. Captured: {self._captured_calls}")
 
-    def captured_calls(self) -> List[Tuple[str, Optional[str], Any]]:
+    def captured_calls(self) -> list[tuple[str, str | None, Any]]:
         return list(self._captured_calls)

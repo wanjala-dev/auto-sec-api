@@ -96,6 +96,45 @@ class ToolOutcome:
     ALL = (SUCCESS, FAILURE)
 
 
+class RunOutcome:
+    """What one agent turn achieved, given how its tool calls went (D2).
+
+    Three states, because two cannot express the common case honestly:
+
+    ``COMPLETED``
+        No tool call failed. The overwhelming majority of turns, and the only
+        one that may claim a clean success.
+    ``PARTIAL``
+        Some tool calls failed and some succeeded. The turn still produced a
+        usable answer, so discarding it would be its own kind of dishonesty —
+        but calling it ``completed`` is the lie D2 exists to remove.
+    ``FAILED``
+        Tool calls were made and every one of them failed. This is the
+        LLM-provider-outage shape: the model narrates "reviewed; no confident
+        fix" over a stack of dead tool calls. There is no success here to
+        protect.
+
+    A turn that called no tools at all is ``COMPLETED`` — there is no tool
+    evidence either way, and inventing a failure from silence would be the
+    mirror-image defect.
+    """
+
+    COMPLETED = "completed"
+    PARTIAL = "partial"
+    FAILED = "failed"
+
+    ALL = (COMPLETED, PARTIAL, FAILED)
+
+
+def resolve_run_outcome(*, total_calls: int, failed_calls: int) -> str:
+    """Classify a turn from its tool-call tally. See ``RunOutcome``."""
+    if total_calls <= 0 or failed_calls <= 0:
+        return RunOutcome.COMPLETED
+    if failed_calls >= total_calls:
+        return RunOutcome.FAILED
+    return RunOutcome.PARTIAL
+
+
 @dataclass(frozen=True)
 class ToolSpec:
     """A tool's declaration. Every field is optional in Phase 1.
@@ -206,10 +245,121 @@ def build_tool_spec(
     )
 
 
-#: Prefix ``ToolResult.serialize()`` renders for a failed result. The governance
-#: middleware reads it to recover the ``ok`` bit that ``_serialize_tool_result``
-#: flattens away before anything else can see it (ADR 0031 D2).
+#: Prefix ``ToolResult.serialize()`` renders for a failed result.
+#:
+#: Phase 1 recovered the ``ok`` bit from this prefix because
+#: ``_serialize_tool_result`` destroyed the structured result before any
+#: middleware could see it. D2 replaced that with the artifact channel below, so
+#: the prefix is now only the **last-resort** signal — it still catches the ~49
+#: tools that hand-roll ``f"Error ...: {exc}"`` instead of returning a
+#: ``ToolResult``, which is the population fitness function F4 exists to shrink.
 TOOL_RESULT_ERROR_PREFIX = "Error:"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The outcome channel (ADR 0031 D2)
+#
+# A tool's return is flattened to a string before it becomes a ToolMessage — it
+# has to be, because that string is what the model reads. The bit that was lost
+# is carried instead on ``ToolMessage.artifact``, which LangChain documents as
+# "additional data not sent to the model but can be accessed programmatically".
+#
+# That is the whole trick, and it is why the model-visible bytes do not move:
+# the outcome never enters ``content``. It is also not a parallel channel
+# invented for autosec — it is the framework's own out-of-band slot, which
+# ``langchain_mcp_adapters`` uses for exactly the same purpose (structured
+# content alongside the human-readable text).
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: Namespaced so a tool that one day carries its own artifact cannot collide
+#: with the outcome envelope, and so an unrelated artifact is never misread as
+#: an outcome.
+TOOL_OUTCOME_ARTIFACT_KEY = "autosec_tool_outcome"
+
+
+@dataclass(frozen=True)
+class ToolOutcomeEnvelope:
+    """The structured outcome of one tool call, carried out-of-band.
+
+    ``expected`` is the honesty flag: True when the tool *reported* this outcome
+    (it returned a structured failure, or its declaration named the reason),
+    False when the framework *inferred* it (an escaped exception, or an
+    ``"Error: "`` prefix on a hand-rolled string). Collapsing the two is how
+    "the tool told us it found nothing" became indistinguishable from "the tool
+    blew up", which is the ambiguity D2 removes.
+    """
+
+    outcome: str
+    failure: str | None = None
+    retriable: bool = False
+    expected: bool = False
+
+    def as_artifact(self) -> dict[str, Any]:
+        return {
+            TOOL_OUTCOME_ARTIFACT_KEY: {
+                "outcome": self.outcome,
+                "failure": self.failure,
+                "retriable": self.retriable,
+                "expected": self.expected,
+            }
+        }
+
+
+#: The envelope a tool that says nothing about its outcome gets. Shared
+#: singleton: the overwhelmingly common case allocates nothing.
+SUCCESS_ENVELOPE = ToolOutcomeEnvelope(outcome=ToolOutcome.SUCCESS)
+
+
+def read_outcome_artifact(artifact: Any) -> ToolOutcomeEnvelope | None:
+    """Recover the envelope from a ``ToolMessage.artifact``, or ``None``.
+
+    Tolerant on purpose — a malformed or foreign artifact means "no outcome was
+    carried", never an exception. The caller then falls back to the last-resort
+    signals, which is exactly the pre-D2 behaviour.
+    """
+    if not isinstance(artifact, dict):
+        return None
+    payload = artifact.get(TOOL_OUTCOME_ARTIFACT_KEY)
+    if not isinstance(payload, dict):
+        return None
+    outcome = payload.get("outcome")
+    if outcome not in ToolOutcome.ALL:
+        return None
+    failure = payload.get("failure")
+    return ToolOutcomeEnvelope(
+        outcome=outcome,
+        failure=failure if failure in Failure.ALL else None,
+        retriable=bool(payload.get("retriable")),
+        expected=bool(payload.get("expected")),
+    )
+
+
+def classify_tool_result(*, ok: bool, failure: str | None, retriable: bool, declared_failure_mode: str | None):
+    """Build the envelope for a tool that returned a structured result.
+
+    Precedence for the reason, and the reason for the precedence:
+
+    1. what the **call** reported (``ToolResult(failure=...)``) — the tool knew;
+    2. what the **tool declared** (``@tool(failure_mode=...)``) — D2's "a tool
+       declares its failure semantics"; a tool whose only failure mode is an
+       upstream outage should not have that outage recorded as ``INTERNAL``;
+    3. ``INTERNAL`` — we genuinely do not know, and ``INTERNAL`` is the loud tier.
+
+    Returns ``ToolOutcomeEnvelope``.
+    """
+    if ok:
+        return SUCCESS_ENVELOPE
+    reason = failure if failure in Failure.ALL else None
+    if reason is None and declared_failure_mode in Failure.ALL:
+        reason = declared_failure_mode
+    return ToolOutcomeEnvelope(
+        outcome=ToolOutcome.FAILURE,
+        failure=reason or Failure.INTERNAL,
+        retriable=bool(retriable),
+        # The tool returned a structured result, so this outcome is reported
+        # rather than inferred — regardless of whether it named a reason.
+        expected=True,
+    )
 
 
 def classify_exception(exc: BaseException) -> str:
@@ -260,6 +410,10 @@ class ToolCallObservation:
     failure: str | None = None
     declared: bool = False
     spec_fields: dict[str, Any] = field(default_factory=dict)
+    #: True when the tool reported this failure; False when we inferred it.
+    #: See ``ToolOutcomeEnvelope.expected``.
+    expected: bool = False
+    retriable: bool = False
 
     @property
     def failed(self) -> bool:
@@ -274,6 +428,8 @@ class ToolCallObservation:
         }
         if self.failure:
             payload["failure"] = self.failure
+            payload["expected"] = self.expected
+            payload["retriable"] = self.retriable
         if self.spec_fields:
             payload.update(self.spec_fields)
         return payload

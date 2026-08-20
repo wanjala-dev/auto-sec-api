@@ -8,22 +8,28 @@ middleware wraps the ``ToolNode`` — so it catches every tool regardless of how
 that tool was registered. ``retrieve_workspace_context`` is the proof: it was
 constructed directly and received neither wrapper.
 
-**This middleware enforces nothing.** It classifies and records:
+**This middleware gates nothing.** It classifies and records:
 
-- per-tool **latency**, which is measured today and then discarded;
-- per-tool **outcome**, which is the bit ``_serialize_tool_result`` flattens
-  into a string before anything can read it — ``ToolResult(ok=False)`` becomes
-  ``"Error: ..."`` and the failure disappears;
-- the value for ``DeepRunLog.status``, a column that exists and is never
+- per-tool **latency**, which was measured and then discarded;
+- per-tool **outcome** and its machine-readable **reason**;
+- the value for ``DeepRunLog.status``, a column that existed and was never
   written.
 
-Recovering that bit is the point of Phase 1, not a side effect. The worked
-failure it makes visible: an LLM-provider outage produces "reviewed; no
-confident fix" across every finding, every card stamped triaged, and
-``status="completed"`` at all four layers. After this middleware the tool
-observations carry ``outcome=failure`` and the run logs a warning that it
-reported success over failed tool calls. The reported status does not change —
-that is Phase 3 — but it stops being invisible.
+**Phase 3 (D2) changed where the outcome comes from.** Phase 1 could only
+recover "something failed" by matching the ``"Error: "`` prefix back off the
+rendered string, because ``_serialize_tool_result`` flattened
+``ToolResult(ok=False)`` into prose before any middleware could see it — which
+collapsed every reason to ``INTERNAL``. The structured outcome now rides
+``ToolMessage.artifact`` (LangChain's own out-of-band slot, "not sent to the
+model"), so ``classify_tool_message`` reads what the tool reported instead of
+guessing. The prefix check survives only as the last-resort signal for tools
+that still hand-roll an error string.
+
+The worked failure this makes visible: an LLM-provider outage produces
+"reviewed; no confident fix" across every finding, every card stamped triaged,
+and ``status="completed"`` at all four layers. The observations now carry
+``outcome=failure`` with a real reason, and ``execute()`` no longer reports a
+clean success over them (``tool_spec.resolve_run_outcome``).
 
 Reversible by removing one entry from the list ``_build_agent_middleware``
 returns.
@@ -40,12 +46,15 @@ from langchain.agents.middleware import AgentMiddleware, ToolCallRequest
 from langchain_core.messages import ToolMessage
 
 from components.agents.application.policies.tool_spec import (
+    SUCCESS_ENVELOPE,
     TOOL_RESULT_ERROR_PREFIX,
     Failure,
     ToolCallObservation,
     ToolOutcome,
+    ToolOutcomeEnvelope,
     ToolSpec,
     classify_exception,
+    read_outcome_artifact,
 )
 
 logger = logging.getLogger(__name__)
@@ -116,32 +125,40 @@ class ToolCallObservationBuffer:
         self._ordered.clear()
 
 
-def classify_tool_message(message: Any) -> tuple[str, str | None]:
-    """Classify a returned ``ToolMessage`` into ``(outcome, failure)``.
+def classify_tool_message(message: Any) -> ToolOutcomeEnvelope:
+    """Classify a returned ``ToolMessage`` into a ``ToolOutcomeEnvelope``.
 
-    Two signals, in order:
+    Three signals, in strict precedence order. The first is the D2 fix; the
+    other two are what Phase 1 had, kept as the fallback for the tools that do
+    not yet return a ``ToolResult``.
 
-    1. LangChain's own ``ToolMessage.status`` — set to ``"error"`` when the
-       ``ToolNode`` caught an exception out of the tool body.
-    2. The ``"Error: "`` prefix ``ToolResult.serialize()`` renders for
-       ``ok=False``. This is the recovery of the flattened bit: the framework
-       already knew the call failed and threw the knowledge away at
-       ``_serialize_tool_result``. Reading it back off the rendered string is
-       not elegant, and it is deliberately not a fix — D2 makes the structured
-       result reach the middleware directly. Until then this is the only place
-       the bit still exists, and observing it is what sizes D2.
+    1. **The artifact** — ``ToolMessage.artifact`` carries the outcome the tool
+       actually reported, put there by ``_serialize_tool_result``. This is the
+       bit that used to be destroyed by flattening; it now survives, with its
+       reason, so a "not found" stops being indistinguishable from a crash.
+    2. **LangChain's ``ToolMessage.status``** — ``"error"`` when something in the
+       tool pipeline caught an exception. Inferred, not reported, and the reason
+       is genuinely unknown: ``INTERNAL``, the loud tier.
+    3. **The ``"Error: "`` prefix** — last resort, for the ~49 tool bodies that
+       hand-roll ``f"Error ...: {exc}"`` instead of returning a ``ToolResult``.
+       Fitness function F4 is the ratchet that shrinks that population; until it
+       is empty, this is the only signal those tools give us.
     """
     if not isinstance(message, ToolMessage):
-        return ToolOutcome.SUCCESS, None
+        return SUCCESS_ENVELOPE
+
+    carried = read_outcome_artifact(getattr(message, "artifact", None))
+    if carried is not None:
+        return carried
 
     if getattr(message, "status", None) == "error":
-        return ToolOutcome.FAILURE, Failure.INTERNAL
+        return ToolOutcomeEnvelope(outcome=ToolOutcome.FAILURE, failure=Failure.INTERNAL, expected=False)
 
     content = getattr(message, "content", None)
     if isinstance(content, str) and content.lstrip().startswith(TOOL_RESULT_ERROR_PREFIX):
-        return ToolOutcome.FAILURE, Failure.INTERNAL
+        return ToolOutcomeEnvelope(outcome=ToolOutcome.FAILURE, failure=Failure.INTERNAL, expected=False)
 
-    return ToolOutcome.SUCCESS, None
+    return SUCCESS_ENVELOPE
 
 
 class ToolGovernanceMiddleware(AgentMiddleware):
@@ -244,25 +261,29 @@ class ToolGovernanceMiddleware(AgentMiddleware):
         try:
             result = handler(request)
         except BaseException as exc:
-            # Observe-only: classify, record, and re-raise untouched. Letting an
+            # Classify, record, and re-raise untouched. Letting an
             # implementation bug bubble is the documented contract for
-            # ``wrap_tool_call``; this middleware is a licence to classify
-            # failures, never to swallow more of them.
+            # ``wrap_tool_call`` ("handle runtime input errors; incorrect tool
+            # implementation errors should bubble up"); D2 is a licence to
+            # classify failures, never to swallow more of them. ``expected`` is
+            # False because nothing declared this — we inferred it from the
+            # exception type.
             self._record(
                 tool_name=tool_name,
                 tool_call_id=tool_call_id,
-                outcome=ToolOutcome.FAILURE,
-                failure=classify_exception(exc),
+                envelope=ToolOutcomeEnvelope(
+                    outcome=ToolOutcome.FAILURE,
+                    failure=classify_exception(exc),
+                    expected=False,
+                ),
                 latency_ms=self._elapsed_ms(started),
             )
             raise
 
-        outcome, failure = classify_tool_message(result)
         self._record(
             tool_name=tool_name,
             tool_call_id=tool_call_id,
-            outcome=outcome,
-            failure=failure,
+            envelope=classify_tool_message(result),
             latency_ms=self._elapsed_ms(started),
         )
         return result
@@ -278,11 +299,12 @@ class ToolGovernanceMiddleware(AgentMiddleware):
         *,
         tool_name: str,
         tool_call_id: str,
-        outcome: str,
-        failure: str | None,
+        envelope: ToolOutcomeEnvelope,
         latency_ms: int,
     ) -> None:
         """Buffer the observation and log it. Never raises."""
+        outcome = envelope.outcome
+        failure = envelope.failure
         try:
             spec = self.spec_for(tool_name)
             observation = ToolCallObservation(
@@ -293,6 +315,8 @@ class ToolGovernanceMiddleware(AgentMiddleware):
                 failure=failure,
                 declared=spec.is_declared,
                 spec_fields=spec.as_log_fields(),
+                expected=envelope.expected,
+                retriable=envelope.retriable,
             )
             self.buffer.record(observation)
             # Structured, grep-able, and free of tool input/output — the
@@ -300,10 +324,12 @@ class ToolGovernanceMiddleware(AgentMiddleware):
             # it here would put tool arguments into the log stream.
             log = logger.warning if observation.failed else logger.info
             log(
-                "agent_tool_call tool=%s outcome=%s failure=%s latency_ms=%s declared=%s agent_id=%s workspace_id=%s",
+                "agent_tool_call tool=%s outcome=%s failure=%s expected=%s "
+                "latency_ms=%s declared=%s agent_id=%s workspace_id=%s",
                 tool_name,
                 outcome,
                 failure or "",
+                envelope.expected,
                 latency_ms,
                 spec.is_declared,
                 getattr(self._agent, "agent_id", None),
