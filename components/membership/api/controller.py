@@ -520,60 +520,38 @@ class WorkspaceUserSearchView(APIView):
     MIN_QUERY_LEN = 2
 
     def get(self, request, *args, **kwargs):
+        from components.identity.application.service import IdentityService
         from components.shared_kernel.application.providers.django_orm_provider import (
             get_django_orm_provider as _get_django_orm_provider,
         )
 
         _django_orm = _get_django_orm_provider()
         Q = _django_orm.Q
-        from components.identity.application.providers.users_models_provider import (
-            get_users_models_provider,
-        )
-
-        _pkg_models = get_users_models_provider()
-        CustomUser = _pkg_models.CustomUser
-        from components.workspace.application.providers.workspaces_models_provider import (
-            get_workspaces_models_provider,
-        )
-
-        _pkg_models = get_workspaces_models_provider()
-        WorkspaceMembership = _pkg_models.WorkspaceMembership
 
         query = (request.query_params.get("q") or "").strip()
         if len(query) < self.MIN_QUERY_LEN:
             return Response({"results": []}, status=status.HTTP_200_OK)
 
-        # Workspaces the requester belongs to (active membership). Staff
-        # / superuser see across the system — they're already trusted.
+        # "Users who share an active workspace with the actor (staff see all)"
+        # is one rule, so it has one implementation: IdentityService owns it
+        # and every user-serving read seam calls it. This view used to carry
+        # its own copy; identity's own list + search seams had *none*, which
+        # is how they shipped as an unauthenticated cross-tenant dump. A
+        # second copy of a tenant boundary is a leak waiting for the two to
+        # drift apart.
         actor = request.user
-        if getattr(actor, "is_staff", False) or getattr(actor, "is_superuser", False):
-            scoped_user_ids = None
-        else:
-            actor_workspace_ids = list(
-                WorkspaceMembership.objects.filter(
-                    user_id=actor.id,
-                    status=WorkspaceMembership.Status.ACTIVE,
-                ).values_list("workspace_id", flat=True)
+        users = (
+            IdentityService()
+            .get_users_visible_to(actor)
+            .filter(
+                Q(email__icontains=query)
+                | Q(first_name__icontains=query)
+                | Q(last_name__icontains=query)
+                | Q(username__icontains=query),
+                is_active=True,
             )
-            if not actor_workspace_ids:
-                return Response({"results": []}, status=status.HTTP_200_OK)
-            scoped_user_ids = set(
-                WorkspaceMembership.objects.filter(
-                    workspace_id__in=actor_workspace_ids,
-                    status=WorkspaceMembership.Status.ACTIVE,
-                ).values_list("user_id", flat=True)
-            )
-
-        users = CustomUser.objects.filter(
-            Q(email__icontains=query)
-            | Q(first_name__icontains=query)
-            | Q(last_name__icontains=query)
-            | Q(username__icontains=query),
-            is_active=True,
-        ).exclude(id=actor.id)
-
-        if scoped_user_ids is not None:
-            users = users.filter(id__in=scoped_user_ids)
+            .exclude(id=actor.id)
+        )
 
         users = users.select_related("profile")[: self.MAX_RESULTS]
 

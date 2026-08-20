@@ -45,6 +45,25 @@ class UserQueryPort(ABC):
         """Return the base user queryset with profile pre-fetched.
 
         Returns a queryset with select_related for profile and contributor_profile.
+
+        WARNING: this is the *unscoped* directory — every user on the
+        installation. autosec is single-database with application-enforced
+        tenant isolation, so returning this from a read seam is a cross-tenant
+        leak. Anything that serves users to a caller must use
+        ``get_queryset_visible_to`` instead.
+        """
+        ...
+
+    @abstractmethod
+    def get_queryset_visible_to(self, actor):
+        """Return the user queryset a given actor is allowed to see.
+
+        The tenant boundary for user data: users who share at least one
+        *active* workspace membership with ``actor``, plus the actor. Staff and
+        superusers are already trusted with system-wide administration and get
+        the unscoped queryset.
+
+        Returns an empty queryset for an anonymous or missing actor.
         """
         ...
 

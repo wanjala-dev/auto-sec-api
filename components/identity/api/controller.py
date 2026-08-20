@@ -740,8 +740,22 @@ class UserViewSet(viewsets.ModelViewSet):
         """
         Load one-to-one profile data up front to avoid N+1s when serializing
         nested user payloads.
+
+        ``list`` is tenant-scoped: it may only ever return users the caller
+        shares an active workspace with (staff see all). autosec is
+        single-database with application-enforced isolation, so this filter is
+        the tenant boundary — there is no database boundary behind it.
+
+        The object-scoped actions deliberately keep the unscoped queryset.
+        They are already gated by ``IsLoggedInUserOrAdmin``'s self-or-staff
+        object check, and narrowing the lookup here would turn their 403 into
+        a 404 — which the frontend's api client treats as "session is gone"
+        and force-logs the operator out (``apiClient.ts`` 404 interceptor on
+        ``/identity/users/``). Same denial, worse blast radius.
         """
         service = IdentityService()
+        if self.action == "list":
+            return service.get_users_visible_to(self.request.user)
         return service.get_user_queryset()
 
     # User permissions
@@ -768,9 +782,17 @@ class UserViewSet(viewsets.ModelViewSet):
                 IsLoggedInUserOrAdmin,
             ]
         elif self.action == "list":
-            permission_classes = [
-                IsUnauthenticatedOrAdminOrStaff,
-            ]
+            # Was IsUnauthenticatedOrAdminOrStaff, every branch of which
+            # returns True — so this answered 200 with no credentials and
+            # served every user on the installation: email, names, username
+            # and workspaces, for every tenant. That is a cross-tenant PII
+            # dump and a user-enumeration oracle, and enumeration was step 1
+            # of the repro for the unauthenticated DELETE fixed in #402.
+            #
+            # Authentication is only half the fix: a signed-in tenant must
+            # still not see another tenant's people. The scoping lives in
+            # get_queryset() above.
+            permission_classes = [permissions.IsAuthenticated]
         return [permission() for permission in permission_classes]
 
 
@@ -1150,21 +1172,12 @@ class SupportImpersonationSessionEndView(APIView):
         return Response(_serialize_session(session), status=status.HTTP_200_OK)
 
 
-class UserList(generics.ListAPIView):
-    permission_classes = (IsUnauthenticatedOrAdminOrStaff,)
-    serializer_class = UserSerializer
-    name = "customuser-list"
-
-    def get_queryset(self):
-        service = IdentityService()
-        return service.get_user_queryset()
-
-
-# class UserDetail(generics.RetrieveAPIView):
-#     permission_classes = (IsUnauthenticatedOrAdminOrStaff,)
-#     queryset = CustomUser.objects.all()
-#     serializer_class = UserSerializer
-#     name = 'customuser-detail'
+# ``UserList`` (and its already-commented-out ``UserDetail`` sibling) lived
+# here: a second, unrouted copy of the user directory carrying the same
+# permissive gate and the same unscoped ``get_user_queryset()``. Nothing
+# imported it and ``urls.py`` never routed it, so it was one URL entry away
+# from silently reopening the leak this change closes. Deleted rather than
+# fixed twice — ``UserViewSet.list`` is the one canonical user list.
 
 
 class ProfileEditView(APIView):
@@ -1515,24 +1528,58 @@ class LogoutAPIView(generics.GenericAPIView):
         return response
 
 
-class UserSearch(generics.ListCreateAPIView):
-    """Search users by username or email using a query param or path value."""
+class UserSearch(generics.ListAPIView):
+    """Search users by username or email using a query param or path value.
 
-    permission_classes = (IsUnauthenticatedOrAdminOrStaff,)
+    Read-only and authenticated, scoped to the caller's own tenancy.
+
+    Three defects were fixed here at once, all of them the same shape — input
+    reaching the ORM before anything checked who was asking:
+
+    * it answered 200 with no credentials, so it was an anonymous
+      account-existence oracle across every tenant;
+    * a missing ``query`` reached ``icontains=None`` and raised
+      ``ValueError: Cannot use None as a query value`` — an unauthenticated
+      500 on a search endpoint;
+    * it subclassed ``ListCreateAPIView`` with ``UserSerializer``, whose
+      ``create()`` is fully functional, so ``POST`` here was a second,
+      unauthenticated way to mint accounts alongside the real (gated)
+      registration endpoints. ``ListAPIView`` removes the write verb.
+
+    A blank query is also an empty result, never "match everything":
+    ``icontains=""`` matches every row, which would have made a one-character
+    typo a directory dump.
+    """
+
+    permission_classes = (permissions.IsAuthenticated,)
     serializer_class = UserSerializer
 
+    MIN_QUERY_LEN = 2
+    MAX_RESULTS = 25
+
     def get(self, request, *args, **kwargs):
-        query = kwargs.get("query") or self.request.GET.get("query")
+        # Path value first (the ``search/<query>/`` route), then ``query``
+        # (what the frontend sends), then ``q`` (the convention every other
+        # search endpoint in the codebase uses — accepted so the two spellings
+        # stop producing different behaviour).
+        raw = kwargs.get("query") or request.query_params.get("query") or request.query_params.get("q") or ""
+        query = raw.strip()
+
+        if len(query) < self.MIN_QUERY_LEN:
+            return Response({"data": []}, status=status.HTTP_200_OK)
+
         service = IdentityService()
-        # Use lazy import to filter the queryset
-        queryset = service.get_user_queryset()
         from components.shared_kernel.application.providers.django_orm_provider import (
             get_django_orm_provider as _get_django_orm_provider,
         )
 
         _django_orm = _get_django_orm_provider()
         Q = _django_orm.Q
-        profile_list = queryset.filter(Q(username__icontains=query) | Q(email__icontains=query))
+        # Tenant boundary — same rule the list action and the membership
+        # typeahead use: you can only find people you already share a
+        # workspace with.
+        queryset = service.get_users_visible_to(request.user)
+        profile_list = queryset.filter(Q(username__icontains=query) | Q(email__icontains=query))[: self.MAX_RESULTS]
         serializer = UserSerializer(instance=profile_list, many=True, context={"request": request, "service": service})
         return Response({"data": serializer.data}, status=status.HTTP_200_OK)
 
