@@ -1965,6 +1965,7 @@ class GoogleSocialAuthView(GenericAPIView):
             google_auth=provider.store(),
             session_registry=IdentityProvider.build_session_registry(),
             tokens=IdentityProvider.build_token_adapter(),
+            audit_port=IdentityProvider.build_auth_audit_repository(),
         )
         result = use_case.execute(
             raw_token=raw_token,
@@ -2192,6 +2193,7 @@ class MagicLinkVerifyView(views.APIView):
             magic_link=OrmMagicLinkAdapter(),
             session_registry=IdentityProvider.build_session_registry(),
             tokens=IdentityProvider.build_token_adapter(),
+            audit_port=IdentityProvider.build_auth_audit_repository(),
         ).execute(
             token_value=token_value,
             context=build_request_context(request),

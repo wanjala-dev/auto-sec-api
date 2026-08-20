@@ -19,8 +19,10 @@ from components.identity.application.ports.google_auth_port import (
     GoogleAuthPort,
     GoogleTokenVerifierPort,
 )
+from components.identity.application.ports.auth_audit_port import AuthAuditPort
 from components.identity.application.ports.session_registry_port import SessionRegistryPort
 from components.identity.application.ports.token_port import TokenPort
+from components.identity.domain.enums import AuthEventCode
 from components.identity.domain.value_objects.auth_tokens import RequestContext
 
 @dataclass(frozen=True)
@@ -58,11 +60,13 @@ class AuthenticateWithGoogleUseCase:
         google_auth: GoogleAuthPort,
         session_registry: SessionRegistryPort,
         tokens: TokenPort,
+        audit_port: AuthAuditPort,
     ) -> None:
         self._verifier = verifier
         self._google_auth = google_auth
         self._sessions = session_registry
         self._tokens = tokens
+        self._audit = audit_port
 
     def execute(
         self,
@@ -105,4 +109,19 @@ class AuthenticateWithGoogleUseCase:
                 context=context,
                 login_method="google",
             )
+        # Same reason as the magic-link path: the login-activity feed reads
+        # AuthAuditEvent, and a sign-in it never hears about is a sign-in it
+        # will confidently tell an operator did not happen.
+        self._audit.record_event(
+            event_code=AuthEventCode.LOGIN,
+            user_id=UUID(str(session.user_id)),
+            email=session.email,
+            success=True,
+            context=context,
+            metadata={
+                "login_method": "google",
+                "session_jti": session.refresh_jti,
+                "created_user": session.created_user,
+            },
+        )
         return session
