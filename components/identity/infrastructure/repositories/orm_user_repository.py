@@ -7,11 +7,11 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from infrastructure.persistence.users.models import CustomUser, UserProfile
+from components.identity.application.ports.user_repository_port import UserRepositoryPort
 from components.identity.domain.entities.user_entity import UserEntity
 from components.identity.domain.entities.user_profile_entity import UserProfileEntity
 from components.identity.mappers.db.user_mapper import to_user_entity, to_user_profile_entity
-from components.identity.application.ports.user_repository_port import UserRepositoryPort
+from infrastructure.persistence.users.models import CustomUser, UserProfile
 
 
 class OrmUserRepository(UserRepositoryPort):
@@ -62,18 +62,15 @@ class OrmUserRepository(UserRepositoryPort):
             return False
 
     def validate_new_password(self, user_id: UUID, password: str) -> list[str]:
-        from django.contrib.auth.password_validation import validate_password
-        from django.core.exceptions import ValidationError
+        from components.identity.infrastructure.adapters.password_policy import (
+            validate_password_strength,
+        )
 
         try:
             user = CustomUser.objects.get(id=user_id)
         except CustomUser.DoesNotExist:
             return ["User not found."]
-        try:
-            validate_password(password, user=user)
-            return []
-        except ValidationError as exc:
-            return list(exc.messages)
+        return validate_password_strength(password, user=user)
 
     def enable_two_factor(self, user_id: UUID) -> None:
         from django.utils import timezone
@@ -100,9 +97,9 @@ class OrmUserRepository(UserRepositoryPort):
         try:
             workspace = Workspace.objects.get(id=workspace_id)
             return {
-                'id': str(workspace.id),
-                'workspace_name': workspace.workspace_name,
-                'icon': workspace.photo_url,
+                "id": str(workspace.id),
+                "workspace_name": workspace.workspace_name,
+                "icon": workspace.photo_url,
             }
         except Workspace.DoesNotExist:
             return None
@@ -113,8 +110,8 @@ class OrmUserRepository(UserRepositoryPort):
         Delegates to the workspace facade to avoid coupling.
         Uses lazy imports to avoid circular dependencies.
         """
-        from infrastructure.persistence.workspaces.models import Workspace
         from components.workspace.application.facades.workspace_facade import ensure_workspace_follower
+        from infrastructure.persistence.workspaces.models import Workspace
 
         try:
             workspace = Workspace.objects.get(id=workspace_id)

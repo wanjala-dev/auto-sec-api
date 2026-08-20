@@ -102,7 +102,10 @@ def test_password_reset_notifications(api_client, system_actor, django_capture_o
         complete_response = api_client.patch(
             reverse("password-reset-complete"),
             {
-                "password": "newpassword321",
+                # Must satisfy the password policy now enforced on reset-complete
+                # (the same chain as change-password); this test asserts the
+                # notification fires, the password value is incidental.
+                "password": "NewResetPass2026!x",
                 "token": token,
                 "uidb64": uidb64,
             },
