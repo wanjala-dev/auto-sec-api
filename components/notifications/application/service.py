@@ -2,6 +2,7 @@
 
 Orchestration only – delegates to use cases via NotificationsProvider.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -17,6 +18,7 @@ class NotificationsService:
 
     Orchestration only – delegates to use cases for business logic.
     """
+
     provider: NotificationsProvider = field(default_factory=NotificationsProvider)
 
     def mark_notification_read(self, command) -> Any:
@@ -51,17 +53,22 @@ class NotificationsService:
         repo = self.provider.build_notification_repository()
         return repo.get_ai_preferences_queryset(user_id)
 
-    def get_user_preference(self, user_id):
-        """Get or create user notification preference."""
+    def find_user_by_id(self, user_id):
+        """Resolve a user id to a user, or None. Never raises."""
         repo = self.provider.build_notification_repository()
-        return repo.get_user_preference(user_id)
+        return repo.find_user_by_id(user_id)
 
-    def list_user_preferences(self):
-        """List all user preferences."""
+    def get_user_preference(self, user):
+        """Get or create the preference row owned by ``user`` (an instance)."""
         repo = self.provider.build_notification_repository()
-        return repo.list_user_preferences()
+        return repo.get_user_preference(user)
 
-    def delete_user_preference(self, user_id):
-        """Delete user notification preference."""
+    def list_user_preferences(self, for_user=None):
+        """Preference rows — every row when ``for_user`` is None, else theirs."""
         repo = self.provider.build_notification_repository()
-        return repo.delete_user_preference(user_id)
+        return repo.list_user_preferences(for_user=for_user)
+
+    def delete_user_preference(self, user):
+        """Delete ``user``'s preference row. Returns the number removed."""
+        repo = self.provider.build_notification_repository()
+        return repo.delete_user_preference(user)
