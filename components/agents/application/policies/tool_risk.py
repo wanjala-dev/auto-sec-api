@@ -75,21 +75,20 @@ def tool_risk_refusal(risk: str | None, *, is_autonomous: bool, approval_granted
 # on the ``@tool(risk=...)`` decorator (which takes precedence); this map keeps
 # one auditable list for the tools that predate the decorator arg. Only tiers
 # above the default (``read``) are listed.
+#
+# Every key MUST name a tool some registered agent actually exposes. Eight keys
+# here named nonprofit tools this fork deleted — ``manage_sponsorship_payments``,
+# ``cancel_sponsorship``, ``cancel_recurring_donation``, ``send_sponsor_update``,
+# ``delete_transaction``, ``delete_news_article``, ``delete_event``,
+# ``delete_estimate`` — and survived because nothing checked (ADR 0031 F6, Phase
+# 0). A map that is 80% fiction is a map nobody trusts, and an untrusted risk map
+# is one nobody notices a real gap in. ``tests/architecture/test_tool_risk_map_is_live.py``
+# now fails on the next dead key.
 _TOOL_RISK: dict[str, str] = {
-    # Money movement / external send / financial-record deletion — approval-gated
-    # and denied to autonomous runs.
-    "manage_sponsorship_payments": ToolRisk.IRREVERSIBLE,
-    "cancel_sponsorship": ToolRisk.IRREVERSIBLE,
-    "cancel_recurring_donation": ToolRisk.IRREVERSIBLE,
-    "send_sponsor_update": ToolRisk.IRREVERSIBLE,
-    "delete_transaction": ToolRisk.IRREVERSIBLE,
     # Recoverable soft-deletes (recycle bin) — reversible; documentary only, no
     # approval gate, but named so the classification is explicit not accidental.
     "delete_task": ToolRisk.REVERSIBLE_WRITE,
     "delete_project_milestone": ToolRisk.REVERSIBLE_WRITE,
-    "delete_news_article": ToolRisk.REVERSIBLE_WRITE,
-    "delete_event": ToolRisk.REVERSIBLE_WRITE,
-    "delete_estimate": ToolRisk.REVERSIBLE_WRITE,
 }
 
 
