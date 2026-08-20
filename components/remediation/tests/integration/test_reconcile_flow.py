@@ -72,7 +72,7 @@ def _finding_task(workspace, owner, team, column, *, source_type="ai.log_watch")
         },
         "triage": {"status": "triaged"},
         "payload": {
-            "fingerprint": "fp-abc",
+            "lookup_key": "fp-abc",
             "draft_pr": {"url": _PR_URL, "repo": "acme/repo", "branch": "fix/x"},
             "suggested_fix": "rename the class alias",
             "sign_off": {"artifact_type": "remediation", "artifact_id": "signoff-1"},
@@ -255,7 +255,7 @@ class TestCandidateScanIsSourceTypeAgnostic:
             created_by=owner,
             title="[FINDING] no PR yet",
             source_type="ai.cloud_exposure",
-            metadata={"triage": {"status": "triaged"}, "payload": {"fingerprint": "fp"}},
+            metadata={"triage": {"status": "triaged"}, "payload": {"lookup_key": "fp"}},
         )
         assert list(_candidates(str(ws.id))) == []
 

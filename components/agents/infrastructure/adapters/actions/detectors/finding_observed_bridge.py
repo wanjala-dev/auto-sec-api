@@ -91,9 +91,13 @@ def _build_finding_observed(workspace_id, result):
     from components.shared_kernel.domain.security import AssetUrn
 
     payload = result.payload or {}
-    fingerprint = str(payload.get("lookup_key") or payload.get("fingerprint") or "").strip()
+    # ``lookup_key`` is the one name a detector payload carries its identity
+    # under (ADR 0032 §1.3.3 / D6). The ``or payload["fingerprint"]`` fallback
+    # that used to sit here kept a second name alive for the same value; the
+    # log-watch contracts no longer emit it.
+    fingerprint = str(payload.get("lookup_key") or "").strip()
     if not fingerprint:
-        raise ValueError("logwatch finding carries no fingerprint/lookup_key")
+        raise ValueError("logwatch finding carries no lookup_key")
 
     service = (str(payload.get("service") or "").strip()) or "unknown"
     impact_score = int((result.metadata or {}).get("impact_score", 0))

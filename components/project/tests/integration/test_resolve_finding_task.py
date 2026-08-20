@@ -29,7 +29,7 @@ def _finding_task(workspace_factory, team_factory, *, resolved: bool = False):
         created_by=owner,
         title="[FINDING] casing ImportError",
         source_type="ai.log_watch",
-        metadata={"triage": {"status": "resolved" if resolved else "triaged"}, "payload": {"fingerprint": "fp"}},
+        metadata={"triage": {"status": "resolved" if resolved else "triaged"}, "payload": {"lookup_key": "fp"}},
     )
     return ws, task
 

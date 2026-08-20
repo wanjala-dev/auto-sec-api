@@ -63,7 +63,7 @@ def _finding(ws, owner, team, column, *, fingerprint):
         metadata={
             "provenance": {"events": [{"actor": "agent:triage via user:u1", "action": "opened draft PR", "at": "t1"}]},
             "triage": {"status": "resolved"},
-            "payload": {"fingerprint": fingerprint, "draft_pr": {"url": _PR, "repo": "acme/repo"}},
+            "payload": {"lookup_key": fingerprint, "draft_pr": {"url": _PR, "repo": "acme/repo"}},
         },
     )
 
