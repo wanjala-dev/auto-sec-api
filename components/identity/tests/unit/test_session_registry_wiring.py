@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import datetime
 from dataclasses import dataclass, field
+from unittest.mock import ANY
 from uuid import uuid4
 
 import pytest
@@ -84,6 +85,11 @@ class FakeSessionRegistry(SessionRegistryPort):
     def touch(self, *, refresh_jti, min_interval_seconds=300):
         self.touched.append(refresh_jti)
 
+    def is_active(self, *, refresh_jti):
+        # This fake records calls rather than modelling state; nothing under
+        # test here reads session liveness.
+        return True
+
     def revoke(self, *, refresh_jti, reason):
         self.revoked.append((refresh_jti, reason))
 
@@ -102,7 +108,7 @@ class FakeSessionRegistry(SessionRegistryPort):
         return []
 
     def list_active_jtis_for_user(self, *, user_id, except_jti=None):
-        return []
+        return [c["refresh_jti"] for c in self.created if c["user_id"] == user_id and c["refresh_jti"] != except_jti]
 
     def apply_enrichment(self, *, session_id, device, geo, enriched_at):
         return False
@@ -414,19 +420,28 @@ class TestLogoutSessionRevocation:
 
 
 class TestChangePasswordSessionParity:
-    def test_change_password_touches_no_sessions(self):
-        """DELIBERATE (T2-S1): ChangePasswordUseCase does not revoke tokens
-        today, so it must not revoke sessions either — the registry must
-        never mark a session revoked while its refresh token still works.
-        If token revocation is ever added to password change, session
-        revocation (reason="password_change") must be added in the same
-        change, and this test flipped."""
+    """FLIPPED, exactly as the previous version of this test instructed.
+
+    It used to assert that ChangePasswordUseCase touched no sessions, on the
+    correct reasoning that the registry must never mark a session revoked while
+    its refresh token still works — and it said, in its own docstring: "If token
+    revocation is ever added to password change, session revocation must be
+    added in the same change, and this test flipped."
+
+    That is this change. Password change now does BOTH writes together, through
+    the shared ``revoke_sessions_for_user`` helper, so the parity the old test
+    protected still holds — it just holds at "both" instead of "neither".
+    """
+
+    def _run(self, sessions, revocation, *, session_jti):
         use_case = ChangePasswordUseCase(
             user_repo=FakeUserRepo(),
             audit_port=FakeAuditPort(),
             notification_port=FakeNotificationPort(),
+            session_registry=sessions,
+            token_revocation=revocation,
         )
-        result = use_case.execute(
+        return use_case.execute(
             ChangePasswordCommand(
                 user_id=uuid4(),
                 email="tester@example.com",
@@ -434,9 +449,32 @@ class TestChangePasswordSessionParity:
                 new_password="brand-new-password-9",
                 confirm_password="brand-new-password-9",
                 context=_CONTEXT,
+                session_jti=session_jti,
             )
         )
-        # Success — and the use case has no session registry dependency at
-        # all, which is the strongest form of "does not touch sessions".
+
+    def test_change_password_revokes_sessions_and_blacklists_in_the_same_breath(self):
+        sessions, revocation = FakeSessionRegistry(), FakeTokenRevocation()
+
+        result = self._run(sessions, revocation, session_jti="current-sid")
+
         assert getattr(result, "success", False) is True
-        assert not hasattr(use_case, "_sessions")
+        assert sessions.revoked_all == [{"user_id": ANY, "reason": "password_changed", "except_jti": "current-sid"}], (
+            "password change must revoke the user's other sessions"
+        )
+
+    def test_change_password_spares_the_session_that_performed_it(self):
+        """A routine password change must not log you out of the device you are on."""
+        sessions, revocation = FakeSessionRegistry(), FakeTokenRevocation()
+
+        self._run(sessions, revocation, session_jti="current-sid")
+
+        assert sessions.revoked_all[0]["except_jti"] == "current-sid"
+
+    def test_change_password_without_a_session_claim_spares_nothing(self):
+        """A token predating the registry cannot express "all but me" — fail safe."""
+        sessions, revocation = FakeSessionRegistry(), FakeTokenRevocation()
+
+        self._run(sessions, revocation, session_jti=None)
+
+        assert sessions.revoked_all[0]["except_jti"] is None

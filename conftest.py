@@ -273,6 +273,42 @@ def api_client():
 
 
 @pytest.fixture
+def authenticate_as(db):
+    """Sign a user in the way the PRODUCT does, and attach the credential.
+
+    Mints a full pair (so the access token carries a ``sid``) **and** registers
+    the ``UserSession`` behind it, exactly as ``LoginUseCase`` and
+    ``VerifyOTPUseCase`` do. Authentication checks the session registry, so a
+    test that mints a bare token — ``issue_tokens(..., include_refresh=False)``
+    stamps no ``sid`` at all — is not testing a logged-in user; it is testing a
+    credential the product would never hand out and now correctly rejects.
+
+    Returns the token dict so callers can reach the refresh token too.
+    """
+
+    def _authenticate(api_client, user, *, otp_verified=False, device=None, login_method="password"):
+        from components.identity.application.providers.identity_provider import (
+            IdentityProvider,
+        )
+        from components.identity.infrastructure.adapters import user_utils
+
+        tokens = user_utils.issue_tokens(
+            user, otp_verified=otp_verified, device=device, include_refresh=True
+        )
+        IdentityProvider.build_session_registry().create_session(
+            user_id=user.id,
+            refresh_jti=tokens["refresh_jti"],
+            expires_at=tokens["refresh_expires_at"],
+            context=None,
+            login_method=login_method,
+        )
+        api_client.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens['access']}")
+        return tokens
+
+    return _authenticate
+
+
+@pytest.fixture
 def user_factory(db):
     """Create unique users for tests."""
     counter = count(1)

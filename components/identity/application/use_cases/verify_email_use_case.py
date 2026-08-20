@@ -13,6 +13,7 @@ from components.identity.application.commands.verify_email_command import (
     VerifyEmailResult,
 )
 from components.identity.application.ports.auth_audit_port import AuthAuditPort
+from components.identity.application.ports.session_registry_port import SessionRegistryPort
 from components.identity.application.ports.token_port import TokenPort
 from components.identity.application.ports.user_repository_port import UserRepositoryPort
 from components.identity.domain.enums import AuthEventCode
@@ -27,10 +28,12 @@ class VerifyEmailUseCase:
         user_repo: UserRepositoryPort,
         token_port: TokenPort,
         audit_port: AuthAuditPort,
+        session_registry: SessionRegistryPort,
     ) -> None:
         self._user_repo = user_repo
         self._tokens = token_port
         self._audit = audit_port
+        self._sessions = session_registry
 
     def execute(self, command: VerifyEmailCommand) -> VerifyEmailResult | VerifyEmailFailure:
         """Execute the email verification flow."""
@@ -94,6 +97,20 @@ class VerifyEmailUseCase:
         tokens = {"access": token_pair.access}
         if token_pair.refresh:
             tokens["refresh"] = token_pair.refresh
+
+        # Confirming an email signs the user in, so it creates a real session —
+        # register it. Without this the session existed only as a signed token:
+        # absent from /identity/me/sessions/, unreachable by revoke-others,
+        # password change or reset, and (once authentication checks the
+        # registry) not a session at all.
+        if token_pair.refresh_jti and token_pair.refresh_expires_at:
+            self._sessions.create_session(
+                user_id=user_id,
+                refresh_jti=token_pair.refresh_jti,
+                expires_at=token_pair.refresh_expires_at,
+                context=context,
+                login_method="email_verify",
+            )
 
         return VerifyEmailResult(
             user_id=user.id,

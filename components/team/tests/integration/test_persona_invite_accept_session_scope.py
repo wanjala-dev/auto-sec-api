@@ -168,3 +168,45 @@ def test_a_brand_new_invitee_still_gets_signed_in():
     assert response.status_code == 200, response.data
     assert response.data.get("access"), "a brand-new invitee was not signed in by their own signup"
     assert response.data.get("refresh")
+
+
+def test_a_brand_new_invitee_s_token_actually_works(api_client):
+    """Returning a token is not the same as being signed in.
+
+    This asserted only that `access` was non-empty, which a token nothing
+    accepts would also satisfy. Now that authentication checks the session
+    registry, a mint that skips the registry produces exactly that: a
+    well-formed token that authenticates nothing.
+    """
+    from django.urls import reverse as _reverse
+
+    owner = _user("owner-works@example.com", password="ownerpass1")
+    workspace = _workspace(owner)
+
+    access = _accept(_invite(owner, workspace, "works-new@example.com"), password="newuserpass1").data["access"]
+
+    api_client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
+    assert api_client.get(_reverse("user-summary")).status_code == 200, (
+        "the token handed to a brand-new invitee does not authenticate"
+    )
+
+
+def test_a_brand_new_invitee_s_session_is_listed_and_revocable():
+    """Their session must be visible in the registry like any other login.
+
+    The invite path minted with a bare ``RefreshToken.for_user``, which stamps
+    no ``sid`` and writes no ``UserSession`` row — an immortal session, absent
+    from /identity/me/sessions/ and beyond the reach of revoke-others, password
+    change and password reset.
+    """
+    from infrastructure.persistence.users.models import CustomUser, UserSession
+
+    owner = _user("owner-listed@example.com", password="ownerpass1")
+    workspace = _workspace(owner)
+
+    _accept(_invite(owner, workspace, "listed-new@example.com"), password="newuserpass1")
+
+    invitee = CustomUser.objects.get(email="listed-new@example.com")
+    assert UserSession.objects.filter(user=invitee).count() == 1, (
+        "invite-accept signed a new user in without registering a revocable session"
+    )

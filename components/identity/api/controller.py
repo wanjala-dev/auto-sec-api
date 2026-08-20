@@ -1661,6 +1661,7 @@ class ChangePasswordView(UpdateAPIView):
                 new_password=serializer.validated_data["new_password"],
                 confirm_password=serializer.validated_data["confirm_password"],
                 context=context,
+                session_jti=_extract_current_sid(request),
             )
         )
 

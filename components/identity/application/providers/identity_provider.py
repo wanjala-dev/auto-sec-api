@@ -186,6 +186,7 @@ class IdentityProvider:
             user_repo=OrmUserRepository(),
             token_port=JWTTokenAdapter(),
             audit_port=OrmAuthAuditRepository(),
+            session_registry=OrmUserSessionRepository(),
         )
 
     @staticmethod
@@ -204,6 +205,8 @@ class IdentityProvider:
             audit_port=OrmAuthAuditRepository(),
             notification_port=DjangoSecurityNotificationAdapter(),
             user_repo=OrmUserRepository(),
+            session_registry=OrmUserSessionRepository(),
+            token_revocation=JWTTokenRevocationAdapter(),
         )
 
     @staticmethod
@@ -212,6 +215,8 @@ class IdentityProvider:
             user_repo=OrmUserRepository(),
             audit_port=OrmAuthAuditRepository(),
             notification_port=DjangoSecurityNotificationAdapter(),
+            session_registry=OrmUserSessionRepository(),
+            token_revocation=JWTTokenRevocationAdapter(),
         )
 
     @staticmethod

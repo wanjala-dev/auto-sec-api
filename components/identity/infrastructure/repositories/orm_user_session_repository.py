@@ -140,6 +140,27 @@ class OrmUserSessionRepository(SessionRegistryPort):
             last_seen_at__lt=cutoff,
         ).update(last_seen_at=now)
 
+    def is_active(self, *, refresh_jti: str) -> bool:
+        """One indexed existence check — ``refresh_jti`` is UNIQUE on the table.
+
+        Runs on every authenticated request, so it stays a single narrow query
+        with no joins and no row materialisation. Deliberately NOT cached: a
+        revocation that takes effect "within the TTL" is the same lie this whole
+        change exists to remove. Revisit only with a measurement, and then with
+        invalidation on revoke (``.claude/rules/performance.md`` §8).
+        """
+        from django.utils import timezone
+
+        from infrastructure.persistence.users.models import UserSession
+
+        if not refresh_jti:
+            return False
+        return UserSession.objects.filter(
+            refresh_jti=refresh_jti,
+            revoked_at__isnull=True,
+            expires_at__gt=timezone.now(),
+        ).exists()
+
     def revoke(self, *, refresh_jti: str, reason: str) -> None:
         from django.utils import timezone
 

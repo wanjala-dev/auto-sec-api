@@ -84,26 +84,13 @@ class CustomUser(AbstractUser):
     def __str__(self):
         return f"{self.id}-{self.email}"
 
-    def tokens(self):
-        # The real issuer lives in the identity component. The previous
-        # import path (infrastructure.persistence.users.utils) doesn't
-        # exist in this codebase and would 500 every caller. We import
-        # lazily because the identity adapter pulls in DRF/JWT which we
-        # don't want at model-load time.
-        from components.identity.infrastructure.adapters.user_utils import (
-            issue_tokens,
-        )
-
-        tokens = issue_tokens(
-            self,
-            otp_verified=False,
-            device=None,
-            include_refresh=True,
-        )
-        return {
-            "refresh": tokens.get("refresh"),
-            "access": tokens.get("access"),
-        }
+    # NOTE: a ``tokens()`` helper used to live here, minting a full pair
+    # straight off the model. It had no production callers — only tests — and
+    # it was a footgun: it issued a session-shaped credential without writing
+    # the ``UserSession`` row that makes a session listable and revocable, so
+    # anything built on it produced a login nothing could end. Signing a user in
+    # is an identity use case, not a model method; tests use the
+    # ``authenticate_as`` fixture in ``conftest.py``, which mints AND registers.
 
     # def save(self, *args, **kwargs):
     #     self.email = self.email.lower()
