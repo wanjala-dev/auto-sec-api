@@ -142,8 +142,11 @@ class ListFollowers(RetrieveAPIView):
 class PostList(generics.ListCreateAPIView):
     serializer_class = PostSerializer
     name = "post-list"
+    # IsAuthenticated, NOT IsAuthenticatedOrReadOnly: get_post_queryset() applies
+    # no workspace/visibility filter, so a "read-only" anonymous GET here returned
+    # every tenant's posts. autosec is single-DB — a missing filter IS a leak.
     permission_classes = (
-        permissions.IsAuthenticatedOrReadOnly,
+        permissions.IsAuthenticated,
         IsOwnerOrReadOnly,
         RequiresFeatureFlag,
     )
@@ -168,7 +171,20 @@ class PostList(generics.ListCreateAPIView):
 class PostDetail(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = PostSerializer
     name = "post-detail"
-    permission_classes = (RequiresFeatureFlag,)
+    # This view previously declared ``(RequiresFeatureFlag,)`` ALONE, which
+    # replaced the DRF project default (IsAdminUser + IsAuthenticated) and left a
+    # feature flag as the only gate on update and HARD delete. RequiresFeatureFlag
+    # defines no has_object_permission, and the flag's workspace is resolvable from
+    # a caller-supplied ?workspace_id= — so an anonymous caller could point the flag
+    # at any enabled workspace and mutate or destroy any post by integer pk.
+    # A feature flag gates a FEATURE; it is never an authentication or an
+    # authorization gate. Mirrors CommentDetail, plus IsAuthenticated because the
+    # queryset is workspace-unscoped (see PostList).
+    permission_classes = (
+        permissions.IsAuthenticated,
+        IsOwnerOrReadOnly,
+        RequiresFeatureFlag,
+    )
     feature_flag_key = _SOCIAL_FEED_FLAG_KEY
 
     def get_queryset(self):
@@ -233,8 +249,11 @@ class AddDislike(generics.ListCreateAPIView):
 class CommentList(generics.ListCreateAPIView):
     serializer_class = CommentSerializer
     name = "comment-list"
+    # IsAuthenticated for the same reason as PostList — the comment queryset is
+    # workspace-unscoped, so anonymous "read-only" access dumped every tenant's
+    # comments.
     permission_classes = (
-        permissions.IsAuthenticatedOrReadOnly,
+        permissions.IsAuthenticated,
         IsOwnerOrReadOnly,
         RequiresFeatureFlag,
     )
@@ -260,7 +279,7 @@ class CommentDetail(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = CommentSerializer
     name = "comment-detail"
     permission_classes = (
-        permissions.IsAuthenticatedOrReadOnly,
+        permissions.IsAuthenticated,
         IsOwnerOrReadOnly,
         RequiresFeatureFlag,
     )
@@ -332,7 +351,6 @@ class AddCommentDislike(generics.ListCreateAPIView):
                 "message": "success",
             }
         )
-
 
 
 # ── Workspace feed (follow-filtered, per-workspace broadcast) ───────────
