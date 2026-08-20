@@ -1,6 +1,26 @@
-# PROPOSAL — the ADR 0031 Phase 4 trim. Nothing here is done.
+# PROPOSAL — the ADR 0031 Phase 4 trim. DECLINED. Nothing here is done, and nothing here should be done.
 
-Status: **proposal, 2026-08-20. Awaiting Henry. No code is deleted by this document or its PR.**
+Status: **DECLINED by Henry, 2026-08-20.** Verdict: *"convert, don't delete — these will be needed."*
+
+> **Do not execute this document.** It is kept as the record of an analysis, not as a backlog item.
+> The measurement it rests on is sound and worth reading; the conclusion it invites was considered
+> and rejected. The 53 CRUD tools stay, now carrying declarations (#446).
+>
+> The reasoning behind the decision, which the evidence itself supports: a zero call-count over this
+> cluster's 24-day history measures **which surfaces were exercised, not which tools have value**.
+> The same rule that would retire these tools would also retire `open_draft_pr` — 29 of the 79
+> never-recorded tools live on the *security* agents. And `tools/task_agent.py`, whose deletion this
+> document contemplated, carries **874 recorded calls** because TriageAgent re-exports five tools
+> from it.
+>
+> **Two items here are bugs, not dead code, and remain open on their own merits:**
+> `detectors/tasks.py` and `detectors/projects.py` are never imported, so **7 detector classes never
+> register**. That is a wiring defect to fix, not surface to delete. `agent_bridge.py` having zero
+> production callers still contradicts ADR 0031 D4's decision to keep it — worth reconciling in the
+> ADR rather than resolving with `rm`.
+
+Original status when opened: proposal, 2026-08-20, awaiting Henry. No code was deleted by this
+document or its PR.
 
 Evidence: [`AGENT_TOOL_USAGE_EVIDENCE_2026-08-20.md`](AGENT_TOOL_USAGE_EVIDENCE_2026-08-20.md) —
 every claim below is measured there. Read that first; this document only says *what to remove and
