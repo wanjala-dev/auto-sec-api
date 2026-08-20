@@ -40,6 +40,26 @@ class ContributionMeansSerializer(serializers.ModelSerializer):
         ]
 
 
+def _password_policy_errors(password, *, initial_data) -> list[str]:
+    """Run the configured password policy for a not-yet-persisted account.
+
+    Builds an unsaved ``CustomUser`` carrying just email + username so the
+    user-attribute-similarity and zxcvbn personal-info penalties still apply,
+    then delegates to the ONE policy implementation shared with
+    ``UserRepositoryPort.validate_new_password`` (the change-password path).
+    """
+    from components.identity.infrastructure.adapters.password_policy import (
+        validate_password_strength,
+    )
+
+    data = initial_data if isinstance(initial_data, dict) else {}
+    policy_user = CustomUser(
+        email=(data.get("email") or ""),
+        username=(data.get("username") or ""),
+    )
+    return validate_password_strength(password, user=policy_user)
+
+
 class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(max_length=68, min_length=6, write_only=True)
     default_error_messages = {"username": "The username should only contain alphanumeric characters"}
@@ -47,6 +67,15 @@ class RegisterSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomUser
         fields = ["email", "username", "password"]
+
+    def validate_password(self, value):
+        """Enforce the configured password policy — same chain as
+        change-password. Previously register accepted anything past
+        ``min_length=6`` (a top-10 common or all-numeric password)."""
+        errors = _password_policy_errors(value, initial_data=self.initial_data)
+        if errors:
+            raise serializers.ValidationError(errors)
+        return value
 
     def validate(self, attrs):
         email = attrs.get("email", "")
@@ -401,6 +430,15 @@ class UserSerializer(serializers.HyperlinkedModelSerializer):
             "workspaces",
         )
         extra_kwargs = {"password": {"write_only": True}, "url": {"view_name": "users-detail"}}
+
+    def validate_password(self, value):
+        """Enforce the configured password policy on signup / user-create.
+        ``signupapi`` previously accepted a single-character password (no
+        length floor at all)."""
+        errors = _password_policy_errors(value, initial_data=self.initial_data)
+        if errors:
+            raise serializers.ValidationError(errors)
+        return value
 
     def create(self, validated_data):
         profile_data = validated_data.pop("profile", {})

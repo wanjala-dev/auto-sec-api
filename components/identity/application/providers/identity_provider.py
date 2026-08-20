@@ -203,6 +203,7 @@ class IdentityProvider:
             reset_port=DjangoPasswordResetAdapter(),
             audit_port=OrmAuthAuditRepository(),
             notification_port=DjangoSecurityNotificationAdapter(),
+            user_repo=OrmUserRepository(),
         )
 
     @staticmethod

@@ -11,10 +11,11 @@ from components.identity.application.commands.reset_password_command import (
     SetNewPasswordFailure,
     SetNewPasswordResult,
 )
-from components.identity.domain.enums import AuthEventCode
 from components.identity.application.ports.auth_audit_port import AuthAuditPort
 from components.identity.application.ports.password_reset_port import PasswordResetPort
 from components.identity.application.ports.security_notification_port import SecurityNotificationPort
+from components.identity.application.ports.user_repository_port import UserRepositoryPort
+from components.identity.domain.enums import AuthEventCode
 
 
 class SetNewPasswordUseCase:
@@ -26,10 +27,12 @@ class SetNewPasswordUseCase:
         reset_port: PasswordResetPort,
         audit_port: AuthAuditPort,
         notification_port: SecurityNotificationPort,
+        user_repo: UserRepositoryPort,
     ) -> None:
         self._reset = reset_port
         self._audit = audit_port
         self._notification = notification_port
+        self._user_repo = user_repo
 
     def execute(self, command: SetNewPasswordCommand) -> SetNewPasswordResult | SetNewPasswordFailure:
         """Execute the set-new-password flow."""
@@ -41,7 +44,17 @@ class SetNewPasswordUseCase:
                 message="Token is not valid, please request a new one",
             )
 
-        # 2. Set new password
+        # 2. Enforce the password policy — the SAME chain as change-password.
+        #    Reset-complete previously accepted a top-10 common password that
+        #    /identity/changepassword/ would have refused.
+        policy_errors = self._user_repo.validate_new_password(user_id, command.new_password)
+        if policy_errors:
+            return SetNewPasswordFailure(
+                reason="weak_password",
+                message=" ".join(policy_errors),
+            )
+
+        # 3. Set new password
         self._reset.set_new_password(user_id, command.new_password)
 
         # 3. Record audit event
