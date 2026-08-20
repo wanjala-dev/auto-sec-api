@@ -45,6 +45,7 @@ from components.report.domain.entities.assembled_report_entity import (
 from components.report.domain.report_kind import get_report_kind
 from components.report.domain.services import finding_curation as curation
 from components.report.domain.services import finding_section_builder as fsb
+from components.report.domain.value_objects.scan_coverage import ScanCoverage
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +130,7 @@ class ReportAssemblerService:
             excluded_suppressed=page.excluded_suppressed,
             excluded_sample=page.excluded_sample,
             sample_count=page.sample_count,
+            scan_coverage=page.scan_coverage,
         )
 
         logger.info(
@@ -167,6 +169,7 @@ class ReportAssemblerService:
             excluded_sample=page.excluded_sample,
             sample_finding_count=page.sample_count,
             untriaged_count=untriaged_count,
+            scan_coverage=page.scan_coverage,
         )
 
 
@@ -184,6 +187,7 @@ def build_grounding_texts(
     excluded_suppressed: int = 0,
     excluded_sample: int = 0,
     sample_count: int = 0,
+    scan_coverage: ScanCoverage | None = None,
 ) -> tuple[str, ...]:
     """The plain-text corpus the narrative must be grounded in.
 
@@ -206,6 +210,11 @@ def build_grounding_texts(
         f"Distinct findings: {distinct_count}.",
         f"Total findings observed (before de-duplication): {raw_count}.",
     ]
+    # Scan coverage comes FIRST after the counts, because it is the fact that
+    # decides how every other zero in this corpus should be read. Without it a
+    # corpus of "0 findings, 0 critical, 0 high" is indistinguishable from a
+    # clean estate, and a faithful narrative written from it will say so.
+    texts.extend(_coverage_texts(scan_coverage))
     if sample_count:
         texts.append(
             f"THIS REPORT CONTAINS SAMPLE DATA: {sample_count} of the findings are seeded demonstration "
@@ -248,3 +257,37 @@ def build_grounding_texts(
         for bullet in tech.remediation:
             texts.append(bullet)
     return tuple(texts)
+
+
+def _coverage_texts(coverage: ScanCoverage | None) -> list[str]:
+    """State what actually scanned — or that nothing did.
+
+    Fail-closed on the unknown case: an adapter that cannot report coverage says
+    so, rather than letting silence be narrated as "we looked and it was clean".
+    """
+    if coverage is None:
+        return [
+            "Scan coverage for this scope was not recorded, so this report cannot state whether "
+            "any scan ran. Do not describe it as a clean result."
+        ]
+    texts: list[str] = []
+    if coverage.has_coverage:
+        texts.append(f"{coverage.completed_runs} scans completed over this scope during the period covered.")
+        if coverage.last_completed_at is not None:
+            texts.append(f"The most recent completed scan finished at {coverage.last_completed_at.isoformat()}.")
+    else:
+        texts.append(
+            "NO COMPLETED SCAN COVERS THIS SCOPE. This report is empty because nothing was scanned, "
+            "not because nothing was found — it is not a clean result and must not be described as one."
+        )
+    if coverage.failed_runs:
+        texts.append(
+            f"{coverage.failed_runs} scans failed during the period covered, so this assessment is "
+            f"incomplete — findings those scans would have produced are absent from this report."
+        )
+    if coverage.running_runs:
+        texts.append(
+            f"{coverage.running_runs} scans were still running when this report was assembled; "
+            f"their findings are not included."
+        )
+    return texts

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from components.report.domain.value_objects.scan_coverage import ScanCoverage
 from components.report.domain.value_objects.severity import SEVERITY_ORDER, Severity
 
 
@@ -166,10 +167,24 @@ class AssembledReport:
     sample_finding_count: int = 0
     # Listed findings that never reached the board.
     untriaged_count: int = 0
+    # Did anything actually LOOK at this scope? ``None`` = the finding source
+    # could not tell. An empty report with no completed scan is an UNSCANNED
+    # scope, not a clean one — see ``ScanCoverage`` on the finding port.
+    scan_coverage: ScanCoverage | None = None
 
     @property
     def contains_sample_data(self) -> bool:
         return self.sample_finding_count > 0
+
+    @property
+    def has_scan_coverage(self) -> bool:
+        """Has a scan actually completed over this scope?
+
+        Fail-closed: unknown coverage is NOT coverage. The document may only make
+        a "no findings were surfaced" claim when this is True, because that
+        sentence asserts something was reviewed.
+        """
+        return self.scan_coverage is not None and self.scan_coverage.has_coverage
 
     @property
     def is_truncated(self) -> bool:

@@ -164,6 +164,12 @@ def build_render_context(
         if assembled.is_truncated
         else "",
         "exclusion_notice": _exclusion_notice(assembled),
+        # ── Scan coverage: is this report EMPTY, or is it CLEAN? ──
+        # ``has_scan_coverage`` is the ONLY thing that earns the document's
+        # "no findings were surfaced" sentence. Without it a never-scanned
+        # workspace rendered byte-identically to a thoroughly-scanned clean one.
+        "has_scan_coverage": assembled.has_scan_coverage,
+        "coverage_notice": _coverage_notice(assembled),
         "untriaged_count": assembled.untriaged_count,
         "untriaged_notice": (
             f"{assembled.untriaged_count} of the findings listed have not been triaged: they were never "
@@ -177,6 +183,51 @@ def build_render_context(
         "technical_findings": technical,
         "severity_ratings": severity_ratings,
     }
+
+
+def _coverage_notice(assembled: AssembledReport) -> str:
+    """State whether anything actually scanned — and what did not finish.
+
+    Rendered whenever the answer is anything other than "everything completed":
+    no coverage at all, a failed run, or a run still in flight. A clean report
+    also states its coverage, because "4 scans completed" is what makes "no
+    findings were surfaced" a claim rather than an assumption.
+    """
+    coverage = assembled.scan_coverage
+    if coverage is None:
+        return (
+            "Scan coverage for this scope was not recorded, so this report cannot state whether any "
+            "scan ran over it. Do not read the finding count below as a clean result."
+        )
+
+    parts: list[str] = []
+    if not coverage.has_coverage:
+        parts.append(
+            "No completed scan covers this scope for the period reported. This report is empty "
+            "because nothing was scanned, not because nothing was found — it is not a clean result."
+        )
+    else:
+        when = (
+            f", most recently on {coverage.last_completed_at:%d %B %Y}"
+            if coverage.last_completed_at is not None
+            else ""
+        )
+        parts.append(f"{coverage.completed_runs} scans completed over this scope during the period covered{when}.")
+    if coverage.failed_runs:
+        parts.append(
+            f"{coverage.failed_runs} scans failed during the period, so this assessment is incomplete: "
+            f"anything those scans would have surfaced is absent from this document."
+        )
+    if coverage.running_runs:
+        parts.append(
+            f"{coverage.running_runs} scans were still running when this report was assembled; their "
+            f"findings are not included."
+        )
+    if len(parts) == 1 and coverage.has_coverage:
+        # A fully-covered, fully-completed report: the coverage line is a plain
+        # statement of fact, not a caveat.
+        return parts[0]
+    return " ".join(parts)
 
 
 def _exclusion_notice(assembled: AssembledReport) -> str:
