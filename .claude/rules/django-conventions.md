@@ -231,7 +231,7 @@ class Transaction(StandardMetadata):
 | Search | django-elasticsearch-dsl | 8.0 |
 | AI/Agents | langchain, langchain-openai, langgraph | 0.3+ |
 | Payments | stripe | 5.0 |
-| Database | PostgreSQL via psycopg 3.2 (4 databases, tenant routing) |
+| Database | PostgreSQL via psycopg 3.2 — pooled `default` + one per dedicated tenant, routed (see Tenancy) |
 | Schema | drf-spectacular | 0.29 |
 | Filtering | django-filter | 24.2 |
 | PDF | reportlab | (receipt generation) |
