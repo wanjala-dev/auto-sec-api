@@ -170,12 +170,27 @@ def build_worker_from_agent(
                 payload={"task_id": task.id, "error": str(exc)},
             )
             raise
+        # ADR 0031 D2 — layer 4. This row used to say ``completed`` no matter
+        # what the worker reported, which is how a run whose every tool call
+        # failed still read as a clean sub-agent completion in the run trace.
+        # ``response["status"]`` is the agent's own verdict (``completed`` /
+        # ``partial`` / ``failed``); the literal is only the fallback for a
+        # response shape that predates D2.
+        worker_status = "completed"
+        worker_payload: dict[str, Any] = {"task_id": task.id}
+        if isinstance(response, dict):
+            reported = response.get("status")
+            if reported in ("completed", "partial", "failed"):
+                worker_status = reported
+            tool_failures = response.get("tool_failures")
+            if tool_failures:
+                worker_payload["tool_failures"] = tool_failures
         log_deep_event(
             thread_id,
             "worker_completed",
-            status="completed",
+            status=worker_status,
             agent_type=agent_type,
-            payload={"task_id": task.id},
+            payload=worker_payload,
         )
 
         summary = summarizer(response)

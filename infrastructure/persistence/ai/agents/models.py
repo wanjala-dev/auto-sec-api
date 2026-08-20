@@ -155,11 +155,16 @@ class AgentExecution(models.Model):
     STATUS_PENDING = "pending"
     STATUS_RUNNING = "running"
     STATUS_COMPLETED = "completed"
+    #: ADR 0031 D2 — some of the turn's tool calls failed and some succeeded.
+    #: The answer is usable (``success`` stays True) but the turn is not a clean
+    #: success, and recording it as ``completed`` is the silent-success defect.
+    STATUS_PARTIAL = "partial"
     STATUS_FAILED = "failed"
     STATUS_CHOICES = [
         (STATUS_PENDING, "Pending"),
         (STATUS_RUNNING, "Running"),
         (STATUS_COMPLETED, "Completed"),
+        (STATUS_PARTIAL, "Partial"),
         (STATUS_FAILED, "Failed"),
     ]
 

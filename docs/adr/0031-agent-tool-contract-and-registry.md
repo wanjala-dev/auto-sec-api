@@ -382,6 +382,62 @@ Then
 F4 (failure), then F1 (full declaration) once enough tools carry one that the allowlist is short.
 Each is one test flipped from warn to fail, and each is independently revertible.
 
+*D2 + F4 landed 2026-08-20 — the failure-semantics half of Phase 3.*
+
+**The outcome now survives serialization, out-of-band.** `_serialize_tool_result` was where
+`ToolResult.ok` died; it now returns `(content, artifact)` under LangChain's
+`response_format="content_and_artifact"`. `content` is byte-for-byte the string it always was —
+`ToolResult.serialize()` is untouched — and the structured outcome rides `ToolMessage.artifact`,
+which LangChain documents as *"additional data not sent to the model"* and
+`langchain_mcp_adapters` uses for the same purpose. So this is the framework's own out-of-band
+slot, not a parallel channel invented here. `convert_to_openai_messages` and
+`convert_to_openai_tool` are asserted identical with and without it
+(`test_tool_failure_semantics.py::TestTheModelVisibleBytesDidNotMove`).
+
+A contextvar was considered and rejected on evidence: LangGraph's `ToolNode` runs sync tools in a
+thread pool under `copy_context().run(...)`, so a value set inside the tool would never reach the
+middleware.
+
+**Classification is honest.** `ToolResult` grew `failure` + `retriable`; the reason resolves
+call → declaration (`@tool(failure_mode=...)`) → `INTERNAL`, and every observation carries
+`expected` — True when the tool *reported* the outcome, False when the framework *inferred* it from
+an escaped exception or a rendered prefix. `INTERNAL` stays the loud tier; it is just no longer the
+answer for everything. `_risk_gated` refusals now classify as `DENIED` via a `str` subclass
+(`_ToolRefusal`), so a blocked call stops counting as a success without moving a single byte the
+model reads.
+
+**`execute()` stopped claiming success it cannot know.** `resolve_run_outcome` (application layer,
+framework-free) gives three states: no tool failed → `completed`; some failed → `partial`
+(`success=True` — the answer is usable and discarding it would be its own dishonesty); tool calls
+were made and **all** failed → `failed` (`success=False`, narration preserved as `result`). A turn
+with no tool calls is `completed`. All four layers agree: the `tool_observation` row's status +
+reason, `AgentExecution.status` (new `partial` choice), the `run_telemetry` row, and the
+`worker_completed` row — which read `completed` unconditionally and now carries the worker's own
+verdict.
+
+**Two things worth recording that the ADR did not anticipate.**
+
+- Phase 1's `"Error: "` prefix heuristic reads as though it covered the ~49 hand-rolled error
+  strings. It never did — every one of them is `f"Error <verb>ing X: {exc}"`, with no colon after
+  "Error", so the heuristic only ever matched `ToolResult.serialize()` output. Those failures were
+  invisible before D2 and are invisible after it. Converting the bodies is the only fix, which
+  raises F4 from hygiene to the actual remediation. Pinned by
+  `test_the_prefix_fallback_does_not_reach_the_hand_rolled_house_style`.
+- "No outcome" is carried as **no artifact**, never as an asserted success. Attaching a success
+  envelope to every bare-string return would have shadowed the fallback and turned "we don't know"
+  into "it worked" — the defect class in miniature.
+
+**F4 is on, in ratchet mode** (`tests/architecture/test_tool_blanket_exception.py`): 63 known
+blanket-`except`-returning-a-string bodies are named and printed every run; a 64th fails the build.
+The distribution is the finding — **50 are the inherited CRUD fleet** (`task_agent` 21,
+`project_agent` 19, `workspace_agent` 6, `user_agent` 4), i.e. Phase 4 / OQ4, and **13 are security
+surface** (`ai_governance_agent` 6, `posture_agent` 5, `report_agent` 2), which is where conversion
+should start.
+
+*Not in scope, and named rather than silently left.* The six advisor services whose
+`logger.exception(...); return None` produces the inventory's worked example still return `None`;
+D2 supplies the mechanism to report it, and converting them is its own change.
+
 **Phase 4 — the CRUD backlog.** `task_agent` / `project_agent` / `workspace_agent` / `user_agent` are
 46 of the 101 tools, carry 0 risk declarations, and are inherited nonprofit-shaped CRUD. Convert them
 last, or reconsider whether a SOC product needs 25 task-management tools reachable from chat at all.

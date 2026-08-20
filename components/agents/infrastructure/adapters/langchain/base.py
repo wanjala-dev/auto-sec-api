@@ -25,7 +25,9 @@ from langchain_core.tools.base import BaseTool
 from components.agents.application.policies.tool_risk import ToolRisk as _ToolRisk
 from components.agents.application.policies.tool_spec import Failure as _Failure
 from components.agents.application.policies.tool_spec import Provenance as _Provenance
+from components.agents.application.policies.tool_spec import RunOutcome as _RunOutcome
 from components.agents.application.policies.tool_spec import Scope as _Scope
+from components.agents.application.policies.tool_spec import resolve_run_outcome as _resolve_run_outcome_policy
 from components.agents.application.ports.llm_provider_port import LLMProviderPort
 from components.agents.application.ports.tracing_port import NullTracingAdapter, TracingPort
 from components.agents.infrastructure.adapters.langchain.graph_agent import build_graph_executor
@@ -59,12 +61,24 @@ class ToolResult:
     Tools can return any type — when they return a `ToolResult`, the
     framework calls `.serialize()` to produce a string the LLM can read.
     Strings, dicts, and other primitives are passed through as-is.
+
+    ADR 0031 D2 adds ``failure`` and ``retriable``. Both are optional and
+    neither is rendered: ``serialize()`` is byte-for-byte what it was, because
+    that string is what the model reads. The structured outcome leaves the tool
+    on ``ToolMessage.artifact`` instead — see ``_serialize_tool_result``.
+
+        ToolResult(ok=False, error="…", failure=Failure.UPSTREAM_UNAVAILABLE, retriable=True)
     """
 
     ok: bool = True
     message: str = ""
     data: dict[str, Any] | None = None
     error: str | None = None
+    #: One of ``tool_spec.Failure``. When unset, the tool's declared
+    #: ``failure_mode`` names the reason; when that is unset too, ``INTERNAL``.
+    failure: str | None = None
+    #: Whether the caller may reasonably retry. Recorded, never acted on here.
+    retriable: bool = False
 
     def serialize(self) -> str:
         if not self.ok:
@@ -506,6 +520,21 @@ def is_ai_service_principal(user_id, workspace_id) -> bool:
         return False
 
 
+class _ToolRefusal(str):
+    """The refusal string ``_risk_gated`` returns, tagged as a refusal.
+
+    A ``str`` subclass on purpose: every existing consumer — the LLM, the
+    ``AgentTestCase`` scripted executor, ``str()`` — sees exactly the same
+    characters it saw before, so the model-visible bytes cannot move. The only
+    thing that changes is that ``_serialize_tool_result`` can now tell a refusal
+    apart from a successful return and record it as ``Failure.DENIED`` rather
+    than silently counting a blocked tool call as a success (ADR 0031 D2:
+    "not permitted" is one of the outcomes that must stop reading as success).
+    """
+
+    __slots__ = ()
+
+
 def _risk_gated(func, tool_name, explicit_risk, agent):
     """Wrap a promoted tool so its risk tier is enforced per call (SEE-203).
 
@@ -532,7 +561,8 @@ def _risk_gated(func, tool_name, explicit_risk, agent):
             is_autonomous, approval_granted = False, False
         refusal = tool_risk_refusal(resolved_risk, is_autonomous=is_autonomous, approval_granted=approval_granted)
         if refusal is not None:
-            return refusal
+            # Same characters, tagged. See ``_ToolRefusal``.
+            return _ToolRefusal(refusal)
         return func(*args, **kwargs)
 
     return wrapper
@@ -562,21 +592,69 @@ def _governance_observation_for(agent: Any, action: Any):
         return None
 
 
-def _serialize_tool_result(func):
-    """Honor the ``ToolResult`` contract: a tool that returns a ``ToolResult`` gets it
-    ``.serialize()``-d to the string the LLM reads (see the ``ToolResult`` docstring).
+def _serialize_tool_result(func, declared_failure_mode: str | None = None):
+    """Honor the ``ToolResult`` contract, and keep the outcome the flattening destroys.
 
-    Without this the raw dataclass reaches the model as an ugly ``repr`` (and a tool
-    returning a non-string trips the tool-smoke ``isinstance(result, str)`` guard). Any
-    other return type — a plain string, a refusal string from ``_risk_gated`` — passes
-    through unchanged. Applied as the outermost wrapper in the promotion loop so it
-    normalises every return path.
+    A tool that returns a ``ToolResult`` gets it ``.serialize()``-d to the string
+    the LLM reads (see the ``ToolResult`` docstring). Without this the raw
+    dataclass reaches the model as an ugly ``repr`` (and a tool returning a
+    non-string trips the tool-smoke ``isinstance(result, str)`` guard). Any other
+    return type — a plain string, a dict — passes through unchanged. Applied as
+    the outermost wrapper in the promotion loop so it normalises every return path.
+
+    **ADR 0031 D2.** This function is where ``ToolResult.ok`` used to be
+    destroyed: the ``@dataclass`` carried a machine-readable outcome, and one
+    line turned it into prose before any middleware, any log row, or ``execute()``
+    could read it. Phase 1 could only recover "something failed" by matching the
+    ``"Error: "`` prefix back off the rendered string, which collapsed every
+    reason to ``INTERNAL``.
+
+    It now returns ``(content, artifact)`` — LangChain's ``content_and_artifact``
+    tool contract. ``content`` is the identical string it always was; the
+    artifact carries the structured outcome and is documented by LangChain as
+    "additional data not sent to the model". The model's view is byte-for-byte
+    unchanged (pinned by ``TestTheModelVisibleBytesDidNotMove``), and the
+    governance middleware reads the outcome off ``ToolMessage.artifact`` instead
+    of guessing at a prefix.
+
+    ``declared_failure_mode`` is the tool's ``@tool(failure_mode=...)``
+    declaration: the fallback reason for an ``ok=False`` that names none. That is
+    the "a tool declares its failure semantics, and the framework classifies the
+    outcome" half of D2.
     """
+    from components.agents.application.policies.tool_spec import (
+        Failure,
+        ToolOutcome,
+        ToolOutcomeEnvelope,
+        classify_tool_result,
+    )
 
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         result = func(*args, **kwargs)
-        return result.serialize() if isinstance(result, ToolResult) else result
+        if isinstance(result, ToolResult):
+            envelope = classify_tool_result(
+                ok=result.ok,
+                failure=result.failure,
+                retriable=result.retriable,
+                declared_failure_mode=declared_failure_mode,
+            )
+            return result.serialize(), envelope.as_artifact()
+        if isinstance(result, _ToolRefusal):
+            # A blocked tool call is a failed tool call. The refusal text is
+            # returned verbatim — only the classification is added.
+            envelope = ToolOutcomeEnvelope(
+                outcome=ToolOutcome.FAILURE,
+                failure=Failure.DENIED,
+                expected=True,
+            )
+            return str(result), envelope.as_artifact()
+        # A tool that returns a bare string (or anything else) carries no
+        # outcome, and "no outcome" is expressed as **no artifact** — not as an
+        # asserted success. Attaching ``SUCCESS_ENVELOPE`` here would shadow the
+        # middleware's last-resort ``"Error: "`` prefix check and turn "we don't
+        # know" into "it worked", which is the defect class in miniature.
+        return result, None
 
     return wrapper
 
@@ -584,6 +662,19 @@ def _serialize_tool_result(func):
 # Status string constants (avoids importing the AgentExecution ORM model).
 EXECUTION_STATUS_COMPLETED = "completed"
 EXECUTION_STATUS_FAILED = "failed"
+#: ADR 0031 D2 — some tool calls failed, some succeeded. The turn produced a
+#: usable answer, so throwing it away would be its own dishonesty; calling it
+#: ``completed`` would be the lie. Mirrors ``AgentExecution.STATUS_PARTIAL``.
+EXECUTION_STATUS_PARTIAL = "partial"
+
+#: ``tool_spec.RunOutcome`` → the ``AgentExecution.status`` string. The two
+#: vocabularies are deliberately separate: the policy is framework-free and the
+#: ORM's choices are a persistence concern, and they happen to agree today.
+_RUN_OUTCOME_TO_EXECUTION_STATUS = {
+    "completed": EXECUTION_STATUS_COMPLETED,
+    "partial": EXECUTION_STATUS_PARTIAL,
+    "failed": EXECUTION_STATUS_FAILED,
+}
 
 _retry_candidates: list[type[BaseException]] = []
 
@@ -1137,14 +1228,25 @@ class BaseAgent(WorkspaceRetrievalMixin, ABC):
                     self,
                 )
                 # Outermost: honor the ToolResult contract — serialize a ToolResult
-                # return to the string the LLM reads (str/refusal returns pass through).
-                func_to_register = _serialize_tool_result(func_to_register)
+                # return to the string the LLM reads (str/refusal returns pass
+                # through) and carry the structured outcome out-of-band as the
+                # tool's artifact (ADR 0031 D2). The wrapper always returns a
+                # 2-tuple, which is what ``response_format`` below requires.
+                spec = meta.get("spec")
+                func_to_register = _serialize_tool_result(
+                    func_to_register,
+                    getattr(spec, "failure_mode", None),
+                )
                 promoted.append(
                     StructuredTool.from_function(
                         func=func_to_register,
                         name=meta.get("name") or method_name,
                         description=meta.get("description") or method_name,
                         args_schema=schema_to_register,
+                        # Tool-side only: ``convert_to_openai_tool`` output is
+                        # identical with and without it, so the tool definition
+                        # the model is offered does not move.
+                        response_format="content_and_artifact",
                     )
                 )
             self.tools = promoted
@@ -2045,24 +2147,30 @@ class BaseAgent(WorkspaceRetrievalMixin, ABC):
             # calls without contaminating this one.
             collected_artifacts = list(self._pending_artifacts)
 
-            # ADR 0031 Phase 1 — observe-only. ``success=True`` below is
-            # unconditional: a turn whose every tool call failed still records
+            # ADR 0031 D2 — ``success=True`` used to be unconditional here: a
+            # turn whose every tool call failed still recorded
             # ``status=completed`` at all four layers, which is how an
-            # LLM-provider outage produces "reviewed; no confident fix" across
-            # every finding with nothing anywhere saying it went wrong. Phase 1
-            # does not change the reported status — that is Phase 3 (D2) — but
-            # it stops the contradiction being invisible.
-            self._warn_on_success_over_tool_failures()
+            # LLM-provider outage produced "reviewed; no confident fix" across
+            # every finding with nothing anywhere saying it went wrong. The
+            # verdict now comes from the tool calls that actually ran.
+            run_outcome, tool_failure_note = self._resolve_run_outcome()
+            run_status = _RUN_OUTCOME_TO_EXECUTION_STATUS.get(run_outcome, EXECUTION_STATUS_COMPLETED)
+            run_succeeded = run_status != EXECUTION_STATUS_FAILED
+            if tool_failure_note:
+                self._warn_on_success_over_tool_failures(run_outcome)
 
             # Record execution in memory service
             execution = self.memory_service.record_execution(
                 query=query,
+                # The narration is kept even on the failed path. Nothing is
+                # lost by this change; it just stops being labelled a success.
                 result=result_text,
-                success=True,
+                success=run_succeeded,
+                error_message=tool_failure_note if not run_succeeded else "",
                 execution_time_ms=execution_time_ms,
                 execution=execution,
                 execution_id=execution_id,
-                status=EXECUTION_STATUS_COMPLETED,
+                status=run_status,
                 progress=100,
                 state=self._execution_state_with_telemetry(),
                 task_id=task_id,
@@ -2079,7 +2187,7 @@ class BaseAgent(WorkspaceRetrievalMixin, ABC):
                     "execution_id": str(execution.id),
                 }
             )
-            self.state.status = "completed"
+            self.state.status = run_status
             self.state.updated_at = datetime.now()
 
             self._maybe_log_auto_action(
@@ -2090,13 +2198,21 @@ class BaseAgent(WorkspaceRetrievalMixin, ABC):
             )
 
             result_payload = {
-                "success": True,
+                "success": run_succeeded,
                 "result": result_text,
+                # ADR 0031 D2 — the run's own verdict, so a consumer can tell a
+                # clean turn from a partial one without re-deriving it. Additive
+                # key; ``success`` keeps its existing meaning.
+                "status": run_outcome,
                 "execution_id": str(execution.id),
                 "execution_time_ms": execution_time_ms,
                 "agent_id": self.agent_id,
                 "state": self.state.to_dict(),
             }
+            if tool_failure_note:
+                result_payload["tool_failures"] = tool_failure_note
+                if not run_succeeded:
+                    result_payload["error"] = tool_failure_note
             if rubric_evaluations:
                 result_payload["rubric_evaluations"] = rubric_evaluations
             # Ship the per-call telemetry snapshot (token counters, model
@@ -2112,7 +2228,12 @@ class BaseAgent(WorkspaceRetrievalMixin, ABC):
                     result_payload["telemetry"] = telemetry_snapshot
             except Exception:  # pylint: disable=broad-except
                 logger.debug("telemetry snapshot attach failed for agent %s", self.agent_id, exc_info=True)
-            self._maybe_log_run_telemetry(run_context, success=True)
+            self._maybe_log_run_telemetry(
+                run_context,
+                success=run_succeeded,
+                error=tool_failure_note if not run_succeeded else None,
+                outcome=run_outcome,
+            )
             return result_payload
 
         except Exception as e:
@@ -2375,13 +2496,43 @@ class BaseAgent(WorkspaceRetrievalMixin, ABC):
             logger.debug("tool outcome summary failed for agent %s", self.agent_id, exc_info=True)
             return {}
 
-    def _warn_on_success_over_tool_failures(self) -> None:
-        """Log loudly when a turn reports success over failed tool calls.
+    def _resolve_run_outcome(self) -> tuple[str, str]:
+        """This turn's verdict, from the tool calls that actually ran (D2).
 
-        The contradiction this surfaces is the ADR 0031 D2 defect class:
-        ``ToolResult.ok`` is flattened to a string before anything reads it, so
-        a run whose tools all failed still reports ``success``. Observe-only —
-        this changes no status, it only makes the disagreement grep-able.
+        Returns ``(run_outcome, tool_failure_note)`` — the note is empty when
+        nothing failed, and otherwise names the failed tools and their reasons
+        so it can go on ``AgentExecution.error_message`` and the run payload.
+
+        Fail-safe on purpose: if the observation buffer is missing (a scripted
+        test stub, an agent whose executor was replaced) or anything goes wrong
+        reading it, the answer is ``COMPLETED`` — the pre-D2 behaviour. An
+        observability failure must never invent a run failure, which would be
+        the mirror image of the defect this fixes.
+        """
+        try:
+            buffer = getattr(self, "_tool_call_observations", None)
+            if buffer is None:
+                return _RunOutcome.COMPLETED, ""
+            observations = buffer.all()
+            failures = [obs for obs in observations if obs.failed]
+            outcome = _resolve_run_outcome_policy(total_calls=len(observations), failed_calls=len(failures))
+            if not failures:
+                return outcome, ""
+            detail = ", ".join(sorted({f"{obs.tool_name} ({obs.failure or 'unknown'})" for obs in failures}))
+            note = f"{len(failures)} of {len(observations)} tool call(s) failed: {detail}"
+            return outcome, note
+        except Exception:  # pragma: no cover — observability never breaks a run
+            logger.debug("run outcome resolution failed for agent %s", self.agent_id, exc_info=True)
+            return _RunOutcome.COMPLETED, ""
+
+    def _warn_on_success_over_tool_failures(self, run_outcome: str | None = None) -> None:
+        """Log loudly when a turn finishes over failed tool calls.
+
+        Before D2 this was the *only* record of the contradiction, because
+        ``execute()`` reported a clean success regardless. The status now moves
+        too; the log line stays because it is the grep-able per-turn breadcrumb
+        an operator reaches for, and because a ``partial`` turn still reports
+        ``success=True`` and deserves to be findable.
         """
         try:
             buffer = getattr(self, "_tool_call_observations", None)
@@ -2392,12 +2543,14 @@ class BaseAgent(WorkspaceRetrievalMixin, ABC):
                 return
             logger.warning(
                 "agent_run_reported_success_with_tool_failures agent_id=%s workspace_id=%s "
-                "failed_calls=%s total_calls=%s failed_tools=%s",
+                "run_outcome=%s failed_calls=%s total_calls=%s failed_tools=%s failure_reasons=%s",
                 self.agent_id,
                 self.workspace_id,
+                run_outcome or "",
                 len(failures),
                 len(buffer.all()),
                 sorted({obs.tool_name for obs in failures}),
+                sorted({obs.failure or "unknown" for obs in failures}),
             )
         except Exception:  # pragma: no cover — observability never breaks a run
             logger.debug("tool-failure warning failed for agent %s", self.agent_id, exc_info=True)
@@ -2517,14 +2670,25 @@ class BaseAgent(WorkspaceRetrievalMixin, ABC):
         *,
         success: bool,
         error: str | None = None,
+        outcome: str | None = None,
     ) -> None:
+        """Write the ``run_telemetry`` row — layer 3 of the four (ADR 0031 D2).
+
+        ``outcome`` is the ``RunOutcome`` when the caller has one, so a
+        ``partial`` turn is recorded as ``partial`` rather than rounded to
+        ``success``. A clean turn keeps writing the literal ``"success"`` this
+        row has always carried — the row's vocabulary is read by the deep-run
+        query repository and the HUD, and D2 has no reason to move it for the
+        case that did not change.
+        """
+
         if not run_context or not isinstance(run_context, dict):
             return
         run_id = run_context.get("run_id") or run_context.get("plan_id")
         if not run_id:
             return
         telemetry = self._get_telemetry_snapshot()
-        if not telemetry and not error:
+        if not telemetry and not error and not outcome:
             return
         try:
             from components.agents.infrastructure.gateways.deep.logging import log_deep_event
@@ -2532,10 +2696,14 @@ class BaseAgent(WorkspaceRetrievalMixin, ABC):
             payload = {"telemetry": telemetry} if telemetry else {}
             if error:
                 payload["error"] = error
+            if outcome and outcome != _RunOutcome.COMPLETED:
+                status = outcome
+            else:
+                status = "success" if success else "failed"
             log_deep_event(
                 run_id,
                 "run_telemetry",
-                status="success" if success else "failed",
+                status=status,
                 agent_type=self.__class__.__name__,
                 payload=payload,
             )

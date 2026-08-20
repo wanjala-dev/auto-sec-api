@@ -34,11 +34,10 @@ What Pattern E does NOT catch:
 - Tool-selection gaps (LLM picks the wrong tool — that's Pattern B).
 - Permission bugs that only fire for non-admin users.
 """
+
 from __future__ import annotations
 
-import re
 import uuid
-from typing import Iterable, List, Tuple
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -48,13 +47,13 @@ from components.agents.tests._helpers.agent_capability_inventory import (
     CANONICAL_TOOLS,
     UNIVERSAL_TOOLS,
 )
-
+from components.agents.tests._helpers.tool_output import model_visible_output
 
 # Markers that almost certainly indicate a Python traceback or schema
 # drift bubbled up to the LLM. Some of these phrases appear in
 # legitimate response strings (e.g. "expected" in a UX message), so
 # we anchor on the patterns that ONLY appear in tracebacks.
-_TRACEBACK_MARKERS: Tuple[str, ...] = (
+_TRACEBACK_MARKERS: tuple[str, ...] = (
     "AttributeError",
     "ImportError",
     "ModuleNotFoundError",
@@ -131,7 +130,7 @@ _SMOKE_SKIP: dict[str, set[str]] = {
 _KNOWN_DRIFT: dict[tuple[str, str], str] = {}
 
 
-def _all_agent_tool_pairs() -> List[Tuple[str, str]]:
+def _all_agent_tool_pairs() -> list[tuple[str, str]]:
     """Return ``[(agent_name, tool_name), ...]`` for every entry in
     ``CANONICAL_TOOLS`` minus ``_SMOKE_SKIP`` exclusions.
 
@@ -139,7 +138,7 @@ def _all_agent_tool_pairs() -> List[Tuple[str, str]]:
     ``get_workspace_info``) are NOT iterated — they're framework-
     provided and tested separately.
     """
-    pairs: List[Tuple[str, str]] = []
+    pairs: list[tuple[str, str]] = []
     for agent_name, tool_names in sorted(CANONICAL_TOOLS.items()):
         skip = _SMOKE_SKIP.get(agent_name, set())
         for tool_name in sorted(tool_names):
@@ -201,10 +200,9 @@ def _make_smoke_agent(agent_cls, *, smoke_workspace):
 
     from components.agents.infrastructure.adapters.langchain import base as base_module
 
-    with patch.object(
-        base_module, "get_agent_memory_service", return_value=fake_memory_service
-    ), patch.object(
-        agent_cls, "_create_agent_executor", lambda self_inner: None, create=False
+    with (
+        patch.object(base_module, "get_agent_memory_service", return_value=fake_memory_service),
+        patch.object(agent_cls, "_create_agent_executor", lambda self_inner: None, create=False),
     ):
         agent = agent_cls(
             agent_id=str(uuid.uuid4()),
@@ -237,9 +235,7 @@ def _find_tool(agent, tool_name: str):
     _all_agent_tool_pairs(),
     ids=lambda v: v if isinstance(v, str) else "?",
 )
-def test_tool_smoke_run_does_not_leak_traceback(
-    agent_name, tool_name, smoke_workspace, request
-):
+def test_tool_smoke_run_does_not_leak_traceback(agent_name, tool_name, smoke_workspace, request):
     """Calling a tool with empty JSON must not leak a traceback marker.
 
     The expectation is graceful failure: each tool either succeeds (if
@@ -258,9 +254,7 @@ def test_tool_smoke_run_does_not_leak_traceback(
         )
 
     agent_cls = AgentRegistry.get_agent_class(agent_name)
-    assert agent_cls is not None, (
-        f"Agent {agent_name} is in CANONICAL_TOOLS but not registered."
-    )
+    assert agent_cls is not None, f"Agent {agent_name} is in CANONICAL_TOOLS but not registered."
 
     agent = _make_smoke_agent(agent_cls, smoke_workspace=smoke_workspace)
     tool = _find_tool(agent, tool_name)
@@ -271,7 +265,7 @@ def test_tool_smoke_run_does_not_leak_traceback(
 
     # Call with empty JSON — the smallest input any tool should accept.
     try:
-        result = tool.func("{}")
+        raw = tool.func("{}")
     except Exception as exc:  # pylint: disable=broad-except
         pytest.fail(
             f"Tool {agent_name}.{tool_name} raised an unhandled exception "
@@ -279,9 +273,14 @@ def test_tool_smoke_run_does_not_leak_traceback(
             "Tools must catch their own errors and return a string."
         )
 
+    # ADR 0031 D2 — a promoted tool's ``.func`` returns ``(content, artifact)``;
+    # the artifact is the structured outcome and never reaches the model.
+    # Pattern E is about what the LLM-facing prompt sees, so it asserts against
+    # the content half — the same half ``BaseTool.run`` would hand the model.
+    result = model_visible_output(tool, raw)
+
     assert isinstance(result, str), (
-        f"Tool {agent_name}.{tool_name} returned non-string: "
-        f"{type(result).__name__} (value: {result!r})"
+        f"Tool {agent_name}.{tool_name} returned non-string: {type(result).__name__} (value: {result!r})"
     )
 
     leaked = [marker for marker in _TRACEBACK_MARKERS if marker in result]

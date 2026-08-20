@@ -257,6 +257,21 @@ _WORKER_TERMINAL_STATES = {
     "worker_blocked": "blocked",
 }
 
+#: ADR 0031 D2 — the run outcomes a ``worker_completed`` row may now carry.
+#: Before D2 the row was written with ``status="completed"`` no matter what the
+#: worker reported, so a sub-agent whose every tool call failed still read as a
+#: clean completion in the run trace. Anything else on the row (a legacy blank,
+#: or the ``"denied"`` a ``worker_blocked`` row carries as its *reason*) falls
+#: back to the event-type map, which is what those events mean.
+_WORKER_COMPLETED_OUTCOMES = frozenset({"completed", "partial", "failed"})
+
+
+def _worker_terminal_status(row) -> str:
+    """The sub-agent status for a terminal worker event."""
+    if row.event_type == "worker_completed" and (row.status or "") in _WORKER_COMPLETED_OUTCOMES:
+        return row.status
+    return _WORKER_TERMINAL_STATES[row.event_type]
+
 
 def _subagent_views(logs: Iterable) -> tuple[DeepRunSubagentView, ...]:
     """Roll up worker events into per-task sub-agent views.
@@ -290,7 +305,7 @@ def _subagent_views(logs: Iterable) -> tuple[DeepRunSubagentView, ...]:
 
         elif row.event_type in _WORKER_TERMINAL_STATES and task_id:
             completed_at.setdefault(task_id, row.created_at)
-            status[task_id] = _WORKER_TERMINAL_STATES[row.event_type]
+            status[task_id] = _worker_terminal_status(row)
             if row.agent_type and task_id not in agent_type:
                 agent_type[task_id] = row.agent_type
 

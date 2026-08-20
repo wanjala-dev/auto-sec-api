@@ -54,10 +54,15 @@ def run_agent_execution(self, execution_id: str) -> dict[str, Any]:
     # already RUNNING under a *different* task_id (another worker has it), skip
     # re-running rather than double-spending tokens.
     incoming_task_id = self.request.id or ""
-    if execution.status == AgentExecution.STATUS_COMPLETED:
+    # ``partial`` (ADR 0031 D2) is terminal exactly like ``completed`` — the turn
+    # ran to the end and produced an answer; some of its tool calls failed. It
+    # has to be listed here or a redelivery would replay an expensive,
+    # non-idempotent LLM call that the pre-D2 code skipped as ``completed``.
+    if execution.status in (AgentExecution.STATUS_COMPLETED, AgentExecution.STATUS_PARTIAL):
         logger.info(
-            "run_agent_execution skip already-completed execution_id=%s task_id=%s",
+            "run_agent_execution skip already-terminal execution_id=%s status=%s task_id=%s",
             execution_id,
+            execution.status,
             incoming_task_id,
         )
         return {
