@@ -42,10 +42,30 @@ POOLED_ALIAS = "default"
 
 @dataclass(frozen=True)
 class TenantScope:
-    """One database a scheduled sweep must run against, and how to bind it."""
+    """One database a run must operate against, and how to bind it.
+
+    The canonical "which customer am I working on" value object — used by the
+    beat fan-out below AND by the ``--tenant`` / ``--all-tenants`` management
+    command flags (``tenancy/management.py``). One type, one ``bind()``, so a
+    scheduled sweep and an operator command can never disagree about what
+    binding a tenant means.
+    """
 
     label: str
     db_alias: str
+    #: The single workspace this scope is pinned to, when it is pinned to one.
+    #:
+    #: Set ONLY for a pooled tenant, where the workspace IS the isolation —
+    #: a pooled scope with no workspace bound reaches every customer in the
+    #: shared database, which for a named tenant would be the silent
+    #: cross-tenant access this whole design exists to prevent.
+    #:
+    #: Left ``None`` for a dedicated tenant: there the DATABASE is the
+    #: isolation, every workspace inside it belongs to that one customer, and
+    #: pinning one would silently narrow a whole-tenant job to a single
+    #: workspace. Also ``None`` for the pool-wide sweep scope below, which is
+    #: deliberately cross-workspace.
+    workspace_id: str | None = None
 
     @property
     def is_pooled(self) -> bool:
@@ -54,18 +74,27 @@ class TenantScope:
     @contextmanager
     def bind(self) -> Iterator[None]:
         """Bind this scope for the duration of the block, and unbind after."""
+        from contextlib import ExitStack
+
         from components.shared_platform.infrastructure.tenancy.context import (
             KIND_DEDICATED,
             TenantContext,
             pooled_context,
             tenant_context,
         )
+        from components.shared_platform.infrastructure.tenancy.workspace_context import (
+            workspace_context,
+        )
 
-        if self.is_pooled:
-            with pooled_context():
-                yield
-            return
-        with tenant_context(TenantContext(kind=KIND_DEDICATED, subdomain=self.label, db_alias=self.db_alias)):
+        tenant = (
+            pooled_context()
+            if self.is_pooled
+            else tenant_context(TenantContext(kind=KIND_DEDICATED, subdomain=self.label, db_alias=self.db_alias))
+        )
+        with ExitStack() as stack:
+            stack.enter_context(tenant)
+            if self.workspace_id:
+                stack.enter_context(workspace_context(self.workspace_id))
             yield
 
 
