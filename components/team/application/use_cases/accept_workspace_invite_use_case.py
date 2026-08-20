@@ -204,9 +204,27 @@ class AcceptWorkspaceInviteUseCase:
                     mark_contributor=seed_is_contributor,
                 )
 
-            # Issue JWT tokens INSIDE the atomic block so any failure here rolls
-            # back the user/membership/invitation writes together.
-            issued = self.tokens.issue_for_user(user_id=user_id)
+            # An invite grants MEMBERSHIP. It authenticates nobody.
+            #
+            # This endpoint is unauthenticated on purpose ("the token IS the
+            # credential"), which is sound for a brand-new account: the accept
+            # IS the signup and the password was set in this same request, so
+            # the token proves the person who set it is holding it.
+            #
+            # It is NOT sound for an established account. Holding the invite
+            # token says nothing about being that user — and the INVITER holds
+            # it too, since the create response returns the raw token in its
+            # body. Issuing a session here therefore let any workspace admin
+            # invite an existing user's address, read the token out of their
+            # own 201, and get a full pair as that user: past their password,
+            # past their second factor, past the verification gate and past
+            # lockout. Established users get their membership and are sent to
+            # the login endpoint, which is where all of those controls live.
+            issued = None
+            if not is_existing_user:
+                # Issue INSIDE the atomic block so any failure here rolls back
+                # the user/membership/invitation writes together.
+                issued = self.tokens.issue_for_user(user_id=user_id)
 
             self.invitations.mark_accepted(invitation_id=invitation.id, accepted_at=now)
 
@@ -217,9 +235,12 @@ class AcceptWorkspaceInviteUseCase:
                 "persona": invitation.persona,
                 "role": invitation.role,
                 "workspace_id": invitation.workspace_id,
-                "access": issued.access,
-                "refresh": issued.refresh,
+                "access": issued.access if issued else None,
+                "refresh": issued.refresh if issued else None,
                 "is_existing_user": is_existing_user,
+                # Explicit instruction for the frontend rather than leaving it
+                # to infer intent from a null token.
+                "requires_login": issued is None,
             },
             status_code=200,
         )

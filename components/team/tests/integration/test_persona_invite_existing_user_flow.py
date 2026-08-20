@@ -209,8 +209,15 @@ def test_existing_user_can_accept_without_password():
     )
     assert accept_resp.status_code == 200, accept_resp.data
     assert accept_resp.data["is_existing_user"] is True
-    assert accept_resp.data["access"]
-    assert accept_resp.data["refresh"]
+    # These two lines used to assert `access` and `refresh` were PRESENT. That
+    # was pinning an account-takeover primitive: the owner above holds this same
+    # token (it is in their own 201 body), so a session minted here is a session
+    # on someone else's account — obtained without their password, their second
+    # factor, or their consent. An invite grants membership; authenticating is
+    # the login endpoint's job. See test_persona_invite_accept_session_scope.py.
+    assert accept_resp.data["access"] is None
+    assert accept_resp.data["refresh"] is None
+    assert accept_resp.data["requires_login"] is True
 
     invited.refresh_from_db()
     assert invited.check_password("oldpass123")  # password preserved
