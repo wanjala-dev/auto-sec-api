@@ -661,10 +661,23 @@ class WorkspaceDetail(viewsets.ModelViewSet):
 # ============================================================================
 
 
-class WorkspaceCategoryList(generics.ListCreateAPIView):
-    """List or create workspace categories."""
+class WorkspaceCategoryList(generics.ListAPIView):
+    """List workspace categories.
 
-    permission_classes = (IsUnauthenticatedOrAdminOrStaff,)
+    ``WorkspaceCategory`` is GLOBAL platform reference data — no workspace FK,
+    served unscoped to every tenant. Under ``IsUnauthenticatedOrAdminOrStaff``
+    (whose unsafe-method branch is bare ``request.user.is_authenticated``, and
+    which defines no ``has_object_permission``) any logged-in account — even
+    one belonging to no workspace at all — could POST rows into that shared
+    catalog, and PUT/PATCH/DELETE existing ones through the detail route.
+
+    ``ListAPIView`` removes ``create`` outright: the verb is now a 405, not a
+    permission decision one edit away from returning. The catalog's real write
+    path has always been the ``populate_*`` management commands and the Django
+    admin, never this endpoint — no frontend call site exists.
+    """
+
+    permission_classes = (permissions.IsAuthenticated,)
     serializer_class = WorkspaceCategorySerializer
     name = "workspacecategory-list"
     filter_fields = ("name",)
@@ -675,10 +688,13 @@ class WorkspaceCategoryList(generics.ListCreateAPIView):
         return workspace_service.get_all_workspace_categories()
 
 
-class WorkspaceCategoryDetail(generics.RetrieveUpdateDestroyAPIView):
-    """Retrieve, update, or delete a workspace category."""
+class WorkspaceCategoryDetail(generics.RetrieveAPIView):
+    """Retrieve a workspace category. Read-only — see ``WorkspaceCategoryList``.
 
-    permission_classes = (IsUnauthenticatedOrAdminOrStaff,)
+    A DELETE here removed the category for every tenant simultaneously.
+    """
+
+    permission_classes = (permissions.IsAuthenticated,)
     serializer_class = WorkspaceCategorySerializer
     name = "workspacecategory-detail"
 
@@ -691,15 +707,32 @@ class WorkspaceCategoryDetail(generics.RetrieveUpdateDestroyAPIView):
 # ============================================================================
 
 
-class WorkspaceCommentList(generics.ListCreateAPIView):
-    """List workspace comments."""
+class WorkspaceCommentList(generics.ListAPIView):
+    """List workspace comments the caller may see.
+
+    Two defects, one tuple. ``IsOwnerOrReadOnly`` is
+    ``has_object_permission``-ONLY, and DRF never invokes an object hook on a
+    list/create route — so it contributed nothing here, leaving
+    ``IsAuthenticatedOrReadOnly`` alone:
+
+    * anonymous GET returned every tenant's comments, over the unscoped
+      ``get_all_workspace_comments()``;
+    * POST was gated by authentication alone — a second create path that
+      skipped the ``IsWorkspaceFollowerOrMember`` check the real endpoint
+      (``WorkspaceCommentCreateView``, ``/workspaces/comment/create/``)
+      enforces. It also used the *Get* serializer and never called
+      ``serializer.save(author=...)``, so a comment created here was both
+      unauthorized and authorless.
+
+    ``ListAPIView`` deletes that duplicate write door (405) rather than
+    guarding it, and the read is scoped through the workspace context's
+    canonical ``scope_to_user`` predicate. The frontend only ever used
+    ``/workspaces/<id>/comment/`` and ``/workspaces/comment/create/``.
+    """
 
     serializer_class = WorkspaceCommentGetSerializer
     name = "workspacecomment-list"
-    permission_classes = (
-        permissions.IsAuthenticatedOrReadOnly,
-        IsOwnerOrReadOnly,
-    )
+    permission_classes = (permissions.IsAuthenticated,)
     filter_fields = ("id", "workspace", "comment", "created_on", "author", "likes", "dislikes")
     search_fields = ("^comment",)
     ordering_fields = (
@@ -708,7 +741,7 @@ class WorkspaceCommentList(generics.ListCreateAPIView):
     )
 
     def get_queryset(self):
-        return workspace_service.get_all_workspace_comments()
+        return workspace_service.get_workspace_comments_visible_to(self.request.user)
 
 
 class WorkspaceCommentCreateView(generics.CreateAPIView):
@@ -1135,10 +1168,28 @@ class WorkspaceCardByWorkspaceView(WorkspaceCardView):
 # ============================================================================
 
 
-class WorkspaceContributionMeansViewSet(viewsets.ModelViewSet):
-    """Manage workspace contribution means."""
+class WorkspaceContributionMeansViewSet(viewsets.ReadOnlyModelViewSet):
+    """Read the contribution-means catalog.
 
-    permission_classes = (IsUnauthenticatedOrAdminOrStaff,)
+    ``ContributionMeans`` is GLOBAL platform reference data — no workspace FK,
+    one table read by every tenant. This was a ``ModelViewSet`` whose
+    ``update``/``destroy`` were inherited and never considered, and the URL
+    conf hand-wired ``put``/``patch``/``delete`` straight onto them. With
+    ``IsUnauthenticatedOrAdminOrStaff`` — SAFE_METHODS True, otherwise bare
+    ``request.user.is_authenticated``, and no ``has_object_permission`` — any
+    logged-in account could rewrite or delete a row that every other tenant
+    depends on, and inject new ones through the collection POST.
+
+    ``ReadOnlyModelViewSet`` removes ``create``/``update``/``destroy`` from the
+    class, so the verbs are 405 no matter how a future URL entry maps them —
+    which is the failure mode that produced this bug. The catalog is populated
+    by the ``populate_contribution_means`` management command; the frontend
+    only ever GETs (``listContributionMeans`` /
+    ``listWorkspaceContributionMeans``). Assignment to a workspace has its own
+    endpoint, ``WorkspaceContributionMeansAssignmentView``.
+    """
+
+    permission_classes = (permissions.IsAuthenticated,)
     serializer_class = WorkspaceContributionsMeansSerializer
 
     def get_queryset(self):
@@ -1154,20 +1205,17 @@ class WorkspaceContributionMeansViewSet(viewsets.ModelViewSet):
             return Response(serializer.data)
         return super().list(request, *args, **kwargs)
 
-    def perform_create(self, serializer):
-        workspace_id = self.kwargs.get("workspace")
-        means = serializer.save()
-        if workspace_id:
-            workspace = get_object_or_404(Workspace, id=workspace_id)
-            workspace.contribution_means.add(means)
-
 
 @extend_schema_view(
     list=extend_schema(operation_id="workspace_contribution_means_by_workspace_list"),
-    create=extend_schema(operation_id="workspace_contribution_means_by_workspace_create"),
 )
 class WorkspaceContributionMeansByWorkspaceViewSet(WorkspaceContributionMeansViewSet):
-    """Workspace-scoped contribution means viewset for unique schema operation IDs."""
+    """Workspace-scoped contribution means viewset for unique schema operation IDs.
+
+    Read-only via the parent. The ``create`` schema entry is gone with the
+    action — a decorator naming an action the class no longer has is how a
+    removed verb quietly reappears in generated clients.
+    """
 
     pass
 

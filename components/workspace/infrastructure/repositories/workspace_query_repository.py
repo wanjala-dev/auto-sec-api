@@ -243,6 +243,19 @@ class WorkspaceQueryRepository:
 
         return WorkspaceComment.objects.all().order_by("-created_on")
 
+    @classmethod
+    def get_workspace_comments_visible_to(cls, user):
+        """Comments in workspaces ``user`` may see.
+
+        Reuses ``scope_to_user`` rather than restating the predicate, so the
+        comment list can never drift from the workspace directory's definition
+        of visibility. Anonymous callers get ``none()``.
+        """
+        from infrastructure.persistence.workspaces.models import Workspace
+
+        visible = cls.scope_to_user(Workspace.objects.all(), user)
+        return cls.get_all_workspace_comments().filter(workspace__in=visible).select_related("workspace", "author")
+
     @staticmethod
     def get_workspace_comments_by_workspace(workspace_id):
         """Fetch comments for a specific workspace."""

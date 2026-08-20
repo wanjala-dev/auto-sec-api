@@ -43,6 +43,14 @@ class SocialService:
     def get_post_queryset(self):
         return self._repo.get_post_queryset()
 
+    def get_posts_visible_to(self, user):
+        """The scoped front door for post reads served to a request.
+
+        ``get_post_queryset`` is UNSCOPED — every post on the deployment.
+        Handing it to a response is a cross-tenant disclosure.
+        """
+        return self._repo.get_posts_visible_to(user)
+
     def get_post_by_id(self, post_id):
         return self._repo.get_post_by_id(post_id)
 

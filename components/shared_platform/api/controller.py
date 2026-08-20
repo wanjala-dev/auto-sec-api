@@ -78,26 +78,77 @@ logger = logging.getLogger(__name__)
 
 
 class BannerViewSet(viewsets.ModelViewSet):
-    """ViewSet for managing system/workspace/user banners."""
+    """System / workspace / user banners.
+
+    The write verbs were always gated correctly (``IsAdminUser`` for every
+    action but ``list``/``retrieve``). The READ path was the defect: it was
+    ``AllowAny``, and ``get_queryset()`` built its scope filter EXCLUSIVELY
+    from client-supplied query parameters, never once consulting
+    ``request.user``. An anonymous caller could therefore ask for
+    ``?scope=user&user=<uuid>`` and receive that user's private banners —
+    ``BannerSerializer`` exposes ``user_email`` — or ``?scope=workspace&
+    workspace=<uuid>`` to cross a tenant boundary, or
+    ``?scope=all&include_inactive=true`` to drop BOTH the scope filter and the
+    active-window filter and read every banner of every scope, including
+    unpublished ones.
+
+    Scope is now DERIVED from the caller. The parameters survive as filters
+    that can only narrow: an unknown or foreign value yields fewer rows, never
+    an error, so existing clients keep working.
+    """
 
     serializer_class = BannerSerializer
     queryset = Banner.objects.all()
 
     def get_permissions(self):
         if self.action in ("list", "retrieve"):
-            return [permissions.AllowAny()]
+            return [permissions.IsAuthenticated()]
         return [IsAdminUser()]
 
     def get_queryset(self):
-        include_inactive = self._param_true("include_inactive")
+        user = self.request.user
+        is_support = bool(getattr(user, "is_staff", False) or getattr(user, "is_superuser", False))
+        queryset = Banner.objects.select_related("workspace", "user")
+
+        if not getattr(user, "is_authenticated", False):
+            return queryset.none()
+
+        # Unpublished / expired banners are pre-announcement material.
+        if not (is_support and self._param_true("include_inactive")):
+            queryset = queryset.active()
+
+        if is_support:
+            queryset = self._apply_requested_narrowing(queryset)
+            return queryset.order_by("priority", "-created_at")
+
+        # A non-staff caller sees: system banners, their OWN user banners, and
+        # banners for workspaces they can actually access. The client cannot
+        # name a different user or an unaffiliated workspace.
+        from components.shared_platform.application.providers.workspace_access_provider import (
+            get_workspace_access_adapter,
+        )
+
+        accessible = get_workspace_access_adapter().accessible_workspace_ids(user_id=user.id)
+        requested_workspace = (self.request.query_params.get("workspace") or "").strip()
+        if requested_workspace:
+            accessible = accessible & {requested_workspace}
+
+        scope_filter = Q(scope=Banner.Scope.SYSTEM) | Q(scope=Banner.Scope.USER, user_id=user.id)
+        if accessible:
+            scope_filter |= Q(scope=Banner.Scope.WORKSPACE, workspace_id__in=accessible)
+
+        scope_param = (self.request.query_params.get("scope") or "").strip().lower()
+        if scope_param and scope_param != "all":
+            scope_filter &= Q(scope=scope_param)
+
+        return queryset.filter(scope_filter).order_by("priority", "-created_at")
+
+    def _apply_requested_narrowing(self, queryset):
+        """Staff-only: honour the raw scope parameters for support tooling."""
         scope_param = self.request.query_params.get("scope")
         scope_value = scope_param.lower() if scope_param else None
         workspace_id = self.request.query_params.get("workspace")
         user_id = self.request.query_params.get("user")
-        queryset = Banner.objects.select_related("workspace", "user")
-
-        if not include_inactive:
-            queryset = queryset.active()
 
         if scope_value and scope_value != "all":
             queryset = queryset.filter(scope=scope_value)
@@ -105,15 +156,14 @@ class BannerViewSet(viewsets.ModelViewSet):
                 queryset = queryset.filter(workspace_id=workspace_id)
             if scope_value == Banner.Scope.USER and user_id:
                 queryset = queryset.filter(user_id=user_id)
-        else:
-            scope_filter = Q(scope=Banner.Scope.SYSTEM)
-            if workspace_id:
-                scope_filter |= Q(scope=Banner.Scope.WORKSPACE, workspace_id=workspace_id)
-            if user_id:
-                scope_filter |= Q(scope=Banner.Scope.USER, user_id=user_id)
-            queryset = queryset.filter(scope_filter)
+            return queryset
 
-        return queryset.order_by("priority", "-created_at")
+        scope_filter = Q(scope=Banner.Scope.SYSTEM)
+        if workspace_id:
+            scope_filter |= Q(scope=Banner.Scope.WORKSPACE, workspace_id=workspace_id)
+        if user_id:
+            scope_filter |= Q(scope=Banner.Scope.USER, user_id=user_id)
+        return queryset.filter(scope_filter)
 
     def _param_true(self, name: str) -> bool:
         value = self.request.query_params.get(name, "")
@@ -269,26 +319,71 @@ class HoneypotLoginView(FormView):
 # =============================================================================
 
 
+def _scope_files_to_viewer(queryset, user):
+    """Narrow a ``File`` queryset to what ``user`` may see.
+
+    Visible == the caller owns the row, OR the row belongs to a workspace the
+    caller can access. The document library is a workspace surface (teammates
+    share indexed documents), so owner-only would break it; ``workspace_id`` is
+    nullable, so workspace-only would strand unattached uploads.
+
+    Workspace access is resolved through the existing
+    ``WorkspaceAccessPort`` — the one canonical answer to "which workspaces can
+    this viewer see" in this context — rather than a fresh copy of the
+    predicate. Anonymous callers get ``none()``.
+    """
+    if not getattr(user, "is_authenticated", False):
+        return queryset.none()
+    if getattr(user, "is_staff", False) or getattr(user, "is_superuser", False):
+        return queryset
+
+    from django.db.models import Q
+
+    from components.shared_platform.application.providers.workspace_access_provider import (
+        get_workspace_access_adapter,
+    )
+
+    workspace_ids = get_workspace_access_adapter().accessible_workspace_ids(user_id=user.id)
+    return queryset.filter(Q(owner_id=user.id) | Q(workspace_id__in=workspace_ids))
+
+
 class FileUploadView(viewsets.ModelViewSet):
-    """ViewSet for file upload and management."""
+    """ViewSet for file upload and management.
+
+    Only ``list`` and ``create`` are routed (see ``uploads_urlpatterns``). The
+    collection URL previously also mapped ``put``/``patch``/``delete`` onto the
+    inherited ``update``/``destroy``, which call ``get_object()`` — on a route
+    with no ``pk`` that raises ``AssertionError`` and returns an unhandled
+    **500**, remotely triggerable by any authenticated caller. Those verbs
+    already exist, correctly, on the ``<int:pk>/`` detail routes.
+    """
 
     parser_classes = (MultiPartParser, FormParser)
     queryset = File.objects.all()
     serializer_class = FileSerializer
-    permission_classes = (
-        permissions.IsAuthenticatedOrReadOnly,
-        IsOwnerOrReadOnly,
-    )
+    permission_classes = (permissions.IsAuthenticated,)
 
     def get_queryset(self):
-        """Optional list filters so clients can re-hydrate upload state.
+        """Files the caller may see, then the client's optional filters.
 
-        ``?workspace_id=`` + ``?file_type=pdf,document`` let the grounding
-        uploader (and any surface showing "your indexed documents") re-fetch
-        the same rows after a navigation instead of losing them with local
-        component state. No params = unchanged behaviour.
+        ``GET /upload/`` answered **200 to an anonymous caller** and returned
+        every ``File`` row on the deployment. Two things had to be wrong at
+        once, and both were: ``IsAuthenticatedOrReadOnly`` permits anonymous
+        SAFE_METHODS, and its partner ``IsOwnerOrReadOnly`` is
+        ``has_object_permission``-only — a hook DRF never invokes on a list
+        route — so it contributed nothing at all.
+
+        The scoping below is the tenant boundary. autosec is single-database
+        (ADR 0028): there is no database boundary behind this filter, and
+        ``FileSerializer`` ships ``pdf_text`` (the full extracted text of an
+        uploaded document) plus a fetchable media URL.
+
+        ``?workspace_id=`` and ``?file_type=`` stay, but strictly as filters
+        applied AFTER scoping — they can only ever narrow what the caller may
+        already see. Trusting ``?workspace_id=`` to SELECT the tenant is the
+        bug, not the feature.
         """
-        qs = super().get_queryset()
+        qs = _scope_files_to_viewer(super().get_queryset(), self.request.user)
         params = self.request.query_params
         workspace_id = (params.get("workspace_id") or "").strip()
         if workspace_id:
@@ -387,16 +482,32 @@ class FileUploadView(viewsets.ModelViewSet):
     delete=extend_schema(operation_id="upload_detail_destroy"),
 )
 class FileSerializerDetail(generics.RetrieveUpdateDestroyAPIView):
-    """Retrieve, update, or delete file details."""
+    """Retrieve, update, or delete file details.
+
+    The verbs here are all intended — the frontend GETs and DELETEs by id. The
+    defect was the read gate: ``IsAuthenticatedOrReadOnly`` allows anonymous
+    SAFE_METHODS and ``IsOwnerOrReadOnly`` returns ``True`` for SAFE_METHODS,
+    so the two composed to a fully public GET over ``File.objects.all()``.
+    Primary keys are sequential integers, so an anonymous caller could walk
+    ``/upload/1..N/`` and read every tenant's document text and media URL.
+
+    ``IsAuthenticated`` replaces the read-only escape hatch;
+    ``IsOwnerOrReadOnly`` stays and now actually gates writes. The queryset is
+    scoped so a foreign-tenant id 404s rather than 403s — the response must not
+    confirm the file exists.
+    """
 
     queryset = File.objects.all()
     serializer_class = FileSerializer
     pagination_class = DefaultPagination
     name = "file-detail"
     permission_classes = (
-        permissions.IsAuthenticatedOrReadOnly,
+        permissions.IsAuthenticated,
         IsOwnerOrReadOnly,
     )
+
+    def get_queryset(self):
+        return _scope_files_to_viewer(super().get_queryset(), self.request.user)
 
 
 class PresignedPutUploadView(APIView):

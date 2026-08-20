@@ -166,13 +166,46 @@ class PostList(generics.ListCreateAPIView):
 
 
 class PostDetail(generics.RetrieveUpdateDestroyAPIView):
+    """Read / edit / delete one post.
+
+    This carried ``permission_classes = (RequiresFeatureFlag,)`` and nothing
+    else. Declaring any tuple REPLACES the project default
+    (``IsAdminUser`` + ``IsAuthenticated``, ``api/settings/base.py``), and
+    ``RequiresFeatureFlag`` only answers "is the flag on" — it has no
+    ``has_object_permission``, so DRF's default object check passed. Nothing
+    in the chain ever asked who was calling: an ANONYMOUS ``PATCH`` returned
+    200 and rewrote the body, an anonymous ``DELETE`` returned 204 and removed
+    the row. The flag was not a gate either, because
+    ``resolve_workspace_id_from_request`` honours a caller-supplied
+    ``?workspace_id=`` before authentication, letting the caller choose the
+    workspace the flag is evaluated against.
+
+    Now gated the way the identical sibling ``CommentDetail`` already was —
+    reusing ``IsOwnerOrReadOnly`` (``obj.author == request.user``) rather than
+    inventing a rule — with ``IsAuthenticated`` in place of
+    ``IsAuthenticatedOrReadOnly``: these are workspace posts, not a public
+    blog, and the productized feed route (``/social/posts/<id>/``) has always
+    required authentication.
+    """
+
     serializer_class = PostSerializer
     name = "post-detail"
-    permission_classes = (RequiresFeatureFlag,)
+    permission_classes = (
+        permissions.IsAuthenticated,
+        IsOwnerOrReadOnly,
+        RequiresFeatureFlag,
+    )
     feature_flag_key = _SOCIAL_FEED_FLAG_KEY
 
     def get_queryset(self):
-        return _social_service.get_post_queryset()
+        """Tenant-scoped: authentication alone is not enough.
+
+        ``get_post_queryset()`` is every post on the deployment, addressable by
+        sequential integer pk. autosec is single-database (ADR 0028), so that
+        filter IS the tenant boundary — a signed-in member of workspace B must
+        not read workspace A's feed by walking pks.
+        """
+        return _social_service.get_posts_visible_to(self.request.user)
 
 
 class ListPosts(RetrieveAPIView):
@@ -332,7 +365,6 @@ class AddCommentDislike(generics.ListCreateAPIView):
                 "message": "success",
             }
         )
-
 
 
 # ── Workspace feed (follow-filtered, per-workspace broadcast) ───────────

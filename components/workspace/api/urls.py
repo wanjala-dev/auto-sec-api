@@ -187,21 +187,24 @@ urlpatterns = [
         WorkspaceContributionMeansAssignmentView.as_view(),
         name="assign-contribution-means",
     ),
+    # Read-only: ContributionMeans is a GLOBAL catalog shared by every tenant.
+    # These maps previously wired post/put/patch/delete onto inherited
+    # ModelViewSet actions that nothing in the product ever called — see
+    # WorkspaceContributionMeansViewSet. The catalog is written by the
+    # populate_contribution_means management command.
     path(
         "contribution-means/",
-        WorkspaceContributionMeansViewSet.as_view({"get": "list", "post": "create"}),
+        WorkspaceContributionMeansViewSet.as_view({"get": "list"}),
         name="contribution-means-list",
     ),
     path(
         "contribution-means/<int:pk>/",
-        WorkspaceContributionMeansViewSet.as_view(
-            {"get": "retrieve", "put": "update", "patch": "partial_update", "delete": "destroy"}
-        ),
+        WorkspaceContributionMeansViewSet.as_view({"get": "retrieve"}),
         name="contribution-means-detail",
     ),
     path(
         "<uuid:workspace>/contribution-means/",
-        WorkspaceContributionMeansByWorkspaceViewSet.as_view({"get": "list", "post": "create"}),
+        WorkspaceContributionMeansByWorkspaceViewSet.as_view({"get": "list"}),
         name="workspace-contribution-means",
     ),
     # ========================================================================

@@ -88,11 +88,13 @@ honeypot_app_name = "admin_honeypot"
 # =============================================================================
 
 uploads_urlpatterns = [
+    # Collection route — no pk, so only the collection actions belong here.
+    # put/patch/delete used to be mapped onto update/destroy, which call
+    # get_object() and therefore raised an unhandled 500 on a pk-less URL.
+    # The detail routes below carry those verbs.
     path(
         "",
-        FileUploadView.as_view(
-            {"get": "list", "post": "create", "put": "update", "patch": "partial_update", "delete": "destroy"}
-        ),
+        FileUploadView.as_view({"get": "list", "post": "create"}),
         name="files_list",
     ),
     # Issue a presigned PUT URL so the browser uploads bytes directly
