@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import permissions
 from rest_framework.exceptions import UnsupportedMediaType
 
@@ -168,10 +169,24 @@ class IsActiveWorkspaceMember(permissions.BasePermission):
 
 
 def _resolve_workspace(request, view):
-    """Find the active workspace from URL kwargs, request body, or profile.
+    """Find the workspace this request names, or the caller's own.
 
     Trimmed copy of the logic in ``IsOrgOwnerOrMember._resolve_workspace``.
     Returns a ``Workspace`` or ``None``.
+
+    **An identifier the caller supplied is authoritative and final.** If
+    the request names a workspace, this returns that workspace or
+    ``None`` — never a *different* one. Falling back to the caller's own
+    workspace when the named id does not resolve would authorize against
+    tenant A while the view goes on to act on tenant B, which is the
+    shape PR #439 removed from the agent tools. Two ids never resolve:
+    a malformed one, and one belonging to a workspace whose ``status``
+    is not ``active`` (``Workspace.objects`` filters on it, and the
+    model default is ``"inactive"``) — hence ``all_objects()`` here, so
+    a real row gets a real membership check instead of a fallback.
+
+    The profile fallback survives for requests that name no workspace at
+    all, which is what it was written for.
     """
     Workspace, _ = _get_workspace_models()
 
@@ -193,13 +208,14 @@ def _resolve_workspace(request, view):
     for source in sources:
         for key in _WORKSPACE_LOOKUP_KEYS:
             value = source.get(key) if hasattr(source, "get") else None
-            if value:
-                try:
-                    workspace = Workspace.objects.filter(id=value).first()
-                except (ValueError, TypeError):
-                    continue
-                if workspace:
-                    return workspace
+            if not value:
+                continue
+            try:
+                return Workspace.objects.all_objects().filter(id=value).first()
+            except (ValueError, TypeError, DjangoValidationError):
+                # A malformed identifier is a refusal, not a reason to
+                # authorize against something else.
+                return None
 
     # Fall back to the user's active workspace if one is stored on their
     # profile. Mirrors what the request middleware uses.

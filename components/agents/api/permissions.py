@@ -18,6 +18,15 @@ from rest_framework.permissions import SAFE_METHODS, BasePermission
 from components.agents.application.providers.agent_permissions_provider import (
     get_agent_permissions_provider,
 )
+from components.membership.api.permissions import has_workspace_permission
+
+# The two workspace-agent capability gates, named once so every
+# agent surface asks the same question. ``view_agents`` is carried by
+# every seeded role; ``manage_agents`` only by ``owner`` and ``admin``
+# (``seed_workspace_roles``). Both resolve the workspace from the
+# request (URL kwargs, then body, then query params).
+CanViewWorkspaceAgents = has_workspace_permission("view_agents")
+CanManageWorkspaceAgents = has_workspace_permission("manage_agents")
 
 
 def ai_can(*args, **kwargs):
@@ -48,10 +57,8 @@ class AiKillSwitchPermission(BasePermission):
     """
 
     def has_permission(self, request, view):
-        from components.membership.api.permissions import has_workspace_permission
-
-        key = "view_agents" if request.method in SAFE_METHODS else "manage_agents"
-        return has_workspace_permission(key)().has_permission(request, view)
+        gate = CanViewWorkspaceAgents if request.method in SAFE_METHODS else CanManageWorkspaceAgents
+        return gate().has_permission(request, view)
 
 
 class PostureDashboardPermission(BasePermission):
@@ -65,9 +72,7 @@ class PostureDashboardPermission(BasePermission):
     """
 
     def has_permission(self, request, view):
-        from components.membership.api.permissions import has_workspace_permission
-
-        return has_workspace_permission("view_agents")().has_permission(request, view)
+        return CanViewWorkspaceAgents().has_permission(request, view)
 
 
 class AgentAIPermission(BasePermission):
@@ -120,6 +125,9 @@ class AgentAIPermission(BasePermission):
 __all__ = [
     "AgentAIPermission",
     "AiKillSwitchPermission",
+    "CanManageWorkspaceAgents",
+    "CanViewWorkspaceAgents",
+    "PostureDashboardPermission",
     "ai_can",
     "ensure_agents_team",
     "ensure_ai_grant",

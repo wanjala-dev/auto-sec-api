@@ -62,12 +62,12 @@ class PersonaAILimits:
     owner can customise.
     """
 
-    can_use_chat: bool = True               # Can use workspace AI chat
-    can_use_pdf_chat: bool = True            # Can chat with PDF/RAG documents
-    can_use_deep_runs: bool = False          # Can trigger multi-step deep runs
-    can_view_ai_actions: bool = False        # Can see AI-generated actions
-    max_messages_per_day: int = 50           # Daily message cap (0 = unlimited)
-    max_tokens_per_message: int = 4000       # Max response tokens per message
+    can_use_chat: bool = True  # Can use workspace AI chat
+    can_use_pdf_chat: bool = True  # Can chat with PDF/RAG documents
+    can_use_deep_runs: bool = False  # Can trigger multi-step deep runs
+    can_view_ai_actions: bool = False  # Can see AI-generated actions
+    max_messages_per_day: int = 50  # Daily message cap (0 = unlimited)
+    max_tokens_per_message: int = 4000  # Max response tokens per message
     allowed_agent_types: list[str] = field(default_factory=list)  # Empty = all enabled
     blocked_agent_types: list[str] = field(default_factory=list)  # Explicit denials
 
@@ -142,9 +142,7 @@ class WorkspaceAIConfig:
     max_tokens: int = 4000
 
     # ── Per-persona limits ───────────────────────────────────────────
-    persona_limits: dict[str, PersonaAILimits] = field(
-        default_factory=lambda: dict(DEFAULT_PERSONA_LIMITS)
-    )
+    persona_limits: dict[str, PersonaAILimits] = field(default_factory=lambda: dict(DEFAULT_PERSONA_LIMITS))
 
     # ── Budget / cost caps ───────────────────────────────────────────
     # Workspace-level daily message cap is the user-facing limit; the
@@ -160,13 +158,13 @@ class WorkspaceAIConfig:
     monthly_cost_cap_usd: float = 200.0
 
     # ── Feature toggles ─────────────────────────────────────────────
-    feedback_enabled: bool = True           # Allow thumbs up/down on responses
-    conversation_history_as_rag: bool = True # Index conversations into vector store
-    session_memory_enabled: bool = True     # Extract durable facts from chats
-    auto_embedding_sync: bool = True        # Celery job indexes new content
+    feedback_enabled: bool = True  # Allow thumbs up/down on responses
+    conversation_history_as_rag: bool = True  # Index conversations into vector store
+    session_memory_enabled: bool = True  # Extract durable facts from chats
+    auto_embedding_sync: bool = True  # Celery job indexes new content
 
     # ── Conversation retention ───────────────────────────────────────
-    conversation_retention_days: int = 90   # 0 = keep forever
+    conversation_retention_days: int = 90  # 0 = keep forever
 
     # ── AI fluency profile (workspace-owner authored) ────────────────
     # Free-text fields the workspace owner edits in settings. The
@@ -210,7 +208,9 @@ class WorkspaceAIConfig:
                         can_use_deep_runs=overrides.get("can_use_deep_runs", base.can_use_deep_runs),
                         can_view_ai_actions=overrides.get("can_view_ai_actions", base.can_view_ai_actions),
                         max_messages_per_day=int(overrides.get("max_messages_per_day", base.max_messages_per_day)),
-                        max_tokens_per_message=int(overrides.get("max_tokens_per_message", base.max_tokens_per_message)),
+                        max_tokens_per_message=int(
+                            overrides.get("max_tokens_per_message", base.max_tokens_per_message)
+                        ),
                         allowed_agent_types=overrides.get("allowed_agent_types", base.allowed_agent_types),
                         blocked_agent_types=overrides.get("blocked_agent_types", base.blocked_agent_types),
                     )
@@ -287,3 +287,64 @@ class WorkspaceAIConfig:
         models = AVAILABLE_MODELS.get(self.preferred_provider, [])
         return self.preferred_model in models if models else True
 
+    def is_fallback_model_valid(self) -> bool:
+        """Check if the fallback model is in the known model list."""
+        models = AVAILABLE_MODELS.get(self.preferred_provider, [])
+        return self.fallback_model in models if models else True
+
+    # ── Write path ───────────────────────────────────────────────────
+
+    def validate(self) -> None:
+        """Raise ``ValueError`` if this config is not runnable.
+
+        ``is_model_valid()`` shipped with the value object and was never
+        called on the write path, so an arbitrary string persisted as a
+        workspace's model (ADR 0032 §1.3.5). Validation is domain policy
+        and lives here, not in the controller.
+        """
+        if self.preferred_provider not in ALL_PROVIDERS:
+            raise ValueError(
+                f"Unknown AI provider '{self.preferred_provider}'. Known providers: {', '.join(sorted(ALL_PROVIDERS))}."
+            )
+        known = AVAILABLE_MODELS.get(self.preferred_provider, [])
+        if not self.is_model_valid():
+            raise ValueError(
+                f"Unknown model '{self.preferred_model}' for provider "
+                f"'{self.preferred_provider}'. Known models: {', '.join(known)}."
+            )
+        if not self.is_fallback_model_valid():
+            raise ValueError(
+                f"Unknown fallback model '{self.fallback_model}' for provider "
+                f"'{self.preferred_provider}'. Known models: {', '.join(known)}."
+            )
+
+    def merged_with(self, incoming: dict[str, Any]) -> WorkspaceAIConfig:
+        """Return this config with ``incoming`` applied, validated.
+
+        The write path used to be a blind ``existing.update(incoming)``,
+        so any key in the request body landed verbatim in the stored
+        JSON document. ``EDITABLE_FIELDS`` is the allowlist: a key that
+        is not part of the configuration is refused rather than
+        silently dropped, so a caller aiming at the wrong field name
+        finds out instead of believing the change took.
+
+        Raises ``ValueError`` on an unknown key or an unrunnable result.
+        """
+        if not isinstance(incoming, dict):
+            raise ValueError("config must be a JSON object")
+        unknown = sorted(str(key) for key in incoming if key not in EDITABLE_FIELDS)
+        if unknown:
+            raise ValueError(f"Unknown AI config field(s): {', '.join(unknown)}.")
+        merged = self.to_dict()
+        merged.update(incoming)
+        candidate = WorkspaceAIConfig.from_dict(merged)
+        candidate.validate()
+        return candidate
+
+
+# The exact set of keys ``PATCH /ai/agents/ai-config/update`` accepts —
+# every field the value object round-trips through ``to_dict()``,
+# nothing else. Derived from the dataclass so a new field is editable
+# the moment it is declared and a renamed one cannot leave a stale
+# entry behind.
+EDITABLE_FIELDS: frozenset[str] = frozenset(WorkspaceAIConfig().to_dict())
