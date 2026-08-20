@@ -98,6 +98,9 @@ from components.agents.mappers.rest.conversations_serializers import (
     CreateConversationSerializer,
     CreateMessageSerializer,
 )
+from components.shared_kernel.infrastructure.support.workspace_access import (
+    is_workspace_member,
+)
 from components.shared_platform.api.permissions import RequiresFeatureFlag
 from components.shared_platform.application.providers.core_validators_provider import (
     get_core_validators_provider,
@@ -807,6 +810,10 @@ class AgentViewSet(viewsets.GenericViewSet):
         Phase 5 of the Agents-as-Teammates migration dropped the
         ``actions`` + ``action_counts`` fields here — AI findings are
         Kanban tasks now, read via ``/ai/findings/``.
+
+        ``workspace_id`` arrives as a query parameter, so membership is
+        checked explicitly: ``IsAuthenticated`` alone only proves the caller
+        is *someone*, not that they belong to the workspace they asked about.
         """
         from components.agents.application.ports.agent_graph_query_port import AgentGraphRequest
 
@@ -815,6 +822,12 @@ class AgentViewSet(viewsets.GenericViewSet):
             return Response({"error": "workspace_id is required"}, status=status.HTTP_400_BAD_REQUEST)
 
         normalized_workspace_id = str(ensure_uuid(workspace_id, field_name="workspace_id"))
+
+        if not is_workspace_member(user=request.user, workspace_id=normalized_workspace_id):
+            return Response(
+                {"detail": "You do not have access to this workspace."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
         graph_request = AgentGraphRequest(
             workspace_id=normalized_workspace_id,

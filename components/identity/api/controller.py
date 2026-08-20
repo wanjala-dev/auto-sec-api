@@ -583,7 +583,7 @@ from rest_framework.permissions import IsAuthenticated
 from components.shared_platform.application.providers.core_utils_provider import (
     get_core_utils_provider,
 )
-from components.team.mappers.rest.team_serializers import InvitationSerializer, TeamSerializer, TeamSummarySerializer
+from components.team.mappers.rest.team_serializers import TeamSerializer, TeamSummarySerializer
 
 resolve_frontend_base_url = get_core_utils_provider().resolve_frontend_base_url
 
@@ -841,44 +841,26 @@ class UserViewSet(
         return [permission() for permission in permission_classes]
 
 
-class UserInvitationDetails(APIView):
-    permission_classes = (IsUnauthenticatedOrAdminOrStaff,)
-    name = "user-invitation-detail"
-    serializer_class = InvitationSerializer
-
-    def post(self, request, *args, **kwargs):
-        user_id = request.data.get("user")
-        email = request.data.get("email")
-
-        if not user_id or not email:
-            return Response(
-                {"detail": 'Both "user" and "email" fields are required.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        service = IdentityService()
-        userprofile = service.get_user_profile(user_id)
-
-        if userprofile is None:
-            return Response(
-                {"detail": "User not found."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        invitations = service.list_pending_invitations(email)
-        invitations_serializer = InvitationSerializer(invitations, many=True, context={"request": request})
-
-        return Response(
-            {
-                "success": "true",
-                "status code": status.HTTP_200_OK,
-                "message": "Found!",
-                "data": {
-                    "invitations": invitations_serializer.data,
-                },
-            },
-            status=status.HTTP_200_OK,
-        )
+# ``UserInvitationDetails`` (POST /identity/invitations/) was DELETED, not
+# gated — the same call as the unauthenticated user directory in #425.
+#
+# It ran on ``IsUnauthenticatedOrAdminOrStaff``, every branch of whose
+# ``has_permission`` returns True, so it answered anonymous callers. Given an
+# arbitrary ``user`` id and ``email`` it did two things for free:
+#
+#   1. distinguished a real user id (200) from a nonexistent one (404) — an
+#      enumeration oracle over the whole user table, across every tenant;
+#   2. returned the pending invitations for ANY email supplied, since the
+#      ``email`` was never required to belong to the ``user``.
+#
+# It has no client: every invitation surface in the product speaks to
+# ``/membership/invitations/`` instead. Gating dead fork surface only leaves a
+# smaller hole to re-widen later, so the route is gone.
+#
+# ``IdentityService.list_pending_invitations`` (and its port + ORM repository
+# method) are now unreferenced. They are left in place deliberately: removing
+# them edits a port ABC, which is a refactor rather than a security fix, and
+# does not belong in this PR. Tracked as follow-up.
 
 
 class UserDetails(APIView):

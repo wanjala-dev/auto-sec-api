@@ -23,6 +23,9 @@ from rest_framework.status import HTTP_200_OK
 from rest_framework.views import APIView
 
 from components.membership.api.permissions import IsActiveWorkspaceMember
+from components.shared_kernel.infrastructure.support.workspace_access import (
+    is_workspace_admin,
+)
 from components.team.application.facades.serializer_facade import (
     TeamSerializer,
     TeamSummaryWithMembersSerializer,
@@ -1221,15 +1224,42 @@ class WorkspaceContributionMeansByWorkspaceViewSet(WorkspaceContributionMeansVie
 
 
 class WorkspaceContributionMeansAssignmentView(APIView):
-    """Assign contribution means to a workspace."""
+    """Assign contribution means to a workspace.
 
-    permission_classes = (IsUnauthenticatedOrAdminOrStaff,)
+    The target workspace is named in the request BODY, not the URL, so no
+    URL-scoped permission class can guard it — the check has to happen here,
+    after deserialisation, against the workspace the caller actually asked for.
+
+    This previously ran on ``IsUnauthenticatedOrAdminOrStaff``, every branch of
+    whose ``has_permission`` returns True. Measured on the pre-fix code, an
+    anonymous POST is still refused 401 by the authentication layer — so this
+    was NOT anonymously writable, and an earlier note claiming so was wrong.
+
+    What it WAS: any authenticated user of any tenant could rewrite any other
+    workspace's contribution means by naming its UUID in the body. The
+    permission class contributed nothing beyond "is logged in", and nothing
+    downstream compared the body's workspace to the caller's. Same shape as the
+    ``/preferences/`` and ``/cards/`` org-delete hole (#419).
+    """
+
+    permission_classes = (permissions.IsAuthenticated,)
 
     def post(self, request, *args, **kwargs):
         serializer = WorkspaceContributionMeansAssignmentSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        workspace = workspace_service.get_workspace_by_id(serializer.validated_data["workspace"])
+        workspace_id = serializer.validated_data["workspace"]
+        if not is_workspace_admin(user=request.user, workspace_id=workspace_id):
+            # 403 for members and non-members alike: a member who is not an
+            # admin may not rewrite workspace-level configuration, and we do
+            # not distinguish "not yours" from "not found" to avoid making
+            # this an existence oracle for workspace UUIDs.
+            return Response(
+                {"detail": "You do not have permission to modify this workspace."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        workspace = workspace_service.get_workspace_by_id(workspace_id)
         means = workspace_service.get_contribution_means_by_ids(serializer.validated_data["means"])
 
         # Update the workspace with the new contribution means

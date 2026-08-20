@@ -29,7 +29,6 @@ from components.identity.api.controller import (
     TOTPDeleteView,
     TOTPVerifyView,
     UserDetails,
-    UserInvitationDetails,
     UserPatchView,
     UserSummaryView,
     UserViewSet,
@@ -82,7 +81,9 @@ urlpatterns = [
         name=MagicLinkVerifyView.name,
     ),
     path("logout/", LogoutAPIView.as_view(), name="logout"),
-    path("invitations/", UserInvitationDetails.as_view(), name=UserInvitationDetails.name),
+    # POST invitations/ removed — an unauthenticated user-enumeration oracle
+    # that also returned any email's pending invitations. Clients use
+    # /membership/invitations/. See the controller for the full note.
     path("email-verify/", VerifyEmail.as_view(), name="email-verify"),
     path(
         "resend-verification/",
