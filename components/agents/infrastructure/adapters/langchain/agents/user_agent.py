@@ -16,6 +16,8 @@ Tool surface (4 tools, all workspace-scoped):
 Inherits ``whoami`` + ``get_workspace_info`` from ``WorkspaceContextMixin``.
 """
 
+from components.agents.application.policies.tool_risk import ToolRisk
+from components.agents.application.policies.tool_spec import Failure, Provenance, Scope
 from components.agents.infrastructure.adapters.langchain.base import (
     BaseAgent,
     register_agent,
@@ -65,6 +67,26 @@ class UserAgent(WorkspaceContextMixin, BaseAgent):
     # ``custom_profile.tool_whitelist`` entries reference them by string.
     # Renaming requires a data migration. See ADR 0003 + the agents skill.
 
+    # ── ADR 0031 Phase 4 — the declaration ────────────────────────────────
+    # Every tool below carries `scope` / `risk` / `provenance` /
+    # `failure_mode`. Two of those values deserve a word, because they look
+    # like placeholders and are not:
+    #
+    # `provenance=Provenance.NONE` — not one tool here posts to the board,
+    #   including the ones that write. That is today's behaviour stated
+    #   exactly; it deliberately does not pre-empt ADR 0031 OQ3 (whether
+    #   "every AI action posts to the board" binds every state-changing tool).
+    #
+    # `failure_mode=Failure.INTERNAL` — this is the honest declaration for a
+    #   body that still catches `Exception` and returns a string: the tool
+    #   CANNOT tell you why it failed, and `INTERNAL` is what "we don't know"
+    #   is called. It is not a default nobody chose — it is the F4 remediation
+    #   list, restated where the tool is defined. A body converted to narrow
+    #   excepts + `ToolResult` declares a real reason instead, and
+    #   `tests/architecture/test_tool_blanket_exception.py` names every one
+    #   still outstanding.
+    # ──────────────────────────────────────────────────────────────────────
+
     @tool(
         name="list_workspace_members",
         description=(
@@ -76,6 +98,10 @@ class UserAgent(WorkspaceContextMixin, BaseAgent):
             "\"limit\"?: int}. Output: 'Workspace members (N active): "
             "• Name <email>  Role: ...  Persona: ...'."
         ),
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.READ,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INVALID_INPUT,
     )
     def list_workspace_members(self, input_str: str) -> str:
         return user_tools.list_workspace_members(self, input_str)
@@ -91,6 +117,10 @@ class UserAgent(WorkspaceContextMixin, BaseAgent):
             "{\"query\": str, \"limit\"?: int}. Output: same shape as "
             "list_workspace_members."
         ),
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.READ,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INVALID_INPUT,
     )
     def search_workspace_members(self, input_str: str) -> str:
         return user_tools.search_workspace_members(self, input_str)
@@ -105,6 +135,10 @@ class UserAgent(WorkspaceContextMixin, BaseAgent):
             "as JSON: {\"user_id\"?: uuid, \"email\"?: str, \"query\"?: "
             "str (UUID or email)}. At least one identifier required."
         ),
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.READ,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INVALID_INPUT,
     )
     def get_user_profile(self, input_str: str) -> str:
         return user_tools.get_user_profile(self, input_str)
@@ -120,6 +154,10 @@ class UserAgent(WorkspaceContextMixin, BaseAgent):
             "str, \"since\"?: ISO date (default 30 days ago), \"limit\"?: "
             "int (default 25, max 100)}. Owner/admin only."
         ),
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.READ,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INVALID_INPUT,
     )
     @requires_role("owner", "admin")
     def list_user_activity(self, input_str: str) -> str:

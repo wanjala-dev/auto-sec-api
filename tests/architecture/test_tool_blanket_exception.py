@@ -1,9 +1,9 @@
 """Fitness function F4 (ADR 0031 D2) — a tool must not swallow everything into a string.
 
-**Ratchet mode.** This test does not fail on the 63 violations that exist today;
+**Ratchet mode.** This test does not fail on the 54 violations that exist today;
 it names them, every run, as an explicit remediation list. It *does* fail on a
-new one. Flipping it to fail outright means converting those 63 bodies, which is
-the rest of Phase 3 and Phase 4.
+new one, and the list may only ever shrink — ADR 0031 Phase 4 took it from 63 to
+54. Flipping it to fail outright means converting the remaining 54 bodies.
 
 That is the same shape F3 (``test_tool_payload_tenancy.py``) landed in, and for
 the same reason ADR 0031 names against itself:
@@ -86,20 +86,30 @@ _REPORT = "components/agents/infrastructure/adapters/langchain/agents/report_age
 
 #: KNOWN, UNFIXED, and deliberately listed rather than silently tolerated.
 #:
-#: ``(module path, function name)``. The distribution is itself the finding:
-#: **50 of the 63 are the inherited nonprofit-shaped CRUD fleet** —
-#: ``task_agent`` (21), ``project_agent`` (19), ``workspace_agent`` (6),
-#: ``user_agent`` (4). Those are ADR 0031 Phase 4 / OQ4, where the open question
-#: is whether a SOC product needs 25 task-management tools reachable from chat
-#: at all; converting them is not obviously the right spend.
+#: ``(module path, function name)``. **54 entries, down from 63** — ADR 0031
+#: Phase 4 converted the nine bodies the OQ4 evidence found to be *live*:
+#: ``user_agent``'s four (all of them), and the five ``task_agent`` functions
+#: ``TriageAgent`` re-exports as ``assign_task`` / ``get_team_members`` /
+#: ``get_members_without_tasks`` / ``list_open_findings`` / ``record_finding``.
+#: Those five carry **874 recorded production calls** between them — they were
+#: the only code in the CRUD fleet with any — so they are where a destroyed
+#: failure reason actually costs something today.
 #:
-#: The remaining **13 are security surface** — ``ai_governance_agent`` (6),
-#: ``posture_agent`` (5), ``report_agent`` (2) — and those are the ones worth
-#: converting first. A governance read that swallows its own bug and returns
-#: prose is a compliance answer nobody can trust.
+#: The distribution of what remains is still the finding: **41 are the inherited
+#: nonprofit-shaped CRUD fleet** — ``task_agent`` (16), ``project_agent`` (19),
+#: ``workspace_agent`` (6) — and **13 are security surface**:
+#: ``ai_governance_agent`` (6), ``posture_agent`` (5), ``report_agent`` (2).
+#: The security thirteen are the ones worth converting next. A governance read
+#: that swallows its own bug and returns prose is a compliance answer nobody can
+#: trust.
 #:
-#: This list is the remediation scope, not a place to add an entry so a failure
-#: goes away.
+#: See ``docs/architecture/AGENT_TOOL_USAGE_EVIDENCE_2026-08-20.md`` for why the
+#: CRUD fleet is being converted rather than deleted: zero of its 53 tools has
+#: ever been called, and it is still reachable, entitled by default, and the
+#: configured ``agent_type`` default on three REST endpoints.
+#:
+#: This list is the remediation scope. **It may only ever shrink.** Adding an
+#: entry so a failure goes away is the one thing it must not be used for.
 KNOWN_BLANKET_STRING_HANDLERS: frozenset[tuple[str, str]] = frozenset(
     {
         # ── Security surface: convert these first ──
@@ -137,30 +147,21 @@ KNOWN_BLANKET_STRING_HANDLERS: frozenset[tuple[str, str]] = frozenset(
         (_PROJECT, "update_project_milestone"),
         (_PROJECT, "update_task_status"),
         (_TASK, "add_task_comment"),
-        (_TASK, "assign_task"),
         (_TASK, "break_down_task"),
-        (_TASK, "create_task"),
         (_TASK, "delete_task"),
         (_TASK, "get_due_tasks"),
-        (_TASK, "get_members_without_tasks"),
         (_TASK, "get_projects"),
         (_TASK, "get_task_assignment"),
         (_TASK, "get_task_progress"),
         (_TASK, "get_task_timer_status"),
-        (_TASK, "get_team_members"),
         (_TASK, "get_user_tasks"),
         (_TASK, "list_task_comments"),
-        (_TASK, "list_workspace_tasks"),
         (_TASK, "parse_task_request"),
         (_TASK, "start_task_timer"),
         (_TASK, "stop_task_timer"),
         (_TASK, "update_task_due_date"),
         (_TASK, "update_task_status"),
         (_TASK, "update_task_title"),
-        (_USER, "get_user_profile"),
-        (_USER, "list_user_activity"),
-        (_USER, "list_workspace_members"),
-        (_USER, "search_workspace_members"),
         (_WORKSPACE, "create_organization"),
         (_WORKSPACE, "manage_organization_operations"),
         (_WORKSPACE, "manage_organization_privacy"),
@@ -242,7 +243,7 @@ def find_blanket_string_handlers() -> set[tuple[str, str]]:
 
 class TestToolBlanketExceptionF4:
     def test_no_new_tool_swallows_everything_into_a_string(self):
-        """The ratchet. The 63 listed bodies are tolerated; a 64th is not."""
+        """The ratchet. The 54 listed bodies are tolerated; a 55th is not."""
         found = find_blanket_string_handlers()
         new = sorted(found - KNOWN_BLANKET_STRING_HANDLERS)
         assert not new, (

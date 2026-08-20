@@ -1,6 +1,7 @@
 """Project Management Agent — migrated to the decorator framework (ADR 0003)."""
 
-from components.agents.application.policies.tool_spec import Scope
+from components.agents.application.policies.tool_risk import ToolRisk
+from components.agents.application.policies.tool_spec import Failure, Provenance, Scope
 from components.agents.infrastructure.adapters.langchain.agents._mixins import (
     WorkspaceContextMixin,
 )
@@ -51,6 +52,26 @@ class ProjectAgent(WorkspaceContextMixin, BaseAgent):
     # `_setup_tools` registrations so DB-stored
     # `custom_profile.tool_whitelist` configs keep working. ──
 
+    # ── ADR 0031 Phase 4 — the declaration ────────────────────────────────
+    # Every tool below carries `scope` / `risk` / `provenance` /
+    # `failure_mode`. Two of those values deserve a word, because they look
+    # like placeholders and are not:
+    #
+    # `provenance=Provenance.NONE` — not one tool here posts to the board,
+    #   including the ones that write. That is today's behaviour stated
+    #   exactly; it deliberately does not pre-empt ADR 0031 OQ3 (whether
+    #   "every AI action posts to the board" binds every state-changing tool).
+    #
+    # `failure_mode=Failure.INTERNAL` — this is the honest declaration for a
+    #   body that still catches `Exception` and returns a string: the tool
+    #   CANNOT tell you why it failed, and `INTERNAL` is what "we don't know"
+    #   is called. It is not a default nobody chose — it is the F4 remediation
+    #   list, restated where the tool is defined. A body converted to narrow
+    #   excepts + `ToolResult` declares a real reason instead, and
+    #   `tests/architecture/test_tool_blanket_exception.py` names every one
+    #   still outstanding.
+    # ──────────────────────────────────────────────────────────────────────
+
     @tool(
         name="create_project",
         description=(
@@ -60,6 +81,10 @@ class ProjectAgent(WorkspaceContextMixin, BaseAgent):
             '"confirm": true}. Requires confirm=true. Output: the created '
             "project's id."
         ),
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.REVERSIBLE_WRITE,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def create_project(self, input_str: str) -> str:
         return project_tools.create_project(self, input_str)
@@ -73,6 +98,10 @@ class ProjectAgent(WorkspaceContextMixin, BaseAgent):
             'question. Optional input as JSON: {"status"?, "limit"?}. '
             "Output: 'Projects (N): • Title  Status: ...  Budget: ...'."
         ),
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.READ,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def list_projects(self, input_str: str) -> str:
         return project_tools.list_projects(self, input_str)
@@ -85,6 +114,10 @@ class ProjectAgent(WorkspaceContextMixin, BaseAgent):
             "style question. Input: project name or ID. Output: title, "
             "status, priority, dates, team, lead, tasks, milestones."
         ),
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.READ,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def get_project_info(self, input_str: str) -> str:
         return project_tools.get_project_info(self, input_str)
@@ -99,6 +132,10 @@ class ProjectAgent(WorkspaceContextMixin, BaseAgent):
             '(YYYY-MM-DD or null), "resources"?, "lead_user_id"? '
             "(or null to unassign)}."
         ),
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.REVERSIBLE_WRITE,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def update_project(self, input_str: str) -> str:
         return project_tools.update_project(self, input_str)
@@ -106,6 +143,10 @@ class ProjectAgent(WorkspaceContextMixin, BaseAgent):
     @tool(
         name="assign_project_team",
         description="Assign team members to a project. Input: project_id, team_member_ids. Output: assignment details.",
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.REVERSIBLE_WRITE,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def assign_project_team(self, input_str: str) -> str:
         return project_tools.assign_project_team(self, input_str)
@@ -113,6 +154,10 @@ class ProjectAgent(WorkspaceContextMixin, BaseAgent):
     @tool(
         name="create_project_task",
         description="Create a task within a project. Input: project_id, task_data (title, description, assignee_id, due_date). Output: task details.",
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.REVERSIBLE_WRITE,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def create_project_task(self, input_str: str) -> str:
         return project_tools.create_project_task(self, input_str)
@@ -126,6 +171,10 @@ class ProjectAgent(WorkspaceContextMixin, BaseAgent):
             "status_filter. For workspace-wide task lists use "
             "task_agent's list_workspace_tasks instead."
         ),
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.READ,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def get_project_tasks(self, input_str: str) -> str:
         return project_tools.get_project_tasks(self, input_str)
@@ -147,6 +196,10 @@ class ProjectAgent(WorkspaceContextMixin, BaseAgent):
             "style question. Input: project_id. Output: timeline with "
             "milestones + deadlines."
         ),
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.READ,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def get_project_timeline(self, input_str: str) -> str:
         return project_tools.get_project_timeline(self, input_str)
@@ -154,6 +207,10 @@ class ProjectAgent(WorkspaceContextMixin, BaseAgent):
     @tool(
         name="create_project_milestone",
         description="Create a project milestone. Input: project_id, milestone_data (name, due_date, description). Output: milestone details.",
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.REVERSIBLE_WRITE,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def create_project_milestone(self, input_str: str) -> str:
         return project_tools.create_project_milestone(self, input_str)
@@ -165,6 +222,10 @@ class ProjectAgent(WorkspaceContextMixin, BaseAgent):
             "project_id (parent), milestone_id (integer). Optional: "
             "name, description, target_date (YYYY-MM-DD). Pass as JSON."
         ),
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.REVERSIBLE_WRITE,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def update_project_milestone(self, input_str: str) -> str:
         return project_tools.update_project_milestone(self, input_str)
@@ -176,6 +237,10 @@ class ProjectAgent(WorkspaceContextMixin, BaseAgent):
             "milestone_id. The milestone is detached AND deleted if no "
             "other project still owns it. Pass as JSON."
         ),
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.REVERSIBLE_WRITE,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def delete_project_milestone(self, input_str: str) -> str:
         return project_tools.delete_project_milestone(self, input_str)
@@ -183,6 +248,10 @@ class ProjectAgent(WorkspaceContextMixin, BaseAgent):
     @tool(
         name="get_project_analytics",
         description="Get project analytics and statistics. Input: project_id (optional), date_range (optional). Output: analytics data.",
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.READ,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def get_project_analytics(self, input_str: str) -> str:
         return project_tools.get_project_analytics(self, input_str)
@@ -195,6 +264,10 @@ class ProjectAgent(WorkspaceContextMixin, BaseAgent):
             "me a project summary' style request. Input: project_id + "
             "report_type (status / budget / timeline)."
         ),
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.READ,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def generate_project_report(self, input_str: str) -> str:
         return project_tools.generate_project_report(self, input_str)
@@ -202,6 +275,10 @@ class ProjectAgent(WorkspaceContextMixin, BaseAgent):
     @tool(
         name="manage_project_budget",
         description="Manage project budget and expenses. Input: project_id, budget_data (allocated_amount, spent_amount). Output: budget info.",
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.REVERSIBLE_WRITE,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def manage_project_budget(self, input_str: str) -> str:
         return project_tools.manage_project_budget(self, input_str)
@@ -225,6 +302,9 @@ class ProjectAgent(WorkspaceContextMixin, BaseAgent):
             "permission status. The workspace is always the current one "
             "and cannot be chosen."
         ),
+        risk=ToolRisk.READ,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def check_project_permissions(self, input_str: str) -> str:
         return project_tools.check_project_permissions(self, input_str)

@@ -1,4 +1,6 @@
 """Task Management Agent — migrated to the decorator framework (ADR 0003)."""
+from components.agents.application.policies.tool_risk import ToolRisk
+from components.agents.application.policies.tool_spec import Failure, Provenance, Scope
 from components.agents.infrastructure.adapters.langchain.base import (
     BaseAgent,
     register_agent,
@@ -43,9 +45,33 @@ class TaskAgent(WorkspaceContextMixin, BaseAgent):
     # `_setup_tools` registrations so DB-stored
     # `custom_profile.tool_whitelist` configs keep working. ──
 
+    # ── ADR 0031 Phase 4 — the declaration ────────────────────────────────
+    # Every tool below carries `scope` / `risk` / `provenance` /
+    # `failure_mode`. Two of those values deserve a word, because they look
+    # like placeholders and are not:
+    #
+    # `provenance=Provenance.NONE` — not one tool here posts to the board,
+    #   including the ones that write. That is today's behaviour stated
+    #   exactly; it deliberately does not pre-empt ADR 0031 OQ3 (whether
+    #   "every AI action posts to the board" binds every state-changing tool).
+    #
+    # `failure_mode=Failure.INTERNAL` — this is the honest declaration for a
+    #   body that still catches `Exception` and returns a string: the tool
+    #   CANNOT tell you why it failed, and `INTERNAL` is what "we don't know"
+    #   is called. It is not a default nobody chose — it is the F4 remediation
+    #   list, restated where the tool is defined. A body converted to narrow
+    #   excepts + `ToolResult` declares a real reason instead, and
+    #   `tests/architecture/test_tool_blanket_exception.py` names every one
+    #   still outstanding.
+    # ──────────────────────────────────────────────────────────────────────
+
     @tool(
         name="parse_task_request",
         description="Parse task details from user request (title, description, assignee, due date, priority)",
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.READ,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def parse_task_request(self, input_str: str) -> str:
         return task_tools.parse_task_request(self, input_str)
@@ -58,6 +84,10 @@ class TaskAgent(WorkspaceContextMixin, BaseAgent):
             "X' style request. Input: title (required), description, "
             "assignee, project, due_date, column_title."
         ),
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.REVERSIBLE_WRITE,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INVALID_INPUT,
     )
     def create_task(self, input_str: str) -> str:
         return task_tools.create_task(self, input_str)
@@ -65,6 +95,10 @@ class TaskAgent(WorkspaceContextMixin, BaseAgent):
     @tool(
         name="break_down_task",
         description="Break down a complex task into subtasks",
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.REVERSIBLE_WRITE,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def break_down_task(self, input_str: str) -> str:
         return task_tools.break_down_task(self, input_str)
@@ -72,6 +106,10 @@ class TaskAgent(WorkspaceContextMixin, BaseAgent):
     @tool(
         name="assign_task",
         description="Assign a task to a team member",
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.REVERSIBLE_WRITE,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INVALID_INPUT,
     )
     def assign_task(self, input_str: str) -> str:
         return task_tools.assign_task(self, input_str)
@@ -79,6 +117,10 @@ class TaskAgent(WorkspaceContextMixin, BaseAgent):
     @tool(
         name="get_task_assignment",
         description="Get current assignees for a specific task by ID or partial title",
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.READ,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def get_task_assignment(self, input_str: str) -> str:
         return task_tools.get_task_assignment(self, input_str)
@@ -86,6 +128,10 @@ class TaskAgent(WorkspaceContextMixin, BaseAgent):
     @tool(
         name="get_team_members",
         description="Get available team members for task assignment",
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.READ,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INVALID_INPUT,
     )
     def get_team_members(self, input_str: str) -> str:
         return task_tools.get_team_members(self, input_str)
@@ -93,6 +139,10 @@ class TaskAgent(WorkspaceContextMixin, BaseAgent):
     @tool(
         name="get_members_without_tasks",
         description="List team members who currently have no tasks assigned (optionally scoped by team_id)",
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.READ,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INVALID_INPUT,
     )
     def get_members_without_tasks(self, input_str: str) -> str:
         return task_tools.get_members_without_tasks(self, input_str)
@@ -100,6 +150,10 @@ class TaskAgent(WorkspaceContextMixin, BaseAgent):
     @tool(
         name="get_projects",
         description="Get available projects for task assignment",
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.READ,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def get_projects(self, input_str: str) -> str:
         return task_tools.get_projects(self, input_str)
@@ -115,6 +169,10 @@ class TaskAgent(WorkspaceContextMixin, BaseAgent):
             "\"limit\": int (default 50)}. Pass {} or empty for all active tasks. "
             "Output: 'Tasks (N total): • Title  Status: ...  Priority: ...  ...'."
         ),
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.READ,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INVALID_INPUT,
     )
     def list_workspace_tasks(self, input_str: str) -> str:
         return task_tools.list_workspace_tasks(self, input_str)
@@ -122,6 +180,10 @@ class TaskAgent(WorkspaceContextMixin, BaseAgent):
     @tool(
         name="get_user_tasks",
         description="Get tasks assigned to a specific user (use get_task_assignment to see who owns a task). For workspace-wide task counts/lists, use list_workspace_tasks instead.",
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.READ,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def get_user_tasks(self, input_str: str) -> str:
         return task_tools.get_user_tasks(self, input_str)
@@ -135,6 +197,10 @@ class TaskAgent(WorkspaceContextMixin, BaseAgent):
             "user_id, optional date (defaults to today). Output: list "
             "of tasks due on that date."
         ),
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.READ,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def get_due_tasks(self, input_str: str) -> str:
         return task_tools.get_due_tasks(self, input_str)
@@ -147,6 +213,10 @@ class TaskAgent(WorkspaceContextMixin, BaseAgent):
             "'set status to in progress' style request. Input as JSON: "
             "{\"task_id\": uuid, \"status\": \"todo\"|\"done\"|\"archived\"}."
         ),
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.REVERSIBLE_WRITE,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def update_task_status(self, input_str: str) -> str:
         return task_tools.update_task_status(self, input_str)
@@ -159,6 +229,10 @@ class TaskAgent(WorkspaceContextMixin, BaseAgent):
             "\"YYYY-MM-DDTHH:MM:SS\" or null to clear}. "
             "Output: confirmation with the new due date."
         ),
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.REVERSIBLE_WRITE,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def update_task_due_date(self, input_str: str) -> str:
         return task_tools.update_task_due_date(self, input_str)
@@ -170,6 +244,10 @@ class TaskAgent(WorkspaceContextMixin, BaseAgent):
             "\"title\": \"New title\"}. Title must be 1-255 chars. "
             "Output: 'Renamed task: \"old\" → \"new\"'."
         ),
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.REVERSIBLE_WRITE,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def update_task_title(self, input_str: str) -> str:
         return task_tools.update_task_title(self, input_str)
@@ -182,6 +260,10 @@ class TaskAgent(WorkspaceContextMixin, BaseAgent):
             "list_workspace_tasks output but preserved for audit. "
             "Input as JSON: {\"task_id\": uuid}. Output: confirmation."
         ),
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.REVERSIBLE_WRITE,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def delete_task(self, input_str: str) -> str:
         return task_tools.delete_task(self, input_str)
@@ -195,6 +277,10 @@ class TaskAgent(WorkspaceContextMixin, BaseAgent):
             "\"parent_comment_id\": uuid (optional)}. "
             "Output: confirmation with comment id."
         ),
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.REVERSIBLE_WRITE,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def add_task_comment(self, input_str: str) -> str:
         return task_tools.add_task_comment(self, input_str)
@@ -207,6 +293,10 @@ class TaskAgent(WorkspaceContextMixin, BaseAgent):
             "Output: 'Comments on \"<title>\" (N total): • <when> "
             "<author>  <body>'."
         ),
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.READ,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def list_task_comments(self, input_str: str) -> str:
         return task_tools.list_task_comments(self, input_str)
@@ -220,6 +310,10 @@ class TaskAgent(WorkspaceContextMixin, BaseAgent):
             "Calls the same StartTimerUseCase the kanban play button "
             "uses — running timer shows up on the task card."
         ),
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.REVERSIBLE_WRITE,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def start_task_timer(self, input_str: str) -> str:
         return task_tools.start_task_timer(self, input_str)
@@ -232,6 +326,10 @@ class TaskAgent(WorkspaceContextMixin, BaseAgent):
             "with X', 'pause tracking' style request. Input as JSON: "
             "{\"task_id\": uuid}. Returns the recorded minutes."
         ),
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.REVERSIBLE_WRITE,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def stop_task_timer(self, input_str: str) -> str:
         return task_tools.stop_task_timer(self, input_str)
@@ -244,6 +342,10 @@ class TaskAgent(WorkspaceContextMixin, BaseAgent):
             "running on X', 'how much time have I tracked on X' style "
             "questions. Input as JSON: {\"task_id\": uuid}."
         ),
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.READ,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def get_task_timer_status(self, input_str: str) -> str:
         return task_tools.get_task_timer_status(self, input_str)
@@ -257,6 +359,10 @@ class TaskAgent(WorkspaceContextMixin, BaseAgent):
             "question. Input: optional project_id to scope. Output: "
             "counts + completion percentage."
         ),
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.READ,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def get_task_progress(self, input_str: str) -> str:
         return task_tools.get_task_progress(self, input_str)
@@ -264,6 +370,10 @@ class TaskAgent(WorkspaceContextMixin, BaseAgent):
     @tool(
         name="check_task_permissions",
         description="Verify user has permission to perform task operations on the current workspace. Input: optional user_id. Output: permission status and reason.",
+        scope=Scope.WORKSPACE_BOUND,
+        risk=ToolRisk.READ,
+        provenance=Provenance.NONE,
+        failure_mode=Failure.INTERNAL,
     )
     def check_task_permissions(self, input_str: str) -> str:
         # Underlying ``task_tools.check_permissions`` returns bool —

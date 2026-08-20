@@ -84,9 +84,24 @@ def tool_risk_refusal(risk: str | None, *, is_autonomous: bool, approval_granted
 # 0). A map that is 80% fiction is a map nobody trusts, and an untrusted risk map
 # is one nobody notices a real gap in. ``tests/architecture/test_tool_risk_map_is_live.py``
 # now fails on the next dead key.
+#
+# ADR 0031 Phase 4 gave both of these tools a `@tool(risk=...)` declaration too,
+# stating the same tier. That looks like the duplication `dry-reuse.md` forbids,
+# and these keys stay anyway, for a reason worth writing down: **`tool_observation`
+# rows persist the tier as it was resolved at call time, and historical rows carry
+# `risk: null`.** `compute_ai_activity` re-resolves those through this map (see
+# `test_ai_governance_service.py::test_missing_risk_falls_back_to_central_registry`).
+# Empty the map and every `delete_task` call already in the database
+# retroactively reports as a `read` — a governance answer that changes because
+# the code moved is exactly the kind this module exists to prevent.
+#
+# So the map is not a second source of truth for *new* calls — `resolve_tool_risk`
+# gives the decorator precedence — it is the decoder for *old* ones. It should be
+# emptied only alongside a backfill of the rows that depend on it.
 _TOOL_RISK: dict[str, str] = {
     # Recoverable soft-deletes (recycle bin) — reversible; documentary only, no
     # approval gate, but named so the classification is explicit not accidental.
+    # Both also declare the same tier on their `@tool` decorator (Phase 4).
     "delete_task": ToolRisk.REVERSIBLE_WRITE,
     "delete_project_milestone": ToolRisk.REVERSIBLE_WRITE,
 }

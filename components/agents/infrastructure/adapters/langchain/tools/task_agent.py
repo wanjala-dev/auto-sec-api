@@ -1,17 +1,21 @@
 """Reusable task management agent tools."""
+
 from __future__ import annotations
 
 import json
-import uuid
 import re
-from datetime import datetime, date, timedelta
-from typing import Any, Dict, Optional
+import uuid
+from datetime import date, datetime, timedelta
+from typing import Any
 
 from django.db.models import Q
 from django.utils import timezone
 
+from components.agents.infrastructure.adapters.langchain.base import ToolResult
+from components.agents.infrastructure.adapters.langchain.tools import _failures
 
-def _coerce_payload(payload: Any) -> Dict[str, Any]:
+
+def _coerce_payload(payload: Any) -> dict[str, Any]:
     """Coerce tool input into a dict. Accepts dict or JSON string."""
     if payload in (None, "", {}):
         return {}
@@ -48,13 +52,15 @@ def _resolve_user(agent, identifier: Any = None):
     else:
         _append(identifier)
 
-    config = getattr(agent, 'config', {}) or {}
+    config = getattr(agent, "config", {}) or {}
     for key in ("default_user_id", "default_user_email", "default_username", "default_user_name"):
         _append(config.get(key))
 
-    _append(getattr(agent, 'user_id', None))
+    _append(getattr(agent, "user_id", None))
     try:
-        teammate_profile = agent.action_service.get_teammate(agent.workspace_id) if hasattr(agent, "action_service") else None
+        teammate_profile = (
+            agent.action_service.get_teammate(agent.workspace_id) if hasattr(agent, "action_service") else None
+        )
         ai_user = getattr(teammate_profile, "user", None)
         _append(ai_user.id if ai_user else None)
         _append(ai_user.email if ai_user else None)
@@ -83,9 +89,7 @@ def _resolve_user(agent, identifier: Any = None):
         except CustomUser.DoesNotExist:
             pass
         try:
-            return CustomUser.objects.get(
-                Q(first_name__icontains=candidate) | Q(last_name__icontains=candidate)
-            )
+            return CustomUser.objects.get(Q(first_name__icontains=candidate) | Q(last_name__icontains=candidate))
         except CustomUser.MultipleObjectsReturned:
             continue
         except CustomUser.DoesNotExist:
@@ -110,12 +114,13 @@ def _extract_task_title_from_prompt(text: str) -> str:
             return title.strip("'\"“”‘’")
     return ""
 
+
 def parse_task_request(agent, text: str) -> str:
     try:
         title = text.strip()
 
         assignee = None
-        for pattern in [r'assign to (\w+)', r'give to (\w+)', r'(\w+) should do', r'for (\w+)']:
+        for pattern in [r"assign to (\w+)", r"give to (\w+)", r"(\w+) should do", r"for (\w+)"]:
             match = re.search(pattern, text.lower())
             if match:
                 assignee = match.group(1)
@@ -123,26 +128,26 @@ def parse_task_request(agent, text: str) -> str:
 
         due_date = None
         for pattern in [
-            r'due (\d{4}-\d{2}-\d{2})',
-            r'by (\d{1,2}/\d{1,2}/\d{4})',
-            r'deadline (\d{1,2}-\d{1,2}-\d{4})',
-            r'tomorrow',
-            r'next week',
-            r'this friday',
+            r"due (\d{4}-\d{2}-\d{2})",
+            r"by (\d{1,2}/\d{1,2}/\d{4})",
+            r"deadline (\d{1,2}-\d{1,2}-\d{4})",
+            r"tomorrow",
+            r"next week",
+            r"this friday",
         ]:
             match = re.search(pattern, text.lower())
             if not match:
                 continue
             token = match.group(0)
-            if token == 'tomorrow':
+            if token == "tomorrow":
                 due_date = (date.today() + timedelta(days=1)).isoformat()
-            elif token == 'next week':
+            elif token == "next week":
                 due_date = (date.today() + timedelta(days=7)).isoformat()
-            elif token == 'this friday':
+            elif token == "this friday":
                 days_until_friday = (4 - date.today().weekday()) % 7
                 due_date = (date.today() + timedelta(days=days_until_friday)).isoformat()
             else:
-                for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%m-%d-%Y'):
+                for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y"):
                     try:
                         due_date = datetime.strptime(match.group(1), fmt).date().isoformat()
                         break
@@ -151,34 +156,34 @@ def parse_task_request(agent, text: str) -> str:
             if due_date:
                 break
 
-        priority = 'medium'
+        priority = "medium"
         lowered = text.lower()
-        if any(word in lowered for word in ['urgent', 'asap', 'high priority']):
-            priority = 'high'
-        elif any(word in lowered for word in ['low priority', 'when possible']):
-            priority = 'low'
+        if any(word in lowered for word in ["urgent", "asap", "high priority"]):
+            priority = "high"
+        elif any(word in lowered for word in ["low priority", "when possible"]):
+            priority = "low"
 
         project = None
-        for pattern in [r'in project (\w+)', r'for project (\w+)', r'under (\w+) project']:
+        for pattern in [r"in project (\w+)", r"for project (\w+)", r"under (\w+) project"]:
             match = re.search(pattern, lowered)
             if match:
                 project = match.group(1)
                 break
 
         result = {
-            'title': title,
-            'assignee': assignee,
-            'due_date': due_date,
-            'priority': priority,
-            'project': project,
-            'raw_text': text,
+            "title": title,
+            "assignee": assignee,
+            "due_date": due_date,
+            "priority": priority,
+            "project": project,
+            "raw_text": text,
         }
         return f"Parsed task request: {result}"
     except Exception as exc:  # pylint: disable=broad-except
         return f"Error parsing task request: {exc}"
 
 
-def create_task(agent, params: Any) -> str:
+def create_task(agent, params: Any) -> str | ToolResult:
     """Create a new task. Accepts either a JSON dict (preferred — supports
     description/assignee/project/due_date/column_title) or a plain string
     that becomes the title.
@@ -189,32 +194,32 @@ def create_task(agent, params: Any) -> str:
         # required" (graceful), not a Python KeyError.
         if isinstance(params, str):
             stripped = params.strip()
-            if stripped.startswith('{'):
+            if stripped.startswith("{"):
                 data = _coerce_payload(stripped)
             else:
                 # Plain text string: treat the whole thing as the title.
-                data = {'title': stripped} if stripped else {}
+                data = {"title": stripped} if stripped else {}
         else:
             data = _coerce_payload(params)
 
-        title = (data.get('title') or '').strip()
+        title = (data.get("title") or "").strip()
         if not title:
             return "title is required to create a task."
 
-        description = data.get('description')
-        assignee = data.get('assignee')
-        project = data.get('project')
-        due_date = data.get('due_date')
-        column_title = data.get('column_title')
+        description = data.get("description")
+        assignee = data.get("assignee")
+        project = data.get("project")
+        due_date = data.get("due_date")
+        column_title = data.get("column_title")
 
-        from infrastructure.persistence.project.models import Project, Task, Column, TaskComment
-        from infrastructure.persistence.workspaces.models import Workspace
         # ``ensure_default_columns`` moved to the agents infrastructure
         # tasks module during the DDD/Hex refactor; the legacy
         # ``services.task_service`` path was deleted but this import was
         # left pointing at the dead module, blocking every ``create_task``
         # call (and breaking the social_media agent downstream).
         from components.agents.infrastructure.tasks.service_tasks import ensure_default_columns
+        from infrastructure.persistence.project.models import Column, Project, Task, TaskComment
+        from infrastructure.persistence.workspaces.models import Workspace
 
         if not check_permissions(agent):
             return "Permission denied: User not authorized to create tasks"
@@ -271,17 +276,17 @@ def create_task(agent, params: Any) -> str:
                     ).first()
             if column:
                 task.column = column
-                task.save(update_fields=['column'])
+                task.save(update_fields=["column"])
 
         if assignee:
-            assign_result = assign_task(agent, {'task_id': str(task.id), 'assignee': assignee})
-            if assign_result.lower().startswith('error'):
+            assign_result = assign_task(agent, {"task_id": str(task.id), "assignee": assignee})
+            if assign_result.lower().startswith("error"):
                 return f"Task created but assignment failed: {assign_result}"
 
         if due_date:
             try:
-                task.due_date = datetime.strptime(due_date, '%Y-%m-%d').date()
-                task.save(update_fields=['due_date'])
+                task.due_date = datetime.strptime(due_date, "%Y-%m-%d").date()
+                task.save(update_fields=["due_date"])
             except ValueError:
                 pass
 
@@ -293,8 +298,10 @@ def create_task(agent, params: Any) -> str:
             )
 
         return f"Successfully created task: '{title}' (ID: {task.id})"
-    except Exception as exc:  # pylint: disable=broad-except
-        return f"Error creating task: {exc}"
+    except _failures.INPUT_ERRORS as exc:
+        return _failures.invalid_input("Error creating task", exc)
+    except _failures.UPSTREAM_ERRORS as exc:
+        return _failures.upstream_unavailable("Error creating task", exc)
 
 
 def break_down_task(agent, task_id: str, subtasks: str) -> str:
@@ -306,7 +313,7 @@ def break_down_task(agent, task_id: str, subtasks: str) -> str:
         except Task.DoesNotExist:
             return f"Task {task_id} not found"
 
-        subtask_list = [s.strip() for s in subtasks.replace('\n', ',').split(',') if s.strip()]
+        subtask_list = [s.strip() for s in subtasks.replace("\n", ",").split(",") if s.strip()]
         if not subtask_list:
             return "No subtasks provided"
 
@@ -328,14 +335,14 @@ def break_down_task(agent, task_id: str, subtasks: str) -> str:
         return f"Error breaking down task: {exc}"
 
 
-def assign_task(agent, payload: Any) -> str:
+def assign_task(agent, payload: Any) -> str | ToolResult:
     from infrastructure.persistence.project.models import Task
 
     try:
         data = _coerce_payload(payload)
-        task_id = str(data.get('task_id') or '').strip()
-        title_hint = str(data.get('title') or '').strip()
-        assignee = str(data.get('assignee') or '').strip()
+        task_id = str(data.get("task_id") or "").strip()
+        title_hint = str(data.get("title") or "").strip()
+        assignee = str(data.get("assignee") or "").strip()
         if not assignee:
             return "Missing required field: assignee"
 
@@ -347,12 +354,16 @@ def assign_task(agent, payload: Any) -> str:
             except Task.DoesNotExist:
                 return f"Task {task_id} not found"
         elif title_hint:
-            task = Task.objects.filter(workspace_id=agent.workspace_id, title__icontains=title_hint).order_by('-created_at').first()
+            task = (
+                Task.objects.filter(workspace_id=agent.workspace_id, title__icontains=title_hint)
+                .order_by("-created_at")
+                .first()
+            )
             if not task:
                 return f"Task with title like '{title_hint}' not found"
         else:
             # Fallback to most recently created task in this workspace (likely the one just created)
-            task = Task.objects.filter(workspace_id=agent.workspace_id).order_by('-created_at').first()
+            task = Task.objects.filter(workspace_id=agent.workspace_id).order_by("-created_at").first()
             if not task:
                 return "No tasks found to assign. Please specify task_id or title."
 
@@ -369,8 +380,10 @@ def assign_task(agent, payload: Any) -> str:
 
         task.assigned_to.add(user)
         return f"Successfully assigned task '{task.title}' to {user.get_full_name() or user.username}"
-    except Exception as exc:  # pylint: disable=broad-except
-        return f"Error assigning task: {exc}"
+    except _failures.INPUT_ERRORS as exc:
+        return _failures.invalid_input("Error assigning task", exc)
+    except _failures.UPSTREAM_ERRORS as exc:
+        return _failures.upstream_unavailable("Error assigning task", exc)
 
 
 def get_task_assignment(agent, payload: Any = None, task_id: str | None = None, title: str | None = None) -> str:
@@ -378,7 +391,7 @@ def get_task_assignment(agent, payload: Any = None, task_id: str | None = None, 
     from infrastructure.persistence.project.models import Task
 
     try:
-        if not getattr(agent, 'workspace_id', None):
+        if not getattr(agent, "workspace_id", None):
             return "No workspace context is set for this agent. Please bind the agent to a workspace."
 
         data = _coerce_payload(payload)
@@ -391,13 +404,13 @@ def get_task_assignment(agent, payload: Any = None, task_id: str | None = None, 
                 if extracted:
                     title = title or extracted
                     raw = extracted
-                if raw.replace('-', '').isdigit():
+                if raw.replace("-", "").isdigit():
                     task_id = task_id or raw
                 else:
                     title = title or raw
 
-        task_id = task_id or data.get('task_id') or data.get('id')
-        title = title or data.get('title') or data.get('name') or data.get('task') or data.get('text')
+        task_id = task_id or data.get("task_id") or data.get("id")
+        title = title or data.get("title") or data.get("name") or data.get("task") or data.get("text")
 
         task = None
         if task_id:
@@ -408,7 +421,7 @@ def get_task_assignment(agent, payload: Any = None, task_id: str | None = None, 
         elif title:
             task = (
                 Task.objects.filter(workspace_id=agent.workspace_id, title__icontains=title)
-                .order_by('-created_at')
+                .order_by("-created_at")
                 .first()
             )
             if not task:
@@ -416,29 +429,24 @@ def get_task_assignment(agent, payload: Any = None, task_id: str | None = None, 
         else:
             return "Provide a task_id or title to look up the assignment."
 
-        assignees = list(
-            task.assigned_to.all().values('id', 'email', 'username', 'first_name', 'last_name')
-        )
+        assignees = list(task.assigned_to.all().values("id", "email", "username", "first_name", "last_name"))
         if not assignees:
             return f"Task '{task.title}' (ID: {task.id}) has no assignees."
 
         for entry in assignees:
             name = f"{entry.get('first_name', '')} {entry.get('last_name', '')}".strip()
-            entry['name'] = name or entry.get('username') or entry.get('email')
+            entry["name"] = name or entry.get("username") or entry.get("email")
 
-        return (
-            f"Task '{task.title}' (ID: {task.id}) assignees: "
-            f"{assignees}"
-        )
+        return f"Task '{task.title}' (ID: {task.id}) assignees: {assignees}"
     except Exception as exc:  # pylint: disable=broad-except
         return f"Error getting task assignment: {exc}"
 
 
-def get_team_members(agent, _input: Any | None = None) -> str:
+def get_team_members(agent, _input: Any | None = None) -> str | ToolResult:
     from infrastructure.persistence.team.models import Team
 
     try:
-        teams = Team.objects.filter(workspace_id=agent.workspace_id, status='active').exclude(kind=Team.Kind.AI_AGENTS)
+        teams = Team.objects.filter(workspace_id=agent.workspace_id, status="active").exclude(kind=Team.Kind.AI_AGENTS)
         if not teams.exists():
             return "No active teams found for this workspace"
 
@@ -447,32 +455,34 @@ def get_team_members(agent, _input: Any | None = None) -> str:
             for member in team.members.all():
                 members.append(
                     {
-                        'id': member.id,
-                        'name': member.get_full_name() or member.username,
-                        'email': member.email,
-                        'team': team.title,
+                        "id": member.id,
+                        "name": member.get_full_name() or member.username,
+                        "email": member.email,
+                        "team": team.title,
                     }
                 )
         if not members:
             return "No team members found"
         return f"Available team members: {members}"
-    except Exception as exc:  # pylint: disable=broad-except
-        return f"Error getting team members: {exc}"
+    except _failures.INPUT_ERRORS as exc:
+        return _failures.invalid_input("Error getting team members", exc)
+    except _failures.UPSTREAM_ERRORS as exc:
+        return _failures.upstream_unavailable("Error getting team members", exc)
 
 
-def get_members_without_tasks(agent, payload: Any = None) -> str:
+def get_members_without_tasks(agent, payload: Any = None) -> str | ToolResult:
     """Return team members who currently have no tasks assigned."""
     from infrastructure.persistence.project.models import Task
     from infrastructure.persistence.team.models import Team
 
     try:
-        if not getattr(agent, 'workspace_id', None):
+        if not getattr(agent, "workspace_id", None):
             return "No workspace context is set for this agent. Please bind the agent to a workspace."
 
         data = _coerce_payload(payload)
-        team_id = data.get('team_id') or data.get('team')
+        team_id = data.get("team_id") or data.get("team")
 
-        teams = Team.objects.filter(workspace_id=agent.workspace_id, status='active').exclude(kind=Team.Kind.AI_AGENTS)
+        teams = Team.objects.filter(workspace_id=agent.workspace_id, status="active").exclude(kind=Team.Kind.AI_AGENTS)
         if team_id:
             teams = teams.filter(id=team_id)
 
@@ -480,7 +490,7 @@ def get_members_without_tasks(agent, payload: Any = None) -> str:
             return "No active teams found for this workspace"
 
         members = []
-        for team in teams.prefetch_related('members'):
+        for team in teams.prefetch_related("members"):
             members.extend(list(team.members.all()))
 
         if not members:
@@ -491,15 +501,15 @@ def get_members_without_tasks(agent, payload: Any = None) -> str:
 
         assigned_ids = set(
             Task.objects.filter(workspace_id=agent.workspace_id, assigned_to__in=member_ids)
-            .values_list('assigned_to', flat=True)
+            .values_list("assigned_to", flat=True)
             .distinct()
         )
 
         unassigned = [
             {
-                'id': str(user.id),
-                'name': user.get_full_name() or user.username,
-                'email': user.email,
+                "id": str(user.id),
+                "name": user.get_full_name() or user.username,
+                "email": user.email,
             }
             for user in members
             if user.id not in assigned_ids
@@ -509,15 +519,17 @@ def get_members_without_tasks(agent, payload: Any = None) -> str:
             return "All team members currently have at least one task assigned."
 
         return f"{len(unassigned)} team members have no tasks: {unassigned}"
-    except Exception as exc:  # pylint: disable=broad-except
-        return f"Error getting members without tasks: {exc}"
+    except _failures.INPUT_ERRORS as exc:
+        return _failures.invalid_input("Error getting members without tasks", exc)
+    except _failures.UPSTREAM_ERRORS as exc:
+        return _failures.upstream_unavailable("Error getting members without tasks", exc)
 
 
 def get_projects(agent, _input: Any | None = None) -> str:
     from infrastructure.persistence.project.models import Project
 
     try:
-        projects = Project.objects.filter(workspace_id=agent.workspace_id).values('id', 'title', 'description')
+        projects = Project.objects.filter(workspace_id=agent.workspace_id).values("id", "title", "description")
         if not projects.exists():
             return "No projects found for this workspace"
         return f"Available projects: {list(projects)}"
@@ -530,7 +542,7 @@ def get_user_tasks(agent, user_id: Any = None) -> str:
 
     try:
         # Ensure we have a workspace context
-        if not getattr(agent, 'workspace_id', None):
+        if not getattr(agent, "workspace_id", None):
             return "No workspace context is set for this agent. Please bind the agent to a workspace."
 
         explicit = None
@@ -545,7 +557,7 @@ def get_user_tasks(agent, user_id: Any = None) -> str:
 
         user = _resolve_user(agent, user_id)
         if not user:
-            identifier = user_id or getattr(agent, 'user_id', None)
+            identifier = user_id or getattr(agent, "user_id", None)
             if identifier:
                 token = str(identifier)
                 # Help steer the agent away from task-lookup misuse
@@ -558,7 +570,9 @@ def get_user_tasks(agent, user_id: Any = None) -> str:
                 return f"User '{identifier}' not found. Please provide an explicit email, username, or user ID."
             return "Unable to resolve a user for this request. Include an email, username, or ID in your prompt."
 
-        tasks = Task.objects.filter(workspace_id=agent.workspace_id, assigned_to=user).values('id', 'title', 'status', 'created_at')
+        tasks = Task.objects.filter(workspace_id=agent.workspace_id, assigned_to=user).values(
+            "id", "title", "status", "created_at"
+        )
         if not tasks.exists():
             return f"No tasks assigned to {user.get_full_name() or user.username}"
         return f"Tasks assigned to {user.get_full_name() or user.username}: {list(tasks)}"
@@ -570,32 +584,28 @@ def get_due_tasks(agent, payload: Any = None) -> str:
     from infrastructure.persistence.project.models import Task
 
     try:
-        if not getattr(agent, 'workspace_id', None):
+        if not getattr(agent, "workspace_id", None):
             return "No workspace context is set for this agent. Please bind the agent to a workspace."
 
         data = _coerce_payload(payload)
         user_hint = (
-            data.get('user')
-            or data.get('user_id')
-            or data.get('assignee')
-            or data.get('owner')
-            or data.get('id')
+            data.get("user") or data.get("user_id") or data.get("assignee") or data.get("owner") or data.get("id")
         )
         user = _resolve_user(agent, user_hint) or _resolve_user(agent)
         if not user:
             return "Unable to resolve a user for this request. Provide an explicit email, username, or user ID."
 
-        token = data.get('date') or data.get('target_date') or data.get('due_date')
+        token = data.get("date") or data.get("target_date") or data.get("due_date")
         target_date = timezone.localdate()
         if isinstance(token, str):
             normalized = token.strip().lower()
-            if normalized in {'', 'today', 'current', 'now'}:
+            if normalized in {"", "today", "current", "now"}:
                 target_date = timezone.localdate()
-            elif normalized == 'tomorrow':
+            elif normalized == "tomorrow":
                 target_date = timezone.localdate() + timedelta(days=1)
             else:
                 parsed = None
-                for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%d-%m-%Y'):
+                for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%d-%m-%Y"):
                     try:
                         parsed = datetime.strptime(token.strip(), fmt).date()
                         break
@@ -615,8 +625,8 @@ def get_due_tasks(agent, payload: Any = None) -> str:
                 due_date__date=target_date,
             )
             .exclude(status__in=[Task.DONE, Task.ARCHIVED])
-            .select_related('project')
-            .order_by('due_date', 'title')
+            .select_related("project")
+            .order_by("due_date", "title")
         )
 
         if not due_tasks.exists():
@@ -625,12 +635,12 @@ def get_due_tasks(agent, payload: Any = None) -> str:
 
         formatted = [
             {
-                'id': str(task.id),
-                'title': task.title,
-                'status': task.status,
-                'due_date': task.due_date.isoformat() if task.due_date else None,
-                'priority': task.priority,
-                'project': task.project.title if task.project else None,
+                "id": str(task.id),
+                "title": task.title,
+                "status": task.status,
+                "due_date": task.due_date.isoformat() if task.due_date else None,
+                "priority": task.priority,
+                "project": task.project.title if task.project else None,
             }
             for task in due_tasks
         ]
@@ -648,12 +658,13 @@ def update_task_status(agent, params: Any) -> str:
     than relying on positional kwargs from the LLM tool-calling path.
     """
     from django.core.exceptions import ValidationError
+
     from infrastructure.persistence.project.models import Task
 
     try:
         data = _coerce_payload(params)
-        task_id = (str(data.get("task_id") or "").strip())
-        status = (str(data.get("status") or "").strip())
+        task_id = str(data.get("task_id") or "").strip()
+        status = str(data.get("status") or "").strip()
         if not task_id:
             return "task_id is required."
         if not status:
@@ -669,7 +680,7 @@ def update_task_status(agent, params: Any) -> str:
             return f"Invalid status: {status}. Valid statuses: {valid_statuses}"
 
         task.status = status.lower()
-        task.save(update_fields=['status'])
+        task.save(update_fields=["status"])
         return f"Successfully updated task '{task.title}' status to {status}"
     except Exception as exc:  # pylint: disable=broad-except
         return f"Error updating task status: {exc}"
@@ -708,11 +719,11 @@ def get_task_progress(agent, params: Any = None) -> str:
         progress_percentage = (done_tasks / total_tasks * 100) if total_tasks else 0
 
         progress = {
-            'total_tasks': total_tasks,
-            'todo_tasks': todo_tasks,
-            'done_tasks': done_tasks,
-            'archived_tasks': archived_tasks,
-            'progress_percentage': round(progress_percentage, 2),
+            "total_tasks": total_tasks,
+            "todo_tasks": todo_tasks,
+            "done_tasks": done_tasks,
+            "archived_tasks": archived_tasks,
+            "progress_percentage": round(progress_percentage, 2),
         }
         return f"Task progress: {progress}"
     except Exception as exc:  # pylint: disable=broad-except
@@ -725,10 +736,10 @@ def check_permissions(agent, _input: Any | None = None) -> bool:
     Access is granted to workspace owners, active team members, and workspace followers
     to support transparent collaboration workflows.
     """
-    from infrastructure.persistence.workspaces.models import Workspace
-    from infrastructure.persistence.team.models import Team
     from components.agents.application.facades.agent_permissions_facade import ai_can
     from infrastructure.persistence.ai.models import AIPermissionGrant
+    from infrastructure.persistence.team.models import Team
+    from infrastructure.persistence.workspaces.models import Workspace
 
     try:
         user = _resolve_user(agent)
@@ -739,7 +750,9 @@ def check_permissions(agent, _input: Any | None = None) -> bool:
             return True
         if workspace.followers.filter(id=user.id).exists():
             return True
-        teams = Team.objects.filter(workspace=workspace, status='active', members=user).exclude(kind=Team.Kind.AI_AGENTS)
+        teams = Team.objects.filter(workspace=workspace, status="active", members=user).exclude(
+            kind=Team.Kind.AI_AGENTS
+        )
         if teams.exists():
             return True
         scope_id = str(teams.first().id) if teams.exists() else None
@@ -754,13 +767,13 @@ def check_permissions(agent, _input: Any | None = None) -> bool:
         return False
 
 
-def _get_default_team(agent) -> Optional['Team']:
-    from infrastructure.persistence.team.models import Team
+def _get_default_team(agent) -> Team | None:
     from infrastructure.persistence.subscription.models import Plan
+    from infrastructure.persistence.team.models import Team
 
     try:
         team = (
-            Team.objects.filter(workspace_id=agent.workspace_id, status='active')
+            Team.objects.filter(workspace_id=agent.workspace_id, status="active")
             .exclude(kind=Team.Kind.AI_AGENTS)
             .first()
         )
@@ -794,7 +807,7 @@ def _get_default_team(agent) -> Optional['Team']:
         return None
 
 
-def list_workspace_tasks(agent, params: Any) -> str:
+def list_workspace_tasks(agent, params: Any) -> str | ToolResult:
     """List tasks for the current workspace with optional filters.
 
     The 2026-05-08 audit found this was the load-bearing missing tool:
@@ -815,9 +828,11 @@ def list_workspace_tasks(agent, params: Any) -> str:
 
         # Eager-load FKs the formatter touches so a single page doesn't
         # fan out into N queries (.claude/rules/performance.md §1).
-        qs = Task.objects.filter(workspace_id=agent.workspace_id).select_related(
-            "project", "column", "created_by"
-        ).prefetch_related("assigned_to")
+        qs = (
+            Task.objects.filter(workspace_id=agent.workspace_id)
+            .select_related("project", "column", "created_by")
+            .prefetch_related("assigned_to")
+        )
 
         # Allow ``status`` to be a single value or a list. Default
         # filters out ARCHIVED so chat queries about "tasks" don't
@@ -867,33 +882,25 @@ def list_workspace_tasks(agent, params: Any) -> str:
         lines = [header]
         for task in rows:
             assigned = (
-                ", ".join(
-                    (u.get_full_name() or u.email or str(u.id)) for u in task.assigned_to.all()
-                )
-                or "Unassigned"
+                ", ".join((u.get_full_name() or u.email or str(u.id)) for u in task.assigned_to.all()) or "Unassigned"
             )
             project_label = task.project.title if task.project else "—"
             due = task.due_date.strftime("%Y-%m-%d") if task.due_date else "no due date"
             lines.append(
-                "• {title}\n  Status: {status}  Priority: {priority}  Due: {due}\n  "
-                "Project: {project}  Assigned: {assigned}\n\n".format(
-                    title=task.title,
-                    status=task.status,
-                    priority=task.priority,
-                    due=due,
-                    project=project_label,
-                    assigned=assigned,
-                )
+                f"• {task.title}\n  Status: {task.status}  Priority: {task.priority}  Due: {due}\n  "
+                f"Project: {project_label}  Assigned: {assigned}\n\n"
             )
         return "".join(lines)
-    except Exception as exc:  # pylint: disable=broad-except
-        return f"Error listing tasks: {exc}"
+    except _failures.INPUT_ERRORS as exc:
+        return _failures.invalid_input("Error listing tasks", exc)
+    except _failures.UPSTREAM_ERRORS as exc:
+        return _failures.upstream_unavailable("Error listing tasks", exc)
 
 
 # ── Task edits + comments (PR-B2) ──────────────────────────────────────
 
 
-def _resolve_task_for_update(agent, task_id: Any) -> "tuple[Any, str]":
+def _resolve_task_for_update(agent, task_id: Any) -> tuple[Any, str]:
     """Look up a Task scoped to the agent's workspace.
 
     Returns ``(task, error)`` — exactly one is set. Centralises the
@@ -901,6 +908,7 @@ def _resolve_task_for_update(agent, task_id: Any) -> "tuple[Any, str]":
     the same shape of error message rather than a stack trace.
     """
     from django.core.exceptions import ValidationError
+
     from infrastructure.persistence.project.models import Task
 
     # ``task_id`` arrives as a string (already extracted from the
@@ -911,9 +919,7 @@ def _resolve_task_for_update(agent, task_id: Any) -> "tuple[Any, str]":
         return None, "task_id is required."
 
     try:
-        task = Task.objects.select_related("project").get(
-            id=cleaned, workspace_id=agent.workspace_id
-        )
+        task = Task.objects.select_related("project").get(id=cleaned, workspace_id=agent.workspace_id)
         return task, ""
     except (Task.DoesNotExist, ValidationError, ValueError):
         return None, f"Task {cleaned} not found in this workspace."
@@ -947,10 +953,7 @@ def update_task_due_date(agent, params: Any) -> str:
                 except ValueError:
                     continue
             if parsed is None:
-                return (
-                    f"Could not parse due_date {text!r}. Use ISO 8601 "
-                    "(e.g. '2026-06-15' or '2026-06-15T14:30:00')."
-                )
+                return f"Could not parse due_date {text!r}. Use ISO 8601 (e.g. '2026-06-15' or '2026-06-15T14:30:00')."
             # Make timezone-aware to match the model's DateTimeField.
             from django.utils import timezone
 
@@ -1072,8 +1075,7 @@ def add_task_comment(agent, params: Any) -> str:
         return (
             f"Added comment {comment.id} to task '{task.title}' "
             f"by {getattr(author, 'email', None) or author.id}: "
-            f"{comment_text[:120]!r}"
-            + ("…" if len(comment_text) > 120 else "")
+            f"{comment_text[:120]!r}" + ("…" if len(comment_text) > 120 else "")
         )
     except Exception as exc:  # pylint: disable=broad-except
         return f"Error adding comment: {exc}"
@@ -1229,10 +1231,7 @@ def stop_task_timer(agent, params: Any) -> str:
             now=timezone.now(),
         )
         tracked_minutes = getattr(result, "tracked_minutes", None)
-        return (
-            f"Stopped timer on task {task_id}. "
-            f"Recorded {tracked_minutes} minute(s) of tracked time."
-        )
+        return f"Stopped timer on task {task_id}. Recorded {tracked_minutes} minute(s) of tracked time."
     except LookupError as exc:
         return f"Cannot stop timer: {exc}"
     except PermissionError as exc:
@@ -1279,9 +1278,7 @@ def get_task_timer_status(agent, params: Any) -> str:
             task_id=task.id,
             project_id=None,
         )
-        total_minutes = port.total_tracked_minutes_for_task(
-            task_id=task.id, user=user
-        )
+        total_minutes = port.total_tracked_minutes_for_task(task_id=task.id, user=user)
 
         if active_entry is None:
             return (

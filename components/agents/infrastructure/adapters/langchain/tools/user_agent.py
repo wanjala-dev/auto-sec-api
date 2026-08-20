@@ -18,6 +18,9 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
+from components.agents.infrastructure.adapters.langchain.base import ToolResult
+from components.agents.infrastructure.adapters.langchain.tools import _failures
+
 
 def _coerce_payload(payload: Any) -> dict[str, Any]:
     """Coerce tool input into a dict. Accepts None, dict, JSON string, or raw text."""
@@ -64,7 +67,7 @@ def _format_member(membership, user) -> str:
     return f"• {_full_name(user)} <{user.email or '—'}>\n  Role: {role}  Persona: {persona}  Status: {status}\n"
 
 
-def list_workspace_members(agent, params: Any) -> str:
+def list_workspace_members(agent, params: Any) -> str | ToolResult:
     """List active members of the current workspace.
 
     Optional filters: ``role`` (e.g. ``owner|admin|member|viewer``),
@@ -113,11 +116,13 @@ def list_workspace_members(agent, params: Any) -> str:
         )
         body = "".join(_format_member(m, m.user) for m in rows if m.user is not None)
         return header + body
-    except Exception as exc:  # pylint: disable=broad-except
-        return f"Error listing workspace members: {exc}"
+    except _failures.INPUT_ERRORS as exc:
+        return _failures.invalid_input("Error listing workspace members", exc)
+    except _failures.UPSTREAM_ERRORS as exc:
+        return _failures.upstream_unavailable("Error listing workspace members", exc)
 
 
-def search_workspace_members(agent, params: Any) -> str:
+def search_workspace_members(agent, params: Any) -> str | ToolResult:
     """Search workspace members by name or email substring.
 
     Scoped to the current workspace deliberately. There is no platform-wide
@@ -172,11 +177,13 @@ def search_workspace_members(agent, params: Any) -> str:
         header = f"Workspace members matching '{query}' ({len(rows)} shown):\n\n"
         body = "".join(_format_member(m, m.user) for m in rows if m.user is not None)
         return header + body
-    except Exception as exc:  # pylint: disable=broad-except
-        return f"Error searching workspace members: {exc}"
+    except _failures.INPUT_ERRORS as exc:
+        return _failures.invalid_input("Error searching workspace members", exc)
+    except _failures.UPSTREAM_ERRORS as exc:
+        return _failures.upstream_unavailable("Error searching workspace members", exc)
 
 
-def get_user_profile(agent, params: Any) -> str:
+def get_user_profile(agent, params: Any) -> str | ToolResult:
     """Look up a single workspace member's profile by user_id or email.
 
     Returns name, email, role, persona, status, and join date — fields any
@@ -235,11 +242,13 @@ def get_user_profile(agent, params: Any) -> str:
             f"  Joined workspace: {joined}\n"
             f"  User id: {user.id}\n"
         )
-    except Exception as exc:  # pylint: disable=broad-except
-        return f"Error retrieving user profile: {exc}"
+    except _failures.INPUT_ERRORS as exc:
+        return _failures.invalid_input("Error retrieving user profile", exc)
+    except _failures.UPSTREAM_ERRORS as exc:
+        return _failures.upstream_unavailable("Error retrieving user profile", exc)
 
 
-def list_user_activity(agent, params: Any) -> str:
+def list_user_activity(agent, params: Any) -> str | ToolResult:
     """List a user's recent audit-log entries within this workspace.
 
     Reads ``EntityAuditLog`` filtered by ``actor`` + ``workspace`` — the
@@ -310,8 +319,10 @@ def list_user_activity(agent, params: Any) -> str:
             new = _short(row.new_value)
             lines.append(f"• {when}  {entity}[{row.object_id}].{row.field_name}\n    {old} → {new}\n")
         return "".join(lines)
-    except Exception as exc:  # pylint: disable=broad-except
-        return f"Error listing user activity: {exc}"
+    except _failures.INPUT_ERRORS as exc:
+        return _failures.invalid_input("Error listing user activity", exc)
+    except _failures.UPSTREAM_ERRORS as exc:
+        return _failures.upstream_unavailable("Error listing user activity", exc)
 
 
 def _short(value: Any, max_len: int = 80) -> str:
