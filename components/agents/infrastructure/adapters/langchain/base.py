@@ -538,6 +538,62 @@ def _risk_gated(func, tool_name, explicit_risk, agent):
     return wrapper
 
 
+def _tenancy_scoped(func, tool_name, agent):
+    """Wrap a promoted tool so the model cannot name its tenant (ADR 0031 D1).
+
+    Every tenancy key is removed from the call's arguments before the tool body
+    runs, at three depths: a top-level keyword argument, a value that is itself
+    a payload dict, and a value that is a JSON-encoded payload object — which is
+    the shape ``_adapt_legacy_tool`` produces and ``_coerce_payload`` parses back.
+
+    This is the promotion-loop half of the guard. Its counterpart in
+    ``ToolGovernanceMiddleware`` covers the live LLM path for every tool however
+    it was registered; this one covers direct invocation, which is what the tool
+    tests and the scripted ``AgentTestCase`` executor use, and is therefore where
+    a regression would actually be written.
+
+    Neither seam is the fix on its own. The fix is that the bodies read
+    ``agent.workspace_id`` and nothing else; these two make it so a body that
+    forgot could not succeed anyway.
+    """
+    from components.agents.application.policies.tool_tenancy import scrub_tenancy_keys
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        removed: list[str] = []
+
+        scrubbed_kwargs, dropped = scrub_tenancy_keys(kwargs)
+        removed.extend(dropped)
+        scrubbed_kwargs = dict(scrubbed_kwargs)
+        for key, value in scrubbed_kwargs.items():
+            scrubbed_value, dropped = scrub_tenancy_keys(value)
+            if dropped:
+                scrubbed_kwargs[key] = scrubbed_value
+                removed.extend(dropped)
+
+        scrubbed_args = []
+        for value in args:
+            scrubbed_value, dropped = scrub_tenancy_keys(value)
+            scrubbed_args.append(scrubbed_value)
+            removed.extend(dropped)
+
+        if removed:
+            # Worth seeing: a model naming a workspace is a signal even though
+            # nothing acts on it. No values, only key names — the id itself is
+            # the model's guess and logging it adds nothing.
+            logger.warning(
+                "agent_tool_tenancy_key_stripped tool=%s keys=%s agent_id=%s workspace_id=%s",
+                tool_name,
+                ",".join(sorted(set(removed))),
+                getattr(agent, "agent_id", None),
+                getattr(agent, "workspace_id", None),
+            )
+
+        return func(*scrubbed_args, **scrubbed_kwargs)
+
+    return wrapper
+
+
 def _governance_observation_for(agent: Any, action: Any):
     """The governance middleware's observation for *action*, or ``None``.
 
@@ -1130,6 +1186,15 @@ class BaseAgent(WorkspaceRetrievalMixin, ABC):
                 else:
                     func_to_register = _adapt_legacy_tool(bound)
                     schema_to_register = LegacyStringToolInput
+                # ADR 0031 D1 — applied OUTSIDE ``_adapt_legacy_tool`` so it sees
+                # the model's raw keyword arguments, before the adapter folds
+                # them into the JSON string the body parses. Inside it, the only
+                # thing left to inspect would be that string.
+                func_to_register = _tenancy_scoped(
+                    func_to_register,
+                    meta.get("name") or method_name,
+                    self,
+                )
                 func_to_register = _risk_gated(
                     func_to_register,
                     meta.get("name") or method_name,

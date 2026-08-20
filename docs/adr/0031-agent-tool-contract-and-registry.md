@@ -371,12 +371,41 @@ subclass that pre-populated `self.tools`).
 the live exposure is, with `_resolve_org_id`'s ten call sites as the explicit remediation list.
 
 *F3 landed in WARN mode alongside Phase 2* (`tests/architecture/test_tool_payload_tenancy.py`),
-per the mitigation this ADR names against itself below. It prints and warns the **14** outstanding
+per the mitigation this ADR names against itself below. It printed and warned the **14** outstanding
 entries on every run — `_resolve_org_id` + `_extract_identifier`, their eleven call sites, and
-`project_agent.check_project_permissions`, which does
+`project_agent.check_project_permissions`, which did
 `Workspace.objects.get(id=data["workspace_id"])` with no fallback and no comparison to
-`agent.workspace_id` at all. It is a **ratchet**, not a mute: a *new* violation fails the build
-today. Flipping it to fail outright means fixing those 14, which is the Phase 3 work.
+`agent.workspace_id` at all. It was a **ratchet**, not a mute: a *new* violation failed the build.
+
+**F3 is now in FAIL mode — LANDED 2026-08-20.** All 14 entries are fixed and the allowlist is
+deleted. What shipped:
+
+- `_resolve_org_id` → `_bound_workspace_id(agent)`, which takes no payload at all. All ten call
+  sites read the run's workspace. `_extract_identifier` is deleted with its one caller rewritten.
+- `get_organization_info` no longer resolves a workspace **by name across every row**
+  (`workspace_name__iexact` then `__icontains`) — a bug sharper than the preference this phase set
+  out to fix, and one the ADR did not name: it rendered another tenant's story, owner username and
+  follower list, and answered "does a workspace called X exist" for any X.
+  `get_organization_followers` leaked that tenant's follower **email addresses** the same way.
+- `get_organization_analytics` started from `Workspace.objects.all()` and narrowed *only if* an id
+  resolved, so a run with no bound workspace reported counts aggregated across every tenant. The
+  queryset now starts scoped.
+- `project_agent.check_project_permissions` binds to the run.
+- **Eleven tool descriptions** advertised the parameter — ten `organization_id`, one
+  `workspace_id`. The ADR said nine; the real count is eleven, and a twelfth
+  (`get_organization_info`) advertised "organization name or ID". All rewritten, and a second
+  fitness function keeps them that way: removing the trust without removing the advertisement
+  leaves the model still supplying the value.
+
+D1's by-construction half needed one adaptation. "Leave the field out of the args schema" assumes a
+typed schema; nearly every tool here is a legacy `input_str` tool promoted with
+`LegacyStringToolInput`, whose `extra="allow"` exists precisely so the model can pass arbitrary
+kwargs. There is no field to remove. The equivalent construction is to remove the **value**:
+`application/policies/tool_tenancy.py` defines the tenancy keys once, and two seams strip them —
+`_tenancy_scoped` in the promotion loop (covers direct invocation, which is where tests live) and
+`ToolGovernanceMiddleware._strip_tenancy_args` (covers every tool however registered, which is D3
+item 3). Stripping rather than refusing, because a refusal is a tool error the model retries with
+the same call.
 
 Then
 F4 (failure), then F1 (full declaration) once enough tools carry one that the allowlist is short.
