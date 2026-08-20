@@ -32,8 +32,16 @@ urlpatterns = [
     # catch-all notification detail route can never shadow these paths.
     path("push/subscriptions/", PushSubscriptionController.as_view(), name="push-subscriptions"),
     path("push/vapid-public-key/", VapidPublicKeyController.as_view(), name="push-vapid-public-key"),
-    path("", include(router.urls)),
-    # User preferences (also accessible at /userpreferences/ via root urlconf)
+    # User preferences (also accessible at /userpreferences/ via root urlconf).
+    # These sit BEFORE the router include for the same reason the push routes
+    # do: the router's catch-all detail route (``^(?P<pk>[^/.]+)/$``) matched
+    # ``userpreferences/`` as a notification pk, so the collection route on this
+    # mount was dead — GET answered 404 and POST answered 405, from
+    # NotificationViewSet. The two-segment detail route was never shadowed, so
+    # only the collection was affected. Registered here the mount behaves
+    # identically to ``/userpreferences/``, which matters now that both are
+    # carrying the same authorization.
     path("userpreferences/", UserPreferenceView.as_view(), name="userpreference-list"),
-    path("userpreferences/<str:uuid>/", UserPreferenceDetailView.as_view(), name="userpreference-detail"),
+    path("userpreferences/<str:user_id>/", UserPreferenceDetailView.as_view(), name="userpreference-detail"),
+    path("", include(router.urls)),
 ]

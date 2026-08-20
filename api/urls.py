@@ -61,7 +61,7 @@ api_patterns = [
     path("documents/", include(documents_urlpatterns)),
     path("identity/", include("components.identity.api.urls")),
     path("userpreferences/", UserPreferenceView.as_view()),
-    path("userpreferences/<str:uuid>/", UserPreferenceDetailView.as_view()),
+    path("userpreferences/<str:user_id>/", UserPreferenceDetailView.as_view()),
     path("notifications/", include("components.notifications.api.urls")),
     path("feature-flags/", include(core_urlpatterns)),
     # Pre-auth tenant identity (login brand by Host) — shared_platform.

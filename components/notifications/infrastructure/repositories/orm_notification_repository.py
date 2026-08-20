@@ -153,24 +153,58 @@ class OrmNotificationRepository(NotificationRepositoryPort):
             user_id=user_id,
         ).select_related("workspace")
 
-    def get_user_preference(self, user_id):
-        """Get or create user notification preference."""
-        from infrastructure.persistence.notifications.userpreferences.models import UserPreference
+    def find_user_by_id(self, user_id):
+        """Return the user with ``user_id``, or ``None`` — never raises.
+
+        The caller is an authorization boundary, so a missing or malformed id
+        has to come back as a value it can branch on. This used to be a bare
+        ``CustomUser.objects.get(id=user_id)`` inside ``get_user_preference``,
+        which turned an anonymous GET of an unknown id into a 500 — and a 500
+        that differed from the 200 a real id produced is a user-enumeration
+        oracle. A malformed (non-UUID) id raises ``ValidationError`` from the
+        field rather than ``DoesNotExist``, so both are caught.
+        """
+        from django.core.exceptions import ValidationError
+
         from infrastructure.persistence.users.models import CustomUser
 
-        user = CustomUser.objects.get(id=user_id)
+        try:
+            return CustomUser.objects.filter(id=user_id).first()
+        except (ValidationError, ValueError, TypeError):
+            return None
+
+    def get_user_preference(self, user):
+        """Get or create the preference row owned by ``user``.
+
+        Takes a resolved user INSTANCE, not an id, so the caller cannot hand
+        this method an id it has not authorized.
+        """
+        from infrastructure.persistence.notifications.userpreferences.models import UserPreference
+
         preference, _ = UserPreference.objects.get_or_create(user=user)
         return preference
 
-    def list_user_preferences(self):
-        """List all user preferences."""
+    def list_user_preferences(self, for_user=None):
+        """Preference rows: every row when ``for_user`` is None, else just theirs.
+
+        The unscoped branch is reachable only by staff — see
+        ``UserPreferenceView.get``. It used to be the default for everyone,
+        including anonymous callers.
+        """
         from infrastructure.persistence.notifications.userpreferences.models import UserPreference
 
-        return UserPreference.objects.all()
+        queryset = UserPreference.objects.all()
+        if for_user is not None:
+            queryset = queryset.filter(user=for_user)
+        return queryset
 
-    def delete_user_preference(self, user_id):
-        """Delete user notification preference."""
+    def delete_user_preference(self, user):
+        """Delete ``user``'s preference row. Returns how many rows went.
+
+        ``filter().delete()`` rather than ``get().delete()``: a user with no
+        row is a 404 for the caller to render, not a 500.
+        """
         from infrastructure.persistence.notifications.userpreferences.models import UserPreference
 
-        preference = UserPreference.objects.get(user_id=user_id)
-        preference.delete()
+        deleted, _ = UserPreference.objects.filter(user=user).delete()
+        return deleted

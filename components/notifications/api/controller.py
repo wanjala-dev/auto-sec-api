@@ -8,12 +8,14 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from django.http import Http404
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework import mixins, permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from components.identity.api.permissions import IsLoggedInUserOrAdmin
 from components.notifications.application.providers.notifications_models_provider import (
     get_notifications_models_provider,
 )
@@ -26,7 +28,6 @@ from components.notifications.mappers.rest.notification_serializers import (
 from components.notifications.mappers.rest.user_preferences_serializers import (
     UserPreferenceSerializer,
 )
-from components.workspace.api.workspace_permissions import IsUnauthenticatedOrAdminOrStaff
 
 # Module-level service instance
 _notifications_service = NotificationsService()
@@ -364,25 +365,83 @@ class VapidPublicKeyController(APIView):
 
 
 class UserPreferenceView(APIView):
-    """Create, read, update, and delete user notification preferences."""
+    """A user's own notification preferences. Self-or-staff, never anyone else's.
 
-    permission_classes = (IsUnauthenticatedOrAdminOrStaff,)
+    ``user_id`` in the URL is a **USER** id, not a preference id — the route
+    reads ``/userpreferences/<id>/`` but ``<id>`` identifies the *owner*. That
+    mismatch is most of why this view shipped with no ownership check: nothing
+    in it named the thing the id had to be compared against. The kwarg was
+    called ``uuid``; it is called ``user_id`` now so the next reader cannot
+    make the same mistake.
+
+    Until #422 the gate was
+    ``components.workspace.api.workspace_permissions.IsUnauthenticatedOrAdminOrStaff``::
+
+        def has_permission(self, request, view):
+            if request.method in permissions.SAFE_METHODS:
+                return True
+            return request.user.is_authenticated
+
+    Both branches were the bug. Safe methods returned True for *anyone*, so an
+    anonymous ``GET /userpreferences/`` served ``UserPreference.objects.all()``
+    — every account's row, cross-tenant, no credentials. Unsafe methods asked
+    only "is some account logged in", so any user could PATCH or DELETE any
+    other user's preferences by id.
+
+    ``IsLoggedInUserOrAdmin`` is the same self-or-staff object rule already
+    used by ``UserViewSet`` and by the identity views fixed in #416; it is
+    reused here rather than restated. ``IsAuthenticated`` is NOT redundant
+    beside it: ``IsLoggedInUserOrAdmin`` implements only
+    ``has_object_permission``, which DRF runs solely where the view calls
+    ``check_object_permissions``, so it cannot fail an anonymous request closed
+    on its own.
+    """
+
+    permission_classes = (permissions.IsAuthenticated, IsLoggedInUserOrAdmin)
     serializer_class = UserPreferenceSerializer
 
+    def _resolve_target_user(self, request, user_id):
+        """Return the user whose preferences this request addresses.
+
+        Raises ``PermissionDenied`` (403) for anyone reaching past their own
+        row, and ``Http404`` when a staff caller names an id that isn't there.
+
+        The self case short-circuits before any query — the common path costs
+        nothing, and a caller poking at ids that aren't theirs never reaches
+        the ORM at all. For the non-self case the lookup cannot raise (see
+        ``find_user_by_id``) and the deny is identical whether the id exists or
+        not, so neither branch leaks whether an account is real.
+        """
+        caller = request.user
+        if user_id is None or str(user_id) == str(caller.id):
+            return caller
+
+        target = _notifications_service.find_user_by_id(user_id)
+        # obj == request.user is already False here, so this denies every
+        # non-staff caller — before the 404 below can confirm anything.
+        self.check_object_permissions(request, target)
+        if target is None:
+            raise Http404("User not found.")
+        return target
+
     def post(self, request):
-        serializer = UserPreferenceSerializer(data=request.data)
+        # ``user`` is a writable serializer field, so it was a free "create a
+        # preference row for somebody else" primitive. The owner is whoever the
+        # caller is authorized for — never whatever the body asked for.
+        target = self._resolve_target_user(request, request.data.get("user"))
+        payload = {**request.data, "user": str(target.id)}
+        serializer = UserPreferenceSerializer(data=payload)
         if serializer.is_valid():
             serializer.save()
             return Response({"status": "success", "data": serializer.data}, status=status.HTTP_200_OK)
         return Response({"status": "error", "data": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
 
-    def patch(self, request, uuid=None):
-        if not uuid:
-            return Response(
-                {"status": "error", "message": "User identifier required."}, status=status.HTTP_400_BAD_REQUEST
-            )
-        preference = _notifications_service.get_user_preference(uuid)
-        serializer = UserPreferenceSerializer(preference, data=request.data, partial=True)
+    def patch(self, request, user_id=None):
+        target = self._resolve_target_user(request, user_id)
+        preference = _notifications_service.get_user_preference(target)
+        # Same reason as POST: the body must not be able to reassign ownership.
+        payload = {key: value for key, value in request.data.items() if key != "user"}
+        serializer = UserPreferenceSerializer(preference, data=payload, partial=True)
         if serializer.is_valid():
             saved = serializer.save()
             # The per-channel delivery gate (channels_for) caches its
@@ -402,17 +461,26 @@ class UserPreferenceView(APIView):
 
         get_push_delivery_provider().invalidate_channel_cache(user_id)
 
-    def get(self, request, uuid=None):
-        if uuid:
-            preference = _notifications_service.get_user_preference(uuid)
+    def get(self, request, user_id=None):
+        if user_id is not None:
+            target = self._resolve_target_user(request, user_id)
+            preference = _notifications_service.get_user_preference(target)
             serializer = UserPreferenceSerializer(preference)
             return Response({"status": "success", "data": serializer.data}, status=status.HTTP_200_OK)
-        preferences = _notifications_service.list_user_preferences()
+
+        # The collection. Staff keep the fleet-wide view; everyone else gets
+        # exactly their own row. This branch is the one that was dumping the
+        # whole table to unauthenticated callers.
+        for_user = None if request.user.is_staff else request.user
+        preferences = _notifications_service.list_user_preferences(for_user=for_user)
         serializer = UserPreferenceSerializer(preferences, many=True)
         return Response({"status": "success", "data": serializer.data}, status=status.HTTP_200_OK)
 
-    def delete(self, request, uuid=None):
-        _notifications_service.delete_user_preference(uuid)
+    def delete(self, request, user_id=None):
+        target = self._resolve_target_user(request, user_id)
+        deleted = _notifications_service.delete_user_preference(target)
+        if not deleted:
+            raise Http404("User preferences not found.")
         return Response({"status": "success", "data": "Item Deleted"})
 
 
