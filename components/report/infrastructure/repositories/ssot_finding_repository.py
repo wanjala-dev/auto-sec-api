@@ -15,6 +15,8 @@ Query budget (perf rule §1 — constant, never scaling with row count):
 2. ONE indexed read of the findings page.
 3. ONE read of the board cards for exactly those finding ids.
 4. ONE prefetch of those cards' assignees.
+5. ONE aggregate over ``ScanRun`` for the scope's scan coverage — so an empty
+   report can say whether anything looked, rather than reading as a clean result.
 
 Reading ``infrastructure.persistence.{findings,project}.models`` is a persistence
 read, NOT a ``components.<ctx>.infrastructure`` import — it does not cross the
@@ -29,13 +31,14 @@ import logging
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from django.db.models import Case, Count, IntegerField, Q, When
+from django.db.models import Case, Count, IntegerField, Max, Q, When
 
 from components.report.application.ports.finding_source_port import (
     FindingPage,
     FindingQuery,
     FindingSourcePort,
 )
+from components.report.domain.value_objects.scan_coverage import ScanCoverage
 from components.shared_kernel.domain.security import SAMPLE_SOURCE_PREFIX, FindingStatus, Severity
 
 logger = logging.getLogger(__name__)
@@ -138,10 +141,16 @@ class SsotFindingRepository(FindingSourcePort):
             excluded_suppressed=0 if query.include_suppressed else int(counts["suppressed"] or 0),
             excluded_sample=0 if query.include_sample else int(counts["sample"] or 0),
             sample_count=sample_count,
+            # (5) One aggregate over the scan-execution store: did anything
+            #     actually look? Zero findings alone cannot answer that, and a
+            #     deliverable that treats "nothing scanned" as "nothing found"
+            #     is the falsehood this read exists to prevent.
+            scan_coverage=self._scan_coverage(query),
         )
         logger.info(
             "report.ssot_findings_read workspace_id=%s returned=%d matched=%d truncated=%d "
-            "untriaged=%d sample=%d excluded_resolved=%d excluded_suppressed=%d",
+            "untriaged=%d sample=%d excluded_resolved=%d excluded_suppressed=%d "
+            "scans_completed=%d scans_failed=%d scans_running=%d",
             query.workspace_id,
             page.returned_count,
             page.total_matched,
@@ -150,8 +159,57 @@ class SsotFindingRepository(FindingSourcePort):
             sample_count,
             page.excluded_resolved,
             page.excluded_suppressed,
+            page.scan_coverage.completed_runs,
+            page.scan_coverage.failed_runs,
+            page.scan_coverage.running_runs,
         )
         return page
+
+    # ── scan coverage ────────────────────────────────────────────────────
+
+    @staticmethod
+    def _scan_coverage(query: FindingQuery) -> ScanCoverage:
+        """Did a scan actually cover this report's scope and period?
+
+        ONE aggregate over ``ScanRun`` — the generic scan-execution store every
+        pillar writes (``ScanRun.source`` matches the ``Finding.source`` of the
+        findings it emits, so the report's own source scope applies verbatim).
+
+        This is the difference between "we looked and the estate is clean" and
+        "nothing has ever looked", which a finding count of zero cannot express.
+        The window is the run's own ``created_at``: a scan that ran before the
+        period does not cover the period, however clean its result was.
+        """
+        from infrastructure.persistence.scanning.models import ScanRun
+
+        runs = ScanRun.objects.filter(workspace_id=query.workspace_id)
+        for names in (query.source_prefixes, query.sources):
+            if not names:
+                continue
+            match = Q()
+            for name in names:
+                cleaned = str(name).strip()
+                if cleaned:
+                    match |= Q(source__startswith=cleaned)
+            if match:
+                runs = runs.filter(match)
+        if query.since is not None:
+            runs = runs.filter(created_at__gte=query.since)
+        if query.until is not None:
+            runs = runs.filter(created_at__lte=query.until)
+
+        agg = runs.aggregate(
+            completed=Count("id", filter=Q(status=ScanRun.Status.COMPLETED)),
+            failed=Count("id", filter=Q(status=ScanRun.Status.FAILED)),
+            running=Count("id", filter=Q(status__in=(ScanRun.Status.RUNNING, ScanRun.Status.PENDING))),
+            last_completed=Max("completed_at", filter=Q(status=ScanRun.Status.COMPLETED)),
+        )
+        return ScanCoverage(
+            completed_runs=int(agg["completed"] or 0),
+            failed_runs=int(agg["failed"] or 0),
+            running_runs=int(agg["running"] or 0),
+            last_completed_at=agg["last_completed"],
+        )
 
     # ── scoping ──────────────────────────────────────────────────────────
 

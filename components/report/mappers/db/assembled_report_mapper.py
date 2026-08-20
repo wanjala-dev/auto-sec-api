@@ -8,6 +8,7 @@ report silently loses — which is how the curation counts went missing before.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from components.report.domain.entities.assembled_report_entity import (
@@ -19,6 +20,7 @@ from components.report.domain.entities.assembled_report_entity import (
     TechnicalFinding,
     TriageState,
 )
+from components.report.domain.value_objects.scan_coverage import ScanCoverage
 from components.report.domain.value_objects.severity import Severity
 
 
@@ -76,7 +78,39 @@ def assembled_to_dict(a: AssembledReport) -> dict[str, Any]:
         "excluded_sample": a.excluded_sample,
         "sample_finding_count": a.sample_finding_count,
         "untriaged_count": a.untriaged_count,
+        "scan_coverage": _coverage_to_dict(a.scan_coverage),
     }
+
+
+def _coverage_to_dict(coverage: ScanCoverage | None) -> dict[str, Any] | None:
+    """``None`` round-trips as ``None`` — "we could not tell" is a real state and
+    must not collapse into "nothing ran" (or, worse, into a clean result)."""
+    if coverage is None:
+        return None
+    return {
+        "completed_runs": coverage.completed_runs,
+        "failed_runs": coverage.failed_runs,
+        "running_runs": coverage.running_runs,
+        "last_completed_at": (coverage.last_completed_at.isoformat() if coverage.last_completed_at else None),
+    }
+
+
+def _coverage_from_dict(data: Any) -> ScanCoverage | None:
+    if not isinstance(data, dict):
+        return None
+    raw = data.get("last_completed_at")
+    when = None
+    if raw:
+        try:
+            when = datetime.fromisoformat(str(raw))
+        except (TypeError, ValueError):
+            when = None
+    return ScanCoverage(
+        completed_runs=int(data.get("completed_runs") or 0),
+        failed_runs=int(data.get("failed_runs") or 0),
+        running_runs=int(data.get("running_runs") or 0),
+        last_completed_at=when,
+    )
 
 
 def _triage_to_dict(state: TriageState) -> dict[str, Any]:
@@ -165,4 +199,5 @@ def dict_to_assembled(data: dict[str, Any]) -> AssembledReport:
         excluded_sample=int(data.get("excluded_sample") or 0),
         sample_finding_count=int(data.get("sample_finding_count") or 0),
         untriaged_count=int(data.get("untriaged_count") or 0),
+        scan_coverage=_coverage_from_dict(data.get("scan_coverage")),
     )

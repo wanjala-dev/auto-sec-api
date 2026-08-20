@@ -18,6 +18,7 @@ from components.report.domain.entities.assembled_report_entity import (
     SeverityHistogram,
     TechnicalFinding,
 )
+from components.report.domain.value_objects.scan_coverage import ScanCoverage
 from components.report.domain.value_objects.severity import Severity
 from components.report.infrastructure.adapters.report_html_builder import build_report_html
 
@@ -88,7 +89,7 @@ class TestPentestTemplateRender:
         # Indicative-CVSS caveat surfaces.
         assert "indicative" in html.lower()
 
-    def test_empty_board_renders_honest_report(self):
+    def _empty_html(self, coverage):
         empty = AssembledReport(
             kind="pentest",
             histogram=SeverityHistogram(counts={"critical": 0, "high": 0, "medium": 0, "low": 0}),
@@ -96,8 +97,9 @@ class TestPentestTemplateRender:
             technical_findings=(),
             narrative=ReportNarrative(executive_summary="No findings were surfaced.", overall_assessment=""),
             grounding_texts=("Total findings: 0.",),
+            scan_coverage=coverage,
         )
-        html = build_report_html(
+        return build_report_html(
             assembled=empty,
             kind="pentest",
             title="Empty Report",
@@ -106,7 +108,26 @@ class TestPentestTemplateRender:
             workspace_name="Quiet Org",
             workspace_logo_url="",
         )
+
+    def test_empty_but_genuinely_scanned_report_renders_honestly(self):
+        """A scan completed and surfaced nothing — the clean claim is earned."""
+        html = self._empty_html(ScanCoverage(completed_runs=2))
+
         assert "No technical findings" in html
+        assert "No findings to list" in html
+        assert "2 scans completed" in html
+
+    def test_empty_report_with_unknown_coverage_does_not_claim_a_clean_result(self):
+        """The fixture this test used to carry had NO coverage information, and the
+        template asserted "No technical findings were surfaced in the scope
+        reviewed" anyway — a clean-posture claim backed by nothing. The matrix's
+        "No findings to list" is a statement about the table and stays; the
+        surfaced/reviewed sentences must not be made without coverage."""
+        html = self._empty_html(None)
+
+        assert "No technical findings were surfaced in the scope reviewed." not in html
+        assert "No findings were surfaced in the scope reviewed." not in html
+        assert "Scan coverage for this scope was not recorded" in html
         assert "No findings to list" in html
 
     def test_unfaithful_narrative_surfaces_reviewer_note(self):

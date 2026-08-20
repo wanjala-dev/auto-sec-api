@@ -61,6 +61,12 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+# Re-exported: ``ScanCoverage`` is a domain value object (the application layer
+# depends inward, never the reverse). Callers may import it from either place.
+from components.report.domain.value_objects.scan_coverage import ScanCoverage
+
+__all__ = ["FindingPage", "FindingQuery", "FindingSourcePort", "ScanCoverage"]
+
 
 @dataclass(frozen=True)
 class FindingQuery:
@@ -111,6 +117,10 @@ class FindingPage:
     excluded_sample: int = 0
     #: Seeded demo findings among ``findings`` — non-zero stamps the deliverable.
     sample_count: int = 0
+    #: Whether a scan actually covered this scope. ``None`` = the adapter cannot
+    #: tell; see :class:`ScanCoverage`. An empty page with no coverage is an
+    #: UNSCANNED scope, not a clean one, and the deliverable must distinguish them.
+    scan_coverage: ScanCoverage | None = None
 
     @property
     def returned_count(self) -> int:
