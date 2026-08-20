@@ -181,6 +181,49 @@ class ToolGovernanceMiddleware(AgentMiddleware):
             logger.debug("tool spec lookup failed for %s", tool_name, exc_info=True)
         return UNDECLARED
 
+    # ── tenancy (ADR 0031 D1) ─────────────────────────────────────────────
+
+    def _strip_tenancy_args(self, request: ToolCallRequest, tool_name: str) -> ToolCallRequest:
+        """Return *request* with every tenancy key removed from its arguments.
+
+        The model does not get to name the tenant. ``agent.workspace_id`` is
+        bound when the run is created from the authenticated request and is the
+        only tenant a tool may act on, so an ``organization_id`` in the call's
+        arguments is at best noise and at worst the cross-tenant escape hatch
+        this phase exists to close.
+
+        Stripping rather than refusing is deliberate. A refusal would surface to
+        the model as a tool error it would retry, and the retry would be the
+        same call — the model supplies the key because nine tool descriptions
+        used to ask it to. Those descriptions are fixed in this same change;
+        removing the value is what makes a stale one harmless.
+
+        Never raises: ``request.override`` is immutable-by-design and a failure
+        here must not take down a tool call that is about to be correctly
+        scoped anyway.
+        """
+        from components.agents.application.policies.tool_tenancy import scrub_tenancy_keys
+
+        try:
+            tool_call = request.tool_call
+            if not isinstance(tool_call, dict):
+                return request
+            args = tool_call.get("args")
+            scrubbed, removed = scrub_tenancy_keys(args)
+            if not removed:
+                return request
+            logger.warning(
+                "agent_tool_tenancy_key_stripped tool=%s keys=%s agent_id=%s workspace_id=%s",
+                tool_name,
+                ",".join(sorted(set(removed))),
+                getattr(self._agent, "agent_id", None),
+                getattr(self._agent, "workspace_id", None),
+            )
+            return request.override(tool_call={**tool_call, "args": scrubbed})
+        except Exception:  # pragma: no cover — the guard must not break the call
+            logger.debug("tenancy arg strip failed for %s", tool_name, exc_info=True)
+            return request
+
     # ── the seam ──────────────────────────────────────────────────────────
 
     def wrap_tool_call(
@@ -191,6 +234,11 @@ class ToolGovernanceMiddleware(AgentMiddleware):
         tool_call = request.tool_call if isinstance(request.tool_call, dict) else {}
         tool_name = str(tool_call.get("name") or "")
         tool_call_id = str(tool_call.get("id") or "")
+
+        # ADR 0031 D1 / Phase 3 — the tenant assertion. Middleware wraps the
+        # ``ToolNode``, so this reaches every tool on every agent regardless of
+        # how the tool was registered, which the promotion-loop wrappers cannot.
+        request = self._strip_tenancy_args(request, tool_name)
 
         started = time.perf_counter()
         try:

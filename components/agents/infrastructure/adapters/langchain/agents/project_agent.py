@@ -1,5 +1,6 @@
 """Project Management Agent — migrated to the decorator framework (ADR 0003)."""
 
+from components.agents.application.policies.tool_spec import Scope
 from components.agents.infrastructure.adapters.langchain.agents._mixins import (
     WorkspaceContextMixin,
 )
@@ -217,7 +218,13 @@ class ProjectAgent(WorkspaceContextMixin, BaseAgent):
 
     @tool(
         name="check_project_permissions",
-        description="Check if user can access project data. Input: user_id, workspace_id. Output: permission status.",
+        scope=Scope.WORKSPACE_BOUND,
+        description=(
+            "Check whether a user can access project data in the CURRENT "
+            "workspace. Input: user_id, project_id (optional). Output: "
+            "permission status. The workspace is always the current one "
+            "and cannot be chosen."
+        ),
     )
     def check_project_permissions(self, input_str: str) -> str:
         return project_tools.check_project_permissions(self, input_str)

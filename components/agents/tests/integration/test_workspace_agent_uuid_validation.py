@@ -24,15 +24,17 @@ Tests below pin every link in that chain so a future revert fails
 loudly here instead of silently leaking a tool-error string into
 the user's chat.
 """
+
 from __future__ import annotations
 
 import pytest
 
 from components.agents.infrastructure.adapters.langchain.tools.workspace_agent import (
+    _NO_BOUND_WORKSPACE,
+    _bound_workspace_id,
     _coerce_uuid,
     _fetch_workspace,
     _is_nullish,
-    _resolve_org_id,
     get_organization_operations,
     update_organization,
 )
@@ -95,52 +97,50 @@ class TestCoerceUuid:
 
 
 class _StubAgent:
-    """Tiny stand-in for the BaseAgent surface ``_resolve_org_id`` reads."""
+    """Tiny stand-in for the BaseAgent surface ``_bound_workspace_id`` reads."""
 
     def __init__(self, workspace_id=None):
         self.workspace_id = workspace_id
 
 
 @pytest.mark.unit
-class TestResolveOrgId:
-    """The exact incident path. Each test pins a regression scenario."""
+class TestBoundWorkspaceId:
+    """``_resolve_org_id`` became ``_bound_workspace_id`` in ADR 0031 Phase 3.
 
-    def test_falls_back_to_agent_workspace_when_data_says_None(self):
-        # The bug: pre-fix, ``_resolve_org_id({"organization_id": "None"}, ...)``
-        # returned ``"None"`` instead of the agent's workspace_id, and the
-        # tool then handed that to ``Workspace.objects.get(id="None")``.
+    The incident this module pins is unchanged and still guarded: an LLM
+    placeholder must never reach ``Workspace.objects.get(id=...)``. What changed
+    is *where the id comes from*. The old helper preferred a payload value and
+    fell back to the agent; the new one reads the agent and nothing else, so
+    there is no payload to sanitise — the entire class of "the model sent
+    something weird as the id" is gone rather than filtered.
+
+    ``test_explicit_valid_uuid_wins_over_agent_workspace`` lived here and has
+    been **deleted, not ported**. It pinned the vulnerability: it asserted that
+    a well-formed UUID from the model beat the run's bound workspace. That was
+    the cross-tenant escape hatch, and the assertion below is its inverse.
+    """
+
+    def test_reads_the_agents_workspace(self):
         agent = _StubAgent(workspace_id="038d31c8-4564-4db1-a0d7-359509ffa99f")
-        result = _resolve_org_id({"organization_id": "None"}, agent)
-        assert result == "038d31c8-4564-4db1-a0d7-359509ffa99f"
+        assert _bound_workspace_id(agent) == "038d31c8-4564-4db1-a0d7-359509ffa99f"
 
-    def test_falls_back_for_null_undefined_and_empty(self):
-        agent = _StubAgent(workspace_id="038d31c8-4564-4db1-a0d7-359509ffa99f")
-        for placeholder in ("null", "undefined", ""):
-            assert (
-                _resolve_org_id({"organization_id": placeholder}, agent)
-                == "038d31c8-4564-4db1-a0d7-359509ffa99f"
-            )
+    def test_takes_no_payload_at_all(self):
+        """The structural assertion. A payload parameter is the seam the old
+        helper's cross-tenant preference lived in; it must not come back."""
+        import inspect
 
-    def test_explicit_valid_uuid_wins_over_agent_workspace(self):
-        agent = _StubAgent(workspace_id="038d31c8-4564-4db1-a0d7-359509ffa99f")
-        explicit = "1bb1bbbb-cccc-dddd-eeee-ffffffffffff"
-        assert _resolve_org_id({"organization_id": explicit}, agent) == explicit
+        assert list(inspect.signature(_bound_workspace_id).parameters) == ["agent"]
 
-    def test_returns_none_when_no_valid_id_anywhere(self):
-        # Garbage in payload, no agent fallback → caller sees None and
-        # returns "Organization identifier is required" instead of
-        # crashing on a malformed UUID.
-        agent = _StubAgent(workspace_id=None)
-        assert _resolve_org_id({"organization_id": "None"}, agent) is None
+    def test_returns_none_when_the_agent_has_no_workspace(self):
+        # Caller then returns ``_NO_BOUND_WORKSPACE`` rather than crashing on a
+        # malformed UUID — the same protection, one layer earlier.
+        assert _bound_workspace_id(_StubAgent(workspace_id=None)) is None
 
-    def test_workspace_id_key_resolves_too(self):
-        agent = _StubAgent()
-        assert (
-            _resolve_org_id(
-                {"workspace_id": "038d31c8-4564-4db1-a0d7-359509ffa99f"}, agent
-            )
-            == "038d31c8-4564-4db1-a0d7-359509ffa99f"
-        )
+    def test_an_llm_placeholder_on_the_agent_is_still_rejected(self):
+        # Defence in depth: the agent's own field is not model-controlled, but
+        # ``_coerce_uuid`` still guards it so a half-built agent or a test double
+        # carrying "None" produces a clean refusal.
+        assert _bound_workspace_id(_StubAgent(workspace_id="None")) is None
 
 
 @pytest.mark.django_db
@@ -176,9 +176,7 @@ class TestGetOrganizationOperationsRegression:
     then narrated back to the user as if it described real data.
     """
 
-    def test_with_None_string_falls_back_to_agent_workspace_no_crash(
-        self, workspace_factory
-    ):
+    def test_with_None_string_falls_back_to_agent_workspace_no_crash(self, workspace_factory):
         ws = workspace_factory()
         agent = _StubAgent(workspace_id=str(ws.id))
         # The LLM call shape from prod — argument is the literal "None".
@@ -190,10 +188,7 @@ class TestGetOrganizationOperationsRegression:
         # Either we got a real Operations listing or a clean
         # "No operations found" message — both are acceptable
         # grounded responses.
-        assert (
-            "Organization Operations" in result
-            or "No operations found" in result
-        )
+        assert "Organization Operations" in result or "No operations found" in result
 
     def test_with_no_argument_uses_agent_workspace(self, workspace_factory):
         ws = workspace_factory()
@@ -201,10 +196,15 @@ class TestGetOrganizationOperationsRegression:
         result = get_organization_operations(agent)
         assert "is not a valid UUID" not in result
 
-    def test_with_no_workspace_returns_clean_required_message(self):
+    def test_with_no_workspace_returns_a_clean_refusal(self):
         agent = _StubAgent(workspace_id=None)
         result = get_organization_operations(agent, organization_id="None")
-        assert result == "Organization identifier is required."
+        # Was "Organization identifier is required." — accurate when the model
+        # could supply one. It no longer can, and telling it an identifier is
+        # "required" invites exactly the invented-UUID retry that started the
+        # 2026-05-08 cascade. The guarantee under test is unchanged: a flat,
+        # grounded refusal instead of a traceback.
+        assert result == _NO_BOUND_WORKSPACE
         assert "is not a valid UUID" not in result
 
 
@@ -212,9 +212,7 @@ class TestGetOrganizationOperationsRegression:
 class TestUpdateOrganizationRegression:
     """The other affected call site — same shape."""
 
-    def test_with_None_string_falls_back_to_agent_workspace(
-        self, workspace_factory
-    ):
+    def test_with_None_string_falls_back_to_agent_workspace(self, workspace_factory):
         ws = workspace_factory()
         agent = _StubAgent(workspace_id=str(ws.id))
         result = update_organization(

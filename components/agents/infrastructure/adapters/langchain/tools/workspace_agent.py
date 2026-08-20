@@ -1,10 +1,10 @@
 """Reusable organization-related agent tools."""
+
 from __future__ import annotations
 
 import json
 import uuid
-from typing import Any, Dict, Iterable, Sequence
-
+from typing import Any
 
 # LLMs routinely pass the literal strings ``"None"`` / ``"null"`` /
 # ``"undefined"`` when they want to omit an argument. ``data.get(key)``
@@ -45,7 +45,7 @@ def _coerce_uuid(value: Any) -> str | None:
         return None
 
 
-def _coerce_payload(payload: Any) -> Dict[str, Any]:
+def _coerce_payload(payload: Any) -> dict[str, Any]:
     """Coerce tool input into a dict. Accepts None, dict, JSON string, or raw text."""
     if payload in (None, "", {}):
         return {}
@@ -63,27 +63,27 @@ def _coerce_payload(payload: Any) -> Dict[str, Any]:
 def create_organization(agent, organization_data: Any) -> str:
     """Create a new organization/workspace."""
     from components.agents.application.providers.agent_tagging_provider import AgentTaggingProvider
-    from infrastructure.persistence.workspaces.models import Workspace, WorkspaceCategory, SubCategory
+    from infrastructure.persistence.workspaces.models import SubCategory, Workspace, WorkspaceCategory
 
     try:
         data = _coerce_payload(organization_data)
-        name = (data.get('name') or '').strip()
+        name = (data.get("name") or "").strip()
         if not name:
             return "name is required to create an organization."
 
         workspace = Workspace.objects.create(
             workspace_name=name,
-            workspace_story=data.get('story', ''),
-            privacy=data.get('privacy', 'public'),
-            status='active',
-            workspace_owner_id=getattr(agent, 'user_id', None),
+            workspace_story=data.get("story", ""),
+            privacy=data.get("privacy", "public"),
+            status="active",
+            workspace_owner_id=getattr(agent, "user_id", None),
         )
 
-        for category_name in data.get('categories', []):
+        for category_name in data.get("categories", []):
             category, _ = WorkspaceCategory.objects.get_or_create(name=category_name)
             workspace.workspace_categories.add(category)
 
-        for subcategory_name in data.get('subcategories', []):
+        for subcategory_name in data.get("subcategories", []):
             subcategory, _ = SubCategory.objects.get_or_create(
                 name=subcategory_name,
                 category=workspace.workspace_categories.first() if workspace.workspace_categories.exists() else None,
@@ -91,15 +91,15 @@ def create_organization(agent, organization_data: Any) -> str:
             workspace.workspace_subcategories.add(subcategory)
 
         tag_store = AgentTaggingProvider.build_tag_vocabulary_port()
-        for tag_name in data.get('tags', []):
+        for tag_name in data.get("tags", []):
             workspace.tags.add(tag_store.get_or_create(workspace.id, tag_name).id)
 
         workspace.save()
     except Exception as exc:  # pylint: disable=broad-except
         return f"Error creating organization: {exc}"
 
-    categories = ', '.join(cat.name for cat in workspace.workspace_categories.all()) or 'None'
-    tags = ', '.join(tag.name for tag in workspace.tags.all()) or 'None'
+    categories = ", ".join(cat.name for cat in workspace.workspace_categories.all()) or "None"
+    tags = ", ".join(tag.name for tag in workspace.tags.all()) or "None"
 
     return (
         "Organization Created Successfully:\n"
@@ -125,6 +125,7 @@ def _fetch_workspace(org_id: str):
     the traceback were data.
     """
     from django.core.exceptions import ValidationError
+
     from infrastructure.persistence.workspaces.models import Workspace
 
     try:
@@ -135,95 +136,65 @@ def _fetch_workspace(org_id: str):
         return None, "Organization id is malformed; expected a UUID."
 
 
-def _resolve_org_id(data: Dict[str, Any], agent) -> str | None:
-    """Resolve ``organization_id`` from a tool payload, falling back to
-    the active workspace.
+# The one message every tool in this module returns when the run has no
+# workspace bound to it. Deliberately does NOT say "identifier is required":
+# the model cannot supply one any more, and inviting a retry with an id it is
+# free to invent is how the 2026-05-08 hallucination cascade started.
+_NO_BOUND_WORKSPACE = "This agent run is not bound to a workspace, so there is no organization to act on."
 
-    The LLM frequently fails to pass ``organization_id`` because the
-    workspace context is implicit. We default to ``agent.workspace_id``
-    so single-step questions like "give me an overview" work without
-    the model having to invent a UUID. Explicit values still win —
-    BUT ONLY if they parse as a real UUID. Strings like ``"None"`` /
-    ``"null"`` / a free-form workspace name are all treated as
-    "argument missing" so the caller transparently falls through to
-    the agent's bound workspace instead of handing the ORM a value
-    it'll reject. See the 2026-05-08 incident note in this module's
-    header.
+
+def _bound_workspace_id(agent) -> str | None:
+    """The run's workspace — the ONLY tenant any tool in this module may touch.
+
+    ADR 0031 D1. This replaced ``_resolve_org_id``, which read
+    ``organization_id`` / ``workspace_id`` / ``id`` out of the tool payload and
+    *preferred* them over the agent's bound workspace, falling back to the agent
+    only when the model supplied nothing parseable. That made the model the
+    authority on which tenant a workspace tool acted on, across eleven tools —
+    five of which write.
+
+    The docstring it replaced was not careless: it cited a real incident and
+    solved a real problem (the LLM omitting the id, so the tool defaulted to the
+    agent's workspace). Under D1 that problem does not exist, because the model
+    is never asked for the id and the framework strips it if the model supplies
+    one anyway — see ``application/policies/tool_tenancy.py``.
+
+    ``agent.workspace_id`` is bound when the run is created from the
+    authenticated request. ``_coerce_uuid`` still guards it so a test double or
+    a half-built agent carrying ``None`` produces a clean refusal rather than
+    ``Workspace.objects.get(id=None)``.
     """
-    for key in ("organization_id", "workspace_id", "id"):
-        candidate = _coerce_uuid(data.get(key))
-        if candidate:
-            return candidate
     return _coerce_uuid(getattr(agent, "workspace_id", None))
 
 
-def _extract_identifier(raw: Any, agent=None) -> str:
-    data = _coerce_payload(raw)
-    identifier = (
-        data.get('organization_identifier')
-        or data.get('organization_id')
-        or data.get('id')
-        or data.get('text')
-    )
-    if not identifier and isinstance(raw, str):
-        identifier = raw
-    if not identifier and agent is not None:
-        identifier = getattr(agent, 'workspace_id', None)
+def get_organization_info(agent, organization_identifier: Any = None) -> str:
+    """Describe the run's bound workspace.
+
+    ``organization_identifier`` is accepted and ignored. It is retained only so
+    a stored ``custom_profile.tool_whitelist`` config and any in-flight call
+    that still passes one keeps working (ADR 0031 D8 — schemas grow additively,
+    and a required-arg change is a new tool).
+
+    Previously this resolved the argument by name across **every** workspace
+    row: ``Workspace.objects.filter(workspace_name__iexact=identifier)``, then
+    ``__icontains``. That was not merely a tenancy-preference bug like
+    ``_resolve_org_id`` — it was an unscoped read that rendered another tenant's
+    name, story, owner username and follower list back to the model, and a
+    membership oracle for any workspace name the model cared to guess.
+    """
+    identifier = _bound_workspace_id(agent)
     if not identifier:
-        return ''
-    identifier = str(identifier).strip()
-    # Strip common ASCII quotes and Unicode curly quotes
-    identifier = identifier.strip("\"'“”‘’`”")
-    if identifier.lower().startswith('organization_identifier'):
-        _, _, identifier = identifier.partition(':')
-        identifier = identifier.strip()
-    return identifier.strip("\"'“”‘’`” ")
+        return _NO_BOUND_WORKSPACE
 
-
-def get_organization_info(agent, organization_identifier: Any) -> str:
-    """Retrieve organization information by ID or name."""
-    from django.core.exceptions import ValidationError
-    from infrastructure.persistence.workspaces.models import Workspace
-
-    identifier = _extract_identifier(organization_identifier, agent)
-    if not identifier:
-        return "Organization identifier not provided"
-
-    org = None
-    # Try exact UUID/int ID match first; on UUIDField a non-UUID string
-    # raises ValidationError rather than returning empty, so we guard.
-    try:
-        org = Workspace.objects.filter(id=identifier).first()
-    except (ValidationError, ValueError):
-        org = None
-    if not org and identifier.isdigit():
-        try:
-            org = Workspace.objects.filter(id=int(identifier)).first()
-        except (ValidationError, ValueError):
-            org = None
-    if not org:
-        org = Workspace.objects.filter(workspace_name__iexact=identifier).first()
-    if not org:
-        org = Workspace.objects.filter(workspace_name__icontains=identifier).first()
-    # Final fallback: when the LLM passes something we can't resolve at
-    # all, default to the active workspace.  Prevents "Organization X
-    # not found" when a freeform query like "Wanjala Foundation" leaks
-    # in as the identifier for a workspace whose real name differs.
-    if not org:
-        ws_id = getattr(agent, "workspace_id", None)
-        if ws_id:
-            try:
-                org = Workspace.objects.filter(id=ws_id).first()
-            except (ValidationError, ValueError):
-                org = None
-    if not org:
-        return f"Organization '{identifier}' not found"
+    org, error = _fetch_workspace(identifier)
+    if error:
+        return error
 
     followers = org.followers.all()
-    follower_names = ', '.join(follower.username for follower in followers) or 'None'
-    categories = ', '.join(cat.name for cat in org.workspace_categories.all()) or 'None'
-    subcategories = ', '.join(sub.name for sub in org.workspace_subcategories.all()) or 'None'
-    tags = ', '.join(tag.name for tag in org.tags.all()) or 'None'
+    follower_names = ", ".join(follower.username for follower in followers) or "None"
+    categories = ", ".join(cat.name for cat in org.workspace_categories.all()) or "None"
+    subcategories = ", ".join(sub.name for sub in org.workspace_subcategories.all()) or "None"
+    tags = ", ".join(tag.name for tag in org.tags.all()) or "None"
 
     return (
         "Organization Information:\n"
@@ -250,16 +221,16 @@ def update_organization(agent, update_data: Any) -> str:
     """Update organization fields."""
     try:
         data = _coerce_payload(update_data)
-        org_id = _resolve_org_id(data, agent)
+        org_id = _bound_workspace_id(agent)
         if not org_id:
-            return "Organization identifier is required."
+            return _NO_BOUND_WORKSPACE
         org, error = _fetch_workspace(org_id)
         if error:
             return error
-        field = data.get('field')
+        field = data.get("field")
         if not field:
             return "field is required (e.g. 'workspace_name', 'workspace_story', 'privacy')."
-        new_value = data.get('new_value')
+        new_value = data.get("new_value")
         if new_value is None:
             return "new_value is required."
 
@@ -286,18 +257,18 @@ def manage_organization_team(agent, team_data: Any) -> str:
 
     try:
         data = _coerce_payload(team_data)
-        org_id = _resolve_org_id(data, agent)
+        org_id = _bound_workspace_id(agent)
         if not org_id:
-            return "Organization identifier is required."
+            return _NO_BOUND_WORKSPACE
         org, error = _fetch_workspace(org_id)
         if error:
             return error
-        action = (data.get('action') or '').strip().lower()
+        action = (data.get("action") or "").strip().lower()
         if not action:
             return "action is required ('add' or 'remove')."
-        if action not in {'add', 'remove'}:
+        if action not in {"add", "remove"}:
             return f"Invalid action {action!r}. Use 'add' or 'remove'."
-        user_id = data.get('user_id')
+        user_id = data.get("user_id")
         if not user_id:
             return "user_id is required."
 
@@ -307,7 +278,7 @@ def manage_organization_team(agent, team_data: Any) -> str:
         except (User.DoesNotExist, ValidationError, ValueError):
             return f"User {user_id!r} not found."
 
-        if action == 'add':
+        if action == "add":
             org.followers.add(user)
             return f"Added {user.username} to organization '{org.workspace_name}' team"
         org.followers.remove(user)
@@ -316,21 +287,28 @@ def manage_organization_team(agent, team_data: Any) -> str:
         return f"Error managing organization team: {exc}"
 
 
-def get_organization_analytics(agent, analytics_params: Any) -> str:
-    """Generate organization analytics summary."""
+def get_organization_analytics(agent, analytics_params: Any = None) -> str:
+    """Analytics for the run's bound workspace.
+
+    The queryset starts scoped. It used to start as ``Workspace.objects.all()``
+    and narrow *only if* an id resolved, so a run whose agent carried no
+    ``workspace_id`` — a half-built agent, a test double, a background principal
+    — reported counts and follower totals aggregated across **every tenant in
+    the database**. The unscoped queryset was the bug; the filter was the
+    mitigation. Now there is no unscoped queryset to mitigate.
+    """
     from infrastructure.persistence.workspaces.models import Workspace
 
-    data = _coerce_payload(analytics_params)
-    organizations = Workspace.objects.all()
+    org_id = _bound_workspace_id(agent)
+    if not org_id:
+        return _NO_BOUND_WORKSPACE
 
-    org_id = _resolve_org_id(data, agent)
-    if org_id:
-        organizations = organizations.filter(id=org_id)
+    organizations = Workspace.objects.filter(id=org_id)
 
     total = organizations.count()
-    active = organizations.filter(status='active').count()
+    active = organizations.filter(status="active").count()
     verified = organizations.filter(is_verified=True).count()
-    public = organizations.filter(privacy='public').count()
+    public = organizations.filter(privacy="public").count()
     total_followers = sum(org.followers.count() for org in organizations)
     avg_followers = total_followers / total if total else 0
 
@@ -348,21 +326,21 @@ def get_organization_analytics(agent, analytics_params: Any) -> str:
 
 def manage_organization_categories(agent, category_data: Any) -> str:
     """Manage organization categories and subcategories."""
-    from infrastructure.persistence.workspaces.models import WorkspaceCategory, SubCategory
+    from infrastructure.persistence.workspaces.models import SubCategory, WorkspaceCategory
 
     data = _coerce_payload(category_data)
-    org_id = _resolve_org_id(data, agent)
+    org_id = _bound_workspace_id(agent)
     if not org_id:
-        return "Organization identifier is required to manage categories."
+        return _NO_BOUND_WORKSPACE
     org, error = _fetch_workspace(org_id)
     if error:
         return error
 
-    for category_name in data.get('categories', []):
+    for category_name in data.get("categories", []):
         category, _ = WorkspaceCategory.objects.get_or_create(name=category_name)
         org.workspace_categories.add(category)
 
-    for subcategory_name in data.get('subcategories', []):
+    for subcategory_name in data.get("subcategories", []):
         subcategory, _ = SubCategory.objects.get_or_create(
             name=subcategory_name,
             category=org.workspace_categories.first() if org.workspace_categories.exists() else None,
@@ -370,8 +348,8 @@ def manage_organization_categories(agent, category_data: Any) -> str:
         org.workspace_subcategories.add(subcategory)
 
     org.save()
-    categories = ', '.join(cat.name for cat in org.workspace_categories.all()) or 'None'
-    subcategories = ', '.join(sub.name for sub in org.workspace_subcategories.all()) or 'None'
+    categories = ", ".join(cat.name for cat in org.workspace_categories.all()) or "None"
+    subcategories = ", ".join(sub.name for sub in org.workspace_subcategories.all()) or "None"
 
     return (
         "Categories Updated:\n"
@@ -387,14 +365,14 @@ def manage_organization_tags(agent, tag_data: Any) -> str:
 
     try:
         data = _coerce_payload(tag_data)
-        org_id = _resolve_org_id(data, agent)
+        org_id = _bound_workspace_id(agent)
         if not org_id:
-            return "Organization identifier is required."
+            return _NO_BOUND_WORKSPACE
         org, error = _fetch_workspace(org_id)
         if error:
             return error
-        action = data.get('action', 'add')
-        tags = data.get('tags') or []
+        action = data.get("action", "add")
+        tags = data.get("tags") or []
         if not tags:
             return "tags is required (a list of tag names)."
 
@@ -403,13 +381,13 @@ def manage_organization_tags(agent, tag_data: Any) -> str:
             # Scoped to THIS workspace: creating a tag here can no longer put a
             # row in another tenant's vocabulary.
             tag = tag_store.get_or_create(org.id, tag_name)
-            if action == 'add':
+            if action == "add":
                 org.tags.add(tag.id)
-            elif action == 'remove':
+            elif action == "remove":
                 org.tags.remove(tag.id)
 
         org.save()
-        current_tags = ', '.join(tag.name for tag in org.tags.all()) or 'None'
+        current_tags = ", ".join(tag.name for tag in org.tags.all()) or "None"
 
         return (
             f"Tags {action.capitalize()}d:\n"
@@ -423,11 +401,17 @@ def manage_organization_tags(agent, tag_data: Any) -> str:
 
 
 def get_organization_followers(agent, organization_id: Any = None) -> str:
-    """List followers for an organization."""
-    data = _coerce_payload(organization_id) if not isinstance(organization_id, str) else {"organization_id": organization_id}
-    org_id = _resolve_org_id(data, agent)
+    """List followers for the run's bound workspace.
+
+    ``organization_id`` is accepted and ignored (ADR 0031 D1/D8 — the parameter
+    stays so an in-flight call still binds, but nothing reads it). The coercion
+    that used to turn it into a payload was deleted rather than left dangling:
+    an unused parse of an argument the model controls is the shape someone
+    re-wires later.
+    """
+    org_id = _bound_workspace_id(agent)
     if not org_id:
-        return "Organization identifier is required."
+        return _NO_BOUND_WORKSPACE
     org, error = _fetch_workspace(org_id)
     if error:
         return error
@@ -443,26 +427,26 @@ def get_organization_followers(agent, organization_id: Any = None) -> str:
             "• {username}\n  Email: {email}\n  Joined: {joined}\n  \n".format(
                 username=follower.username,
                 email=follower.email,
-                joined=follower.date_joined.strftime('%Y-%m-%d'),
+                joined=follower.date_joined.strftime("%Y-%m-%d"),
             )
         )
-    return ''.join(lines)
+    return "".join(lines)
 
 
 def manage_organization_privacy(agent, privacy_data: Any) -> str:
     """Adjust organization privacy."""
     try:
         data = _coerce_payload(privacy_data)
-        org_id = _resolve_org_id(data, agent)
+        org_id = _bound_workspace_id(agent)
         if not org_id:
-            return "Organization identifier is required."
+            return _NO_BOUND_WORKSPACE
         org, error = _fetch_workspace(org_id)
         if error:
             return error
-        privacy_level = (data.get('privacy_level') or '').strip().lower()
+        privacy_level = (data.get("privacy_level") or "").strip().lower()
         if not privacy_level:
             return "privacy_level is required ('public' or 'private')."
-        if privacy_level not in {'public', 'private'}:
+        if privacy_level not in {"public", "private"}:
             return f"Invalid privacy level {privacy_level!r}. Use 'public' or 'private'."
 
         org.privacy = privacy_level
@@ -479,11 +463,16 @@ def manage_organization_privacy(agent, privacy_data: Any) -> str:
 
 
 def get_organization_operations(agent, organization_id: Any = None) -> str:
-    """List organization operations."""
-    data = _coerce_payload(organization_id) if not isinstance(organization_id, str) else {"organization_id": organization_id}
-    org_id = _resolve_org_id(data, agent)
+    """List operations for the run's bound workspace.
+
+    ``organization_id`` is accepted and ignored — see
+    ``get_organization_followers``. This is the exact tool from the 2026-05-08
+    incident, where the model passed the literal string ``"None"`` here; it can
+    now pass anything at all and the tenant does not move.
+    """
+    org_id = _bound_workspace_id(agent)
     if not org_id:
-        return "Organization identifier is required."
+        return _NO_BOUND_WORKSPACE
     org, error = _fetch_workspace(org_id)
     if error:
         return error
@@ -498,11 +487,11 @@ def get_organization_operations(agent, organization_id: Any = None) -> str:
         lines.append(
             "• {name}\n  Status: {status}\n  Description: {description}\n  \n".format(
                 name=operation.name,
-                status='Completed' if operation.checked else 'Pending',
-                description=operation.text or 'No description',
+                status="Completed" if operation.checked else "Pending",
+                description=operation.text or "No description",
             )
         )
-    return ''.join(lines)
+    return "".join(lines)
 
 
 def manage_organization_operations(agent, operations_data: Any) -> str:
@@ -511,26 +500,26 @@ def manage_organization_operations(agent, operations_data: Any) -> str:
 
     try:
         data = _coerce_payload(operations_data)
-        org_id = _resolve_org_id(data, agent)
+        org_id = _bound_workspace_id(agent)
         if not org_id:
-            return "Organization identifier is required."
+            return _NO_BOUND_WORKSPACE
         org, error = _fetch_workspace(org_id)
         if error:
             return error
-        action = data.get('action', 'add')
-        operations = data.get('operations') or []
+        action = data.get("action", "add")
+        operations = data.get("operations") or []
         if not operations:
             return "operations is required (a list of operation names)."
 
         for operation_name in operations:
             operation, _ = WorkspaceOperations.objects.get_or_create(name=operation_name)
-            if action == 'add':
+            if action == "add":
                 org.operations.add(operation)
-            elif action == 'remove':
+            elif action == "remove":
                 org.operations.remove(operation)
 
         org.save()
-        current_operations = ', '.join(op.name for op in org.operations.all()) or 'None'
+        current_operations = ", ".join(op.name for op in org.operations.all()) or "None"
 
         return (
             f"Operations {action.capitalize()}d:\n"
@@ -554,22 +543,28 @@ def generate_organization_report(agent, report_params: Any) -> str:
     security fork. The tool is kept as a graceful stub so the workspace
     agent registers with a byte-stable tool set.
     """
-    return (
-        "Organization PDF reports are not available in this deployment."
-    )
+    return "Organization PDF reports are not available in this deployment."
 
 
 def check_organization_permissions(agent, permission_data: Any) -> str:
-    """Check a user's access to an organization."""
+    """Check a user's access to the run's bound workspace.
+
+    The organization is always the bound workspace. ``user_id`` is still read
+    from the payload — it is not a tenancy key and answering "can user X access
+    this workspace" is the tool's whole purpose — but the *workspace* the answer
+    is about is no longer the model's to choose. Before this change a run bound
+    to workspace A could ask about workspace B and be told, correctly for B,
+    "User has full organization access (organization owner)".
+    """
     from components.agents.application.facades.agent_permissions_facade import ai_can
 
     data = _coerce_payload(permission_data)
-    user_id = str(data.get('user_id') or getattr(agent, 'user_id', '') or '')
+    user_id = str(data.get("user_id") or getattr(agent, "user_id", "") or "")
     if not user_id:
         return "User identifier is required."
-    organization_id = _resolve_org_id(data, agent)
+    organization_id = _bound_workspace_id(agent)
     if not organization_id:
-        return "Organization identifier is required."
+        return _NO_BOUND_WORKSPACE
 
     org, error = _fetch_workspace(organization_id)
     if error:
@@ -579,7 +574,7 @@ def check_organization_permissions(agent, permission_data: Any) -> str:
         return "User has full organization access (organization owner)"
     if org.followers.filter(id=user_id).exists():
         return f"User has organization access (team member of: {org.workspace_name})"
-    if org.privacy == 'public':
+    if org.privacy == "public":
         return f"User has read-only access (public organization: {org.workspace_name})"
     if ai_can(str(org.id), user_id, action="workspace:write"):
         return "User has organization access (AI executor)"

@@ -1,20 +1,14 @@
 """Fitness function F3 (ADR 0031 D1) — a tool must not take its tenant from the model.
 
-**Warn mode.** This test does not fail on the violations that exist today; it
-names them, every run, as an explicit remediation list. It *does* fail on a new
-one. Flipping it to fail outright is ADR 0031 Phase 3 and requires fixing the
-call sites below first.
+**Fail mode, since ADR 0031 Phase 3.** There is no allowlist. A tool body that
+resolves its workspace/organization from its own payload fails this test, and
+adding an entry to make it pass is not an available move — the entry would have
+to be a new constant, in a diff, with a reviewer looking at it.
 
-The list existing rather than being notional is the point. ADR 0031 names one
-risk against itself:
-
-    "The main one is that Phase 1's observe-only mode becomes permanent — the
-    middleware lands, nothing is ever enforced, and we have added a layer
-    without removing a bug class."
-
-Its mitigation is that "F3 should be scheduled with Phase 2 rather than
-deferred". This is that. The ratchet — warn on the known, fail on the new — is
-what stops warn mode being the same trap in a different shape.
+It shipped in warn mode alongside Phase 2, naming fourteen violations every run:
+``workspace_agent._resolve_org_id`` and ``_extract_identifier``, their eleven
+call sites, and ``project_agent.check_project_permissions``. Phase 3 fixed all
+fourteen; this is the same detector with the allowlist deleted.
 
 ── What the rule is ──────────────────────────────────────────────────────────
 
@@ -22,33 +16,41 @@ autosec is single-database for pooled tenants; tenant isolation is enforced in
 application code by filtering on ``workspace_id``. A missing filter IS a
 cross-tenant data leak, with no database boundary behind it to catch you.
 
-So under D1 the workspace id reaches a tool through the runtime, never through
-the tool's args schema — a tenant id the model cannot write is a tenant id the
-model cannot cross. This test is the other half: no tool body may read a
+So under D1 the workspace id reaches a tool from the run, never from the model —
+``agent.workspace_id``, bound when the run is created from the authenticated
+request. This test is the source-level half: no tool body may read a
 workspace/organization key out of its payload, whether directly or through a
 helper that does it on its behalf.
 
-── Why the existing violations are not merely careless ───────────────────────
+The framework halves are ``_tenancy_scoped`` (the promotion loop) and
+``ToolGovernanceMiddleware._strip_tenancy_args`` (every tool, however
+registered), both driven by ``application/policies/tool_tenancy.py``. They mean
+a body that violated this rule could not succeed anyway. This test is what stops
+one being written, and — more to the point — stops the *next* one being written
+by an author copying a neighbouring tool.
 
-``_resolve_org_id`` is a considered helper with a thoughtful docstring citing a
+── Why the fixed violations were not merely careless ─────────────────────────
+
+``_resolve_org_id`` was a considered helper with a thoughtful docstring citing a
 real 2026-05-08 incident, written by someone solving a genuine problem: the LLM
-kept omitting the id, so the tool defaulted to the agent's workspace. It is
-*still* a cross-tenant escape hatch, and it is advertised to the model in the
-tool descriptions that mention ``organization_id``. That is the argument for
+kept omitting the id, so the tool defaulted to the agent's workspace. It was
+*still* a cross-tenant escape hatch, and it was advertised to the model in the
+tool descriptions that mentioned ``organization_id``. That is the argument for
 construction over discipline — the discipline was present and the outcome was
 wrong anyway.
 
 Detection is one hop deep: a function that reads a tenancy key out of a dict is
-a "payload tenancy reader", and so is any function that calls one. That finds
+a "payload tenancy reader", and so is any function that calls one. That found
 ``_resolve_org_id``'s call sites by following the code rather than by
-hard-coding the helper's name, so renaming it does not blind the rule.
+hard-coding the helper's name, so a rename does not blind the rule.
 """
 
 from __future__ import annotations
 
 import ast
-import warnings
 from pathlib import Path
+
+from components.agents.application.policies.tool_tenancy import TENANCY_SOURCE_KEYS
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -58,53 +60,10 @@ SCANNED_ROOTS = (
     Path("components/agents/infrastructure/adapters/langchain/agents"),
 )
 
-#: Payload keys that carry a tenant identity. A tool reading any of these out of
-#: its own arguments is taking its tenant from the model.
-TENANCY_KEYS = frozenset({"workspace_id", "organization_id"})
-
-#: KNOWN, UNFIXED, and deliberately listed rather than silently tolerated.
-#:
-#: ``(module path, function name)``. Every entry is a tool body — or a helper a
-#: tool body calls — that resolves its tenant from the model's arguments.
-#: Fixing them is ADR 0031 Phase 3 (bind the workspace through ``ToolRuntime``
-#: and delete the payload read); this list is the remediation scope for that
-#: work, not a place to add entries so a failure goes away.
-#:
-#: ``workspace_agent._resolve_org_id`` + its TEN call sites: the helper prefers
-#: an ``organization_id`` supplied by the model over the agent's bound
-#: workspace, falling back to ``agent.workspace_id`` only when the model
-#: supplied nothing parseable. ``_extract_identifier`` is the same shape, and
-#: ``get_organization_info`` is its one caller.
-#:
-#: ``project_agent.check_project_permissions`` is the sharpest of them: it does
-#: ``Workspace.objects.get(id=data["workspace_id"])`` with no fallback and no
-#: comparison against ``agent.workspace_id`` at all, so the workspace it
-#: reports permissions for is whichever one the model names.
-_WORKSPACE_TOOLS = "components/agents/infrastructure/adapters/langchain/tools/workspace_agent.py"
-_PROJECT_TOOLS = "components/agents/infrastructure/adapters/langchain/tools/project_agent.py"
-
-KNOWN_PAYLOAD_TENANCY_READS: frozenset[tuple[str, str]] = frozenset(
-    {
-        # ── The helpers that do the payload read ──
-        (_WORKSPACE_TOOLS, "_resolve_org_id"),
-        (_WORKSPACE_TOOLS, "_extract_identifier"),
-        # ── `_resolve_org_id`'s ten call sites: the Phase 3 remediation list ──
-        (_WORKSPACE_TOOLS, "update_organization"),
-        (_WORKSPACE_TOOLS, "manage_organization_team"),
-        (_WORKSPACE_TOOLS, "get_organization_analytics"),
-        (_WORKSPACE_TOOLS, "manage_organization_categories"),
-        (_WORKSPACE_TOOLS, "manage_organization_tags"),
-        (_WORKSPACE_TOOLS, "get_organization_followers"),
-        (_WORKSPACE_TOOLS, "manage_organization_privacy"),
-        (_WORKSPACE_TOOLS, "get_organization_operations"),
-        (_WORKSPACE_TOOLS, "manage_organization_operations"),
-        (_WORKSPACE_TOOLS, "check_organization_permissions"),
-        # ── `_extract_identifier`'s one call site ──
-        (_WORKSPACE_TOOLS, "get_organization_info"),
-        # ── A direct read with no fallback at all ──
-        (_PROJECT_TOOLS, "check_project_permissions"),
-    }
-)
+#: Payload keys that carry a tenant identity. Imported rather than restated so
+#: the rule, the promotion-loop wrapper and the middleware cannot disagree about
+#: what a tenancy key is.
+TENANCY_KEYS = TENANCY_SOURCE_KEYS
 
 
 def _module_paths() -> list[Path]:
@@ -148,17 +107,17 @@ def _reads_tenancy_key(node: ast.AST) -> bool:
     """True when *node* names a tenancy key AND reads out of a mapping.
 
     Two signals, because the direct form is not the only one. ``_resolve_org_id``
-    reads its keys from a loop::
+    read its keys from a loop::
 
         for key in ("organization_id", "workspace_id", "id"):
             candidate = _coerce_uuid(data.get(key))
 
     A detector that only matched ``data.get("workspace_id")`` literally would
-    miss the single most consequential violation in the codebase — and with it
-    all ten of its call sites. So the rule is: the function mentions a tenancy
-    key as a string it does not merely write, and it reads a mapping. That is
-    broader than strictly necessary and deliberately so; the exemptions above
-    are what keep it from being noisy.
+    have missed the single most consequential violation in the codebase — and
+    with it all ten of its call sites. So the rule is: the function mentions a
+    tenancy key as a string it does not merely write, and it reads a mapping.
+    That is broader than strictly necessary and deliberately so; the exemptions
+    above are what keep it from being noisy.
     """
     exempt = _exempt_constant_ids(node)
     names_a_tenancy_key = any(
@@ -202,84 +161,127 @@ def _functions(tree: ast.Module) -> list[ast.FunctionDef | ast.AsyncFunctionDef]
     return [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
 
 
-def find_payload_tenancy_reads() -> set[tuple[str, str]]:
-    """Every ``(module, function)`` in the tool layer that takes its tenant from
-    the payload — directly, or through a helper in the same module that does."""
-    violations: set[tuple[str, str]] = set()
+def _payload_tenancy_reads_in(rel: str, source: str) -> set[tuple[str, str]]:
+    """The ``(module, function)`` violations in one module's *source*.
 
-    for path in _module_paths():
-        rel = path.relative_to(ROOT).as_posix()
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-        except SyntaxError:  # pragma: no cover — a syntax error is another test's job
+    Split out from ``find_payload_tenancy_reads`` so the one-hop walk can be
+    proven against synthetic source. With the real violations fixed there is
+    nothing left in the tree to demonstrate it on, and an unproven detector is
+    the failure mode this whole file exists to avoid.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:  # pragma: no cover — a syntax error is another test's job
+        return set()
+
+    functions = _functions(tree)
+    direct = {fn.name for fn in functions if _reads_tenancy_key(fn)}
+    violations: set[tuple[str, str]] = {(rel, name) for name in direct}
+
+    # One hop: a caller of a direct reader is taking the same escape hatch, it is
+    # just doing it through the helper. Following the call graph rather than
+    # naming the helper keeps the rule alive across a rename.
+    for fn in functions:
+        if fn.name in direct:
             continue
-
-        functions = _functions(tree)
-        direct = {fn.name for fn in functions if _reads_tenancy_key(fn)}
-        violations.update((rel, name) for name in direct)
-
-        # One hop: a caller of a direct reader is taking the same escape hatch,
-        # it is just doing it through the helper. Following the call graph
-        # rather than naming the helper keeps the rule alive across a rename.
-        for fn in functions:
-            if fn.name in direct:
-                continue
-            if _called_names(fn) & direct:
-                violations.add((rel, fn.name))
+        if _called_names(fn) & direct:
+            violations.add((rel, fn.name))
 
     return violations
 
 
+def find_payload_tenancy_reads() -> set[tuple[str, str]]:
+    """Every ``(module, function)`` in the tool layer that takes its tenant from
+    the payload — directly, or through a helper in the same module that does."""
+    violations: set[tuple[str, str]] = set()
+    for path in _module_paths():
+        violations |= _payload_tenancy_reads_in(
+            path.relative_to(ROOT).as_posix(),
+            path.read_text(encoding="utf-8"),
+        )
+    return violations
+
+
+def _tool_descriptions() -> list[tuple[str, str, str]]:
+    """``(module, tool_name, description)`` for every ``@tool(...)`` declaration.
+
+    Only literal descriptions — a description assembled at runtime is out of
+    reach of an AST scan, and there are none today.
+    """
+    found: list[tuple[str, str, str]] = []
+    for path in _module_paths():
+        rel = path.relative_to(ROOT).as_posix()
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError:  # pragma: no cover
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            called = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
+            if called != "tool":
+                continue
+            kwargs = {kw.arg: kw.value for kw in node.keywords if kw.arg}
+            description = kwargs.get("description")
+            try:
+                text = ast.literal_eval(description) if description is not None else None
+            except (ValueError, TypeError):
+                text = None
+            if not isinstance(text, str):
+                continue
+            name = kwargs.get("name")
+            try:
+                tool_name = ast.literal_eval(name) if name is not None else "<unnamed>"
+            except (ValueError, TypeError):
+                tool_name = "<unnamed>"
+            found.append((rel, str(tool_name), text))
+    return found
+
+
 class TestToolPayloadTenancyF3:
-    def test_no_new_tool_takes_its_tenant_from_the_model(self):
-        """The ratchet. Warn mode tolerates the listed violations; it does not
-        tolerate an eleventh."""
-        found = find_payload_tenancy_reads()
-        new = sorted(found - KNOWN_PAYLOAD_TENANCY_READS)
-        assert not new, (
+    def test_no_tool_takes_its_tenant_from_the_model(self):
+        """F3, in fail mode. Zero tolerance, no allowlist."""
+        found = sorted(find_payload_tenancy_reads())
+        assert not found, (
             "A tool is resolving its workspace/organization from its own payload, "
             "which lets the model choose the tenant (ADR 0031 D1).\n\n"
-            + "\n".join(f"  - {module}::{function}" for module, function in new)
-            + "\n\nBind the workspace through the run instead of accepting it as a tool "
-            "argument. Do not add the entry to KNOWN_PAYLOAD_TENANCY_READS to make this pass."
+            + "\n".join(f"  - {module}::{function}" for module, function in found)
+            + "\n\nTake the tenant from the run instead — `agent.workspace_id` — and "
+            "delete the payload read. Do not add an allowlist to make this pass; the "
+            "fourteen entries this test used to tolerate are exactly what Phase 3 removed."
         )
 
-    def test_the_remediation_list_is_reported_every_run(self, capsys):
-        """Warn, visibly. A list nobody sees is the same as no list."""
-        found = find_payload_tenancy_reads()
-        outstanding = sorted(found & KNOWN_PAYLOAD_TENANCY_READS)
-        if outstanding:
-            message = (
-                f"ADR 0031 F3 (warn mode): {len(outstanding)} tool(s) still resolve their "
-                "tenant from the model's payload. Phase 3 remediation list:\n"
-                + "\n".join(f"  - {module}::{function}" for module, function in outstanding)
-            )
-            warnings.warn(message, UserWarning, stacklevel=1)
-            print(message)
-        assert outstanding, (
-            "KNOWN_PAYLOAD_TENANCY_READS matched nothing. Either the remediation "
-            "landed — in which case delete the stale entries and flip F3 to fail "
-            "mode (Phase 3) — or the detector stopped detecting, which is worse."
-        )
+    def test_no_tool_description_advertises_a_tenancy_parameter(self):
+        """The other half of the same hole, and the one that is easy to forget.
 
-    def test_the_known_list_has_no_stale_entries(self):
-        """An entry that no longer matches is a fix nobody noticed shipping. It
-        must be deleted, so the list keeps meaning what it says."""
-        found = find_payload_tenancy_reads()
-        stale = sorted(KNOWN_PAYLOAD_TENANCY_READS - found)
-        assert not stale, (
-            "These entries no longer match any code — the violation was fixed or "
-            "the function was renamed. Remove them from KNOWN_PAYLOAD_TENANCY_READS:\n"
-            + "\n".join(f"  - {module}::{function}" for module, function in stale)
+        Removing the trust without removing the advertisement leaves the model
+        still supplying the value. Eleven descriptions asked for one —
+        ``organization_id`` on ten workspace tools and ``workspace_id`` on
+        ``check_project_permissions`` — and a description is bytes the model
+        reads and acts on. A stale one is now harmless (the framework strips the
+        key) but it still spends tokens teaching the model a call shape that
+        does nothing, and it is how the next tool author learns the old pattern.
+        """
+        offenders = [
+            (module, tool_name, key)
+            for module, tool_name, description in _tool_descriptions()
+            for key in sorted(TENANCY_KEYS)
+            if key in description
+        ]
+        assert not offenders, (
+            "A tool description tells the model it may supply a workspace/organization "
+            "id. It may not — the framework strips the key and the tool reads the run's "
+            "bound workspace (ADR 0031 D1).\n\n"
+            + "\n".join(f"  - {module}::{tool_name} advertises {key!r}" for module, tool_name, key in offenders)
+            + "\n\nRewrite the description to say the tool always acts on the current workspace."
         )
 
     def test_the_detector_actually_detects(self):
         """A fitness function that cannot fail is decoration. Prove the AST
         walk fires on both shapes it is meant to catch."""
         direct = ast.parse(
-            "def t(agent, payload):\n"
-            "    data = coerce(payload)\n"
-            "    return Workspace.objects.get(id=data['workspace_id'])\n"
+            "def t(agent, payload):\n    data = coerce(payload)\n    return Workspace.objects.get(id=data['workspace_id'])\n"
         )
         assert _reads_tenancy_key(_functions(direct)[0]) is True
 
@@ -293,8 +295,8 @@ class TestToolPayloadTenancyF3:
             "            return data.get(key)\n"
         )
         assert _reads_tenancy_key(_functions(iterated)[0]) is True, (
-            "the loop form is how _resolve_org_id reads its keys — missing it "
-            "would hide the violation this rule exists for, and all ten of its call sites"
+            "the loop form is how _resolve_org_id read its keys — missing it "
+            "would have hidden the violation this rule exists for, and all ten of its call sites"
         )
 
         clean = ast.parse(
@@ -314,16 +316,49 @@ class TestToolPayloadTenancyF3:
             "would bury the real violations under ~10 false positives"
         )
 
-    def test_the_helper_and_its_call_sites_are_both_found(self):
-        """The one-hop walk is what makes the ten call sites visible; a
-        direct-read-only detector would report the helper alone and understate
-        the remediation by an order of magnitude."""
-        found = find_payload_tenancy_reads()
-        module = _WORKSPACE_TOOLS
-        assert (module, "_resolve_org_id") in found
-        callers = {
-            function
-            for path, function in found
-            if path == module and function not in {"_resolve_org_id", "_extract_identifier"}
-        }
-        assert len(callers) >= 10, callers
+    def test_a_helper_and_its_call_sites_are_both_found(self):
+        """The one-hop walk is what made the ten call sites visible; a
+        direct-read-only detector would have reported the helper alone and
+        understated the remediation by an order of magnitude.
+
+        Proven on synthetic source because the real instance is fixed — the
+        capability has to outlive the violation that motivated it, or the next
+        helper of the same shape is reported as one problem instead of eleven.
+        """
+        source = (
+            "def _resolve(data, agent):\n"
+            "    for key in ('organization_id', 'workspace_id'):\n"
+            "        if data.get(key):\n"
+            "            return data.get(key)\n"
+            "    return agent.workspace_id\n"
+            "\n"
+            "def a_tool(agent, payload):\n"
+            "    return _resolve(coerce(payload), agent)\n"
+            "\n"
+            "def unrelated_tool(agent, payload):\n"
+            "    return Finding.objects.filter(workspace_id=agent.workspace_id)\n"
+        )
+        found = _payload_tenancy_reads_in("synthetic.py", source)
+        assert ("synthetic.py", "_resolve") in found, "the direct reader must be found"
+        assert ("synthetic.py", "a_tool") in found, "its caller takes the same escape hatch, one hop away"
+        assert ("synthetic.py", "unrelated_tool") not in found, "a correctly-scoped tool must not be flagged"
+
+    def test_the_bound_workspace_helper_replaced_the_payload_one(self):
+        """The specific regression. ``_resolve_org_id`` is gone, and the helper
+        that replaced it does not take a payload at all — so there is no
+        argument a future edit could reach for."""
+        import inspect
+
+        from components.agents.infrastructure.adapters.langchain.tools import workspace_agent as workspace_tools
+
+        assert not hasattr(workspace_tools, "_resolve_org_id"), (
+            "_resolve_org_id is the helper this phase deleted; if it is back, so is the hole"
+        )
+        assert not hasattr(workspace_tools, "_extract_identifier"), (
+            "_extract_identifier resolved a workspace by NAME across every tenant"
+        )
+        params = list(inspect.signature(workspace_tools._bound_workspace_id).parameters)
+        assert params == ["agent"], (
+            f"_bound_workspace_id must take only the agent, got {params!r} — a payload "
+            "parameter is the seam the old helper's cross-tenant preference lived in"
+        )

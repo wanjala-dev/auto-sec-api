@@ -656,6 +656,25 @@ def add_project_risk(agent, risk_data: Any) -> str:
 
 
 def check_project_permissions(agent, permission_data: Any) -> str:
+    """Check a user's project access within the run's bound workspace.
+
+    ADR 0031 D1 / Phase 3. This was the sharpest entry on the F3 remediation
+    list: it did ``Workspace.objects.get(id=data["workspace_id"])`` — the
+    **model-supplied** id, with no fallback and no comparison against
+    ``agent.workspace_id`` at all. ``_resolve_org_id`` at least *preferred* the
+    caller's value; this never looked at the agent's. A tenancy check that reads
+    whatever the model asks it to read is worse than no check, because it looks
+    like one: the answer it returned ("User has full project access (workspace
+    owner)") was a true statement about a workspace the run had no business
+    naming, and it enumerated that workspace's teams on the way.
+
+    The workspace now comes from the run. ``user_id`` and ``project_id`` still
+    come from the payload — neither is a tenancy key, and the project lookup was
+    already scoped by ``workspace_id=workspace.id``, which is now a scope that
+    means something.
+    """
+    from django.core.exceptions import ValidationError
+
     from components.agents.application.facades.agent_permissions_facade import ai_can
     from infrastructure.persistence.ai.models import AIPermissionGrant
     from infrastructure.persistence.project.models import Project
@@ -664,7 +683,13 @@ def check_project_permissions(agent, permission_data: Any) -> str:
 
     try:
         data = _coerce_payload(permission_data)
-        workspace = Workspace.objects.get(id=data["workspace_id"])
+        bound = getattr(agent, "workspace_id", None)
+        if not bound:
+            return "This agent run is not bound to a workspace, so there are no project permissions to check."
+        try:
+            workspace = Workspace.objects.get(id=bound)
+        except (Workspace.DoesNotExist, ValidationError, ValueError):
+            return "The workspace bound to this run no longer exists."
         user_id = _resolve_user_id(agent, data)
         project_id = data.get("project_id") or data.get("project")
         scope_id = None
