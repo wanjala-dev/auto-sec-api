@@ -12,6 +12,10 @@ from decimal import Decimal
 
 from components.evaluation.application.ports.eval_ports import CaseSourcePort, EvalCaseInput
 from components.evaluation.domain.value_objects.claim_tier import AxisEvidence
+from components.evaluation.domain.value_objects.dataset_version import (
+    CaseFingerprintInput,
+    fingerprint,
+)
 
 
 class DjangoEvalRepository(CaseSourcePort):
@@ -35,17 +39,36 @@ class DjangoEvalRepository(CaseSourcePort):
         Correctness rests on the ``(run, case)`` unique constraint on
         ``EvalCaseResult``: a result row is the durable record that a case is
         done, so "done" survives a worker dying mid-suite.
+
+        Pending is computed against the run's OWN frozen ``case_snapshot``, not
+        against a fresh query of the suite. That distinction is what stops a
+        suite edited mid-flight from changing a run underneath itself: cases
+        added after the run started are not part of it, and a case deleted from
+        the suite does not silently shrink the denominator a rate is computed
+        over.
+
+        Runs created before snapshots existed have an empty one; those fall back
+        to the live suite, which is the behaviour they already had.
         """
         from infrastructure.persistence.evaluation.models import EvalCase, EvalCaseResult
 
-        done = EvalCaseResult.objects.filter(run=run, workspace_id=run.workspace_id).values_list("case_id", flat=True)
+        done = {
+            str(pk)
+            for pk in EvalCaseResult.objects.filter(run=run, workspace_id=run.workspace_id).values_list(
+                "case_id", flat=True
+            )
+        }
+
+        snapshot = [str(cid) for cid in (run.case_snapshot or [])]
+        if snapshot:
+            return [cid for cid in snapshot if cid not in done]
+
         rows = (
             EvalCase.objects.filter(suite_id=run.suite_id, workspace_id=run.workspace_id)
-            .exclude(id__in=done)
             .order_by("created_at")
             .values_list("id", flat=True)
         )
-        return [str(pk) for pk in rows]
+        return [str(pk) for pk in rows if str(pk) not in done]
 
     def get_case_input(self, *, case_id: str, workspace_id: str) -> EvalCaseInput | None:
         from infrastructure.persistence.evaluation.models import EvalCase
@@ -78,17 +101,50 @@ class DjangoEvalRepository(CaseSourcePort):
 
     # ── runs ────────────────────────────────────────────────────────────────
 
-    def create_run(self, *, workspace_id, suite, agent_type, model_slug, cases_total):
-        from infrastructure.persistence.evaluation.models import EvalRun
+    def create_run(self, *, workspace_id, suite, agent_type, model_slug, cases_total=None):
+        """Open a run and FREEZE the dataset it will be scored against.
+
+        `cases_total` is derived here rather than taken from the caller, because
+        it has to agree with the snapshot exactly. A caller-supplied total that
+        drifted from the frozen case list would leave a run that can never
+        finish (total too high) or that finalises early with cases ungraded
+        (total too low).
+        """
+        from infrastructure.persistence.evaluation.models import EvalCase, EvalRun
+
+        rows = list(
+            EvalCase.objects.filter(suite_id=suite.id, workspace_id=workspace_id)
+            .order_by("created_at")
+            .values("id", "scenario", "prompt_inputs", "solution_criteria")
+        )
+        snapshot = [str(row["id"]) for row in rows]
 
         return EvalRun.objects.create(
             workspace_id=workspace_id,
             suite=suite,
             agent_type=agent_type,
             model_slug=model_slug,
-            cases_total=cases_total,
+            cases_total=len(snapshot) if cases_total is None else cases_total,
             status=EvalRun.Status.PENDING,
+            case_snapshot=snapshot,
+            dataset_hash=_fingerprint_rows(rows),
         )
+
+    def suite_dataset_hash(self, *, suite_id, workspace_id) -> str:
+        """The suite's fingerprint AS IT STANDS NOW.
+
+        Compared against a run's stored hash, this is what lets the panel say
+        "this suite has changed since that run" instead of quietly presenting
+        two incomparable scores next to each other.
+        """
+        from infrastructure.persistence.evaluation.models import EvalCase
+
+        rows = list(
+            EvalCase.objects.filter(suite_id=suite_id, workspace_id=workspace_id).values(
+                "id", "scenario", "prompt_inputs", "solution_criteria"
+            )
+        )
+        return _fingerprint_rows(rows)
 
     def list_runs(self, *, workspace_id: str, limit: int = 25):
         from infrastructure.persistence.evaluation.models import EvalRun
@@ -257,6 +313,21 @@ class DjangoEvalRepository(CaseSourcePort):
         return [
             AxisEvidence(axis=axis, passed=passed, measured=measured) for axis, (passed, measured) in tallies.items()
         ]
+
+
+def _fingerprint_rows(rows) -> str:
+    """Fingerprint ORM `.values()` dicts via the framework-free domain function."""
+    return fingerprint(
+        [
+            CaseFingerprintInput(
+                case_id=str(row["id"]),
+                scenario=row["scenario"] or "",
+                prompt_inputs=row["prompt_inputs"] or {},
+                solution_criteria=list(row["solution_criteria"] or []),
+            )
+            for row in rows
+        ]
+    )
 
 
 def _to_case_input(row) -> EvalCaseInput:
