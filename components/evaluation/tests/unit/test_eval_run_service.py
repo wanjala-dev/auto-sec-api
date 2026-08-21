@@ -176,6 +176,59 @@ class TestFailuresAreRecordedNotSwallowed:
         assert execution.failure_reason == "timeout"
 
 
+class TestAFailedAgentIsNeverGraded:
+    """Regression: an empty output must not SATISFY an absence-shaped check.
+
+    Found live on 2026-08-21. Every case in a real run died on an invalid agent
+    id, so the agent produced nothing — and the panel reported
+    `no_fabricated_asset` PASSED for all eight, because a deterministic verifier
+    looking for fabricated URNs finds none in an empty string.
+
+    The judge was already skipped for a failed outcome. The verifiers were not,
+    and they are precisely the checks whose "pass" condition is an absence. "The
+    agent said nothing" is not evidence that it fabricated nothing.
+    """
+
+    def _failed(self):
+        return _service(agent=_Agent(outcome=AgentOutcome(output="", error="boom")))
+
+    def test_no_axis_is_marked_passed_when_the_agent_produced_nothing(self):
+        execution = _run_one(self._failed())
+
+        assert execution.axis_verdicts == {}
+
+    def test_the_deterministic_verifier_does_not_manufacture_a_pass(self):
+        """The specific false PASS that shipped: a verifier that would happily
+        return True for an empty output must not be consulted at all."""
+        verifier = _Verifier(verdict=AxisVerdict("fix_applies", True, "vacuously true"))
+
+        execution = _run_one(
+            _service(agent=_Agent(outcome=AgentOutcome(output="", error="boom")), verifier=verifier)
+        )
+
+        assert "fix_applies" not in execution.axis_verdicts
+
+    def test_every_axis_gets_a_reason_the_operator_can_read(self):
+        execution = _run_one(self._failed())
+
+        assert set(execution.axis_reasons) == set(AXES)
+        assert all("no output" in reason for reason in execution.axis_reasons.values())
+
+    def test_the_failure_reason_is_the_agents_own_error(self):
+        execution = _run_one(self._failed())
+
+        assert execution.failure_reason == "boom"
+
+    def test_cost_already_incurred_is_still_recorded(self):
+        """A failed case can still have cost tokens before it failed. Dropping
+        that would under-report real spend."""
+        execution = _run_one(
+            _service(agent=_Agent(outcome=AgentOutcome(output="", error="boom", cost_usd=0.004)))
+        )
+
+        assert execution.cost_usd == pytest.approx(0.004)
+
+
 class TestCostAndReporting:
     def test_cost_accrues_from_agent_and_judge(self):
         execution = _run_one(_service())

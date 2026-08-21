@@ -39,9 +39,7 @@ class EvalAgentRunnerAdapter(AgentRunnerPort):
     def __init__(self, *, user_id=None) -> None:
         self._user_id = user_id
 
-    def run_case(
-        self, *, agent_type: str, workspace_id: str, case: EvalCaseInput, model_slug: str
-    ) -> AgentOutcome:
+    def run_case(self, *, agent_type: str, workspace_id: str, case: EvalCaseInput, model_slug: str) -> AgentOutcome:
         from components.agents.application.providers.agent_registry_provider import (
             get_agent_registry_provider,
         )
@@ -49,7 +47,12 @@ class EvalAgentRunnerAdapter(AgentRunnerPort):
         try:
             result = get_agent_registry_provider().run_in_evaluation_mode(
                 agent_type=agent_type,
-                agent_id=f"eval-{uuid.uuid4()}",
+                # A bare UUID. The `eval-` prefix this used to carry made the
+                # value a string that only LOOKED like an id: the field is a
+                # real UUID, so every case died on "is not a valid UUID" and no
+                # agent ever ran. Evaluation runs are identified by their
+                # execution mode, not by a decorated id.
+                agent_id=str(uuid.uuid4()),
                 user_id=self._user_id,
                 workspace_id=workspace_id,
                 model_slug=model_slug,

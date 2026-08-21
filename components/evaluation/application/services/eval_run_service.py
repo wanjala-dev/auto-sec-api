@@ -118,6 +118,36 @@ class EvalRunService:
             )
 
         cost += outcome.cost_usd
+
+        if outcome.failed:
+            # The agent produced NOTHING — it returned an error rather than
+            # raising one. Nothing may be graded from that, and this is the
+            # exact shape that shipped a false PASS: the judge was already
+            # skipped here, but the deterministic verifiers were not, and
+            # `verify_no_fabricated_asset("")` finds no fabricated URN in an
+            # empty string and so returns PASS. A case that never ran displayed
+            # a green tick.
+            #
+            # Found by the live smoke test on 2026-08-21, where every one of
+            # eight cases died on an invalid agent id and the panel reported
+            # `no_fabricated_asset` PASSED for all of them.
+            #
+            # "The agent said nothing" is not evidence that it fabricated
+            # nothing, and an absence of output must never satisfy an
+            # absence-shaped check.
+            return CaseExecution(
+                case=case,
+                outcome=outcome,
+                axis_verdicts={},
+                axis_reasons=dict.fromkeys(axes, "the agent produced no output, so this axis was not assessed"),
+                strengths=[],
+                weaknesses=[],
+                reasoning="",
+                judge_model_slug="",
+                cost_usd=cost,
+                failure_reason=outcome.error,
+            )
+
         deterministic, judged = self._split_axes(axes)
 
         for axis in deterministic:
