@@ -6,7 +6,10 @@ sign-off decision into a labeled ``PromptEvalExample``; the negative examples
 flagged, stored on ``expected_output.generated_content``. This command runs the
 SEE-173 writing-quality rubric (deterministic code graders + the ``WritingJudge``
 LLM-as-judge) against that snapshotted copy and writes HTML + JSON reports under
-``docs/eval-reports/`` — auto-surfaced by ``PromptEvalReportsViewSet``.
+``docs/eval-reports/`` as a LOCAL artefact. Nothing serves these over the API
+any more: the untenanted viewset that did was retired (ADR 0033 D8), because it
+showed every workspace the same files. In-product evaluation lives in the
+``evaluation`` context, per workspace.
 
 Eval MODE is **grade the snapshot, do NOT regenerate.** We are not asking the
 generator to re-draft; we are scoring the *actual content a human rejected*, so

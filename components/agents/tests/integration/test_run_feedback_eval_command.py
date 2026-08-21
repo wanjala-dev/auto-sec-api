@@ -7,7 +7,8 @@ Two layers:
 - **End-to-end (django_db):** seed a small newsletter feedback dataset, stub the
   ``WritingJudge`` at the class boundary (NO real LLM), run the command into a
   temp reports dir, and assert a report JSON lands with the expected ``_meta``
-  the ``PromptEvalReportsViewSet`` reads.
+  the command writes to disk. NOTE: the API that once served these was
+  retired with the PROMPT QUALITY card — the files are a local artefact now.
 """
 
 from __future__ import annotations
