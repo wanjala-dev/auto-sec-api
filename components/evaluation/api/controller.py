@@ -67,12 +67,15 @@ class EvalSuiteListView(_WorkspaceScoped):
             return denied
 
         from components.evaluation.domain.value_objects.claim_tier import MIN_OBSERVATIONS
+        from components.evaluation.domain.value_objects.dataset_version import short
 
         workspace_availability = _provider().availability_reader()
         repo = _repo()
         suites = []
         for suite in repo.list_suites(workspace_id=workspace_id):
             latest = repo.latest_run_for(suite_id=str(suite.id), workspace_id=workspace_id)
+            # Fingerprinted once per suite, not once per field that reads it.
+            current_hash = repo.suite_dataset_hash(suite_id=str(suite.id), workspace_id=workspace_id)
             suites.append(
                 {
                     "id": str(suite.id),
@@ -81,6 +84,14 @@ class EvalSuiteListView(_WorkspaceScoped):
                     "origin": suite.origin,
                     "case_count": getattr(suite, "case_count", 0),
                     "axes": list(suite.axes or []),
+                    "dataset_version": short(current_hash),
+                    # True when the cases were edited after the last run, so the
+                    # last score no longer describes the suite as it stands. Left
+                    # False when there is no run to compare against — "unchanged"
+                    # would be a claim, and there is nothing to claim it about.
+                    "changed_since_last_run": bool(
+                        latest and latest.dataset_hash and latest.dataset_hash != current_hash
+                    ),
                     "last_run": (
                         {
                             "id": str(latest.id),
@@ -171,12 +182,9 @@ class EvalRunCreateView(_WorkspaceScoped):
             suite=suite,
             agent_type=suite.agent_type,
             model_slug=model_slug,
-            cases_total=len(cases),
         )
 
-        job = provider.create_progress_job(
-            workspace_id=workspace_id, run_id=run.id, title=f"Evaluating {suite.name}"
-        )
+        job = provider.create_progress_job(workspace_id=workspace_id, run_id=run.id, title=f"Evaluating {suite.name}")
         if job is not None:
             run.background_job = job
             run.save(update_fields=["background_job"])
@@ -214,10 +222,6 @@ class EvalRunDetailView(_WorkspaceScoped):
         if run is None:
             return _deny("Run not found.", status.HTTP_404_NOT_FOUND)
 
-        from components.evaluation.api.resources.eval_resources import (
-            AxisResource,
-            CaseResultResource,
-        )
 
         axes = list(run.suite.axes or [])
         evidence = repo.axis_evidence(run_id=run_id, workspace_id=workspace_id, axes=axes)
@@ -309,8 +313,14 @@ class EvalProvenanceView(_WorkspaceScoped):
 
 
 def _run_dict(run) -> dict:
+    from components.evaluation.domain.value_objects.dataset_version import short
+
     return {
         "id": str(run.id),
+        # Which exact set of cases this score belongs to (ADR 0033 D13). Two
+        # runs with different versions are two different exams; the panel uses
+        # this to refuse a comparison rather than draw a misleading trend.
+        "dataset_version": short(run.dataset_hash),
         "suite_id": str(run.suite_id),
         "suite_name": run.suite.name,
         "model_slug": run.model_slug,
