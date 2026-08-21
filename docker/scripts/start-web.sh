@@ -21,6 +21,16 @@ python manage.py seed_subscription_tiers || true
 # seedable). Safe for every boot.
 python manage.py seed_demo_workspace || true
 
+# AI model catalogue. Was never run by any startup path — the 13 rows in the
+# live database got there from a one-off manual invocation, so a cluster
+# rebuild would have come up with NO catalogue and a model picker with nothing
+# in it. Idempotent (update_or_create by slug).
+#
+# Seeding does not enable anything by itself: a model is only OFFERED when its
+# provider also has a credential configured (provider_credentials), so this is
+# safe to run on every boot regardless of which keys the deployment holds.
+python manage.py seed_ai_models || true
+
 # octopus-security fork: the nonprofit `bootstrap_dev` (personas + subscription
 # tiers + workspace defaults) is retired. For now we create a minimal superuser
 # so the admin/API is reachable. A security-appropriate dev-seed command will

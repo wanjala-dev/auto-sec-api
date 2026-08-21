@@ -729,39 +729,85 @@ class AgentViewSet(viewsets.GenericViewSet):
     @_schema()
     @action(detail=False, methods=["get"], url_path="ai-models")
     def ai_models(self, request):
-        """List available AI models from the catalog. Workspace owners pick from these."""
+        """The models this deployment can actually run. Workspace owners pick from these.
+
+        "Available" is the AND of two independent facts, because for a long
+        while it was neither:
+
+          offered = is_available          (policy: we list it)
+                    AND has_credential()  (capability: we can call it)
+
+        The policy flag alone was untrustworthy in both directions — every
+        seeded model sat ``is_available=False`` including the one actually
+        serving runs, and flipping them all on would have offered Anthropic,
+        Azure and Ollama models this deployment holds no key for. A picker that
+        lists a model you cannot run moves the failure from pick time to run
+        time, which is the worst place for it.
+
+        Unusable providers are reported in ``unavailable_providers`` rather
+        than silently omitted: an admin wondering where Claude went deserves
+        "no ANTHROPIC_API_KEY is set", not an unexplained absence.
+        """
         try:
             from components.agents.application.providers.ai_models_provider import (
                 get_ai_models_provider,
+            )
+            from components.agents.infrastructure.services.provider_credentials import (
+                credentialed_provider_slugs,
+                missing_requirement_summary,
             )
 
             _pkg_models = get_ai_models_provider()
             AIModel = _pkg_models.AIModel
             provider_filter = request.query_params.get("provider")
+
+            usable = credentialed_provider_slugs()
             qs = AIModel.objects.filter(is_available=True).select_related("provider")
             if provider_filter:
                 qs = qs.filter(provider__slug=provider_filter)
-            models_list = [
+
+            offered, withheld_providers = [], {}
+            for m in qs:
+                slug = (m.provider.slug or "").lower()
+                if slug not in usable:
+                    withheld_providers.setdefault(
+                        slug,
+                        {
+                            "provider": slug,
+                            "provider_name": m.provider.name,
+                            "reason": missing_requirement_summary(slug),
+                            "models_withheld": 0,
+                        },
+                    )
+                    withheld_providers[slug]["models_withheld"] += 1
+                    continue
+                offered.append(
+                    {
+                        "slug": m.slug,
+                        "name": m.name,
+                        "provider": m.provider.slug,
+                        "provider_name": m.provider.name,
+                        "model_id": m.model_id,
+                        "description": m.description,
+                        "tier": m.tier,
+                        "supports_streaming": m.supports_streaming,
+                        "supports_tool_use": m.supports_tool_use,
+                        "supports_vision": m.supports_vision,
+                        "context_window": m.context_window,
+                        "max_output_tokens": m.max_output_tokens,
+                        "input_cost_per_1k": str(m.input_cost_per_1k),
+                        "output_cost_per_1k": str(m.output_cost_per_1k),
+                        "is_default": m.is_default,
+                    }
+                )
+            return Response(
                 {
-                    "slug": m.slug,
-                    "name": m.name,
-                    "provider": m.provider.slug,
-                    "provider_name": m.provider.name,
-                    "model_id": m.model_id,
-                    "description": m.description,
-                    "tier": m.tier,
-                    "supports_streaming": m.supports_streaming,
-                    "supports_tool_use": m.supports_tool_use,
-                    "supports_vision": m.supports_vision,
-                    "context_window": m.context_window,
-                    "max_output_tokens": m.max_output_tokens,
-                    "input_cost_per_1k": str(m.input_cost_per_1k),
-                    "output_cost_per_1k": str(m.output_cost_per_1k),
-                    "is_default": m.is_default,
-                }
-                for m in qs
-            ]
-            return Response({"models": models_list, "total": len(models_list)}, status=status.HTTP_200_OK)
+                    "models": offered,
+                    "total": len(offered),
+                    "unavailable_providers": list(withheld_providers.values()),
+                },
+                status=status.HTTP_200_OK,
+            )
         except Exception as e:
             return Response({"error": f"Failed to list AI models: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
