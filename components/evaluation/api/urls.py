@@ -10,11 +10,13 @@ from __future__ import annotations
 from django.urls import path
 
 from components.evaluation.api.controller import (
+    EvalCaseTemplateView,
     EvalEstimateView,
     EvalProvenanceView,
     EvalRunCreateView,
     EvalRunDetailView,
     EvalRunListView,
+    EvalSuiteCreateView,
     EvalSuiteListView,
 )
 
@@ -22,6 +24,17 @@ app_name = "evaluation"
 
 urlpatterns = [
     path("workspaces/<uuid:workspace_id>/suites/", EvalSuiteListView.as_view(), name="eval-suites"),
+    # Authoring: typed cases or an uploaded file, one validator behind both.
+    path(
+        "workspaces/<uuid:workspace_id>/suites/create/",
+        EvalSuiteCreateView.as_view(),
+        name="eval-suite-create",
+    ),
+    path(
+        "workspaces/<uuid:workspace_id>/case-template/",
+        EvalCaseTemplateView.as_view(),
+        name="eval-case-template",
+    ),
     path(
         "workspaces/<uuid:workspace_id>/suites/<uuid:suite_id>/estimate/",
         EvalEstimateView.as_view(),

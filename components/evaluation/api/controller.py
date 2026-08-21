@@ -201,6 +201,89 @@ class EvalRunCreateView(_WorkspaceScoped):
         )
 
 
+class EvalSuiteCreateView(_WorkspaceScoped):
+    """Create a suite from cases the workspace wrote — typed, or uploaded.
+
+    ADMIN, because it writes and because the suite it creates can then be run,
+    which spends money. Reading stays open to members (D11).
+    """
+
+    def post(self, request, workspace_id):
+        denied = self._admin_or_deny(request, workspace_id)
+        if denied:
+            return denied
+
+        from components.evaluation.application.services.case_authoring_service import (
+            AuthoredSuiteRequest,
+            CaseAuthoringService,
+        )
+
+        data = request.data or {}
+        rows = data.get("cases")
+        payload = AuthoredSuiteRequest(
+            name=str(data.get("name") or ""),
+            agent_type=str(data.get("agent_type") or ""),
+            axes=list(data.get("axes") or []),
+            mode=str(data.get("mode") or "agent"),
+            system_prompt=str(data.get("system_prompt") or ""),
+            forked_from_prompt_id=str(data.get("forked_from_prompt_id") or ""),
+            raw=str(data.get("raw") or ""),
+            fmt=str(data.get("format") or "json"),
+            rows=list(rows) if isinstance(rows, list) else None,
+        )
+
+        result = CaseAuthoringService(writer=_provider().repository()).create(
+            workspace_id=str(workspace_id), request=payload
+        )
+
+        # 400 with per-row reasons, never a partial import: a suite that
+        # silently differs from the file that made it is worse than a refusal.
+        status_code = status.HTTP_201_CREATED if result.ok else status.HTTP_400_BAD_REQUEST
+        return Response(result.as_dict(), status=status_code)
+
+
+class EvalCaseTemplateView(_WorkspaceScoped):
+    """The starting point for an authored suite.
+
+    A worked example beats field documentation: the shape is obvious from two
+    filled-in cases, and it is the same JSON the create endpoint accepts, so
+    edit-and-upload works without translation.
+    """
+
+    def get(self, request, workspace_id):
+        denied = self._member_or_deny(request, workspace_id)
+        if denied:
+            return denied
+
+        from components.evaluation.domain.services.case_upload import (
+            MAX_CASES,
+            MAX_CRITERIA,
+            MAX_SCENARIO_CHARS,
+            TEMPLATE,
+        )
+
+        return Response(
+            {
+                "template": TEMPLATE,
+                "limits": {
+                    "max_cases": MAX_CASES,
+                    "max_scenario_chars": MAX_SCENARIO_CHARS,
+                    "max_criteria_per_case": MAX_CRITERIA,
+                },
+                "notes": [
+                    "scenario is required — it is the question the case asks.",
+                    "solution_criteria are what 'right' meant for THIS case, not a general standard.",
+                    (
+                        "A suite you write yourself is a selection, not a sample, so its results are "
+                        "capped at DIRECTIONAL — they can show the agent handled the cases you chose, "
+                        "not that it is good in general."
+                    ),
+                ],
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
 class EvalRunListView(_WorkspaceScoped):
     def get(self, request, workspace_id):
         denied = self._member_or_deny(request, workspace_id)

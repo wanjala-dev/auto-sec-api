@@ -54,8 +54,15 @@ class CaseFingerprintInput:
     solution_criteria: list[str]
 
 
-def fingerprint(cases: list[CaseFingerprintInput]) -> str:
-    """A stable SHA-256 over the content of a case set."""
+def fingerprint(cases: list[CaseFingerprintInput], *, system_prompt: str = "") -> str:
+    """A stable SHA-256 over the content of a case set.
+
+    ``system_prompt`` participates for PROMPT-mode suites, where the prompt is
+    not configuration around the question — it IS the thing under test. Leaving
+    it out would let someone rewrite the prompt, re-run, and read the movement
+    as the model changing, which is the exact confusion this function exists to
+    prevent. Agent-mode suites pass nothing and are unaffected.
+    """
     payload = [
         {
             "id": str(case.case_id),
@@ -65,7 +72,12 @@ def fingerprint(cases: list[CaseFingerprintInput]) -> str:
         }
         for case in sorted(cases, key=lambda c: str(c.case_id))
     ]
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    encoded = json.dumps(
+        {"cases": payload, "system_prompt": system_prompt or ""},
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 

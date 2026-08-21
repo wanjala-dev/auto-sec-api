@@ -127,8 +127,65 @@ class DjangoEvalRepository(CaseSourcePort):
             cases_total=len(snapshot) if cases_total is None else cases_total,
             status=EvalRun.Status.PENDING,
             case_snapshot=snapshot,
-            dataset_hash=_fingerprint_rows(rows),
+            # The system prompt is part of the question in prompt mode, so it
+            # participates in the fingerprint — otherwise editing the prompt and
+            # re-running reads as the model changing.
+            dataset_hash=_fingerprint_rows(rows, system_prompt=suite.system_prompt),
         )
+
+    def create_authored_suite(
+        self,
+        *,
+        workspace_id,
+        name,
+        agent_type,
+        axes,
+        mode,
+        system_prompt,
+        forked_from_prompt_id,
+        cases,
+    ):
+        """Persist an authored suite and its cases in ONE transaction.
+
+        Atomic on purpose: a suite row that survives while its cases fail leaves
+        an empty suite the operator did not ask for, and the panel would offer
+        to run it.
+        """
+        from django.db import transaction
+
+        from infrastructure.persistence.evaluation.models import EvalCase, EvalSuite
+
+        with transaction.atomic():
+            suite = EvalSuite.objects.create(
+                workspace_id=workspace_id,
+                name=name,
+                agent_type=agent_type,
+                axes=list(axes),
+                origin=EvalSuite.Origin.AUTHORED,
+                mode=mode,
+                system_prompt=system_prompt or "",
+                forked_from_prompt_id=forked_from_prompt_id or "",
+            )
+            EvalCase.objects.bulk_create(
+                [
+                    EvalCase(
+                        suite=suite,
+                        workspace_id=workspace_id,
+                        source_kind=EvalCase.SourceKind.AUTHORED,
+                        # Falls back to the row's position so the
+                        # (suite, source_kind, source_ref) uniqueness constraint
+                        # cannot collapse two distinct cases that both left
+                        # source_ref blank.
+                        source_ref=(case.source_ref or f"authored-{index}")[:255],
+                        scenario=case.scenario,
+                        prompt_inputs=case.prompt_inputs,
+                        solution_criteria=case.solution_criteria,
+                        label=case.label,
+                    )
+                    for index, case in enumerate(cases, start=1)
+                ]
+            )
+        return suite.id
 
     def suite_dataset_hash(self, *, suite_id, workspace_id) -> str:
         """The suite's fingerprint AS IT STANDS NOW.
@@ -139,12 +196,15 @@ class DjangoEvalRepository(CaseSourcePort):
         """
         from infrastructure.persistence.evaluation.models import EvalCase
 
+        from infrastructure.persistence.evaluation.models import EvalSuite
+
         rows = list(
             EvalCase.objects.filter(suite_id=suite_id, workspace_id=workspace_id).values(
                 "id", "scenario", "prompt_inputs", "solution_criteria"
             )
         )
-        return _fingerprint_rows(rows)
+        suite = EvalSuite.objects.filter(id=suite_id, workspace_id=workspace_id).only("system_prompt").first()
+        return _fingerprint_rows(rows, system_prompt=suite.system_prompt if suite else "")
 
     def list_runs(self, *, workspace_id: str, limit: int = 25):
         from infrastructure.persistence.evaluation.models import EvalRun
@@ -315,7 +375,7 @@ class DjangoEvalRepository(CaseSourcePort):
         ]
 
 
-def _fingerprint_rows(rows) -> str:
+def _fingerprint_rows(rows, *, system_prompt: str = "") -> str:
     """Fingerprint ORM `.values()` dicts via the framework-free domain function."""
     return fingerprint(
         [
@@ -326,7 +386,8 @@ def _fingerprint_rows(rows) -> str:
                 solution_criteria=list(row["solution_criteria"] or []),
             )
             for row in rows
-        ]
+        ],
+        system_prompt=system_prompt,
     )
 
 
