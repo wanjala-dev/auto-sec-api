@@ -30,6 +30,9 @@ def run_eval_suite(self, run_id: str) -> dict:
         EvalAgentRunnerAdapter,
     )
     from components.evaluation.infrastructure.adapters.llm_judge_adapter import LlmJudgeAdapter
+    from components.evaluation.infrastructure.adapters.verifier_adapter import (
+        DeterministicVerifierAdapter,
+    )
     from components.evaluation.infrastructure.repositories.eval_repository import (
         DjangoEvalRepository,
     )
@@ -53,7 +56,7 @@ def run_eval_suite(self, run_id: str) -> dict:
         case_source=repo,
         agent_runner=EvalAgentRunnerAdapter(),
         judge=LlmJudgeAdapter(model_slug=run.model_slug),
-        verifier=_verifier_or_none(),
+        verifier=DeterministicVerifierAdapter(workspace_id=run.workspace_id),
     )
 
     run.status = EvalRun.Status.RUNNING
@@ -117,24 +120,6 @@ def run_eval_suite(self, run_id: str) -> dict:
         self.request.id,
     )
     return {"success": True, "cases": completed, "cost_usd": float(spent)}
-
-
-def _verifier_or_none():
-    """The deterministic verifier registry, when it is present.
-
-    Landing in a separate change, so this import is optional TODAY and the
-    absence is explicit: without it, deterministic axes simply go unmeasured
-    (NOT MEASURED), which is honest. They are never silently marked passed.
-    """
-    try:
-        from components.evaluation.infrastructure.adapters.verifier_adapter import (
-            DeterministicVerifierAdapter,
-        )
-
-        return DeterministicVerifierAdapter()
-    except Exception:
-        logger.info("eval_verifier_registry_absent — deterministic axes will read NOT MEASURED")
-        return None
 
 
 def _cap_for(run) -> Decimal | None:
