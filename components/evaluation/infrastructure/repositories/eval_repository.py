@@ -21,16 +21,37 @@ class DjangoEvalRepository(CaseSourcePort):
         from infrastructure.persistence.evaluation.models import EvalCase
 
         rows = EvalCase.objects.filter(suite_id=suite_id, workspace_id=workspace_id).order_by("created_at")
-        return [
-            EvalCaseInput(
-                case_id=str(row.id),
-                scenario=row.scenario,
-                prompt_inputs=row.prompt_inputs or {},
-                solution_criteria=list(row.solution_criteria or []),
-                label=row.label,
-            )
-            for row in rows
-        ]
+        return [_to_case_input(row) for row in rows]
+
+    def pending_case_ids(self, *, run) -> list[str]:
+        """Case IDs in this run's suite that have NO result yet.
+
+        This is what makes a run resumable, and it is the difference between a
+        retry costing nothing and a retry costing the whole suite again. The
+        previous shape re-read every case unconditionally, so an interrupted
+        300-case run restarted at case 1 and paid a second time for the 200 it
+        had already graded.
+
+        Correctness rests on the ``(run, case)`` unique constraint on
+        ``EvalCaseResult``: a result row is the durable record that a case is
+        done, so "done" survives a worker dying mid-suite.
+        """
+        from infrastructure.persistence.evaluation.models import EvalCase, EvalCaseResult
+
+        done = EvalCaseResult.objects.filter(run=run, workspace_id=run.workspace_id).values_list("case_id", flat=True)
+        rows = (
+            EvalCase.objects.filter(suite_id=run.suite_id, workspace_id=run.workspace_id)
+            .exclude(id__in=done)
+            .order_by("created_at")
+            .values_list("id", flat=True)
+        )
+        return [str(pk) for pk in rows]
+
+    def get_case_input(self, *, case_id: str, workspace_id: str) -> EvalCaseInput | None:
+        from infrastructure.persistence.evaluation.models import EvalCase
+
+        row = EvalCase.objects.filter(id=case_id, workspace_id=workspace_id).first()
+        return _to_case_input(row) if row else None
 
     # ── suites ──────────────────────────────────────────────────────────────
 
@@ -127,6 +148,92 @@ class DjangoEvalRepository(CaseSourcePort):
             status=EvalRun.Status.RUNNING,
         )
 
+    # ── concurrent-safe accounting ──────────────────────────────────────────
+    #
+    # Cases now execute in PARALLEL, so every counter below is written with an
+    # F() expression rather than read-modify-write. Read-modify-write is correct
+    # only while exactly one worker touches a run; with a fan-out, two workers
+    # finishing at once both read `cases_completed = 40`, both write 41, and the
+    # run silently loses a case — for a COST field that means under-reporting
+    # real money spent.
+
+    def accrue(self, *, run_id, cost_usd: float) -> tuple[int, Decimal]:
+        """Atomically add one case's cost and bump the completed counter.
+
+        Returns the run's (completed, cost) AFTER this case, read back in the
+        same breath so the caller can decide about the cap and finalisation
+        from post-increment values rather than its own stale copy.
+        """
+        from django.db.models import F
+
+        from infrastructure.persistence.evaluation.models import EvalRun
+
+        EvalRun.objects.filter(pk=run_id).update(
+            cases_completed=F("cases_completed") + 1,
+            cost_usd=F("cost_usd") + Decimal(str(round(cost_usd, 6))),
+        )
+        row = EvalRun.objects.filter(pk=run_id).values("cases_completed", "cost_usd").first()
+        if row is None:
+            return 0, Decimal(0)
+        return int(row["cases_completed"]), Decimal(row["cost_usd"])
+
+    def spend_so_far(self, *, run_id) -> Decimal:
+        from infrastructure.persistence.evaluation.models import EvalRun
+
+        row = EvalRun.objects.filter(pk=run_id).values("cost_usd").first()
+        return Decimal(row["cost_usd"]) if row else Decimal(0)
+
+    def claim_terminal_state(self, *, run_id, status, last_error: str = "") -> bool:
+        """Move a run to a terminal state, exactly once.
+
+        With N workers racing to finish the last case, several can observe
+        "completed == total" simultaneously. The conditional UPDATE is the
+        claim: it only matches a run still in a non-terminal state, so the
+        database picks one winner and `.update()` returns 0 for the losers.
+
+        Doing this with an if-then-save would let two workers both write
+        `finished_at`, and — worse — both fire whatever finalisation follows.
+        """
+        from django.utils import timezone
+
+        from infrastructure.persistence.evaluation.models import EvalRun
+
+        claimed = EvalRun.objects.filter(
+            pk=run_id,
+            status__in=(EvalRun.Status.PENDING, EvalRun.Status.RUNNING),
+        ).update(status=status, finished_at=timezone.now(), last_error=last_error)
+        return bool(claimed)
+
+    def mark_running(self, *, run_id) -> None:
+        from django.utils import timezone
+
+        from infrastructure.persistence.evaluation.models import EvalRun
+
+        EvalRun.objects.filter(pk=run_id, status=EvalRun.Status.PENDING).update(
+            status=EvalRun.Status.RUNNING, started_at=timezone.now()
+        )
+
+    def stalled_run_ids(self, *, older_than) -> list[str]:
+        """Runs stuck mid-flight with nothing having happened for a while.
+
+        A fan-out has a failure mode a single task does not: if the dispatched
+        case tasks are lost — broker eviction, a worker killed between ack and
+        execution — nothing is left to finish the run, and it sits at RUNNING
+        for ever showing a half-finished bar. Nobody is coming; something has to
+        notice. Silence is not success.
+        """
+        from django.db.models import Max, Q
+
+        from infrastructure.persistence.evaluation.models import EvalRun
+
+        rows = (
+            EvalRun.objects.filter(status__in=(EvalRun.Status.PENDING, EvalRun.Status.RUNNING))
+            .annotate(last_result_at=Max("results__created_at"))
+            .filter(Q(last_result_at__lt=older_than) | Q(last_result_at__isnull=True, created_at__lt=older_than))
+            .values_list("id", flat=True)
+        )
+        return [str(pk) for pk in rows]
+
     # ── aggregation ─────────────────────────────────────────────────────────
 
     def axis_evidence(self, *, run_id: str, workspace_id: str, axes: list[str]) -> list[AxisEvidence]:
@@ -150,6 +257,16 @@ class DjangoEvalRepository(CaseSourcePort):
         return [
             AxisEvidence(axis=axis, passed=passed, measured=measured) for axis, (passed, measured) in tallies.items()
         ]
+
+
+def _to_case_input(row) -> EvalCaseInput:
+    return EvalCaseInput(
+        case_id=str(row.id),
+        scenario=row.scenario,
+        prompt_inputs=row.prompt_inputs or {},
+        solution_criteria=list(row.solution_criteria or []),
+        label=row.label,
+    )
 
 
 __all__ = ["DjangoEvalRepository"]

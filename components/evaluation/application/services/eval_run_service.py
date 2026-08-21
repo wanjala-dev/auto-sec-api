@@ -173,40 +173,44 @@ class EvalRunService:
             failure_reason=failure_reason,
         )
 
-    # ── whole suite ─────────────────────────────────────────────────────────
+    def timed_out_execution(self, *, case: EvalCaseInput, seconds: int) -> CaseExecution:
+        """A case that outran its own time limit, as a recordable result.
 
-    def execute_suite(
-        self,
-        *,
-        suite_id: str,
-        workspace_id: str,
-        agent_type: str,
-        axes: list[str],
-        model_slug: str,
-        on_case=None,
-    ):
-        """Yield a ``CaseExecution`` per case.
+        Recording the timeout matters more than it looks. If a case that hangs
+        simply produced no row, the run would sit one case short of its total
+        and never finalise — a whole suite left permanently "in progress" by one
+        slow case. And the slow case itself would be invisible, when it is
+        exactly the finding worth having.
 
-        A generator so the caller can persist and report progress incrementally
-        — a run of 50 cases that only surfaces at the end looks hung, and the
-        BackgroundJob progress surface exists precisely to avoid that.
+        Every axis is left UNMEASURED. A timeout says nothing about whether the
+        agent would have been right, and scoring it as a failure would invent a
+        quality defect out of a latency one.
         """
-        cases = self._cases.load_cases(suite_id=suite_id, workspace_id=workspace_id)
-        for index, case in enumerate(cases, start=1):
-            execution = self.execute_case(
-                case=case,
-                axes=axes,
-                agent_type=agent_type,
-                workspace_id=workspace_id,
-                model_slug=model_slug,
-            )
-            if on_case is not None:
-                try:
-                    on_case(index, len(cases), execution)
-                except Exception:
-                    # Progress reporting must never take down a run.
-                    logger.exception("eval_progress_callback_failed case=%s", case.case_id)
-            yield execution
+        return CaseExecution(
+            case=case,
+            outcome=AgentOutcome(output="", error=f"timed out after {seconds}s"),
+            axis_verdicts={},
+            axis_reasons={},
+            strengths=[],
+            weaknesses=[],
+            reasoning="",
+            judge_model_slug="",
+            cost_usd=0.0,
+            failure_reason=(
+                f"timed out after {seconds}s — no axis was graded, so this case is unmeasured rather than failed"
+            ),
+        )
+
+    # There is deliberately NO `execute_suite` here.
+    #
+    # It existed, and it looped over every case in one call. That is the shape
+    # the fan-out replaced: one Celery task iterating a whole suite is bounded
+    # by `task_time_limit = 300`, which at ~10-30s per case caps a suite at
+    # roughly 10-30 cases — below the 50 the field considers a minimum useful
+    # golden set. Keeping the method as a convenience would leave the defect one
+    # import away from returning, and the next caller would have no way to know
+    # it was the thing that got removed. A case at a time is the only unit of
+    # work this service offers.
 
 
 __all__ = ["CaseExecution", "EvalRunService"]

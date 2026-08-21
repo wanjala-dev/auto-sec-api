@@ -506,6 +506,16 @@ CELERY_BROKER_TRANSPORT_OPTIONS = {
 }
 
 CELERY_BEAT_SCHEDULE = {
+    # A fan-out run can lose its dispatched case tasks (broker eviction, a
+    # worker killed between ack and execution) and then nothing remains to
+    # finish it — it sits at RUNNING with a half-filled bar, which an operator
+    # reads as "still working". This notices the silence and fails it honestly,
+    # keeping whatever results were already recorded.
+    "evaluation_reap_stalled_runs": {
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "evaluation.reap_stalled_eval_runs"},
+        "schedule": crontab(minute="*/10"),
+    },
     # ── auto-sec kept schedules (nonprofit aggregation/search/payment
     # beats removed in the fork). Task names reference kept task modules; add
     # security-domain schedules (alert sweeps, agent runs) here as they ship.
