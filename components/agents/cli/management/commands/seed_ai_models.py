@@ -222,7 +222,11 @@ class Command(BaseCommand):
         parser.add_argument(
             "--available",
             action="store_true",
-            help="Mark all seeded models as available (use when API keys are configured).",
+            help=(
+                "DEPRECATED and now a no-op — seeded models are catalogued as available by "
+                "default, and whether one can actually be CALLED is decided by provider "
+                "credentials at read time (provider_credentials.has_credential)."
+            ),
         )
 
     @transaction.atomic
@@ -283,9 +287,20 @@ class Command(BaseCommand):
                 "input_cost_per_1k": model_data.get("input_cost_per_1k", 0),
                 "output_cost_per_1k": model_data.get("output_cost_per_1k", 0),
                 "is_default": model_data.get("is_default", False),
+                # Catalogued as available by default. This used to be set only
+                # behind --available, and the flag was forgotten: all 13 rows
+                # landed False, including gpt-4o-mini — the model actually
+                # serving runs — so the picker had nothing to offer and the
+                # panel truthfully reported an empty catalogue.
+                #
+                # Making it a listing decision is safe now because it is no
+                # longer the whole answer: `ai_models` intersects it with
+                # provider_credentials.has_credential(), so a model can only be
+                # OFFERED if this deployment can actually call it. A forgotten
+                # flag can no longer hide the catalogue, and a remembered one
+                # can no longer promise a provider we hold no key for.
+                "is_available": True,
             }
-            if mark_available:
-                defaults["is_available"] = True
 
             obj, created = AIModel.objects.update_or_create(
                 slug=model_data["slug"],
@@ -297,14 +312,42 @@ class Command(BaseCommand):
                 models_updated += 1
 
         if dry_run:
-            self.stdout.write(self.style.WARNING(
-                f"\n[DRY RUN] Would seed {len(PROVIDERS)} providers and {len(MODELS)} models."
-            ))
+            self.stdout.write(
+                self.style.WARNING(f"\n[DRY RUN] Would seed {len(PROVIDERS)} providers and {len(MODELS)} models.")
+            )
         else:
-            self.stdout.write(self.style.SUCCESS(
-                f"\nSeeded {providers_created} providers, "
-                f"created {models_created} models, "
-                f"updated {models_updated} models."
-            ))
+            self.stdout.write(
+                self.style.SUCCESS(
+                    f"\nSeeded {providers_created} providers, "
+                    f"created {models_created} models, "
+                    f"updated {models_updated} models."
+                )
+            )
             if mark_available:
-                self.stdout.write(self.style.SUCCESS("All models marked as available."))
+                self.stdout.write(
+                    self.style.WARNING(
+                        "--available is a no-op: models are catalogued as available by default, "
+                        "and callability is decided by provider credentials at read time."
+                    )
+                )
+
+            # Say plainly which of the catalogued models this deployment can
+            # actually call. Seeding a catalogue and printing SUCCESS while
+            # every entry is unreachable is how this went unnoticed the first
+            # time.
+            from components.agents.infrastructure.services.provider_credentials import (
+                credentialed_provider_slugs,
+            )
+
+            usable = credentialed_provider_slugs()
+            if usable:
+                self.stdout.write(
+                    self.style.SUCCESS(f"Providers this deployment can call: {', '.join(sorted(usable))}.")
+                )
+            else:
+                self.stdout.write(
+                    self.style.WARNING(
+                        "No provider credentials are configured — the catalogue is seeded but "
+                        "NOTHING is offerable. Set OPENAI_API_KEY (or another provider's) first."
+                    )
+                )
