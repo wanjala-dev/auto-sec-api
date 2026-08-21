@@ -194,6 +194,7 @@ INSTALLED_APPS = [
     "infrastructure.persistence.honeypot",
     "infrastructure.persistence.prompt_eval",
     "infrastructure.persistence.evaluation",
+    "components.evaluation.cli",
     # Primary adapter CLI apps (management commands + ready() wiring)
     "components.agents.cli",
     "components.shared_platform.cli",

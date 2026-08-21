@@ -314,13 +314,42 @@ spirit — grade only against the stated criteria, and a case meeting all of the
 
 Deterministic verifiers (`fix_applies`, `no_fabricated_asset`) do not go near the judge.
 
+### D11 — READING an eval takes membership; RUNNING one takes admin
+
+Resolved during P2, and recorded here because it was open question 1 below — a doc that
+still asks a question the code has answered is the failure mode `django-conventions.md`
+"Tenancy" was rewritten twice for.
+
+The tension was real. Running an eval spends the workspace's model budget, which argues
+admin. But Henry's ask was "for workspace owners **and team members**", plural and
+explicit, and the audiences genuinely differ: AI PERFORMANCE is tenant-wide operating
+telemetry, whereas this is quality evidence about the agents a member works alongside all
+day. The member triaging findings is exactly who benefits from knowing how the agent
+scores. Hiding the grade from them makes it a thing done TO them.
+
+So the split follows the *cost*, not the sensitivity:
+
+| Route | Who |
+|---|---|
+| list suites / list runs / run detail / estimate | any workspace MEMBER |
+| POST a run | workspace ADMIN (`manage_agents`) |
+| case provenance (`DeepRun` prompts + tool IO) | OWNER only, per the existing DeepRun read-authz contract |
+
+A read-only member still sees the COST ESTIMATE. That is deliberate: knowing a re-measure
+costs $1.40 is precisely the context needed to ask an admin to authorise one, and hiding
+the number leaves them a dead control and no argument.
+
+The first frontend cut gated the whole panel on `manage_agents`. That was stricter than
+the API, which does not remove the access — only the visibility of it — leaving two
+answers to "who is this for" and one of them enforced. Fixed before merge.
+
 ## Phases
 
 | Phase | Deliverable | Notes |
 |---|---|---|
 | **P1** | `evaluation` context + models + case mining from sign-off decisions + read-only EVALUATE panel | proves the spine on real labels |
 | **P2** | RUN EVAL button → Celery → `BackgroundJob` progress → results | reuses the existing progress primitive |
-| **P3** | Failure drill-down: case → `DeepRun` → `DeepRunLog` tool calls and prompts | D4, owner-only |
+| **P3** | Failure drill-down: case → `DeepRun` → `DeepRunLog` tool calls and prompts | D4, owner-only. **Landed WITH P2** — `EvalCaseResult.deep_run` was already the FK, so the provenance route and panel cost little more than exposing it. |
 | **P4** | Judge agreement (D6), model calibration, fold the prompt harness in, retire `docs/eval-reports/` | one place evals live |
 
 P1+P2 are the smallest thing that answers Henry's question. P3 is what makes a failure
@@ -337,8 +366,8 @@ actionable rather than merely visible.
 
 ## Open questions for Henry
 
-1. **Who may run an eval?** Workspace admin only, or any member? Running costs money, which
-   argues admin — but "as a team member I want to evaluate" was part of the ask.
+1. ~~**Who may run an eval?**~~ **RESOLVED in P2 — see D11.** Reading takes membership,
+   running takes admin, provenance stays owner-only.
 2. **Cadence.** Manual button only in v1, or also a scheduled weekly run so the panel has
    history without anyone remembering? Scheduled means recurring spend.
 3. **Do eval results feed remediation memory?** A case the agent reliably fails is exactly

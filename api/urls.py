@@ -82,6 +82,7 @@ api_patterns = [
     path("findings/", include("components.findings.api.urls")),
     path("tagging/", include("components.tagging.api.urls")),
     path("cloud-graph/", include("components.cloud_graph.api.urls")),
+    path("evaluation/", include("components.evaluation.api.urls")),
     path("response/", include("components.response.api.urls")),
     re_path(r"^countries/ctry/(\w{0,50})", CountryDetails.as_view()),
     path("countries/", CountryListView.as_view()),
