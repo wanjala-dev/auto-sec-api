@@ -113,3 +113,71 @@ def resolve_tool_risk(tool_name: str | None, explicit_risk: str | None = None) -
     if explicit_risk in ToolRisk.ALL:
         return explicit_risk
     return _TOOL_RISK.get(tool_name or "", ToolRisk.READ)
+
+
+# ── Evaluation isolation (ADR 0033 D5) ──────────────────────────────────────
+#
+# An eval run executes a real agent against real cases. For the triage agent
+# that means an agent which can, in normal operation, open draft PRs on a
+# customer's repository, write findings and move board cards. An eval run must
+# do none of it: the whole point is to measure judgement, and a harness that
+# writes to a customer's repo is worse than no harness.
+#
+# This gate is SEPARATE from ``tool_risk_refusal`` on purpose, because it needs
+# something that function does not have: the tool's NAME, so it can tell a
+# DECLARED read from an UNDECLARED tool.
+#
+# That distinction is the whole design. ``resolve_tool_risk`` returns ``read``
+# for both — deliberately, since defaulting to the least-privileged tier is
+# right for the autonomy cap. For evaluation it is exactly backwards: a tool
+# nobody classified is a tool nobody has checked, and treating it as harmless
+# is how a write slips through. So evaluation fails CLOSED — declared-read
+# runs, everything else is refused, including anything undeclared.
+
+
+#: The value ``agent.config["execution_mode"]`` carries during an eval run.
+#: Named here, beside the gate that acts on it, so the runner and the enforcer
+#: cannot drift apart on a string literal.
+EVALUATION_EXECUTION_MODE = "evaluation"
+
+
+def is_risk_declared(tool_name: str | None, explicit_risk: str | None = None) -> bool:
+    """Whether this tool's tier was stated, rather than defaulted.
+
+    A tool is declared when it carries ``@tool(risk=...)`` or appears in the
+    central map. Absence is not evidence of harmlessness.
+    """
+    if explicit_risk in ToolRisk.ALL:
+        return True
+    return (tool_name or "") in _TOOL_RISK
+
+
+def evaluation_may_execute(tool_name: str | None, explicit_risk: str | None = None) -> bool:
+    """True only for a tool explicitly declared ``read``."""
+    return is_risk_declared(tool_name, explicit_risk) and resolve_tool_risk(tool_name, explicit_risk) == ToolRisk.READ
+
+
+def evaluation_refusal(tool_name: str | None, explicit_risk: str | None = None) -> str | None:
+    """Refusal message for a tool an evaluation run must not execute.
+
+    Returns ``None`` when the tool is cleared. Two refusals, deliberately
+    worded differently, because they need different fixes: a write tool is
+    working as intended and simply has no place in an eval run, while an
+    undeclared tool is a gap in the contract that someone must close.
+    """
+    if evaluation_may_execute(tool_name, explicit_risk):
+        return None
+
+    if not is_risk_declared(tool_name, explicit_risk):
+        return (
+            f"Evaluation runs refuse undeclared tools. '{tool_name or 'unnamed'}' has no "
+            "risk tier on its @tool decorator or in the central map, so it cannot be "
+            "shown to be read-only. Declare its tier, then re-run."
+        )
+
+    return (
+        f"Evaluation runs are read-only. '{tool_name or 'unnamed'}' changes state "
+        f"({resolve_tool_risk(tool_name, explicit_risk)}), and an eval must measure "
+        "judgement without altering the workspace it is measuring. Report what you "
+        "WOULD have done instead."
+    )
