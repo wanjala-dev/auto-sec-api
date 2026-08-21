@@ -153,6 +153,21 @@ class EvalRun(models.Model):
 
     cases_total = models.PositiveIntegerField(default=0)
     cases_completed = models.PositiveIntegerField(default=0)
+
+    # WHICH cases this run scored, frozen when the run was created (ADR 0033
+    # D13). Two things depend on this and neither is bookkeeping.
+    #
+    # `dataset_hash` is a content fingerprint, so two runs can be compared only
+    # when they asked the same questions. Without it, editing a case and
+    # re-running looks exactly like the model changing — and the easiest way to
+    # make a failing suite pass is to soften the criteria it is failing.
+    #
+    # `case_snapshot` is the id list, and it is what the runner iterates. A run
+    # must NOT pick up cases added to its suite after it started: a suite that
+    # grows mid-run would otherwise move its own denominator, and a "34 of 40"
+    # would silently become "34 of 47" while nothing new was graded.
+    dataset_hash = models.CharField(max_length=64, blank=True, default="")
+    case_snapshot = models.JSONField(default=list, blank=True)
     cost_usd = models.DecimalField(max_digits=12, decimal_places=6, default=0)
     last_error = models.TextField(blank=True, default="")
 
