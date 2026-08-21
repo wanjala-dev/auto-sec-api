@@ -137,6 +137,65 @@ class TestTenantBoundary:
         assert "admin" in response.data["error"].lower()
 
 
+class TestModeTravelsWithTheData:
+    """Agent-mode and prompt-mode scores are never comparable (D15).
+
+    An agent has tools and retrieval a bare prompt does not, so presenting one
+    as the other is the same category error as comparing across models. The
+    client keeps them apart, which it can only do if the payload says which is
+    which — and it must say so on the RUN, not only on the suite, because a
+    caller with runs and no suites would otherwise have to guess.
+    """
+
+    def test_a_suite_states_its_mode(self, tenants):
+        url = reverse("evaluation:eval-suites", kwargs={"workspace_id": tenants["ws_a"].id})
+
+        response = _as(tenants["alice"]).get(url)
+
+        assert response.data["suites"][0]["mode"] == "agent"
+
+    def test_a_run_states_its_mode_without_a_join(self, tenants):
+        url = reverse("evaluation:eval-runs", kwargs={"workspace_id": tenants["ws_a"].id})
+
+        response = _as(tenants["alice"]).get(url)
+
+        assert response.data["runs"][0]["mode"] == "agent"
+
+    def test_a_prompt_suite_reports_prompt_mode_and_that_a_prompt_is_set(self, tenants):
+        EvalSuite.objects.create(
+            workspace=tenants["ws_a"],
+            name="Prompt A/B",
+            agent_type="triage",
+            axes=AXES,
+            mode=EvalSuite.Mode.PROMPT,
+            system_prompt="You are a careful triage analyst.",
+        )
+        url = reverse("evaluation:eval-suites", kwargs={"workspace_id": tenants["ws_a"].id})
+
+        response = _as(tenants["alice"]).get(url)
+
+        prompt_suite = next(s for s in response.data["suites"] if s["name"] == "Prompt A/B")
+        assert prompt_suite["mode"] == "prompt"
+        assert prompt_suite["system_prompt_set"] is True
+
+    def test_the_prompt_TEXT_is_never_in_the_list_payload(self, tenants):
+        """Only whether one is set. A system prompt can carry a customer's own
+        wording and there is no reason for a list endpoint to ship it."""
+        EvalSuite.objects.create(
+            workspace=tenants["ws_a"],
+            name="Prompt B",
+            agent_type="triage",
+            axes=AXES,
+            mode=EvalSuite.Mode.PROMPT,
+            system_prompt="secret-ish wording",
+        )
+        url = reverse("evaluation:eval-suites", kwargs={"workspace_id": tenants["ws_a"].id})
+
+        response = _as(tenants["alice"]).get(url)
+
+        assert "secret-ish wording" not in str(response.data)
+
+
 class TestRunDetailHonesty:
     def test_pass_rate_is_null_below_the_floor_not_zero(self, tenants):
         """The contract's load-bearing line. One observation is not 100%, and
