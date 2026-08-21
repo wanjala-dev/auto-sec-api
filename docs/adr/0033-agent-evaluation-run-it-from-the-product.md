@@ -73,6 +73,34 @@ Henry's Logseq notes on prompt evaluation could not be located — the graph at
 `~/Documents/logseq` holds two unrelated pages. **Fold them in when pointed at the right
 graph**; this ADR does not claim to incorporate them.
 
+### What the field says (researched 2026-08-21, sources at the end)
+
+The webinar is one practitioner's view; these are the points current practice adds or
+contradicts, and each changed a decision below rather than merely decorating it.
+
+- **Evaluate at three levels**, not one: end-to-end (did the task succeed), trajectory
+  (was the path sound and efficient), component (which tool or retriever broke). Our D2
+  starts end-to-end because that is the customer's question — but `DeepRunLog` already
+  stores the ordered trajectory, so trajectory-level scoring is a P4 extension of stored
+  data, not a new pipeline.
+- **Trace mining beats synthetic suites** for ecological validity. Independent confirmation
+  of D3.
+- **Raw agreement is a trap on imbalanced labels.** This one is load-bearing and is why D6
+  changed: a judge that always says "pass" scores 90% raw agreement on a 90%-pass suite
+  with Cohen's κ near zero.
+- **Judges that reason before grading agree far more** — inter-judge κ ~0.55 → ~0.75 simply
+  by demanding a rationale first.
+- **Human-calibration sets are 50–200 items** in the literature; the target band for
+  judge–human κ is 0.7–0.8, the human–human ceiling.
+- **≥500 cases before aggregate metrics are trustworthy.** This directly contradicts the
+  webinar's "10 or more per axis" and is the uncomfortable finding: no young workspace will
+  have 500 labelled cases. Rather than split the difference silently, D9 states the tiers.
+- **Prime Intellect's `verifiers` v1** decomposes an environment into *taskset* (data,
+  tools, scoring), *harness* (solves it, produces a rollout) and *runtime* (local **or
+  sandbox**). That is independent convergence on the shape of D8 + D5 — and the explicit
+  runtime/sandbox split is the strongest external argument that D5's isolation is the
+  standard move, not our paranoia.
+
 ## Decisions
 
 ### D1 — EVALUATE is a sibling surface to AI PERFORMANCE, not a tab inside it
@@ -147,13 +175,35 @@ cards. An eval run does none of that. Enforcement, in order:
 3. A fitness test asserts that a full eval run produces zero rows in `Finding`, `Task`,
    and the VCS draft-PR path. This is the test that must never be baselined away.
 
-### D6 — Judge disagreement is recorded, not hidden
+### D6 — Judge agreement is measured with Cohen's κ, and the judge reasons before it grades
 
 Where an axis is judged rather than verified, the case is graded by two models where the
-catalogue offers two (it now does — ADR 0033 depends on #453 for that). Agreement is
-recorded per case. A suite whose judges disagree above a threshold is reported as
-**rubric ambiguity** — a defect in our prompt, surfaced to us, not billed to the customer
-as a failing agent.
+catalogue offers two (it now does — this ADR depends on #453 for that). A suite whose
+judges disagree beyond threshold is reported as **rubric ambiguity** — a defect in our
+prompt, surfaced to us, not billed to the customer as a failing agent.
+
+Three specifics, taken from the research rather than invented:
+
+1. **Cohen's κ, never raw agreement.** Raw agreement inflates badly on imbalanced labels:
+   if 90% of cases pass, a judge that answers "pass" unconditionally scores 90% raw
+   agreement and κ ≈ 0. Since a healthy security agent's suite *should* be mostly passes,
+   raw agreement here would be a number that looks excellent precisely when it means
+   nothing — the exact failure mode this codebase keeps shipping. κ is the honest statistic.
+2. **Target κ 0.7–0.8**, the human–human ceiling reported in the literature. Below ~0.6 the
+   suite is reported as **not measurable** rather than as a result, consistent with how
+   ADR 0032 treats under-powered rates.
+3. **The judge writes a one-paragraph rationale BEFORE emitting its verdict.** This is
+   reported to lift inter-judge κ from ~0.55 to ~0.75 — a large gain for a prompt-ordering
+   change and a few tokens. The rationale is also exactly what a human needs when they open
+   a failed case, so it is stored, not discarded.
+
+### D6a — Human calibration is a first-class step, not an afterthought
+
+A judge nobody checked is an opinion with a percent sign. Calibration sets in the
+literature are **50–200 human-labelled items**, which is tractable: the sign-off decisions
+D3 mines are already human labels, so calibration means measuring **judge-vs-human κ** on
+that existing set rather than asking anyone to label afresh. A rubric ships only once it
+agrees with the humans who produced the labels.
 
 ### D7 — Cost is stated before the run, and capped
 
@@ -182,6 +232,24 @@ invalidates fix-confidence.
 `docs/eval-reports/*.json` and the disk-reading viewset are **retired** in Phase 4, not
 left beside the new surface. Two sources of eval truth is the defect this codebase keeps
 producing.
+
+### D9 — A suite states which tier of claim it can support
+
+The field says ≥500 cases before aggregate metrics are trustworthy. The webinar says 10+
+per axis. Both are right about different claims, and a young workspace will have neither.
+Splitting the difference quietly would produce a confident number from six cases, which is
+this codebase's signature defect. So the tier is stated on the surface:
+
+| Cases on the axis | What the panel is allowed to say |
+|---|---|
+| < 10 | **NOT MEASURED** — count only, no rate, no verdict |
+| 10–49 | **DIRECTIONAL** — rate with denominator, explicitly "too few to conclude" |
+| 50–499 | **MEASURED** — rate + trend; κ against human labels reported |
+| ≥ 500 | **AGGREGATE-GRADE** — comparison across models and time is defensible |
+
+This reuses ADR 0032's `MIN_TRIALS = 10` as the floor rather than inventing a second
+threshold, and it means the surface starts honest on day one instead of waiting for enough
+data to be honest.
 
 ## Phases
 
@@ -213,7 +281,22 @@ actionable rather than merely visible.
 3. **Do eval results feed remediation memory?** A case the agent reliably fails is exactly
    what the fix-confidence machinery should down-weight. Powerful, and a coupling worth
    deciding deliberately rather than drifting into.
-4. **Minimum viable suite size.** The webinar suggests ~10 cases per axis. With five axes
-   that is a lot of labelled history for a young workspace. Do we ship with fewer and mark
-   it under-powered (consistent with `MIN_TRIALS`), or withhold the surface until it can
-   support a judgement?
+4. **Minimum viable suite size.** D9 proposes tiered claims rather than a single threshold,
+   which is my recommendation. The alternative is withholding EVALUATE entirely until a
+   workspace clears 50 cases — cleaner, but it means Tom sees nothing for weeks.
+5. **Trajectory-level scoring in P4 or sooner?** The data is already in `DeepRunLog`, and
+   "the agent got the right answer the wrong way" is precisely what a security buyer
+   distrusts. It may deserve to be earlier than P4.
+
+## Sources
+
+- [LLM-as-a-Judge in 2026: techniques and best practices — DeepEval](https://deepeval.com/blog/llm-as-a-judge)
+- [LLM Agent Evaluation Metrics in 2026: tool calling, task completion, trace-based evals — Confident AI](https://www.confident-ai.com/blog/llm-agent-evaluation-complete-guide)
+- [LLM-as-Judge patterns for agent evaluation: calibration, bias, trajectory — Zylos Research](https://zylos.ai/research/2026-05-26-llm-as-judge-agent-evaluation-patterns/)
+- [Cohen's kappa: inter-annotator agreement beyond raw percent — ZeroEntropy](https://zeroentropy.dev/concepts/cohens-kappa/)
+- [How to calibrate your LLM judge with human annotations — Galileo](https://galileo.ai/blog/calibrate-llm-judge-human-annotations)
+- [Judge's Verdict: a comprehensive analysis of LLM judges (arXiv 2510.09738)](https://arxiv.org/pdf/2510.09738)
+- [Can LLM-as-a-Judge reliably verify rubrics in agentic scenarios? (arXiv 2606.29920)](https://arxiv.org/pdf/2606.29920)
+- [verifiers v1: decomposing tasksets and harnesses for agentic RL & evaluations — Prime Intellect](https://www.primeintellect.ai/blog/verifiers-v1)
+- [verifiers — environments docs](https://docs.primeintellect.ai/verifiers/environments)
+- [LLM-as-a-judge — Langfuse docs](https://langfuse.com/docs/evaluation/evaluation-methods/llm-as-a-judge)
