@@ -82,6 +82,12 @@ class EvalSuiteListView(_WorkspaceScoped):
                     "name": suite.name,
                     "agent_type": suite.agent_type,
                     "origin": suite.origin,
+                    # WHAT was under test. Agent-mode and prompt-mode scores are
+                    # never comparable (ADR 0033 D15) — an agent has tools and
+                    # retrieval a bare prompt does not — so the client needs
+                    # this to keep them apart rather than infer it.
+                    "mode": suite.mode,
+                    "system_prompt_set": bool((suite.system_prompt or "").strip()),
                     "case_count": getattr(suite, "case_count", 0),
                     "axes": list(suite.axes or []),
                     "dataset_version": short(current_hash),
@@ -400,6 +406,11 @@ def _run_dict(run) -> dict:
 
     return {
         "id": str(run.id),
+        # Carried on the RUN, not left for the client to join from the suite
+        # list. A run whose suite was since deleted still has to say which
+        # question it answered, and a caller that has runs but not suites must
+        # not have to guess.
+        "mode": getattr(run.suite, "mode", "agent"),
         # Which exact set of cases this score belongs to (ADR 0033 D13). Two
         # runs with different versions are two different exams; the panel uses
         # this to refuse a comparison rather than draw a misleading trend.
