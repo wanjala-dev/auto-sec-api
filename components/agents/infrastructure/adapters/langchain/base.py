@@ -542,8 +542,17 @@ def _risk_gated(func, tool_name, explicit_risk, agent):
     is denied to any caller until this run carries ``approval_granted``. Both
     return a refusal string the LLM surfaces gracefully — the tool body never
     runs. Reversible/read tools pass straight through.
+
+    An EVALUATION run (ADR 0033 D5) is stricter than either: only tools
+    explicitly declared ``read`` execute, and anything undeclared is refused
+    too. Evaluating the triage agent means running an agent that can open draft
+    PRs on a customer's repository; the harness must measure judgement without
+    altering the workspace it is measuring. That check runs FIRST, because it
+    is the one whose failure is an incident rather than a bad answer.
     """
     from components.agents.application.policies.tool_risk import (
+        EVALUATION_EXECUTION_MODE,
+        evaluation_refusal,
         resolve_tool_risk,
         tool_risk_refusal,
     )
@@ -552,11 +561,20 @@ def _risk_gated(func, tool_name, explicit_risk, agent):
 
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
+        # Read deliberately outside the try below: a failure to determine the
+        # execution mode must not silently drop the evaluation gate, which is
+        # what a shared `except: default to permissive` would do.
+        config = getattr(agent, "config", None) or {}
+        if str(config.get("execution_mode") or "").strip().lower() == EVALUATION_EXECUTION_MODE:
+            eval_refusal = evaluation_refusal(tool_name, explicit_risk)
+            if eval_refusal is not None:
+                return _ToolRefusal(eval_refusal)
+
         try:
             is_autonomous = is_ai_service_principal(
                 getattr(agent, "user_id", None), getattr(agent, "workspace_id", None)
             )
-            approval_granted = bool((getattr(agent, "config", None) or {}).get("approval_granted"))
+            approval_granted = bool(config.get("approval_granted"))
         except Exception:
             is_autonomous, approval_granted = False, False
         refusal = tool_risk_refusal(resolved_risk, is_autonomous=is_autonomous, approval_granted=approval_granted)
