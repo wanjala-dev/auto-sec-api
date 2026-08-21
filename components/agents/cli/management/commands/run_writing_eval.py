@@ -12,7 +12,8 @@ deterministic and offline-friendly, and steered by the case's voice rules.
 It then scores the draft with deterministic code graders (faithfulness,
 voice, readability, structure) + an LLM rubric judge (warmth, specificity,
 clarity/CTA, on-voice), and writes HTML + JSON reports under
-``docs/eval-reports/`` (surfaced by the existing PromptEvalReportsViewSet).
+``docs/eval-reports/`` as a LOCAL artefact — the API that surfaced these was
+retired (ADR 0033 D8); per-workspace evaluation lives in ``evaluation``.
 
 Establishing a baseline: run once, record the scores (sred:result). To
 detect a regression, change the writing prompt/model and re-run — the

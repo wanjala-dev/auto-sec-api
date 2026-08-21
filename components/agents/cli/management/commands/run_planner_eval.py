@@ -269,7 +269,7 @@ class Command(BaseCommand):
         )
 
         # Inject the eval-run metadata into the JSON so the V2 panel +
-        # PromptEvalReportsViewSet can render prompt_id / version /
+        # Kept so a local reader can group by prompt_id / version /
         # label / judge_provider without re-parsing the filename. The
         # EvaluationReport dataclass doesn't carry these fields (they're
         # CLI knobs, not part of the eval surface).

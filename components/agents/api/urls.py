@@ -52,13 +52,6 @@ router.register(r'health', controller.HealthViewSet, basename='health')
 # Agents-as-Teammates migration.
 router.register(r'findings', controller.AIFindingsViewSet, basename='ai-findings')
 # Wave 4 of the prompt-evaluation plan — read-only API over
-# docs/eval-reports/*.json so the V2 HudPromptQualityPanel can render
-# without filesystem access.
-router.register(
-    r'prompt-eval/reports',
-    controller.PromptEvalReportsViewSet,
-    basename='prompt-eval-reports',
-)
 
 # ── URL Patterns ──
 urlpatterns = [
