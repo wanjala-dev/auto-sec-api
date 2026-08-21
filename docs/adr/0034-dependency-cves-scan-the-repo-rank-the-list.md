@@ -70,6 +70,66 @@ More than **40%** of alerts from security tools are false positives
 Trivy natively consumes VEX to suppress non-applicable CVEs with a machine-readable
 justification ([Trivy filtering](https://trivy.dev/docs/latest/configuration/filtering/)).
 
+### How much would this actually produce? (second research pass)
+
+Enough to matter, and the numbers are the argument for D2 rather than a footnote to it.
+
+A typical npm application declares 10–15 direct dependencies and resolves to **700–900
+packages**; the average project carries 79 transitive ones. A study across 11,900
+repositories found 72,082 vulnerabilities in the Python repos' 2,602 dependency files —
+roughly **28 per dependency file**, of which about 23% were High or Critical
+([npm/PyPI survey](https://arxiv.org/html/2506.12995v1),
+[PyPitfall](https://arxiv.org/html/2507.18075v1),
+[cyberdesserts](https://blog.cyberdesserts.com/npm-security-vulnerabilities/)).
+
+`auto-sec-api` alone has five requirements files. Six connected repos plausibly means
+several hundred findings on first scan. That is the wall, quantified, and it would land
+in the same list as the cloud and container findings people already triage.
+
+**88% of known vulnerabilities live in TRANSITIVE dependencies** (Sonatype, Oct 2024, via
+[safeguard.sh](https://safeguard.sh/resources/blog/direct-vs-transitive-vulnerabilities-why-the-distinction-matters-for-remediation-prioritization)).
+
+### Correction to something I told Henry
+
+I said a dependency bump was "arguably the highest-confidence auto-PR we could ship."
+That is true for DIRECT dependencies and false for most findings.
+
+A vulnerable transitive dependency cannot simply be bumped. It needs the parent package
+upgraded, a manager-specific override (`overrides` in npm, `resolutions` in Yarn, pnpm
+overrides), or an upstream release that does not exist yet. And an override is not free:
+if the fixed version changes an API the direct dependency calls, forcing it either breaks
+the build or leaves the risky path live — those cases need an upstream fix, not a pin
+([Snyk fix types](https://docs.snyk.io/scan-fix-and-prevent/scan-with-snyk/snyk-open-source/manage-vulnerabilities/vulnerability-fix-types),
+[Tidelift](https://support.tidelift.com/hc/en-us/articles/26315406262292-Updating-transitive-dependencies),
+[safeguard.sh](https://safeguard.sh/resources/blog/how-to-remediate-transitive-dependency-vulnerabilities)).
+
+So the auto-PR story holds for roughly the 12% that are direct, and for the rest it is a
+research task, not a patch. Claiming otherwise would have set up the specialist to
+produce confident bumps that do not apply — the failure mode ADR 0033's verifiers exist
+to catch.
+
+### Which vulnerability database
+
+No single source is complete. Across 1,000 randomly sampled 2024–2025 open-source
+vulnerabilities: **OSV 93%, NVD 89%, GHSA 87% — union 98%**
+([ScanRook](https://scanrook.io/blog/cve-database-comparison),
+[safeguard.sh](https://safeguard.sh/resources/blog/open-source-vulnerability-database-comparison)).
+NVD has carried a backlog of unanalysed CVEs since mid-2024, with 30-day-plus delays
+routine and some CVEs sitting months without CVSS enrichment
+([Vulert](https://vulert.com/blog/nvd-data-quality-problems/)).
+
+Trivy aggregates several of these including GHSA, and is assessed close to Snyk on
+Python/JS/Go while covering containers, filesystems, IaC and secrets from one binary.
+OSV-Scanner has fewer false positives via ecosystem-specific matching, and Grype is
+narrower but cleaner
+([AppSec Santa](https://appsecsanta.com/sca-tools/open-source-sca-tools),
+[safeguard.sh](https://safeguard.sh/resources/blog/best-open-source-sca-tools-in-2026-tested-on-a-real-monorepo)).
+
+**We stay on Trivy** — it is deployed, pinned, and already the scanner spine, and
+`improve-dont-replicate` says converge rather than add a second engine. But D5's
+precision caveat now has a companion: a CVE we do not report is invisible, and no source
+sees everything.
+
 ## The decision that matters
 
 Read those numbers next to our own operator feedback and they say the same thing from
@@ -104,6 +164,13 @@ and requires the customer to have Dependabot enabled — so it cannot be the mec
 provider-neutral product depends on. Worth revisiting later as enrichment, where their
 triage state is a signal we do not otherwise have.
 
+**D6 — Direct and transitive findings are labelled differently, and only direct ones get
+an auto-PR in this phase.** 88% of findings will be transitive, where a bump is often not
+available at all. Offering a draft PR we cannot ground would reproduce the confident-
+wrong-patch failure ADR 0033 was built to catch. Transitive findings get the remediation
+BRIEF instead (task #145's Class-B outcome), which is honest about needing a parent
+upgrade or an override.
+
 **D5 — Precision caveat, stated because it will bite.** Trivy reads non-lock manifests
 (`requirements.txt`) even when a lockfile exists, and those may not pin exact versions
 ([Chainguard](https://edu.chainguard.dev/chainguard/chainguard-images/staying-secure/working-with-scanners/trivy-tutorial/)).
@@ -124,6 +191,10 @@ against a version we guessed is worse than no finding.
 
 ## Open questions for Henry
 
+0. **Given ~28 findings per dependency file and 88% of them transitive, is the digest
+   (D2) enough** — or does this genuinely need reachability before it is shippable at
+   all? The volume numbers moved me closer to "reachability is not optional here", and
+   that is the question I would most like your read on.
 1. **Is this ahead of reachability (#146)?** SCA + EPSS/KEV is days; reachability is
    weeks but is the actual differentiator. My read: do this first *because* it produces
    the corpus reachability would later filter — but that is a judgement about sequencing,
