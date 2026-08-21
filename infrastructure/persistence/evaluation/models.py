@@ -40,6 +40,29 @@ class EvalSuite(models.Model):
     class Origin(models.TextChoices):
         MINED = "mined", "Mined from this workspace's history"
         CURATED = "curated", "Curated by Auto-Sec"
+        AUTHORED = "authored", "Written by this workspace"
+
+    class Mode(models.TextChoices):
+        """WHAT is under test, which decides what a score can be said about.
+
+        AGENT runs the real agent — its tools, its retrieval, its
+        registry-versioned system prompt — and answers "is my triage agent
+        good?".
+
+        PROMPT runs a system prompt the operator typed, alone, and answers "is
+        this prompt better than the one I am running?". It is the shorter loop:
+        edit the prompt, score it against your own cases, ship it only if it
+        actually won.
+
+        They are never comparable. An agent has tools and retrieval a bare
+        prompt does not, so a prompt score presented as an agent score is the
+        same category error as comparing two different models' numbers (ADR
+        0032 D5). The mode is stored so the panel can keep them apart rather
+        than relying on anyone remembering which is which.
+        """
+
+        AGENT = "agent", "The agent, end to end"
+        PROMPT = "prompt", "A system prompt on its own"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     workspace = models.ForeignKey(
@@ -47,6 +70,17 @@ class EvalSuite(models.Model):
         on_delete=models.CASCADE,
         related_name="eval_suites",
     )
+
+    mode = models.CharField(max_length=16, choices=Mode.choices, default=Mode.AGENT)
+    # PROMPT mode only: the system prompt under test. It is part of the QUESTION
+    # being asked, so it is covered by the dataset fingerprint — editing it and
+    # re-running would otherwise look exactly like the model changing, which is
+    # the confusion the fingerprint exists to prevent.
+    system_prompt = models.TextField(blank=True, default="")
+    # Which PromptRegistry version this was forked from, when the operator
+    # started from their agent's live prompt rather than a blank box. Keeps the
+    # comparison honest: "better than what?" has an answer.
+    forked_from_prompt_id = models.CharField(max_length=255, blank=True, default="")
 
     name = models.CharField(max_length=200)
     agent_type = models.CharField(max_length=100, db_index=True)
@@ -74,6 +108,7 @@ class EvalCase(models.Model):
     """One case: an input, where it came from, and what right looks like."""
 
     class SourceKind(models.TextChoices):
+        AUTHORED = "authored", "Written by this workspace"
         SIGN_OFF = "sign_off", "Sign-off decision"
         FINDING = "finding", "Resolved finding"
         DEEP_RUN = "deep_run", "Deep run"

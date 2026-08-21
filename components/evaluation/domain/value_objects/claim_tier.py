@@ -88,6 +88,38 @@ def tier_for(observations: int) -> ClaimTier:
     return ClaimTier.AGGREGATE_GRADE
 
 
+#: The strongest claim a SELF-AUTHORED suite may support (ADR 0033 D14).
+#:
+#: Every threshold above answers "how many observations is enough". This one
+#: answers a different question that no count can settle: where the cases came
+#: from. A mined suite is a SAMPLE of what the agent actually faced. An uploaded
+#: suite is a SELECTION — someone chose which questions to ask, and nothing
+#: stops them choosing ten the agent already handles.
+#:
+#: Without this cap the two are indistinguishable on screen: ten uploaded cases
+#: clear MIN_OBSERVATIONS exactly as ten mined ones do, and 500 clear
+#: AGGREGATE_THRESHOLD. The resulting "AGGREGATE-GRADE, 100%" would be true and
+#: useless, and it would arrive through the front door of a feature we built.
+#:
+#: DIRECTIONAL is the honest ceiling. A self-authored suite can support "the
+#: agent handled the cases you chose"; it cannot support "the agent is good at
+#: this", which is what MEASURED and above assert.
+SELF_AUTHORED_CEILING = ClaimTier.DIRECTIONAL
+
+
+def cap_for_provenance(tier: ClaimTier, *, self_authored: bool) -> ClaimTier:
+    """Lower a tier to what its PROVENANCE can support.
+
+    Only ever lowers. A self-authored suite below the ceiling keeps its own
+    (lower) tier rather than being raised to it — twelve uploaded cases are
+    still twelve cases, and three are still NOT MEASURED.
+    """
+    if not self_authored:
+        return tier
+    if tier in (ClaimTier.MEASURED, ClaimTier.AGGREGATE_GRADE):
+        return SELF_AUTHORED_CEILING
+    return tier
+
 @dataclass(frozen=True)
 class AxisEvidence:
     """One axis's result, carrying its own denominator and claim tier.
@@ -99,6 +131,10 @@ class AxisEvidence:
     axis: str
     passed: int
     measured: int
+    #: Set when the cases were authored by the customer rather than mined from
+    #: their history. Carried on the evidence itself so the ceiling travels with
+    #: the number instead of having to be re-applied by every reader.
+    self_authored: bool = False
 
     def __post_init__(self) -> None:
         if self.passed < 0 or self.measured < 0:
@@ -108,7 +144,7 @@ class AxisEvidence:
 
     @property
     def tier(self) -> ClaimTier:
-        return tier_for(self.measured)
+        return cap_for_provenance(tier_for(self.measured), self_authored=self.self_authored)
 
     @property
     def pass_rate(self) -> float | None:
@@ -131,14 +167,17 @@ class AxisEvidence:
             "tier": self.tier.value,
             "tier_label": self.tier.label,
             "may_conclude": self.tier.may_conclude,
+            "self_authored": self.self_authored,
         }
 
 
 __all__ = [
     "AGGREGATE_THRESHOLD",
+    "SELF_AUTHORED_CEILING",
     "MEASURED_THRESHOLD",
     "MIN_OBSERVATIONS",
     "AxisEvidence",
     "ClaimTier",
+    "cap_for_provenance",
     "tier_for",
 ]

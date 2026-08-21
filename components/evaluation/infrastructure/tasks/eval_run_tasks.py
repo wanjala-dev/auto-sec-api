@@ -229,15 +229,29 @@ def reap_stalled_eval_runs() -> dict:
 
 
 def _service(run):
+    """Assemble the runner for this run's MODE.
+
+    Agent mode executes the real agent — tools, retrieval, its registry
+    system prompt. Prompt mode executes the operator's typed prompt alone.
+    Choosing here, from the suite, is what keeps the two from being mixed up
+    by a caller that forgot which kind of suite it had.
+    """
     from components.evaluation.application.services.eval_run_service import EvalRunService
     from components.evaluation.infrastructure.adapters.eval_agent_runner_adapter import EvalAgentRunnerAdapter
     from components.evaluation.infrastructure.adapters.llm_judge_adapter import LlmJudgeAdapter
+    from components.evaluation.infrastructure.adapters.prompt_runner_adapter import PromptRunnerAdapter
     from components.evaluation.infrastructure.adapters.verifier_adapter import DeterministicVerifierAdapter
     from components.evaluation.infrastructure.repositories.eval_repository import DjangoEvalRepository
+    from infrastructure.persistence.evaluation.models import EvalSuite
+
+    if run.suite.mode == EvalSuite.Mode.PROMPT:
+        runner = PromptRunnerAdapter(system_prompt=run.suite.system_prompt)
+    else:
+        runner = EvalAgentRunnerAdapter()
 
     return EvalRunService(
         case_source=DjangoEvalRepository(),
-        agent_runner=EvalAgentRunnerAdapter(),
+        agent_runner=runner,
         judge=LlmJudgeAdapter(model_slug=run.model_slug),
         verifier=DeterministicVerifierAdapter(workspace_id=run.workspace_id),
     )
