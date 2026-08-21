@@ -342,6 +342,16 @@ CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = "UTC"
 
 CELERY_BEAT_SCHEDULE = {
+    # A fan-out run can lose its dispatched case tasks (broker eviction, a
+    # worker killed between ack and execution) and then nothing remains to
+    # finish it — it sits at RUNNING with a half-filled bar, which an operator
+    # reads as "still working". This notices the silence and fails it honestly,
+    # keeping whatever results were already recorded.
+    "evaluation_reap_stalled_runs": {
+        "task": "shared_platform.run_for_each_tenant",
+        "kwargs": {"task": "evaluation.reap_stalled_eval_runs"},
+        "schedule": crontab(minute="*/10"),
+    },
     # Daily login-session janitor: mark expired-but-unrevoked sessions as
     # revoked ("expired_sweep"), prune sessions dead > SESSION_RETENTION_DAYS,
     # prune AuthAuditEvent rows > AUTH_AUDIT_RETENTION_DAYS. Idempotent

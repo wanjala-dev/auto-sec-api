@@ -194,39 +194,41 @@ class TestCostAndReporting:
         assert execution.failure_reason == ""
 
 
-class TestSuiteIteration:
-    def test_progress_is_reported_per_case(self):
-        seen = []
-        service = _service(cases=_Cases([CASE, CASE, CASE]))
+class TestTimeouts:
+    """A case slower than its own limit, and why it still produces a row.
 
-        list(
-            service.execute_suite(
-                suite_id="s",
-                workspace_id="ws-1",
-                agent_type="triage",
-                axes=AXES,
-                model_slug="gpt-4o-mini",
-                on_case=lambda i, total, ex: seen.append((i, total)),
-            )
-        )
+    Per-case timeouts only became possible once cases became separate tasks.
+    They also became NECESSARY: with a fan-out, a case that produced nothing
+    would leave the run permanently one short of its total and never finalise.
+    """
 
-        assert seen == [(1, 3), (2, 3), (3, 3)]
+    def test_a_timed_out_case_is_unmeasured_not_failed(self):
+        """A timeout is a latency fact, not a quality one. Marking the axes
+        failed would invent a defect the agent was never shown to have."""
+        execution = _service().timed_out_execution(case=CASE, seconds=240)
 
-    def test_a_broken_progress_callback_does_not_kill_the_run(self):
-        service = _service(cases=_Cases([CASE, CASE]))
+        assert execution.axis_verdicts == {}
+        assert execution.outcome.failed
 
-        def _explode(*args):
-            raise RuntimeError("ui blew up")
+    def test_a_timed_out_case_says_so_in_words_an_operator_reads(self):
+        execution = _service().timed_out_execution(case=CASE, seconds=240)
 
-        results = list(
-            service.execute_suite(
-                suite_id="s",
-                workspace_id="ws-1",
-                agent_type="triage",
-                axes=AXES,
-                model_slug="gpt-4o-mini",
-                on_case=_explode,
-            )
-        )
+        assert "240s" in execution.failure_reason
+        assert "unmeasured rather than failed" in execution.failure_reason
 
-        assert len(results) == 2
+    def test_it_costs_nothing_because_nothing_completed(self):
+        execution = _service().timed_out_execution(case=CASE, seconds=240)
+
+        assert execution.cost_usd == 0.0
+
+
+def test_the_service_offers_no_whole_suite_loop():
+    """`execute_suite` was REMOVED, not overlooked.
+
+    One task looping a whole suite is bounded by `task_time_limit = 300`, which
+    caps a suite near 10-30 cases — under the 50 the field treats as a minimum
+    useful golden set. Leaving the method behind would put that ceiling one
+    import away from coming back, with nothing to tell the next caller that it
+    is the thing that was removed.
+    """
+    assert not hasattr(EvalRunService, "execute_suite")

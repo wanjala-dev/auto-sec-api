@@ -90,6 +90,9 @@ _EXPECTED_BEAT_TASKS: dict[str, dict[str, bool]] = {
     "cloud_posture.schedule_vercel_prowler_runs": {"local": True, "dev": True, "prod": True},
     "container_security.schedule_container_scans": {"local": True, "dev": False, "prod": False},
     "code_security.schedule_repo_scans": {"local": True, "dev": False, "prod": False},
+    # Not a scan pillar — a reaper. It runs everywhere because a stalled run
+    # is equally silent in every environment.
+    "evaluation.reap_stalled_eval_runs": {"local": True, "dev": True, "prod": True},
 }
 
 
