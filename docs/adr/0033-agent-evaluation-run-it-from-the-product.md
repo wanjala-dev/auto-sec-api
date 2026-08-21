@@ -69,9 +69,44 @@ than merely sensible:
 - **Calibrate across model strengths.** A suite every model passes tells you nothing; the
   interesting suite is one where a weak model fails and a strong one passes.
 
-Henry's Logseq notes on prompt evaluation could not be located — the graph at
-`~/Documents/logseq` holds two unrelated pages. **Fold them in when pointed at the right
-graph**; this ADR does not claim to incorporate them.
+### Henry's Logseq notes (Anthropic course, "Prompt evaluation")
+
+These were supplied directly after an earlier draft claimed they could not be found — that
+claim was wrong; the graph searched was the wrong one. They are the most directly
+applicable input of the three, because they are a working pipeline rather than commentary,
+and several decisions below are lifted from them.
+
+- **Three grader kinds, with an explicit division of labour**: *code* graders (length, word
+  presence, syntax validity, readability), *model* graders (quality, instruction-following,
+  completeness, helpfulness, safety), *human* graders (comprehensiveness, depth,
+  conciseness, relevance). The worked example maps criteria onto graders deliberately —
+  *format* and *valid syntax* to code, *task following* to a model. D2's split between
+  deterministic verifiers and the LLM judge is the same move.
+- **The grader must emit `strengths`, `weaknesses` and `reasoning` BEFORE `score`**, because
+  "without this context, models tend to default to middling scores around 6". This is
+  **independent confirmation of D6** from Anthropic's own teaching material, arrived at from
+  a different direction than the κ research (which measured 0.55 → 0.75). Two unrelated
+  sources, same instruction: make the judge reason first.
+- **Two-stage dataset generation** — first generate N *unique ideas* ("clearly distinct from
+  the others", "specific enough to guide a full test case"), then expand each idea into a
+  full case. Adopted in D3: mining traces without a diversity step produces near-duplicate
+  cases clustered on whatever the workspace happened to do most.
+- **Per-case `solution_criteria`, 1–4 items**, with an explicit warning to keep them tied to
+  the task: *"avoid over-specifying criteria with requirements that go beyond the core
+  task"*. Adopted in D10.
+- **Anti-harshness scoring instructions**, which are the surprising part: *"Grade the output
+  based ONLY on the listed criteria. Do not add your own extra requirements… If a solution
+  meets all of the mandatory and secondary criteria give it a 10. Don't complain that the
+  solution 'only' meets the criteria."* A judge that invents standards makes our agent look
+  worse than it is — the mirror image of the over-claiming this codebase usually guards
+  against, and just as dishonest.
+- **Mandatory vs secondary criteria**: a violation of a mandatory requirement caps the score
+  at 3 regardless of everything else. That is the same shape as D2's deterministic axes.
+- **Operational details worth copying**: grade at `temperature=0.0`, generate ideas at 1.0
+  and cases at 0.7; bounded concurrency with a configurable limit because rate limits are
+  the real constraint; progress reported at milestones; an HTML report carrying scenario,
+  inputs, criteria, output, score and reasoning per case, plus a **pass rate at ≥7** rather
+  than only a mean.
 
 ### What the field says (researched 2026-08-21, sources at the end)
 
@@ -139,6 +174,12 @@ Sources, in order of signal quality, all of which we already store:
   we will ever get.
 - **findings with a resolved outcome** — fixed/confirmed vs suppressed-as-false-positive.
 - **DeepRuns** — clustered into 2–3 task shapes rather than replayed one by one.
+
+Mining runs in **two stages**, taken from the Logseq pipeline: first cluster the workspace's
+history into *distinct scenarios*, then expand each scenario into a case. Skipping the
+diversity stage produces near-duplicate cases piled on whatever the workspace happened to do
+most that month — a suite that measures one thing ten times and reports it as ten
+observations, which is exactly the false-denominator problem ADR 0032 exists to prevent.
 
 A brand-new workspace has no history. That is a **first-run problem identical to the empty
 model catalogue**, and it must not be solved by pretending: the surface says *"not enough
@@ -250,6 +291,28 @@ this codebase's signature defect. So the tier is stated on the surface:
 This reuses ADR 0032's `MIN_TRIALS = 10` as the floor rather than inventing a second
 threshold, and it means the surface starts honest on day one instead of waiting for enough
 data to be honest.
+
+### D10 — Global axes AND per-case criteria; binary axes, not a 1–10 score
+
+The Logseq pipeline scores 1–10; D2 grades binary axes. Both are kept, at different levels,
+because they answer different questions and the reconciliation matters:
+
+- **Global axes (binary, per D2)** are the product surface. "83% of cases were grounded" is
+  a claim a workspace owner can act on. A mean of 7.4/10 is not — it is uninterpretable
+  across cases, it drifts with judge mood, and a rate needs a denominator to be honest
+  (ADR 0032). Cohen's κ, which D6 depends on, is also defined for categorical judgements;
+  it does not apply cleanly to a 1–10 scale.
+- **Per-case `solution_criteria` (1–4 items, from the notes)** are the *inputs* to the axis
+  judgement, not a separate score. Mined cases carry what "right" meant for that specific
+  case — the sign-off reviewer's actual objection, for instance. The judge grades the axis
+  against those criteria rather than against a generic standard it invented.
+
+The judge prompt therefore takes its **structure** from the notes and its **output type**
+from the research: `strengths` → `weaknesses` → `reasoning` → **per-axis pass/fail**, in
+that order, at `temperature=0.0`, with the anti-harshness instruction included verbatim in
+spirit — grade only against the stated criteria, and a case meeting all of them passes.
+
+Deterministic verifiers (`fix_applies`, `no_fabricated_asset`) do not go near the judge.
 
 ## Phases
 
