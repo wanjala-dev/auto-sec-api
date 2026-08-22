@@ -25,12 +25,15 @@ _SELECTABLE = (AutonomyMode.MANUAL, AutonomyMode.ASSIST, AutonomyMode.AUTONOMOUS
 _SUMMARIES = {
     AutonomyMode.MANUAL: "Reads and analyses. Proposes every change for you to make.",
     AutonomyMode.ASSIST: "Makes reversible changes itself. Irreversible actions need your approval.",
-    AutonomyMode.AUTONOMOUS: "Runs unattended on a schedule. Same limits as Assist — nothing more.",
+    AutonomyMode.AUTONOMOUS: (
+        "Also starts its own runs on a schedule, without waiting for you. "
+        "Same limits as Assist — nothing more."
+    ),
 }
 
 _INITIATED_BY = {
     AutonomyMode.MANUAL: "A human, every run",
-    AutonomyMode.ASSIST: "A human or an event",
+    AutonomyMode.ASSIST: "A human or an event — never the scheduler",
     AutonomyMode.AUTONOMOUS: "The scheduler, unattended",
 }
 
