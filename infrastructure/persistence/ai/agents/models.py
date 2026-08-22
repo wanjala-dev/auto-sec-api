@@ -368,6 +368,12 @@ class DeepRun(models.Model):
     state = models.JSONField(default=dict, blank=True)
     checkpoints = models.JSONField(default=dict, blank=True)
     last_error = models.TextField(blank=True)
+    # The oversight this run executed under (ADR 0035 D5), stamped at START and
+    # never re-derived. Re-deriving from the workspace's CURRENT setting would
+    # mean switching a workspace to AUTONOMOUS makes every historical ASSIST run
+    # look autonomous — the same trap tool_risk.py documents for risk tiers.
+    # "" means the run predates this field: rendered UNKNOWN, never back-filled.
+    autonomy_mode = models.CharField(max_length=16, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

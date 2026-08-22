@@ -317,6 +317,9 @@ class ToolGovernanceMiddleware(AgentMiddleware):
                 spec_fields=spec.as_log_fields(),
                 expected=envelope.expected,
                 retriable=envelope.retriable,
+                # Resolved at the gate (ADR 0035 D5) and read back here rather
+                # than recomputed — one resolution, one recorded answer.
+                autonomy_mode=str(getattr(self._agent, "_autonomy_mode", "") or ""),
             )
             self.buffer.record(observation)
             # Structured, grep-able, and free of tool input/output — the
