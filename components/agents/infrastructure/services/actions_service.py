@@ -28,7 +28,7 @@ that cleans up the remaining naming drift.
 from __future__ import annotations
 
 import logging
-from typing import Iterable, Optional
+from collections.abc import Iterable
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
@@ -60,7 +60,7 @@ class AIActionService:
     persistence onto Task via the specialist handler pipeline.
     """
 
-    def ensure_teammate(self, workspace: "Workspace") -> AITeammateProfile:
+    def ensure_teammate(self, workspace: Workspace) -> AITeammateProfile:
         if not workspace:
             raise ValueError("Workspace is required to ensure teammate")
 
@@ -72,12 +72,8 @@ class AIActionService:
         with transaction.atomic(using=db):
             return self._ensure_teammate_locked(workspace)
 
-    def _ensure_teammate_locked(self, workspace: "Workspace") -> AITeammateProfile:
-        profile = (
-            AITeammateProfile.objects.select_for_update()
-            .filter(workspace=workspace)
-            .first()
-        )
+    def _ensure_teammate_locked(self, workspace: Workspace) -> AITeammateProfile:
+        profile = AITeammateProfile.objects.select_for_update().filter(workspace=workspace).first()
         if profile:
             return profile
 
@@ -96,7 +92,7 @@ class AIActionService:
     def _ensure_default_ai_grant(
         self,
         *,
-        workspace: "Workspace",
+        workspace: Workspace,
         principal: User,
     ) -> AIPermissionGrant:
         grant, _ = AIPermissionGrant.objects.get_or_create(
@@ -115,11 +111,9 @@ class AIActionService:
             grant.save(update_fields=["actions", "updated_at"])
         return grant
 
-    def _ensure_teammate_user(self, workspace: "Workspace") -> User:
+    def _ensure_teammate_user(self, workspace: Workspace) -> User:
         base_slug = (
-            slugify(workspace.workspace_name)
-            if getattr(workspace, "workspace_name", None)
-            else str(workspace.id)
+            slugify(workspace.workspace_name) if getattr(workspace, "workspace_name", None) else str(workspace.id)
         )
         email = f"{base_slug}@{DEFAULT_TEAMMATE_EMAIL_DOMAIN}"
         existing = User.objects.filter(email=email).first()
@@ -147,7 +141,8 @@ class AIActionService:
         user.save(update_fields=["first_name", "last_name", "is_staff"])
         logger.info(
             "Created Orchestrator user %s for workspace %s",
-            user.id, workspace.id,
+            user.id,
+            workspace.id,
         )
         return user
 
@@ -164,17 +159,39 @@ class AIActionService:
                 return candidate
             suffix += 1
 
-    def get_teammate(self, workspace_id: str) -> Optional[AITeammateProfile]:
+    def get_teammate(self, workspace_id: str) -> AITeammateProfile | None:
         return AITeammateProfile.objects.filter(workspace_id=workspace_id).first()
 
     def iter_enabled_seeds(self) -> Iterable[AITeammateProfile]:
-        """Return teammate profiles that should receive scheduled runs."""
-        workspace_ids: Optional[Iterable[str]] = None
+        """Teammate profiles that may receive UNATTENDED runs (ADR 0035 D2/D7).
+
+        TWO independent gates, because they answer different questions:
+
+        - ``ai_teammate_enabled`` — the power switch (D7). OFF means nothing
+          runs at all, by any trigger. Unchanged.
+        - ``autonomy_mode == AUTONOMOUS`` — the policy control (D2). Only an
+          AUTONOMOUS workspace is started by the scheduler with nobody waiting;
+          MANUAL and ASSIST runs are initiated by a human or an event.
+
+        Until this filter existed the kill switch was doing BOTH jobs, which is
+        precisely why AUTONOMOUS had no effect: its work was already being done
+        by a control that is meant to be orthogonal to it. The dial's third
+        position stored a value nothing read.
+
+        Worth being clear about what this does NOT do. Per D3, AUTONOMOUS still
+        grants no extra permission — an unattended run is denied irreversible
+        tools exactly as before. This decides *whether a run starts on its own*,
+        which is the axis D2's "Initiated by" column has always described.
+        """
+        from components.agents.domain.value_objects.autonomy_mode import AutonomyMode
+
+        workspace_ids: Iterable[str] | None = None
         if Workspace:
             base_qs = getattr(Workspace, "_base_manager", None) or Workspace.objects
-            workspace_ids = base_qs.filter(ai_teammate_enabled=True).values_list(
-                "id", flat=True,
-            )
+            workspace_ids = base_qs.filter(
+                ai_teammate_enabled=True,
+                autonomy_mode=AutonomyMode.AUTONOMOUS.value,
+            ).values_list("id", flat=True)
 
         filters = {
             "is_enabled": True,
@@ -185,7 +202,10 @@ class AIActionService:
         if workspace_ids is not None:
             queryset = queryset.filter(workspace_id__in=workspace_ids)
         else:
-            queryset = queryset.filter(workspace__ai_teammate_enabled=True)
+            queryset = queryset.filter(
+                workspace__ai_teammate_enabled=True,
+                workspace__autonomy_mode=AutonomyMode.AUTONOMOUS.value,
+            )
         return queryset
 
     def update_last_run(self, teammate: AITeammateProfile) -> None:

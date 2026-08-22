@@ -121,6 +121,17 @@ before anyone has asked for it, and the first question a customer asks is "is th
 allowed to change things in my account", which is a workspace-level question. Per-agent
 override is a later phase, and D1's policy object is what makes it cheap when it comes.
 
+> **Built 2026-08-22 — and the build found that D2's "Initiated by" column was
+> the only thing giving AUTONOMOUS a job, while nothing read it.** Eligibility
+> for unattended runs came from `ai_teammate_enabled` alone, so the kill switch
+> was silently doing D7's job *and* this one. The consequence was worse than an
+> inert dial: a workspace could receive a teammate cycle every five minutes
+> while its mode displayed ASSIST. `iter_enabled_seeds` now requires BOTH gates
+> — power (`ai_teammate_enabled`) and policy (`autonomy_mode == AUTONOMOUS`) —
+> and migration `workspaces/0007` moves the workspaces that were already running
+> unattended onto AUTONOMOUS, so the set of scheduled workspaces is unchanged and
+> the dial stops misreporting them.
+
 **D7 — The kill switch is NOT a fourth mode.** `ai_teammate_enabled` is a separate,
 orthogonal axis: OFF means nothing runs at all. Folding it into the mode enum would make
 "off" and "manual" look like neighbours on one dial when one is a power switch and the
@@ -151,6 +162,11 @@ evidence for what unenforced duplication becomes.
   on deploy.
 
 ## Open questions for Henry
+
+0. ~~**What does selecting AUTONOMOUS actually change?**~~ **ANSWERED by the
+   build:** it decides whether the scheduler starts runs on its own — exactly
+   what D2's "Initiated by" column already said, and what nothing enforced until
+   2026-08-22. MANUAL and ASSIST are now never scheduler-initiated.
 
 1. **Does AUTONOMOUS ever raise the ceiling (D3)?** I recommend never. If you disagree,
    the alternative worth considering is a per-tool allowlist an admin opts into

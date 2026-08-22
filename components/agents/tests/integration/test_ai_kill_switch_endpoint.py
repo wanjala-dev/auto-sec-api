@@ -209,15 +209,24 @@ class TestKillSwitchEnforcement:
         from components.agents.infrastructure.services.actions_service import get_ai_action_service
         from infrastructure.persistence.ai.models import AITeammateProfile
 
+        from infrastructure.persistence.workspaces.models import Workspace
+
         paused = workspace_factory(ai_teammate_enabled=False)
         active = workspace_factory(ai_teammate_enabled=True)
+        # Both workspaces are put on AUTONOMOUS so this test isolates the KILL
+        # SWITCH. Since ADR 0035 the fanout needs two independent gates — power
+        # (``ai_teammate_enabled``) and policy (``autonomy_mode``) — and without
+        # this line the "active" workspace would be skipped for the policy
+        # reason, so the test would pass while proving nothing about the switch.
+        # The mode gate has its own coverage in
+        # ``test_autonomous_gates_unattended_runs.py``.
+        Workspace.objects.filter(id__in=[paused.id, active.id]).update(autonomy_mode="autonomous")
         # Workspace ``post_save`` (SyncWorkspaceAiTeammateUseCase) already provisions a
         # profile for an ai_teammate_enabled workspace, so a bare ``.create`` here would
         # collide (UNIQUE workspace_id). ``update_or_create`` is idempotent: it forces the
         # "active profile on BOTH workspaces" this test needs — the point being that the
-        # PAUSED workspace has an active profile yet is still skipped, because the fanout
-        # gate is the workspace flag (``iter_enabled_seeds`` filters ai_teammate_enabled),
-        # not the profile.
+        # PAUSED workspace has an active profile AND an autonomous mode, yet is still
+        # skipped, because the kill switch overrides both.
         for workspace in (paused, active):
             AITeammateProfile.objects.update_or_create(
                 workspace=workspace,
