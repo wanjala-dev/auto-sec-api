@@ -85,22 +85,56 @@ class AutonomyMode(Enum):
 UNRECORDED = AutonomyMode.UNKNOWN
 
 
-def resolve(*, execution_mode: str | None, is_autonomous: bool) -> AutonomyMode:
-    """The mode a run is executing under, from the signals available today.
+def resolve(
+    *,
+    execution_mode: str | None,
+    is_autonomous: bool,
+    workspace_mode: AutonomyMode | None = None,
+) -> AutonomyMode:
+    """The mode a run is executing under.
 
     ONE mapping, in one place. The signals are already computed inside
-    ``_risk_gated`` — an ``execution_mode`` on the agent config and an
-    ``is_autonomous`` derived from the calling principal — and this function
-    exists so that recording them never drifts from enforcing them.
+    ``_risk_gated`` — an ``execution_mode`` on the agent config, an
+    ``is_autonomous`` derived from the calling principal, and (since D6) the
+    workspace's configured mode — and this function exists so that recording
+    them never drifts from enforcing them.
 
-    Evaluation wins over autonomy: an eval run driven by a service principal is
-    still an eval run, and it is the stricter of the two, so reporting it as
-    AUTONOMOUS would overstate what it could do.
+    The precedence is strictest-wins, deliberately:
+
+    1. **EVALUATION** beats everything. An eval run driven by a service
+       principal is still an eval run, and it is stricter than any workspace
+       setting, so reporting it as anything else would overstate what it could
+       do.
+    2. **UNKNOWN** when the workspace setting could not be read. Not a fallback
+       to a default — if we do not know what a customer permitted, the honest
+       recording is "we do not know", and the policy built from it holds
+       writes. Guessing ASSIST here would fail open on the one control whose
+       purpose is answering "may the AI change things in my account".
+    3. **The workspace setting** decides MANUAL. A workspace on MANUAL stays on
+       MANUAL even when the scheduler starts the run — otherwise the promise
+       operators care about most would be quietly undone by a cron.
+    4. **AUTONOMOUS** when the caller is a service principal and the workspace
+       permits it. Per D3 this does not widen what the agent may do; it records
+       that nobody is waiting on the run.
+    5. **ASSIST** otherwise — today's behaviour, and the default.
+
+    ``workspace_mode`` is ``None`` only for callers that genuinely have no
+    workspace, which keeps the pre-D6 behaviour rather than handing them a
+    guessed setting. That is distinct from UNKNOWN, which means a setting exists
+    and we failed to read it.
     """
     if (execution_mode or "").strip().lower() == AutonomyMode.EVALUATION.value:
         return AutonomyMode.EVALUATION
+    if workspace_mode is AutonomyMode.UNKNOWN:
+        return AutonomyMode.UNKNOWN
+    if workspace_mode is AutonomyMode.MANUAL:
+        return AutonomyMode.MANUAL
     if is_autonomous:
         return AutonomyMode.AUTONOMOUS
+    if workspace_mode is AutonomyMode.AUTONOMOUS:
+        # Configured unattended, but a human started this one. It is still an
+        # ASSIST run: D1's axis is who initiated it, not what the dial says.
+        return AutonomyMode.ASSIST
     return AutonomyMode.ASSIST
 
 

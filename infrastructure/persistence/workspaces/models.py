@@ -106,6 +106,24 @@ class Workspace(models.Model):
         ),
     )
     ai_teammate_enabled = models.BooleanField(default=False)
+    autonomy_mode = models.CharField(
+        max_length=16,
+        default="assist",
+        choices=(
+            ("manual", "Manual — the agent proposes; nothing is changed for you"),
+            ("assist", "Assist — the agent makes reversible changes; irreversible needs approval"),
+            ("autonomous", "Autonomous — unattended runs, same ceiling as Assist"),
+        ),
+        help_text=(
+            "How much the AI may do in this workspace (ADR 0035). Orthogonal to "
+            "ai_teammate_enabled, which is the power switch: OFF means nothing runs "
+            "at all, while this decides what a run that DOES happen may change. "
+            "Default 'assist' because that is what the product did before this "
+            "field existed — nobody's behaviour changes on deploy. Note that "
+            "'autonomous' does NOT widen the risk ceiling (D3): irreversible "
+            "actions still require human approval in every mode."
+        ),
+    )
     notifications_enabled = models.BooleanField(default=True)
     donor_tips_enabled = models.BooleanField(
         default=True,
@@ -486,6 +504,7 @@ class WorkspaceComment(models.Model):
     )
     dislikes = models.ManyToManyField(settings.AUTH_USER_MODEL, blank=True, related_name="workspace_comment_dislikes")
     parent = models.ForeignKey("self", on_delete=models.CASCADE, blank=True, null=True, related_name="+")
+
     @property
     def recipients(self):
         return WorkspaceComment.objects.filter(parent=self).order_by("-created_on").all()

@@ -1188,6 +1188,62 @@ class AgentViewSet(viewsets.GenericViewSet):
             return Response({"error": str(exc)}, status=status.HTTP_404_NOT_FOUND)
         return Response(data, status=status.HTTP_200_OK)
 
+    @_schema(request_body=True)
+    @action(
+        detail=False,
+        methods=["get", "post"],
+        url_path="autonomy-mode",
+        permission_classes=[IsAuthenticated, AiKillSwitchPermission],
+    )
+    def autonomy_mode(self, request):
+        """Workspace autonomy mode (ADR 0035) — human-only, audited.
+
+        GET  ?workspace_id=<uuid>            → the current mode + what each permits.
+        POST {workspace_id, mode, reason}    → change it, audited (D8).
+
+        Shares ``AiKillSwitchPermission`` with the kill switch beside it — any
+        member reads, only owner/admin changes — because the read/write split is
+        identical and a second permission class would be a second policy to keep
+        in sync.
+
+        It sits next to the kill switch but is NOT a fourth position on it (D7):
+        the switch is a power control (OFF means nothing runs at all), this is a
+        policy control (what a run that DOES happen may change). Folding them
+        into one dial would make "off" and "manual" look like neighbours.
+
+        Deliberately not an agent tool. The AI may report its own mode; it must
+        never be able to widen it.
+        """
+        from components.shared_kernel.domain.errors import NotFoundError, ValidationError
+
+        if request.method == "GET":
+            workspace_id = request.query_params.get("workspace_id")
+            if not workspace_id:
+                return Response({"error": "workspace_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+            try:
+                data = agents_service.autonomy_mode_status(workspace_id=str(workspace_id))
+            except NotFoundError as exc:
+                return Response({"error": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+            return Response(data, status=status.HTTP_200_OK)
+
+        workspace_id = request.data.get("workspace_id")
+        mode = request.data.get("mode")
+        reason = request.data.get("reason")
+        if not workspace_id:
+            return Response({"error": "workspace_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            data = agents_service.set_autonomy_mode(
+                workspace_id=str(workspace_id),
+                mode=str(mode or ""),
+                actor=request.user,
+                reason=str(reason or ""),
+            )
+        except ValidationError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except NotFoundError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+        return Response(data, status=status.HTTP_200_OK)
+
     @_schema()
     @action(
         detail=False,

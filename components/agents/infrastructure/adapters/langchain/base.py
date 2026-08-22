@@ -535,7 +535,7 @@ class _ToolRefusal(str):
     __slots__ = ()
 
 
-def _stamp_autonomy_mode(agent, *, execution_mode, is_autonomous) -> None:
+def _stamp_autonomy_mode(agent, *, execution_mode, is_autonomous, workspace_mode=None) -> None:
     """Record the resolved autonomy mode on the agent for this call (ADR 0035 D5).
 
     The governance middleware reads it back when it builds the observation, so
@@ -550,11 +550,72 @@ def _stamp_autonomy_mode(agent, *, execution_mode, is_autonomous) -> None:
     try:
         from components.agents.domain.value_objects.autonomy_mode import resolve
 
-        agent._autonomy_mode = resolve(  # noqa: SLF001 — same-object stamp, read by the middleware
-            execution_mode=execution_mode, is_autonomous=is_autonomous
+        agent._autonomy_mode = resolve(
+            execution_mode=execution_mode,
+            is_autonomous=is_autonomous,
+            workspace_mode=workspace_mode,
         ).value
     except Exception:  # pragma: no cover — observability never breaks a run
         logger.debug("autonomy mode stamp failed", exc_info=True)
+
+
+#: Attribute the resolved-once policy is cached under, on the agent instance.
+#: Agents are constructed per run (``AgentRegistry`` calls
+#: ``agent_class(agent_id, user_id, workspace_id, ...)``), so instance lifetime
+#: IS run lifetime — which is what makes this the D1 "resolved once at run
+#: start, carried on the run" guarantee rather than a convenience cache.
+_WORKSPACE_MODE_ATTR = "_autosec_workspace_autonomy_mode"
+
+#: Distinguishes "not yet read" from "read, and there is no setting". Without
+#: it, a workspace-less run would re-query on every tool call forever.
+_MODE_UNSET = object()
+
+
+def _read_workspace_autonomy_mode(agent):
+    from components.agents.domain.value_objects.autonomy_mode import AutonomyMode, parse
+
+    workspace_id = getattr(agent, "workspace_id", None)
+    if not workspace_id:
+        # No workspace to govern. Not a failure, and not UNKNOWN either: there
+        # is no setting that could have failed to read.
+        return None
+
+    try:
+        from components.agents.infrastructure.adapters.workspace_autonomy_adapter import (
+            WorkspaceAutonomyAdapter,
+        )
+
+        stored = WorkspaceAutonomyAdapter().get_mode(workspace_id=str(workspace_id))
+    except Exception:
+        logger.exception(
+            "autonomy_mode read failed workspace_id=%s — holding writes for this run",
+            workspace_id,
+        )
+        return AutonomyMode.UNKNOWN
+
+    return None if stored is None else parse(stored)
+
+
+def _workspace_autonomy_mode(agent):
+    """The workspace's configured mode for this run, read at most once.
+
+    D1 forbids re-reading per call: a deep run can execute for many minutes, and
+    an operator toggling the setting mid-run must not change the rules under
+    work already in flight. A run finishes under the policy it started with.
+
+    An unreadable setting resolves to UNKNOWN, which holds writes. That is the
+    deliberate direction — see ``AutonomyPolicy.decide``.
+    """
+    cached = getattr(agent, _WORKSPACE_MODE_ATTR, _MODE_UNSET)
+    if cached is not _MODE_UNSET:
+        return cached
+
+    resolved = _read_workspace_autonomy_mode(agent)
+    try:
+        setattr(agent, _WORKSPACE_MODE_ATTR, resolved)
+    except Exception:  # pragma: no cover — an agent that rejects attributes
+        logger.debug("autonomy mode cache failed", exc_info=True)
+    return resolved
 
 
 def _risk_gated(func, tool_name, explicit_risk, agent):
@@ -571,13 +632,20 @@ def _risk_gated(func, tool_name, explicit_risk, agent):
     PRs on a customer's repository; the harness must measure judgement without
     altering the workspace it is measuring. That check runs FIRST, because it
     is the one whose failure is an incident rather than a bad answer.
+
+    Since ADR 0035 the remaining decision is made by an :class:`AutonomyPolicy`
+    built from the workspace's configured mode. This is still the SINGLE
+    enforcement point (D9) — the policy replaces the two booleans that used to
+    be passed around, it does not add a second gate. A MANUAL workspace holds
+    writes here and nowhere else.
     """
+    from components.agents.application.policies.autonomy_policy import AutonomyPolicy
     from components.agents.application.policies.tool_risk import (
         EVALUATION_EXECUTION_MODE,
         evaluation_refusal,
         resolve_tool_risk,
-        tool_risk_refusal,
     )
+    from components.agents.domain.value_objects.autonomy_mode import resolve as resolve_mode
 
     resolved_risk = resolve_tool_risk(tool_name, explicit_risk)
 
@@ -600,14 +668,31 @@ def _risk_gated(func, tool_name, explicit_risk, agent):
         except Exception:
             is_autonomous, approval_granted = False, False
 
+        # Resolved once per run and carried on it (D1) — never re-read per call,
+        # so toggling the setting mid-run cannot change the rules underneath
+        # work already in flight.
+        workspace_mode = _workspace_autonomy_mode(agent)
+
         # ADR 0035 D5 — stamp the autonomy this CALL ran under, resolved from the
         # very signals the gate below is about to enforce with. Recording it here
         # rather than anywhere else is the point: a second resolution site could
         # disagree with the gate, and then the audit trail would describe a
         # policy that was never applied.
-        _stamp_autonomy_mode(agent, execution_mode=config.get("execution_mode"), is_autonomous=is_autonomous)
+        _stamp_autonomy_mode(
+            agent,
+            execution_mode=config.get("execution_mode"),
+            is_autonomous=is_autonomous,
+            workspace_mode=workspace_mode,
+        )
 
-        refusal = tool_risk_refusal(resolved_risk, is_autonomous=is_autonomous, approval_granted=approval_granted)
+        policy = AutonomyPolicy.for_mode(
+            resolve_mode(
+                execution_mode=config.get("execution_mode"),
+                is_autonomous=is_autonomous,
+                workspace_mode=workspace_mode,
+            )
+        )
+        refusal = policy.refusal(tool_name, resolved_risk, approval_granted=approval_granted)
         if refusal is not None:
             # Same characters, tagged. See ``_ToolRefusal``.
             return _ToolRefusal(refusal)
