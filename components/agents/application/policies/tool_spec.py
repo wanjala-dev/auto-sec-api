@@ -414,6 +414,11 @@ class ToolCallObservation:
     #: See ``ToolOutcomeEnvelope.expected``.
     expected: bool = False
     retriable: bool = False
+    #: The autonomy this CALL executed under (ADR 0035 D5), resolved where the
+    #: gate resolves it and carried to the row. "" means unrecorded, which is
+    #: what every observation written before this field carries; it renders as
+    #: UNKNOWN and is never back-filled.
+    autonomy_mode: str = ""
 
     @property
     def failed(self) -> bool:
@@ -426,6 +431,11 @@ class ToolCallObservation:
             "latency_ms": self.latency_ms,
             "declared": self.declared,
         }
+        # Written only when known. Emitting "unknown" for a call we DID observe
+        # would make an unrecorded row and a recorded-as-unknown row
+        # indistinguishable, and the whole point of D5 is telling those apart.
+        if self.autonomy_mode:
+            payload["autonomy_mode"] = self.autonomy_mode
         if self.failure:
             payload["failure"] = self.failure
             payload["expected"] = self.expected

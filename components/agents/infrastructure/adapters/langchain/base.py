@@ -535,6 +535,28 @@ class _ToolRefusal(str):
     __slots__ = ()
 
 
+def _stamp_autonomy_mode(agent, *, execution_mode, is_autonomous) -> None:
+    """Record the resolved autonomy mode on the agent for this call (ADR 0035 D5).
+
+    The governance middleware reads it back when it builds the observation, so
+    the value that reaches the ``tool_observation`` row is the one resolved at
+    the gate, in the same breath as the decision it describes.
+
+    Never raises. An audit stamp that can break a tool call would be a worse
+    problem than the gap it closes — but note it fails CLOSED in the useful
+    sense: on error the attribute is left unset, the observation records no mode,
+    and the row reads UNKNOWN. It never guesses ASSIST.
+    """
+    try:
+        from components.agents.domain.value_objects.autonomy_mode import resolve
+
+        agent._autonomy_mode = resolve(  # noqa: SLF001 — same-object stamp, read by the middleware
+            execution_mode=execution_mode, is_autonomous=is_autonomous
+        ).value
+    except Exception:  # pragma: no cover — observability never breaks a run
+        logger.debug("autonomy mode stamp failed", exc_info=True)
+
+
 def _risk_gated(func, tool_name, explicit_risk, agent):
     """Wrap a promoted tool so its risk tier is enforced per call (SEE-203).
 
@@ -577,6 +599,14 @@ def _risk_gated(func, tool_name, explicit_risk, agent):
             approval_granted = bool(config.get("approval_granted"))
         except Exception:
             is_autonomous, approval_granted = False, False
+
+        # ADR 0035 D5 — stamp the autonomy this CALL ran under, resolved from the
+        # very signals the gate below is about to enforce with. Recording it here
+        # rather than anywhere else is the point: a second resolution site could
+        # disagree with the gate, and then the audit trail would describe a
+        # policy that was never applied.
+        _stamp_autonomy_mode(agent, execution_mode=config.get("execution_mode"), is_autonomous=is_autonomous)
+
         refusal = tool_risk_refusal(resolved_risk, is_autonomous=is_autonomous, approval_granted=approval_granted)
         if refusal is not None:
             # Same characters, tagged. See ``_ToolRefusal``.
