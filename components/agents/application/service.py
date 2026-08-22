@@ -237,6 +237,18 @@ class AgentsService:
 
         return get_workspace_capabilities(str(workspace_id))
 
+    def autonomy_mode_status(self, *, workspace_id: str) -> Any:
+        """Read the workspace's autonomy mode + the catalog the HUD renders."""
+        from components.agents.application.services import autonomy_mode_service
+
+        return autonomy_mode_service.status(str(workspace_id))
+
+    def set_autonomy_mode(self, *, workspace_id: str, mode: str, actor: Any, reason: str) -> Any:
+        """Change the workspace's autonomy mode (human-only; audited by the owner)."""
+        from components.agents.application.services import autonomy_mode_service
+
+        return autonomy_mode_service.set_mode(workspace_id=str(workspace_id), mode=mode, actor=actor, reason=reason)
+
     def ai_kill_switch_status(self, *, workspace_id: str) -> Any:
         """Read the kill-switch status (workspace toggle + emergency flag)."""
         from components.agents.application.services import ai_governance_service
