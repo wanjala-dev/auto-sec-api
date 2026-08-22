@@ -572,28 +572,17 @@ _MODE_UNSET = object()
 
 
 def _read_workspace_autonomy_mode(agent):
-    from components.agents.domain.value_objects.autonomy_mode import AutonomyMode, parse
+    """Delegates to the shared reader so the gate and the run row cannot drift.
 
-    workspace_id = getattr(agent, "workspace_id", None)
-    if not workspace_id:
-        # No workspace to govern. Not a failure, and not UNKNOWN either: there
-        # is no setting that could have failed to read.
-        return None
+    See ``autonomy_resolution`` — the enforcement site and the recording site
+    resolve through one function, because an audit trail describing a policy
+    that was never applied is worse than no audit trail.
+    """
+    from components.agents.infrastructure.adapters.langchain.autonomy_resolution import (
+        read_workspace_mode,
+    )
 
-    try:
-        from components.agents.infrastructure.adapters.workspace_autonomy_adapter import (
-            WorkspaceAutonomyAdapter,
-        )
-
-        stored = WorkspaceAutonomyAdapter().get_mode(workspace_id=str(workspace_id))
-    except Exception:
-        logger.exception(
-            "autonomy_mode read failed workspace_id=%s — holding writes for this run",
-            workspace_id,
-        )
-        return AutonomyMode.UNKNOWN
-
-    return None if stored is None else parse(stored)
+    return read_workspace_mode(getattr(agent, "workspace_id", None))
 
 
 def _workspace_autonomy_mode(agent):
