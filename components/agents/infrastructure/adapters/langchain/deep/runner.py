@@ -243,6 +243,23 @@ def execute_plan_once(
 
     from infrastructure.persistence.ai.agents.models import DeepRun  # local import to avoid circular
 
+    # ADR 0035 D5 — stamp the autonomy this run executes under, HERE, once, at
+    # the moment it starts running. Never re-derived on read: switching a
+    # workspace to AUTONOMOUS on Friday must not make every historical ASSIST
+    # run look autonomous, which is the question an incident review asks first.
+    #
+    # Resolved through the SAME function the tool gate enforces with, so the row
+    # cannot describe a policy the run was never actually held to.
+    from components.agents.infrastructure.adapters.langchain.autonomy_resolution import (
+        resolve_run_mode,
+    )
+
+    run_autonomy_mode = resolve_run_mode(
+        execution_mode=(agent_config or {}).get("execution_mode") if isinstance(agent_config, dict) else None,
+        user_id=user_id,
+        workspace_id=workspace_id,
+    ).value
+
     DeepRun.objects.update_or_create(
         thread_id=run_thread,
         defaults={
@@ -250,7 +267,14 @@ def execute_plan_once(
             "user_id": user_id,
             "workspace_id": workspace_id,
             "status": DeepRun.STATUS_RUNNING,
+            "autonomy_mode": run_autonomy_mode,
         },
+    )
+    logger.info(
+        "deep_run_started thread_id=%s workspace_id=%s autonomy_mode=%s",
+        run_thread,
+        workspace_id,
+        run_autonomy_mode,
     )
     log_deep_event(run_thread, "run_started", status=DeepRun.STATUS_RUNNING, payload={"plan_id": plan.plan_id})
 
