@@ -11,7 +11,6 @@ door, so the evaluation-mode kwarg is set there, at construction.
 from __future__ import annotations
 
 import logging
-import uuid
 
 from components.evaluation.application.ports.eval_ports import (
     AgentOutcome,
@@ -47,12 +46,6 @@ class EvalAgentRunnerAdapter(AgentRunnerPort):
         try:
             result = get_agent_registry_provider().run_in_evaluation_mode(
                 agent_type=agent_type,
-                # A bare UUID. The `eval-` prefix this used to carry made the
-                # value a string that only LOOKED like an id: the field is a
-                # real UUID, so every case died on "is not a valid UUID" and no
-                # agent ever ran. Evaluation runs are identified by their
-                # execution mode, not by a decorated id.
-                agent_id=str(uuid.uuid4()),
                 user_id=self._user_id,
                 workspace_id=workspace_id,
                 model_slug=model_slug,
